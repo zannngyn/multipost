@@ -14,6 +14,23 @@ export const ERROR_CODES = [
   "DB_ERROR",
   "QUEUE_ERROR",
   "JOB_PAYLOAD_INVALID",
+  // Data pipeline (E2/E3)
+  "DRIVE_ERROR",
+  "SHEET_ERROR",
+  "FILE_NAME_INVALID",
+  "SHEET_ROW_INVALID",
+  "PRODUCT_NOT_FOUND",
+  "MEDIA_NOT_FOUND",
+  "OUT_OF_STOCK",
+  "SYNC_FAILED",
+  // AI gateway (E4, ADR-001)
+  "AI_PROVIDER_ERROR",
+  "AI_RESPONSE_INVALID",
+  "AI_RATE_LIMITED",
+  "AI_BUDGET_EXCEEDED",
+  "CAPTION_VALIDATION_FAILED",
+  "MODEL_NOT_CONFIGURED",
+  "PROMPT_NOT_FOUND",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -30,6 +47,21 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   DB_ERROR: "Không truy cập được cơ sở dữ liệu. Vui lòng thử lại sau ít phút.",
   QUEUE_ERROR: "Hàng đợi công việc gặp sự cố. Vui lòng thử lại sau ít phút.",
   JOB_PAYLOAD_INVALID: "Dữ liệu công việc nền không hợp lệ — công việc đã bị từ chối.",
+  DRIVE_ERROR: "Không truy cập được Google Drive. Kiểm tra quyền Service Account hoặc thử lại sau.",
+  SHEET_ERROR: "Không đọc được Google Sheet. Kiểm tra quyền Service Account hoặc thử lại sau.",
+  FILE_NAME_INVALID: "Tên file ảnh/video không đúng chuẩn đặt tên — file bị bỏ qua và đã ghi nhận.",
+  SHEET_ROW_INVALID: "Dòng dữ liệu trong Sheet không hợp lệ — đã ghi nhận để rà soát.",
+  PRODUCT_NOT_FOUND: "Không tìm thấy sản phẩm với mã tương ứng trong Sheet.",
+  MEDIA_NOT_FOUND: "Không tìm thấy ảnh/video cho sản phẩm này trên Drive.",
+  OUT_OF_STOCK: "Sản phẩm đã hết hàng hoặc tồn kho không hợp lệ — bài đăng bị chặn.",
+  SYNC_FAILED: "Đồng bộ dữ liệu từ Drive/Sheet thất bại. Xem nhật ký đồng bộ để biết chi tiết.",
+  AI_PROVIDER_ERROR: "Dịch vụ AI gặp sự cố. Hệ thống sẽ thử nhà cung cấp dự phòng.",
+  AI_RESPONSE_INVALID: "Kết quả AI trả về không đúng định dạng — đã từ chối và ghi nhận.",
+  AI_RATE_LIMITED: "Dịch vụ AI đang bị giới hạn tần suất. Vui lòng thử lại sau ít phút.",
+  AI_BUDGET_EXCEEDED: "Đã chạm ngưỡng chi phí AI được cấu hình. Cần quản trị viên xem xét.",
+  CAPTION_VALIDATION_FAILED: "Caption không qua được bước kiểm tra an toàn — cần chỉnh sửa hoặc tạo lại.",
+  MODEL_NOT_CONFIGURED: "Chưa cấu hình model AI cho tác vụ này. Kiểm tra registry model.",
+  PROMPT_NOT_FOUND: "Không tìm thấy prompt template cho tác vụ này.",
 };
 
 /** English developer message. Falls back to the code itself. */
@@ -41,6 +73,21 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   DB_ERROR: "Database operation failed",
   QUEUE_ERROR: "Job queue operation failed",
   JOB_PAYLOAD_INVALID: "Job payload failed schema validation",
+  DRIVE_ERROR: "Google Drive operation failed",
+  SHEET_ERROR: "Google Sheets operation failed",
+  FILE_NAME_INVALID: "Media file name does not match the naming convention",
+  SHEET_ROW_INVALID: "Sheet row failed schema validation",
+  PRODUCT_NOT_FOUND: "Product code not found in sheet snapshot",
+  MEDIA_NOT_FOUND: "No media assets found for product",
+  OUT_OF_STOCK: "Product is out of stock or stock value invalid",
+  SYNC_FAILED: "Catalog sync run failed",
+  AI_PROVIDER_ERROR: "AI provider call failed",
+  AI_RESPONSE_INVALID: "AI response failed structured-output validation",
+  AI_RATE_LIMITED: "AI provider rate limit hit",
+  AI_BUDGET_EXCEEDED: "Configured AI cost budget exceeded",
+  CAPTION_VALIDATION_FAILED: "Generated caption failed validation rules",
+  MODEL_NOT_CONFIGURED: "No model configured for task in registry",
+  PROMPT_NOT_FOUND: "Prompt template not found for task",
 };
 
 export interface AppErrorOptions {

@@ -1,0 +1,28 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - heading "MYSP — Đăng bài tự động" [level=1] [ref=e5]
+        - paragraph [ref=e6]:
+          - text: "Đang đăng nhập: Dev Bypass"
+          - generic [ref=e7]: (dev@localhost)
+      - status [ref=e8]: Phiên giả lập DEV — chưa đăng nhập thật. Tắt biến DEV_FAKE_SESSION để dùng đăng nhập Google.
+    - main [ref=e9]:
+      - region [ref=e10]:
+        - generic [ref=e11]:
+          - heading "Sức khoẻ đơn vị (tenant)" [level=2] [ref=e12]
+          - paragraph [ref=e13]: "Kiểm tra toàn tuyến: giao diện → API nội bộ → usecase → cơ sở dữ liệu."
+        - generic [ref=e14]:
+          - generic [ref=e15]:
+            - text: Mã đơn vị (tenant)
+            - textbox "Mã đơn vị (tenant)" [ref=e16]: 00000000-0000-0000-0000-000000000001
+            - paragraph [ref=e17]: Dạng UUID. Đơn vị mẫu đã được điền sẵn.
+          - button "Kiểm tra" [ref=e18]
+        - status [ref=e19]
+        - alert [active] [ref=e64]:
+          - heading "Không truy cập được cơ sở dữ liệu" [level=2] [ref=e65]
+          - paragraph [ref=e66]: Không truy cập được cơ sở dữ liệu. Vui lòng thử lại sau ít phút. Đây là sự cố phía máy chủ — hãy thử lại sau ít phút, hoặc báo quản trị viên nếu kéo dài.
+          - paragraph [ref=e67]: "Mã tham chiếu: DB_ERROR"
+          - button "Thử lại" [ref=e69]
+  - button "Open Next.js Dev Tools" [ref=e29] [cursor=pointer]
+  - alert [ref=e23]

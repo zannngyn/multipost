@@ -1,0 +1,36 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - heading "MYSP — Đăng bài tự động" [level=1] [ref=e5]
+        - paragraph [ref=e6]:
+          - text: "Đang đăng nhập: Dev Bypass"
+          - generic [ref=e7]: (dev@localhost)
+      - status [ref=e8]: Phiên giả lập DEV — chưa đăng nhập thật. Tắt biến DEV_FAKE_SESSION để dùng đăng nhập Google.
+    - main [ref=e9]:
+      - region [ref=e10]:
+        - generic [ref=e11]:
+          - heading "Sức khoẻ đơn vị (tenant)" [level=2] [ref=e12]
+          - paragraph [ref=e13]: "Kiểm tra toàn tuyến: giao diện → API nội bộ → usecase → cơ sở dữ liệu."
+        - generic [ref=e14]:
+          - generic [ref=e15]:
+            - text: Mã đơn vị (tenant)
+            - textbox "Mã đơn vị (tenant)" [active] [ref=e16]: 00000000-0000-0000-0000-000000000001
+            - paragraph [ref=e17]: Dạng UUID. Đơn vị mẫu đã được điền sẵn.
+          - button "Kiểm tra" [ref=e18]
+        - status [ref=e19]
+        - generic [ref=e51]:
+          - generic [ref=e52]:
+            - heading "Demo Tenant" [level=3] [ref=e53]
+            - generic [ref=e54]: Đang hoạt động
+          - generic [ref=e55]:
+            - term [ref=e56]: Mã đơn vị
+            - definition [ref=e57]: 00000000-0000-0000-0000-000000000001
+            - term [ref=e58]: Kiểm tra lúc
+            - definition [ref=e59]:
+              - time [ref=e60]: 00:51:23 13/8/26
+            - term [ref=e61]: Chuỗi kiểm tra
+            - definition [ref=e62]: "Giao diện → API nội bộ → usecase → cơ sở dữ liệu: thông suốt."
+          - paragraph [ref=e63]: Đang làm mới…
+  - button "Open Next.js Dev Tools" [ref=e29] [cursor=pointer]
+  - alert [ref=e23]
