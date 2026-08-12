@@ -17,6 +17,10 @@ import { AppError } from "@/core/domain/errors";
 
 import { startHeartbeat, type HeartbeatHandle } from "./heartbeat";
 import { ECHO_JOB_NAME, makeEchoHandler } from "./jobs/echo-job";
+import {
+  HEALTHCHECK_TENANT_JOB_NAME,
+  makeHealthcheckTenantHandler,
+} from "./jobs/healthcheck-tenant-job";
 
 let logger: Logger | null = null;
 let container: WorkerContainer | null = null;
@@ -55,20 +59,55 @@ process.on("uncaughtException", (error: unknown) => {
   process.exit(1);
 });
 
+/** Drain order: stop taking new jobs, let active ones finish, then close I/O. */
+async function drain(): Promise<"drained"> {
+  heartbeat?.stop();
+  if (consumer) await consumer.close();
+  await container?.close();
+  return "drained";
+}
+
+/**
+ * Graceful shutdown WITH a deadline. Without one a job stuck on an external call
+ * would hold the process until Docker's SIGKILL — no log, no explanation.
+ * Past the deadline we exit non-zero and say so; connections die with the process.
+ */
 async function shutdown(signal: string): Promise<void> {
   if (closing) return; // Second Ctrl+C: ignore, the first drain is still running.
   closing = true;
   const log = logger;
-  log?.info("shutdown requested", { signal });
+  const deadlineMs = container?.config.WORKER_SHUTDOWN_DEADLINE_MS ?? 30_000;
+  const startedAt = Date.now();
+  log?.info("shutdown requested", { signal, deadline_ms: deadlineMs });
+
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<"deadline">((resolve) => {
+    deadlineTimer = setTimeout(() => resolve("deadline"), deadlineMs);
+  });
 
   try {
-    heartbeat?.stop();
-    // Close the consumer first: stop taking new jobs, let active ones finish.
-    if (consumer) await consumer.close();
-    await container?.close();
-    log?.info("worker stopped cleanly", { signal });
+    const outcome = await Promise.race([drain(), deadline]);
+    clearTimeout(deadlineTimer);
+
+    if (outcome === "deadline") {
+      log?.error("shutdown deadline exceeded — forcing exit", {
+        signal,
+        deadline_ms: deadlineMs,
+        duration_ms: Date.now() - startedAt,
+        exit_code: 1,
+        reason: "drain did not finish in time (job still active or broker unreachable)",
+      });
+      process.exit(1);
+    }
+
+    log?.info("worker stopped cleanly", {
+      signal,
+      duration_ms: Date.now() - startedAt,
+      exit_code: 0,
+    });
     process.exit(0);
   } catch (error) {
+    clearTimeout(deadlineTimer);
     logFatal("shutdown failed", error);
     process.exit(1);
   }
@@ -91,15 +130,23 @@ async function main(): Promise<void> {
     logger,
   });
 
-  // Handler map: one entry per job name. Real jobs land in E5 (publish-post).
-  consumer = deps.startConsumer({
+  // Handler map: one entry per job name. Publish jobs land in E5 (publish-post).
+  const handlers = {
     [ECHO_JOB_NAME]: makeEchoHandler(logger),
-  });
+    [HEALTHCHECK_TENANT_JOB_NAME]: makeHealthcheckTenantHandler({
+      logger,
+      healthcheckTenant: deps.usecases.healthcheckTenant,
+    }),
+  };
+  consumer = deps.startConsumer(handlers);
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  logger.info("worker ready", { job_names: [ECHO_JOB_NAME] });
+  logger.info("worker ready", {
+    job_names: Object.keys(handlers),
+    shutdown_deadline_ms: deps.config.WORKER_SHUTDOWN_DEADLINE_MS,
+  });
 }
 
 main().catch((error: unknown) => {

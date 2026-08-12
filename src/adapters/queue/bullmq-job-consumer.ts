@@ -14,12 +14,19 @@ import { DEFAULT_ATTEMPTS, QUEUE_NAME, nextBackoffMs } from "./queue-options";
  */
 
 /**
- * Retrying these is pure waste: the payload/input will never become valid.
- * They are failed immediately via UnrecoverableError (after being logged).
+ * Retrying these is pure waste: the input will not become valid, and the missing
+ * row will not appear, inside a retry window measured in seconds. They are
+ * failed immediately via UnrecoverableError (after being logged with context).
+ *
+ * The mapping "error code -> retryable?" lives HERE, in the broker adapter:
+ * handlers stay free of BullMQ vocabulary and just throw an AppError.
  */
-const NON_RETRYABLE_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
+export const NON_RETRYABLE_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   "JOB_PAYLOAD_INVALID",
   "INVALID_INPUT",
+  // Business failure, not an outage: a tenant is created by an operator, not by
+  // waiting. Burning 3 attempts on it only delays the error report.
+  "TENANT_NOT_FOUND",
 ]);
 
 export interface BullMqJobConsumerDeps {
@@ -124,7 +131,15 @@ export function startBullMqJobConsumer(deps: BullMqJobConsumerDeps): JobConsumer
 
   worker.on("failed", (job: Job | undefined, error: Error) => {
     if (!job) {
-      logger.error("job failed without job context", { err: error });
+      // Happens when the broker loses the job (lock expired, job evicted while
+      // active). Without the queue context this line is undebuggable.
+      logger.error("job failed without job context", {
+        err: AppError.from(error, "QUEUE_ERROR", { queue: queueName }),
+        queue: queueName,
+        registered_job_names: handlerNames,
+        concurrency: deps.concurrency ?? 1,
+        reason: "broker reported a failure with no job payload attached",
+      });
       return;
     }
     const maxAttempts = maxAttemptsOf(job);

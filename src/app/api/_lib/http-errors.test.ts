@@ -7,7 +7,7 @@ import { httpStatusForCode, jsonError, mapAppErrorToHttp, type ApiErrorBody } fr
 const readBody = async (response: Response): Promise<ApiErrorBody> =>
   (await response.json()) as ApiErrorBody;
 
-const makeLogger = () => ({ error: vi.fn() });
+const makeLogger = () => ({ warn: vi.fn(), error: vi.fn() });
 
 describe("mapAppErrorToHttp — edge cases", () => {
   it("maps a plain Error to 500 INTERNAL without leaking details", async () => {
@@ -82,15 +82,27 @@ describe("mapAppErrorToHttp — logging", () => {
     expect(payload.err).toBe(error);
   });
 
-  it("logs 4xx without escalating it to a server error", () => {
+  it("logs 4xx as a warning, not an error — the caller is at fault, not the server", () => {
     const logger = makeLogger();
 
     mapAppErrorToHttp(new AppError("INVALID_INPUT"), { logger, context: { tenant_id: "t1" } });
 
-    const [message, payload] = logger.error.mock.calls[0];
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [message, payload] = logger.warn.mock.calls[0];
     expect(message).toBe("Request failed with client error");
     expect(payload).toMatchObject({ tenant_id: "t1", status: 400 });
     expect(payload.err).toBeUndefined();
+  });
+
+  it("keeps 5xx on the error channel even when it carries a business code", () => {
+    const logger = makeLogger();
+
+    mapAppErrorToHttp(new AppError("DB_ERROR"), { logger, context: { tenant_id: "t1" } });
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error.mock.calls[0][1]).toMatchObject({ status: 503, code: "DB_ERROR" });
   });
 
   it("logs unknown throwables too — nothing is swallowed", () => {
@@ -111,6 +123,9 @@ describe("mapAppErrorToHttp — happy path", () => {
     ["UNAUTHORIZED", 401],
     ["TENANT_NOT_FOUND", 404],
     ["INTERNAL", 500],
+    ["DB_ERROR", 503],
+    ["QUEUE_ERROR", 503],
+    ["JOB_PAYLOAD_INVALID", 400],
   ] as const)("maps %s to HTTP %i", async (code, status) => {
     const response = mapAppErrorToHttp(new AppError(code));
     const body = await readBody(response);

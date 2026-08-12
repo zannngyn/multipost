@@ -48,6 +48,22 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:3000/api/health || exit 1
 CMD ["node", "server.js"]
 
+# --- migrate: one-shot schema migration (and seed) --------------------------
+# Separate from "worker" because it needs drizzle-kit (a devDependency), the
+# drizzle.config.ts and the checked-in ./drizzle SQL — none of which belong in a
+# long-lived runtime image. Shares the same deps layer, so it costs no rebuild.
+FROM base AS migrate
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json drizzle.config.ts ./
+COPY --chown=node:node drizzle ./drizzle
+# src is needed twice: drizzle.config.ts points at the schema barrel, and
+# `pnpm db:seed` (tsx) runs from this same image.
+COPY --chown=node:node src ./src
+USER node
+CMD ["pnpm", "db:migrate"]
+
 # --- worker: BullMQ consumer -------------------------------------------------
 FROM base AS worker
 ENV NODE_ENV=production \

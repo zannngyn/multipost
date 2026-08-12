@@ -7,12 +7,20 @@
  *   pnpm queue:demo --job-id    -> enqueues with a custom job id, then proves a
  *                                  ':' id is rejected by OUR validation boundary,
  *                                  not by the broker
+ *   pnpm queue:demo --healthcheck
+ *                               -> ONLY the healthcheck-tenant jobs: the seeded
+ *                                  demo tenant (succeeds against real Postgres),
+ *                                  an unknown tenant (TENANT_NOT_FOUND) and a
+ *                                  malformed id (INVALID_INPUT). Both failures
+ *                                  are asked for 3 attempts on purpose: they must
+ *                                  still run ONCE (unrecoverable, no retry).
  */
 
 import { makeWorkerContainer } from "@/composition/worker-container";
 import { AppError } from "@/core/domain/errors";
 
 import { ECHO_JOB_NAME } from "./jobs/echo-job";
+import { HEALTHCHECK_TENANT_JOB_NAME } from "./jobs/healthcheck-tenant-job";
 
 /**
  * Job ids are the E5 key shape (batch-code-colour-channel-format). Dashes, not
@@ -21,11 +29,69 @@ import { ECHO_JOB_NAME } from "./jobs/echo-job";
 const VALID_JOB_ID = "batch1-AB123-red-fb-image";
 const INVALID_JOB_ID = "a:b";
 
+/** Same fixed id as adapters/db/seed.ts (worker may not import an adapter). */
+const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001";
+/** Valid UUID shape, never seeded — exercises TENANT_NOT_FOUND. */
+const UNKNOWN_TENANT_ID = "00000000-0000-0000-0000-0000000000ff";
+/** Not a UUID — exercises INVALID_INPUT raised by the usecase itself. */
+const MALFORMED_TENANT_ID = "not-a-uuid";
+
+/** Retry plan the failing jobs ask for; the point is that it is NOT used. */
+const RETRY_IF_IT_WERE_RECOVERABLE = {
+  attempts: 3,
+  backoff: { strategy: "exponential" as const, delayMs: 1_000 },
+};
+
 async function main(): Promise<void> {
   const withInvalid = process.argv.includes("--invalid");
   const withJobId = process.argv.includes("--job-id");
+  const healthcheckOnly = process.argv.includes("--healthcheck");
   const { queue, logger, close } = makeWorkerContainer();
   const log = logger.child({ component: "enqueue-demo" });
+
+  if (healthcheckOnly) {
+    try {
+      const ok = await queue.enqueue(HEALTHCHECK_TENANT_JOB_NAME, { tenantId: DEMO_TENANT_ID });
+      log.info("enqueued healthcheck job for the seeded tenant", {
+        job_id: ok.jobId,
+        tenant_id: DEMO_TENANT_ID,
+        expect: "succeeds on attempt 1, logs tenant name + status from Postgres",
+      });
+
+      const notFound = await queue.enqueue(
+        HEALTHCHECK_TENANT_JOB_NAME,
+        { tenantId: UNKNOWN_TENANT_ID },
+        RETRY_IF_IT_WERE_RECOVERABLE,
+      );
+      log.info("enqueued healthcheck job for an unknown tenant", {
+        job_id: notFound.jobId,
+        tenant_id: UNKNOWN_TENANT_ID,
+        expect: "TENANT_NOT_FOUND on attempt 1, unrecoverable — no attempt 2 or 3",
+      });
+
+      const malformed = await queue.enqueue(
+        HEALTHCHECK_TENANT_JOB_NAME,
+        { tenantId: MALFORMED_TENANT_ID },
+        RETRY_IF_IT_WERE_RECOVERABLE,
+      );
+      log.info("enqueued healthcheck job with a malformed tenant id", {
+        job_id: malformed.jobId,
+        tenant_id: MALFORMED_TENANT_ID,
+        expect: "INVALID_INPUT on attempt 1, unrecoverable — no attempt 2 or 3",
+      });
+    } catch (error) {
+      const appError = AppError.from(error, "QUEUE_ERROR", {
+        component: "enqueue-demo",
+        mode: "healthcheck",
+      });
+      log.error("healthcheck enqueue demo failed", { err: appError });
+      await close();
+      throw appError;
+    }
+
+    await close();
+    return;
+  }
 
   try {
     const ok = await queue.enqueue(ECHO_JOB_NAME, { message: "hello from enqueue-demo" });

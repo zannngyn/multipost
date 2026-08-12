@@ -24,7 +24,8 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
 };
 
 /** Structural logger type — the app layer must not import ports or adapters. */
-type ErrorLogger = {
+export type ErrorLogger = {
+  warn(message: string, context?: Record<string, unknown>): void;
   error(message: string, context?: Record<string, unknown> & { err?: unknown }): void;
 };
 
@@ -58,8 +59,10 @@ export function mapAppErrorToHttp(error: unknown, options: MapErrorOptions = {})
   if (AppError.is(error)) {
     const status = httpStatusForCode(error.code);
     const logPayload = { ...context, ...error.toLogObject(), status };
+    // 4xx is the caller's fault, not an incident: warn keeps the error channel
+    // meaningful for on-call. 5xx keeps `err` attached so the stack is stored.
     if (status >= 500) logger?.error("Request failed with server error", { ...logPayload, err: error });
-    else logger?.error("Request failed with client error", logPayload);
+    else logger?.warn("Request failed with client error", logPayload);
 
     const issues = extractIssues(error);
     return jsonError(status, error.code, error.userMessage, issues);

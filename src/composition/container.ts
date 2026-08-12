@@ -27,11 +27,16 @@ export interface Container extends Infra {
   usecases: Usecases;
 }
 
-export function makeInfra(config: Config): Infra {
+export interface InfraOptions {
+  /** pino `service` binding. Web and worker share this wiring, not their logs. */
+  serviceName?: string;
+}
+
+export function makeInfra(config: Config, options: InfraOptions = {}): Infra {
   const logger = makePinoLogger({
     level: config.LOG_LEVEL,
     pretty: config.LOG_PRETTY,
-    base: { service: "mysp", env: config.NODE_ENV },
+    base: { service: options.serviceName ?? "mysp", env: config.NODE_ENV },
   });
   const { db } = getDbHandle({ url: config.DATABASE_URL });
   return { config, logger, clock: makeSystemClock(), db };

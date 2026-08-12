@@ -1,8 +1,6 @@
 import type { Redis } from "ioredis";
 import { z } from "zod";
 
-import { makeSystemClock } from "@/adapters/clock/system-clock";
-import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { startBullMqJobConsumer } from "@/adapters/queue/bullmq-job-consumer";
 import { makeBullMqJobQueue } from "@/adapters/queue/bullmq-job-queue";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
@@ -10,53 +8,77 @@ import { AppError } from "@/core/domain/errors";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobConsumer, JobHandlerMap, JobQueue } from "@/core/ports/job-queue";
 
+import { loadConfig, type Config, type EnvRecord } from "./config";
+import { closeContainer, makeInfra, makeUsecases, type Usecases } from "./container";
+
 /**
  * Composition root for the WORKER process (and for queue producers such as
- * enqueue-demo). The web container (container.ts) stays untouched.
+ * enqueue-demo). It reuses the web wiring (container.ts: db + usecases) and adds
+ * what only a worker has: a Redis connection, a queue and a job consumer.
  *
- * TODO(E1): merge this env schema into composition/config.ts once that file is
- * stable — the worker needs a strict SUBSET of the web config (no Google/session
- * keys), so it must not fail to boot on a missing web-only variable.
+ * Shared env keys live in composition/config.ts — there is no second copy here.
+ * Only WORKER_* keys, which no other process reads, are parsed below.
  */
 
-const WorkerEnvSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
-  LOG_PRETTY: z
-    .enum(["true", "false"])
-    .default("false")
-    .transform((value) => value === "true"),
-  REDIS_URL: z
-    .string()
-    .trim()
-    .min(1, "REDIS_URL must not be empty")
-    .refine(
-      (value) => value.startsWith("redis://") || value.startsWith("rediss://"),
-      "REDIS_URL must be a redis connection string",
-    ),
+const WorkerRuntimeSchema = z.object({
   /** Parallel jobs per worker process. Keep low: external APIs are rate-limited. */
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
   /** Liveness marker touched by the worker loop; read by the Docker HEALTHCHECK. */
   WORKER_HEARTBEAT_FILE: z.string().trim().min(1).default("/tmp/mysp-worker-heartbeat"),
   WORKER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(120_000).default(15_000),
+  /**
+   * Hard deadline for a graceful shutdown. Past it the process exits non-zero
+   * instead of hanging forever on a stuck job (Docker would SIGKILL it anyway,
+   * but without a log line saying why).
+   */
+  WORKER_SHUTDOWN_DEADLINE_MS: z.coerce.number().int().min(1).max(300_000).default(30_000),
 });
 
-export type WorkerConfig = z.infer<typeof WorkerEnvSchema>;
+export type WorkerConfig = Config & z.infer<typeof WorkerRuntimeSchema>;
 
-export function loadWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
-  const parsed = WorkerEnvSchema.safeParse(env);
-  if (parsed.success) return parsed.data;
+interface EnvIssue {
+  path: string;
+  message: string;
+}
 
-  const issues = parsed.error.issues.map((issue) => ({
+function issuesOf(error: z.ZodError): EnvIssue[] {
+  return error.issues.map((issue) => ({
     path: issue.path.join(".") || "(root)",
     message: issue.message,
   }));
+}
 
-  throw new AppError("INVALID_INPUT", {
-    message: `Invalid worker environment configuration: ${issues.map((i) => i.path).join(", ")}`,
-    userMessage: "Cấu hình worker chưa đầy đủ. Vui lòng liên hệ quản trị viên.",
-    context: { issues },
-  });
+/** Issues recorded by loadConfig() inside its AppError context, if any. */
+function issuesOfAppError(error: AppError): EnvIssue[] {
+  const raw = (error.context as { issues?: unknown }).issues;
+  return Array.isArray(raw) ? (raw as EnvIssue[]) : [{ path: "(core)", message: error.message }];
+}
+
+/**
+ * Shared config + worker config in ONE throw: a fresh deploy sees every missing
+ * key at once instead of one restart per variable.
+ */
+export function loadWorkerConfig(env: EnvRecord = process.env): WorkerConfig {
+  const runtime = WorkerRuntimeSchema.safeParse(env);
+
+  let base: Config | null = null;
+  let baseIssues: EnvIssue[] = [];
+  try {
+    base = loadConfig(env);
+  } catch (error) {
+    baseIssues = issuesOfAppError(AppError.from(error, "INVALID_INPUT"));
+  }
+
+  if (!base || !runtime.success) {
+    const issues = [...baseIssues, ...(runtime.success ? [] : issuesOf(runtime.error))];
+    throw new AppError("INVALID_INPUT", {
+      message: `Invalid worker environment configuration: ${issues.map((i) => i.path).join(", ")}`,
+      userMessage: "Cấu hình worker chưa đầy đủ. Vui lòng liên hệ quản trị viên.",
+      context: { scope: "worker", issues },
+    });
+  }
+
+  return { ...base, ...runtime.data };
 }
 
 export interface WorkerContainer {
@@ -64,19 +86,19 @@ export interface WorkerContainer {
   logger: Logger;
   clock: Clock;
   queue: JobQueue;
+  /** Same usecases the web process runs — one implementation, two entrypoints. */
+  usecases: Usecases;
   /** Starts consuming; the caller owns the returned consumer's lifecycle. */
   startConsumer(handlers: JobHandlerMap): JobConsumer;
-  /** Closes queue + Redis connection. Close the consumer first. */
+  /** Closes queue, Redis connection and the DB pool. Close the consumer first. */
   close(): Promise<void>;
 }
 
-export function makeWorkerContainer(env: NodeJS.ProcessEnv = process.env): WorkerContainer {
+export function makeWorkerContainer(env: EnvRecord = process.env): WorkerContainer {
   const config = loadWorkerConfig(env);
-  const logger = makePinoLogger({
-    level: config.LOG_LEVEL,
-    pretty: config.LOG_PRETTY,
-    base: { service: "mysp-worker", env: config.NODE_ENV },
-  });
+  // Reuses the web composition root: db handle, clock, logger, usecase wiring.
+  const infra = makeInfra(config, { serviceName: "mysp-worker" });
+  const logger = infra.logger;
 
   let connection: Redis | null = null;
   const getConnection = (): Redis => {
@@ -89,8 +111,9 @@ export function makeWorkerContainer(env: NodeJS.ProcessEnv = process.env): Worke
   return {
     config,
     logger,
-    clock: makeSystemClock(),
+    clock: infra.clock,
     queue,
+    usecases: makeUsecases(infra),
     startConsumer(handlers: JobHandlerMap): JobConsumer {
       return startBullMqJobConsumer({
         connection: getConnection(),
@@ -103,6 +126,7 @@ export function makeWorkerContainer(env: NodeJS.ProcessEnv = process.env): Worke
       await queue.close();
       // quit() waits for pending replies; disconnect() would drop them.
       if (connection) await connection.quit();
+      await closeContainer();
     },
   };
 }
@@ -113,3 +137,4 @@ export function makeWorkerContainer(env: NodeJS.ProcessEnv = process.env): Worke
  */
 export type { Clock, Logger } from "@/core/ports/infra";
 export type { JobConsumer, JobEnvelope, JobHandler, JobHandlerMap } from "@/core/ports/job-queue";
+export type { Usecases } from "./container";

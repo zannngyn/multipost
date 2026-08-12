@@ -1,6 +1,7 @@
 # Single-VPS deployment (docs/07 section 1). Values come from .env — see .env.example.
-# Start order is enforced with service_healthy, not with sleeps:
-#   postgres/redis healthy -> web + worker -> caddy.
+# Start order is enforced with service_healthy/service_completed_successfully,
+# never with sleeps:
+#   postgres/redis healthy -> migrate (runs to completion) -> web + worker -> caddy.
 
 services:
   postgres:
@@ -33,6 +34,26 @@ services:
       retries: 5
       start_period: 10s
 
+  # One-shot schema migration. Runs to completion BEFORE web/worker start.
+  # Why a dependency and not a `setup` profile: with
+  # `service_completed_successfully` the ordering is enforced by `docker compose
+  # up` itself, so no operator can forget the manual step and no app container
+  # ever boots against an un-migrated database. drizzle-kit migrate is
+  # idempotent, so re-running it on every `up` is a no-op.
+  # It also carries tsx + src, so `docker compose run --rm migrate pnpm db:seed`
+  # is the way to seed without a second image.
+  migrate:
+    build:
+      context: .
+      target: migrate
+    # A finished one-shot must stay finished; restarting it would loop forever.
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mysp}:${POSTGRES_PASSWORD:-mysp}@postgres:5432/${POSTGRES_DB:-mysp}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   web:
     build:
       context: .
@@ -59,6 +80,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   worker:
     build:
@@ -69,12 +92,19 @@ services:
       NODE_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_PRETTY: "false"
+      # The worker runs the same usecases as the web process, so it needs the DB.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mysp}:${POSTGRES_PASSWORD:-mysp}@postgres:5432/${POSTGRES_DB:-mysp}
       REDIS_URL: redis://redis:6379
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
       WORKER_HEARTBEAT_FILE: /tmp/mysp-worker-heartbeat
+      WORKER_SHUTDOWN_DEADLINE_MS: ${WORKER_SHUTDOWN_DEADLINE_MS:-30000}
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   caddy:
     image: caddy:2-alpine
@@ -88,6 +118,15 @@ services:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddydata:/data
       - caddyconfig:/config
+    # Caddy's admin API (localhost:2019, on by default) answers only while the
+    # config is loaded — a good liveness signal, and it needs no extra tool:
+    # wget ships with the alpine image.
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       web:
         condition: service_healthy
