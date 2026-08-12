@@ -13,7 +13,7 @@ import type {
 } from "@/core/ports/product-repo";
 import type { SheetSnapshot, SheetSource } from "@/core/ports/sheet-source";
 
-import { makeSyncCatalog } from "./sync-catalog";
+import { makeSyncCatalog, MAX_STORED_ISSUES } from "./sync-catalog";
 
 const TENANT = "00000000-0000-0000-0000-000000000001";
 
@@ -129,6 +129,7 @@ function makeHarness(options: {
     finish: async (input) => {
       finished.push(input);
     },
+    findLatest: async () => null,
   };
 
   return {
@@ -295,6 +296,48 @@ describe("syncCatalog — edge cases first", () => {
     expect(harness.writtenMedia[0].productCode).toBe("MG0AD6051");
     expect(harness.writtenMedia[0].needsReview).toBe(true);
     expect(result.issues.some((issue) => issue.reason === "MULTIPLE_PRODUCT_CODES")).toBe(true);
+  });
+
+  it("caps the stored issues but still counts every one of them", async () => {
+    // 250 unparseable names + the sheet row left with no media = 251 issues.
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: Array.from({ length: 250 }, (_, index) => driveFile(`IMG_${index}.JPG`)),
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+
+    expect(result.issues).toHaveLength(MAX_STORED_ISSUES);
+    expect(result.counts.mediaRejected).toBe(250);
+    expect(result.counts.issuesTotal).toBe(251);
+    expect(result.counts.issuesTruncated).toBe(true);
+    expect(harness.finished[0].counts).toMatchObject({ issuesTotal: 251, issuesTruncated: true });
+  });
+
+  it("does not flag truncation when every issue fits", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: [driveFile("MGKVX6310-KEM (1).jpg"), driveFile("IMG_1664.JPG")],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+
+    expect(result.counts.issuesTotal).toBe(result.issues.length);
+    expect(result.counts.issuesTruncated).toBe(false);
+  });
+
+  it("keeps the issue counters on a failed run", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow({ "Tên sản phẩm": "" })]),
+      driveError: new AppError("DRIVE_ERROR", { message: "permission denied" }),
+    });
+
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({ code: "DRIVE_ERROR" });
+    expect(harness.finished[0].counts).toMatchObject({
+      issuesTotal: 1,
+      issuesTruncated: false,
+      driveFilesSeen: 0,
+    });
   });
 });
 

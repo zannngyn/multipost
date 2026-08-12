@@ -4,18 +4,18 @@ import { makeFixtureDriveSource, makeFixtureSheetSource } from "@/adapters/googl
 import { DEMO_TENANT_ID } from "@/adapters/db/seed";
 import { mediaAssets, products, syncRuns, tenantIntegrations, tenants } from "@/adapters/db/schema";
 import { AppError } from "@/core/domain/errors";
-
-import { closeContainer, makeContainer } from "./container";
-import { loadConfig } from "./config";
+import { loadConfig } from "@/composition/config";
+import { closeContainer, makeContainer } from "@/composition/container";
 
 /**
- * Dev script (not part of the app): runs a full catalog sync against a REAL
- * Postgres using the `sample-data/` fixtures as Drive/Sheet, then composes three
- * posts (happy / out of stock / no media) so the whole E2+E3 chain is exercised
- * end to end while no Service Account exists.
+ * Dev script (NOT part of the app — it lives outside `src/` so no production
+ * bundle can reach the `sample-data/` fixture sources): runs a full catalog sync
+ * against a REAL Postgres using the fixtures as Drive/Sheet, then reads the sync
+ * status back and composes three posts (happy / out of stock / no media), so the
+ * whole E2+E3 chain is exercised end to end while no Service Account exists.
  *
  *   DATABASE_URL=... REDIS_URL=... NODE_ENV=development \
- *     pnpm exec tsx src/composition/catalog-smoke.ts
+ *     pnpm exec tsx scripts/catalog-smoke.ts
  */
 
 const CASES = {
@@ -95,6 +95,26 @@ async function main(): Promise<void> {
         last_run_status: runs.at(-1)?.status,
         last_run_issue_count: runs.at(-1)?.issues.length,
         last_run_counts: runs.at(-1)?.counts,
+      },
+      null,
+      2,
+    ),
+  );
+
+  // Read model the status panel will use (E10): must match the run just written.
+  const status = await usecases.getSyncStatus({ tenantId: DEMO_TENANT_ID });
+  console.log("\n=== get-sync-status ===");
+  console.log(
+    JSON.stringify(
+      {
+        syncRunId: status?.syncRunId,
+        status: status?.status,
+        startedAt: status?.startedAt,
+        finishedAt: status?.finishedAt,
+        issuesStored: status?.issues.length,
+        issuesTotal: status?.counts?.issuesTotal,
+        issuesTruncated: status?.counts?.issuesTruncated,
+        errorCode: status?.errorCode,
       },
       null,
       2,

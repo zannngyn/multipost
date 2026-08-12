@@ -10,6 +10,7 @@ import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { SheetSource } from "@/core/ports/sheet-source";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
+import { makeGetSyncStatus, type GetSyncStatus } from "@/core/usecases/get-sync-status";
 import { makeHealthcheckTenant, type HealthcheckTenant } from "@/core/usecases/healthcheck-tenant";
 import { makeSyncCatalog, type SyncCatalog } from "@/core/usecases/sync-catalog";
 
@@ -32,6 +33,7 @@ export interface Infra {
 export interface Usecases {
   healthcheckTenant: HealthcheckTenant;
   syncCatalog: SyncCatalog;
+  getSyncStatus: GetSyncStatus;
   composePost: ComposePost;
   generateCaptions: GenerateCaptions;
 }
@@ -89,6 +91,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       clock: deps.clock,
       logger: deps.logger,
     }),
+    getSyncStatus: makeGetSyncStatus({ syncRuns, logger: deps.logger }),
     composePost: makeComposePost({ products, media, logger: deps.logger }),
     generateCaptions: makeLazyGenerateCaptions({ logger: deps.logger, clock: deps.clock }),
   };

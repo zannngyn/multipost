@@ -32,7 +32,7 @@ import type { SheetSource } from "@/core/ports/sheet-source";
  */
 
 /** A run must not write thousands of JSON rows; counts stay exact regardless. */
-const MAX_STORED_ISSUES = 200;
+export const MAX_STORED_ISSUES = 200;
 
 export interface SyncCatalogInput {
   readonly tenantId: string;
@@ -100,9 +100,14 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
     });
 
     const issues: SyncIssue[] = [];
+    // Counted even when not stored: the operator must see that 250 files were
+    // rejected, not just the 200 the run kept (business rule 5).
+    let issuesTotal = 0;
     const addIssue = (issue: SyncIssue) => {
+      issuesTotal += 1;
       if (issues.length < MAX_STORED_ISSUES) issues.push(issue);
     };
+    const issueCounters = () => ({ issuesTotal, issuesTruncated: issuesTotal > issues.length });
 
     try {
       // --- Sheet ----------------------------------------------------------
@@ -273,6 +278,7 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
         mediaWritten,
         productsDeleted,
         mediaDeleted,
+        ...issueCounters(),
       };
 
       const status: SyncRunStatus =
@@ -310,7 +316,8 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
           syncRunId,
           status: "failed",
           finishedAt: deps.clock.now(),
-          counts: emptyCounts(),
+          // The run produced no numbers, but the issues it did detect stay visible.
+          counts: { ...emptyCounts(), ...issueCounters() },
           issues,
           errorCode: appError.code,
           errorMessage: appError.message,
@@ -394,5 +401,7 @@ function emptyCounts(): SyncRunCounts {
     mediaWritten: 0,
     productsDeleted: 0,
     mediaDeleted: 0,
+    issuesTotal: 0,
+    issuesTruncated: false,
   };
 }

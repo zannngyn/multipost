@@ -63,6 +63,10 @@ export interface SyncRunCounts {
   readonly mediaWritten: number;
   readonly productsDeleted: number;
   readonly mediaDeleted: number;
+  /** Issues DETECTED by the run — `issues[]` is capped, this number is not. */
+  readonly issuesTotal: number;
+  /** True when `issues[]` holds fewer entries than `issuesTotal`. */
+  readonly issuesTruncated: boolean;
 }
 
 export interface StartSyncRunInput {
@@ -87,8 +91,27 @@ export interface FinishSyncRunInput {
   readonly errorMessage?: string | null;
 }
 
+/**
+ * Read model behind "when did this tenant last sync, and how did it go?"
+ * (E2 status panel). Dates stay Dates here; formatting is the usecase's job.
+ */
+export interface SyncRunSummary {
+  readonly id: string;
+  readonly status: SyncRunStatus;
+  readonly startedAt: Date;
+  /** Null while the run is still `running` — a crashed run never gets one. */
+  readonly finishedAt: Date | null;
+  /** Null until the run finishes; `counts` is written by `finish`. */
+  readonly counts: SyncRunCounts | null;
+  readonly issues: readonly SyncIssue[];
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+}
+
 export interface SyncRunRepo {
   /** Creates the row up front so a crash still leaves a `running` trace. */
   start(input: StartSyncRunInput): Promise<{ id: string }>;
   finish(input: FinishSyncRunInput): Promise<void>;
+  /** Newest run by `startedAt`, or null when the tenant never synced. */
+  findLatest(tenantId: string): Promise<SyncRunSummary | null>;
 }
