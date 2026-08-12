@@ -21,6 +21,7 @@ import {
   HEALTHCHECK_TENANT_JOB_NAME,
   makeHealthcheckTenantHandler,
 } from "./jobs/healthcheck-tenant-job";
+import { PUBLISH_POST_JOB_NAME, makePublishPostHandler } from "./jobs/publish-post-job";
 
 let logger: Logger | null = null;
 let container: WorkerContainer | null = null;
@@ -130,12 +131,16 @@ async function main(): Promise<void> {
     logger,
   });
 
-  // Handler map: one entry per job name. Publish jobs land in E5 (publish-post).
+  // Handler map: one entry per job name.
   const handlers = {
     [ECHO_JOB_NAME]: makeEchoHandler(logger),
     [HEALTHCHECK_TENANT_JOB_NAME]: makeHealthcheckTenantHandler({
       logger,
       healthcheckTenant: deps.usecases.healthcheckTenant,
+    }),
+    [PUBLISH_POST_JOB_NAME]: makePublishPostHandler({
+      logger,
+      publishPost: deps.usecases.publishPost,
     }),
   };
   consumer = deps.startConsumer(handlers);

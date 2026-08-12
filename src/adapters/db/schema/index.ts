@@ -6,3 +6,5 @@ export * from "./audit-log";
 export * from "./sync-run";
 export * from "./product";
 export * from "./media-asset";
+export * from "./post-batch";
+export * from "./post-job";

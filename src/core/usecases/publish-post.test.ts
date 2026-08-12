@@ -1,0 +1,581 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { AppError } from "@/core/domain/errors";
+import { deriveBatchStatus, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
+import type { Product } from "@/core/domain/product";
+import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
+import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
+import type {
+  ApplyTransitionInput,
+  PostBatchSummary,
+  PostJobRepo,
+} from "@/core/ports/post-job-repo";
+import type { ProductRepo } from "@/core/ports/product-repo";
+import type { ChannelConfig, ChannelConfigRepo, PublishSettings } from "@/core/ports/publisher";
+
+import { makePublishPost, spacingWaitMs } from "./publish-post";
+
+/**
+ * Every branch of E7.4 with in-memory ports. The publisher is a spy: "was
+ * Facebook called?" is the assertion that matters for the stock gate and for the
+ * anti-duplicate rules.
+ */
+
+const TENANT = "00000000-0000-0000-0000-000000000001";
+
+function silentLogger(): Logger {
+  const logger: Logger = {
+    child: (_bindings: LogBindings) => logger,
+    debug: (_message: string, _context?: LogContext) => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  };
+  return logger;
+}
+
+function fixedClock(startMs = Date.parse("2026-08-13T02:00:00.000Z")): Clock & { advance(ms: number): void } {
+  let now = startMs;
+  return {
+    now: () => new Date(now),
+    nowMs: () => now,
+    advance(ms: number) {
+      now += ms;
+    },
+  };
+}
+
+function makeJob(overrides: Partial<PostJob> = {}): PostJob {
+  return {
+    id: "job-1",
+    tenantId: TENANT,
+    batchId: "batch-1",
+    productCode: "MGKVX6310",
+    color: "TÍM",
+    channelId: "fbpage-a",
+    format: "image_post",
+    status: "queued",
+    attemptCount: 0,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    publishedPostId: null,
+    publishedUrl: null,
+    publishedAt: null,
+    captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
+    media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
+    scheduledAt: null,
+    ...overrides,
+  };
+}
+
+/** In-memory repo with the SAME optimistic guard as the Drizzle one. */
+function makeMemoryRepo(jobs: PostJob[]) {
+  const store = new Map(jobs.map((job) => [job.id, job]));
+  const transitions: Array<{ from: PostJobStatus; to: PostJobStatus; reason: string; ok: boolean }> = [];
+  const repo: PostJobRepo & {
+    transitions: typeof transitions;
+    get(id: string): PostJob | undefined;
+    refreshCalls: string[];
+  } = {
+    transitions,
+    refreshCalls: [],
+    get: (id: string) => store.get(id),
+    async createBatchWithJobs() {
+      throw new Error("not used in this test");
+    },
+    async findJobById(_tenantId: string, postJobId: string) {
+      return store.get(postJobId) ?? null;
+    },
+    async listJobsByBatch(_tenantId: string, batchId: string) {
+      return [...store.values()].filter((job) => job.batchId === batchId);
+    },
+    async applyTransition(input: ApplyTransitionInput) {
+      const current = store.get(input.postJobId);
+      const ok = Boolean(current && current.status === input.from);
+      transitions.push({ from: input.from, to: input.next.status, reason: input.reason, ok });
+      if (!current || current.status !== input.from) return null;
+      store.set(input.postJobId, input.next);
+      return input.next;
+    },
+    async findLastPublishedAt(_tenantId: string, channelId: string) {
+      const published = [...store.values()]
+        .filter((job) => job.channelId === channelId && job.publishedAt)
+        .map((job) => job.publishedAt as Date)
+        .sort((a, b) => b.getTime() - a.getTime());
+      return published[0] ?? null;
+    },
+    async refreshBatchStatus(_tenantId: string, batchId: string): Promise<PostBatchSummary> {
+      repo.refreshCalls.push(batchId);
+      const list = [...store.values()].filter((job) => job.batchId === batchId);
+      return {
+        batchId,
+        tenantId: TENANT,
+        productCode: list[0]?.productCode ?? "",
+        status: deriveBatchStatus(list.map((job) => job.status)),
+        total: list.length,
+        byStatus: { draft: 0, queued: 0, publishing: 0, published: 0, failed: 0, blocked: 0 },
+        jobs: list,
+      };
+    },
+    async getBatchSummary() {
+      return null;
+    },
+  };
+  return repo;
+}
+
+function makeProduct(stockRaw: string, noteRaw = ""): Product {
+  return {
+    content: { code: "MGKVX6310", name: "Giannal", description: null, category: null, season: null },
+    operational: { stockRaw, noteRaw, colorsRaw: "TÍM" },
+    hasConflict: false,
+    sourceRows: [2],
+  };
+}
+
+function makeProducts(product: Product | null): ProductRepo {
+  return {
+    findByCode: async () => product,
+    upsertMany: async () => 0,
+    deleteStale: async () => 0,
+  };
+}
+
+const CHANNEL: ChannelConfig = {
+  channelId: "fbpage-a",
+  platform: "facebook",
+  name: "Page A",
+  externalId: "555000111",
+  accessToken: "secret",
+  status: "active",
+  tokenExpiresAt: null,
+};
+
+function makeChannels(
+  channel: ChannelConfig | null,
+  settings: Partial<PublishSettings> = {},
+): ChannelConfigRepo {
+  return {
+    findChannel: async () => channel,
+    listChannels: async () => (channel ? [channel] : []),
+    getPublishSettings: async () => ({
+      spacingMs: 0,
+      retryBackoffMs: 1_000,
+      maxAttempts: 3,
+      ...settings,
+    }),
+  };
+}
+
+function makeQueue() {
+  const enqueued: Array<{ name: string; payload: unknown; opts?: EnqueueOptions }> = [];
+  const queue: JobQueue & { enqueued: typeof enqueued } = {
+    enqueued,
+    async enqueue(jobName, payload, opts) {
+      enqueued.push({ name: jobName, payload, opts });
+      return { jobId: opts?.jobId ?? "generated" };
+    },
+    async close() {},
+  };
+  return queue;
+}
+
+interface Harness {
+  publish: ReturnType<typeof makePublishPost>;
+  repo: ReturnType<typeof makeMemoryRepo>;
+  queue: ReturnType<typeof makeQueue>;
+  publisher: { publishImagePost: ReturnType<typeof vi.fn> };
+  clock: ReturnType<typeof fixedClock>;
+}
+
+function harness(options: {
+  jobs?: PostJob[];
+  product?: Product | null;
+  channel?: ChannelConfig | null;
+  settings?: Partial<PublishSettings>;
+  publish?: () => Promise<{ postId: string; url: string | null }>;
+} = {}): Harness {
+  const repo = makeMemoryRepo(options.jobs ?? [makeJob()]);
+  const queue = makeQueue();
+  const clock = fixedClock();
+  const publisher = {
+    publishImagePost: vi.fn(
+      options.publish ?? (async () => ({ postId: "555000111_1", url: "https://fb/555000111_1" })),
+    ),
+  };
+  return {
+    repo,
+    queue,
+    clock,
+    publisher,
+    publish: makePublishPost({
+      postJobs: repo,
+      products: makeProducts(options.product === undefined ? makeProduct("104") : options.product),
+      channels: makeChannels(options.channel === undefined ? CHANNEL : options.channel, options.settings),
+      publisher,
+      queue,
+      clock,
+      logger: silentLogger(),
+    }),
+  };
+}
+
+// --- Edge cases first -------------------------------------------------------
+
+describe("publishPost — rejected calls", () => {
+  it("rejects a malformed tenant id or job id", async () => {
+    const { publish } = harness();
+    await expect(publish({ tenantId: "nope", postJobId: "job-1" })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    await expect(publish({ tenantId: TENANT, postJobId: "  " })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+  });
+
+  it("rejects an unknown job without calling the platform", async () => {
+    const { publish, publisher } = harness();
+    await expect(publish({ tenantId: TENANT, postJobId: "ghost" })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      context: { reason: "POST_JOB_NOT_FOUND" },
+    });
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+});
+
+describe("publishPost — anti-duplicate guards (business rule 4)", () => {
+  it("re-running a published job publishes NOTHING (crash after publish, before the status write)", async () => {
+    const published = makeJob({
+      status: "published",
+      publishedPostId: "555000111_1",
+      publishedAt: new Date(),
+      attemptCount: 1,
+    });
+    const { publish, publisher } = harness({ jobs: [published] });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1", attempt: 2, maxAttempts: 3 });
+
+    expect(result.outcome).toBe("already_published");
+    expect(result.publishedPostId).toBe("555000111_1");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("never touches a job left in `publishing` by a dead worker", async () => {
+    const { publish, publisher } = harness({ jobs: [makeJob({ status: "publishing", attemptCount: 1 })] });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1", attempt: 2, maxAttempts: 3 });
+    expect(result.outcome).toBe("skipped");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it.each(["draft", "blocked", "failed"] as PostJobStatus[])(
+    "skips a job in %s instead of publishing it",
+    async (status) => {
+      const { publish, publisher } = harness({
+        jobs: [makeJob({ status, lastErrorCode: status === "draft" ? null : "OUT_OF_STOCK" })],
+      });
+      const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+      expect(result.outcome).toBe("skipped");
+      expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    },
+  );
+
+  it("stops quietly when another worker won the claim race", async () => {
+    const { publish, publisher, repo } = harness();
+    // Simulate the competitor winning between findJobById and the UPDATE.
+    const original = repo.applyTransition.bind(repo);
+    repo.applyTransition = async (input) => {
+      if (input.next.status === "publishing") return null;
+      return original(input);
+    };
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("skipped");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("two concurrent runs of the same job publish exactly once", async () => {
+    const { publish, publisher } = harness();
+    const results = await Promise.allSettled([
+      publish({ tenantId: TENANT, postJobId: "job-1" }),
+      publish({ tenantId: TENANT, postJobId: "job-1" }),
+    ]);
+    const outcomes = results.map((entry) =>
+      entry.status === "fulfilled" ? entry.value.outcome : "threw",
+    );
+    expect(outcomes.filter((outcome) => outcome === "published")).toHaveLength(1);
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("publishPost — stock recheck (business rule 3)", () => {
+  it("blocks a sold-out product BEFORE any call to the channel", async () => {
+    const { publish, publisher, repo } = harness({ product: makeProduct("0") });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(repo.get("job-1")).toMatchObject({ status: "blocked", lastErrorCode: "OUT_OF_STOCK" });
+    expect(result.userMessage).toContain("hết hàng");
+  });
+
+  it("blocks on the note 'HẾT HÀNG' even when the number looks fine", async () => {
+    const { publish, publisher } = harness({ product: makeProduct("50", "HẾT HÀNG") });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.errorCode).toBe("OUT_OF_STOCK");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("blocks when the product vanished from the snapshot", async () => {
+    const { publish, publisher, repo } = harness({ product: null });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "PRODUCT_NOT_FOUND" });
+    expect(repo.get("job-1")?.status).toBe("blocked");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("publishes a low-stock product (1..3) — the warning stays internal", async () => {
+    const { publish, publisher } = harness({ product: makeProduct("3") });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.outcome).toBe("published");
+    const caption = publisher.publishImagePost.mock.calls[0][0].caption as string;
+    expect(caption).not.toContain("Tồn thấp");
+  });
+});
+
+describe("publishPost — channel configuration", () => {
+  it("blocks when the tenant has no such channel", async () => {
+    const { publish, publisher, repo } = harness({ channel: null });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "CHANNEL_NOT_CONFIGURED" });
+    expect(repo.get("job-1")?.status).toBe("blocked");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("blocks when the channel is disabled", async () => {
+    const { publish, publisher } = harness({ channel: { ...CHANNEL, status: "disabled" } });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.errorCode).toBe("CHANNEL_NOT_CONFIGURED");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+});
+
+describe("publishPost — spacing gate (brief §6, PENDING(E1): per channel)", () => {
+  it("re-enqueues with the remaining delay instead of publishing too soon", async () => {
+    const previous = makeJob({
+      id: "job-0",
+      status: "published",
+      publishedPostId: "555000111_0",
+      publishedAt: new Date("2026-08-13T01:59:30.000Z"),
+    });
+    const { publish, publisher, queue, repo } = harness({
+      jobs: [previous, makeJob()],
+      settings: { spacingMs: 60_000 },
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(30_000);
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    // Still queued: a deferred post must not sit in `publishing`.
+    expect(repo.get("job-1")?.status).toBe("queued");
+    expect(queue.enqueued).toHaveLength(1);
+    expect(queue.enqueued[0].opts?.delayMs).toBe(30_000);
+    // A NEW queue id, otherwise BullMQ would drop the re-enqueue.
+    expect(queue.enqueued[0].opts?.jobId).toMatch(/\.d\d+$/);
+  });
+
+  it("publishes immediately once the gap has elapsed", async () => {
+    const previous = makeJob({
+      id: "job-0",
+      status: "published",
+      publishedPostId: "555000111_0",
+      publishedAt: new Date("2026-08-13T01:58:00.000Z"),
+    });
+    const { publish, publisher, queue } = harness({
+      jobs: [previous, makeJob()],
+      settings: { spacingMs: 60_000 },
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("does not delay the first post of a channel", async () => {
+    const { publish, publisher } = harness({ settings: { spacingMs: 120_000 } });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("spacingWaitMs", () => {
+  const now = Date.parse("2026-08-13T02:00:00.000Z");
+  it("returns 0 without a previous post, with spacing 0, or once elapsed", () => {
+    expect(spacingWaitMs(null, now, 60_000)).toBe(0);
+    expect(spacingWaitMs(new Date(now - 1_000), now, 0)).toBe(0);
+    expect(spacingWaitMs(new Date(now - 60_000), now, 60_000)).toBe(0);
+  });
+  it("returns the remaining gap", () => {
+    expect(spacingWaitMs(new Date(now - 20_000), now, 60_000)).toBe(40_000);
+  });
+  it("caps a clock skew (last post in the future) instead of waiting forever", () => {
+    expect(spacingWaitMs(new Date(now + 3_600_000), now, 60_000)).toBe(60_000);
+  });
+});
+
+describe("publishPost — platform failures", () => {
+  it("blocks (no retry) when the token is dead", async () => {
+    const tokenError = new AppError("TOKEN_EXPIRED", {
+      message: "Session expired",
+      context: { graph_code: 190, retryable: false },
+    });
+    const { publish, publisher, repo } = harness({
+      publish: async () => {
+        throw tokenError;
+      },
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 });
+
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "TOKEN_EXPIRED" });
+    expect(repo.get("job-1")).toMatchObject({ status: "blocked", lastErrorCode: "TOKEN_EXPIRED" });
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts the job back in `queued` and rethrows when a retry is left", async () => {
+    const { publish, repo } = harness({
+      publish: async () => {
+        throw new AppError("META_ERROR", { context: { retryable: true } });
+      },
+    });
+
+    await expect(
+      publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ code: "META_ERROR" });
+
+    expect(repo.get("job-1")).toMatchObject({
+      status: "queued",
+      attemptCount: 1,
+      lastErrorCode: "META_ERROR",
+    });
+  });
+
+  it("fails permanently on the last attempt", async () => {
+    const { publish, repo } = harness({
+      publish: async () => {
+        throw new AppError("META_ERROR", { context: { retryable: true } });
+      },
+    });
+
+    await expect(
+      publish({ tenantId: TENANT, postJobId: "job-1", attempt: 3, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ code: "PUBLISH_FAILED" });
+
+    expect(repo.get("job-1")).toMatchObject({ status: "failed", lastErrorCode: "PUBLISH_FAILED" });
+  });
+
+  it("does not burn retries on a non-retryable platform error", async () => {
+    const { publish, repo } = harness({
+      publish: async () => {
+        throw new AppError("META_ERROR", { context: { retryable: false, reason: "PERMISSION_DENIED" } });
+      },
+    });
+
+    await expect(
+      publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ code: "PUBLISH_FAILED" });
+
+    expect(repo.get("job-1")?.status).toBe("failed");
+  });
+});
+
+describe("publishPost — happy path", () => {
+  let h: Harness;
+  beforeEach(() => {
+    h = harness();
+  });
+
+  it("publishes, stores the post id and refreshes the batch summary", async () => {
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 });
+
+    expect(result).toMatchObject({
+      outcome: "published",
+      status: "published",
+      publishedPostId: "555000111_1",
+      publishedUrl: "https://fb/555000111_1",
+      channelId: "fbpage-a",
+    });
+    expect(h.repo.get("job-1")).toMatchObject({
+      status: "published",
+      attemptCount: 1,
+      publishedPostId: "555000111_1",
+      lastErrorCode: null,
+    });
+    expect(h.repo.refreshCalls).toContain("batch-1");
+  });
+
+  it("hands the publisher the caption, the ordered album and the duplicate key", async () => {
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    const input = h.publisher.publishImagePost.mock.calls[0][0];
+    expect(input.caption).toBe("Giannal – MỘT NGÀY DỊU DÀNG");
+    expect(input.media).toHaveLength(1);
+    expect(input.idempotencyKey).toBe("batch-1|MGKVX6310|TÍM|fbpage-a|image_post");
+    expect(input.channel.channelId).toBe("fbpage-a");
+  });
+
+  it("follows the mandated order: claim -> stock -> channel -> publish", async () => {
+    const order: string[] = [];
+    const repo = makeMemoryRepo([makeJob()]);
+    const originalTransition = repo.applyTransition.bind(repo);
+    repo.applyTransition = async (input) => {
+      order.push(`transition:${input.next.status}`);
+      return originalTransition(input);
+    };
+    const products: ProductRepo = {
+      findByCode: async () => {
+        order.push("stock-recheck");
+        return makeProduct("104");
+      },
+      upsertMany: async () => 0,
+      deleteStale: async () => 0,
+    };
+    const channels: ChannelConfigRepo = {
+      findChannel: async () => {
+        order.push("channel-config");
+        return CHANNEL;
+      },
+      listChannels: async () => [CHANNEL],
+      getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 }),
+    };
+    const publish = makePublishPost({
+      postJobs: repo,
+      products,
+      channels,
+      publisher: {
+        publishImagePost: async () => {
+          order.push("publish");
+          return { postId: "555000111_9", url: null };
+        },
+      },
+      queue: makeQueue(),
+      clock: fixedClock(),
+      logger: silentLogger(),
+    });
+
+    await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(order).toEqual([
+      "transition:publishing",
+      "stock-recheck",
+      "channel-config",
+      "publish",
+      "transition:published",
+    ]);
+  });
+});

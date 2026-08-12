@@ -113,7 +113,9 @@ export function makeWorkerContainer(env: EnvRecord = process.env): WorkerContain
     logger,
     clock: infra.clock,
     queue,
-    usecases: makeUsecases(infra),
+    // The worker passes its OWN queue so the process keeps a single Redis
+    // connection: publish-post re-enqueues itself when the spacing gate defers.
+    usecases: makeUsecases(infra, { queue }),
     startConsumer(handlers: JobHandlerMap): JobConsumer {
       return startBullMqJobConsumer({
         connection: getConnection(),
@@ -138,3 +140,9 @@ export function makeWorkerContainer(env: EnvRecord = process.env): WorkerContain
 export type { Clock, Logger } from "@/core/ports/infra";
 export type { JobConsumer, JobEnvelope, JobHandler, JobHandlerMap } from "@/core/ports/job-queue";
 export type { Usecases } from "./container";
+/**
+ * Job NAME (a value, not a type): producer and consumer must agree on it, and
+ * the producer lives in core. Re-exported here so worker/ can use it without
+ * importing core directly (docs/07 import matrix).
+ */
+export { PUBLISH_POST_JOB_NAME } from "@/core/usecases/publish-post";

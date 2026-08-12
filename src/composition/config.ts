@@ -105,6 +105,25 @@ export const AiConfigSchema = z.object({
 export type AiConfig = z.infer<typeof AiConfigSchema>;
 
 /**
+ * Facebook publishing (E5). Loaded on demand like auth/google/ai: a process
+ * that never publishes must boot without it.
+ *
+ * Only the API VERSION lives here — it is a deploy-time decision, identical for
+ * every tenant. Page ids, Page tokens and the posting spacing stay in
+ * `tenant_integration` (business rule 7); putting them in env would break
+ * multi-tenancy on the first second tenant.
+ */
+export const MetaConfigSchema = z.object({
+  META_GRAPH_VERSION: z
+    .string()
+    .trim()
+    .regex(/^v\d+\.\d+$/, "META_GRAPH_VERSION must look like v23.0")
+    .default("v23.0"),
+});
+
+export type MetaConfig = z.infer<typeof MetaConfigSchema>;
+
+/**
  * One throw listing every bad key — a fresh deploy reports all gaps at once
  * instead of one restart per missing variable.
  */
@@ -138,4 +157,8 @@ export function loadGoogleConfig(env: EnvRecord = process.env): GoogleConfig {
 
 export function loadAiConfig(env: EnvRecord = process.env): AiConfig {
   return parseEnv(AiConfigSchema, env, "ai");
+}
+
+export function loadMetaConfig(env: EnvRecord = process.env): MetaConfig {
+  return parseEnv(MetaConfigSchema, env, "meta");
 }

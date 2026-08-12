@@ -70,6 +70,7 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       AUTH_ALLOWED_DOMAINS: ${AUTH_ALLOWED_DOMAINS:-example.com}
       SESSION_SECRET: ${SESSION_SECRET:-}
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v23.0}
     expose:
       - "3000"
     ports:
@@ -95,6 +96,9 @@ services:
       # The worker runs the same usecases as the web process, so it needs the DB.
       DATABASE_URL: postgresql://${POSTGRES_USER:-mysp}:${POSTGRES_PASSWORD:-mysp}@postgres:5432/${POSTGRES_DB:-mysp}
       REDIS_URL: redis://redis:6379
+      # Graph API version used by the publish jobs (E5). Bumping it is a deploy
+      # decision; Page ids and tokens live in tenant_integration, not here.
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v23.0}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
       WORKER_HEARTBEAT_FILE: /tmp/mysp-worker-heartbeat
       WORKER_SHUTDOWN_DEADLINE_MS: ${WORKER_SHUTDOWN_DEADLINE_MS:-30000}

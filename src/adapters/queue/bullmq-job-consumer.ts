@@ -27,6 +27,18 @@ export const NON_RETRYABLE_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   // Business failure, not an outage: a tenant is created by an operator, not by
   // waiting. Burning 3 attempts on it only delays the error report.
   "TENANT_NOT_FOUND",
+  // --- Publishing (E5/E7). A retry cannot restock an item, mint a token,
+  // configure a channel, or undo a post that already exists. publish-post
+  // records the reason on the post_job row before these ever reach the queue;
+  // they are listed here as defence in depth for the paths that DO throw.
+  "OUT_OF_STOCK",
+  "DUPLICATE_POST_BLOCKED",
+  "CHANNEL_NOT_CONFIGURED",
+  "TOKEN_EXPIRED",
+  "INVALID_JOB_TRANSITION",
+  // The usecase already spent every allowed attempt (or hit a non-retryable
+  // platform error) and moved the job to `failed`.
+  "PUBLISH_FAILED",
 ]);
 
 export interface BullMqJobConsumerDeps {

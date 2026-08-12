@@ -15,10 +15,23 @@ import { z } from "zod";
  * NOT `z.uuid()`: the seeded demo id has no RFC-4122 version nibble and would
  * be rejected.
  */
-const TENANT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const TENANT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Seeded fixture (mirrors DEMO_TENANT_ID in adapters/db/seed.ts) — prefilled. */
 export const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001";
+
+/**
+ * Reusable tenant id field. Every screen validates it the same way, so an
+ * operator never sees two different sentences for the same mistake
+ * (core-component-reuse: share the rule, not just the widget).
+ */
+export const tenantIdField = () =>
+  z
+    .string()
+    .trim()
+    .min(1, "Nhập mã đơn vị (tenant) để tiếp tục.")
+    .regex(TENANT_ID_PATTERN, `Mã đơn vị phải có dạng UUID, ví dụ: ${DEMO_TENANT_ID}`);
 
 export const TenantHealthFormSchema = z.object({
   tenantId: z
