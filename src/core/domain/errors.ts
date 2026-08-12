@@ -31,6 +31,13 @@ export const ERROR_CODES = [
   "CAPTION_VALIDATION_FAILED",
   "MODEL_NOT_CONFIGURED",
   "PROMPT_NOT_FOUND",
+  // Publishing (E5/E7)
+  "META_ERROR",
+  "TOKEN_EXPIRED",
+  "CHANNEL_NOT_CONFIGURED",
+  "DUPLICATE_POST_BLOCKED",
+  "PUBLISH_FAILED",
+  "INVALID_JOB_TRANSITION",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -62,6 +69,12 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   CAPTION_VALIDATION_FAILED: "Caption không qua được bước kiểm tra an toàn — cần chỉnh sửa hoặc tạo lại.",
   MODEL_NOT_CONFIGURED: "Chưa cấu hình model AI cho tác vụ này. Kiểm tra registry model.",
   PROMPT_NOT_FOUND: "Không tìm thấy prompt template cho tác vụ này.",
+  META_ERROR: "Facebook trả về lỗi khi đăng bài. Xem chi tiết trong nhật ký đăng.",
+  TOKEN_EXPIRED: "Token của kênh đã hết hạn hoặc bị thu hồi. Cần kết nối lại kênh.",
+  CHANNEL_NOT_CONFIGURED: "Kênh chưa được cấu hình cho đơn vị này. Kiểm tra phần quản lý kênh.",
+  DUPLICATE_POST_BLOCKED: "Bài này đã được đăng (hoặc đang đăng) lên kênh này — đã chặn đăng trùng.",
+  PUBLISH_FAILED: "Đăng bài thất bại sau số lần thử cho phép. Xem nhật ký để biết nguyên nhân.",
+  INVALID_JOB_TRANSITION: "Trạng thái công việc đăng bài không cho phép thao tác này.",
 };
 
 /** English developer message. Falls back to the code itself. */
@@ -88,6 +101,12 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   CAPTION_VALIDATION_FAILED: "Generated caption failed validation rules",
   MODEL_NOT_CONFIGURED: "No model configured for task in registry",
   PROMPT_NOT_FOUND: "Prompt template not found for task",
+  META_ERROR: "Graph API call failed",
+  TOKEN_EXPIRED: "Channel access token expired or revoked",
+  CHANNEL_NOT_CONFIGURED: "Channel not configured for tenant",
+  DUPLICATE_POST_BLOCKED: "Duplicate publish blocked by idempotency lock",
+  PUBLISH_FAILED: "Publish failed after allowed retries",
+  INVALID_JOB_TRANSITION: "Post job state transition not allowed",
 };
 
 export interface AppErrorOptions {

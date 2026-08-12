@@ -36,6 +36,12 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   CAPTION_VALIDATION_FAILED: 422,
   MODEL_NOT_CONFIGURED: 500,
   PROMPT_NOT_FOUND: 500,
+  META_ERROR: 502,
+  TOKEN_EXPIRED: 401,
+  CHANNEL_NOT_CONFIGURED: 409,
+  DUPLICATE_POST_BLOCKED: 409,
+  PUBLISH_FAILED: 502,
+  INVALID_JOB_TRANSITION: 409,
 };
 
 /** Structural logger type — the app layer must not import ports or adapters. */
