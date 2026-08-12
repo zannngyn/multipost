@@ -97,6 +97,8 @@ async function generate(
     platform: request.platform,
     channel: request.channelId,
     job_id: request.postJobId,
+    batch_id: request.batchId,
+    product_code: request.productCode,
   });
 
   const policy = await deps.policies.getPolicy({ tenantId, task: request.task });
@@ -311,6 +313,8 @@ async function runTier(deps: ContentEngineDeps, input: TierRunInput): Promise<Ti
       task: request.task,
       postJobId: request.postJobId,
       channelId: request.channelId,
+      batchId: request.batchId,
+      productCode: request.productCode,
       promptTemplateId: template.id,
       promptVersion: template.version,
       provider: entry.provider,

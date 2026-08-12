@@ -10,6 +10,7 @@ import type {
   PostJobRepo,
 } from "@/core/ports/post-job-repo";
 import type { ChannelConfigRepo } from "@/core/ports/publisher";
+import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
 import { makeRetryPostJob } from "./retry-post-job";
@@ -68,7 +69,12 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
 
 function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {}) {
   const store = new Map(jobs.map((job) => [job.id, job]));
-  const transitions: Array<{ from: PostJobStatus; to: PostJobStatus; reason: string }> = [];
+  const transitions: Array<{
+    from: PostJobStatus;
+    to: PostJobStatus;
+    reason: string;
+    actorUserId: string | null;
+  }> = [];
   const repo: PostJobRepo & {
     transitions: typeof transitions;
     get(id: string): PostJob | undefined;
@@ -90,7 +96,12 @@ function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {})
       return { items: [], nextCursor: null };
     },
     async applyTransition(input: ApplyTransitionInput) {
-      transitions.push({ from: input.from, to: input.next.status, reason: input.reason });
+      transitions.push({
+        from: input.from,
+        to: input.next.status,
+        reason: input.reason,
+        actorUserId: input.actorUserId ?? null,
+      });
       if (options.rejectTransition) return null;
       const current = store.get(input.postJobId);
       if (!current || current.status !== input.from) return null;
@@ -142,7 +153,28 @@ const CHANNELS: ChannelConfigRepo = {
   getPublishSettings: async () => ({ spacingMs: 60_000, retryBackoffMs: 1_000, maxAttempts: 3 }),
 };
 
-function harness(jobs: PostJob[], options: { queueFails?: boolean; rejectTransition?: boolean } = {}) {
+/** app_user lookup: the audit trail's "who pressed chạy lại?". */
+function makeUsers(byEmail: Record<string, string>, options: { fail?: boolean } = {}) {
+  const asked: string[] = [];
+  const users: UserRepo & { asked: string[] } = {
+    asked,
+    async findUserIdByEmail(_tenantId, email) {
+      asked.push(email);
+      if (options.fail) throw new AppError("DB_ERROR", { message: "app_user unreachable" });
+      return byEmail[email.trim().toLowerCase()] ?? null;
+    },
+  };
+  return users;
+}
+
+function harness(
+  jobs: PostJob[],
+  options: {
+    queueFails?: boolean;
+    rejectTransition?: boolean;
+    users?: UserRepo;
+  } = {},
+) {
   const lines: LogLine[] = [];
   const repo = makeRepo(jobs, { rejectTransition: options.rejectTransition });
   const queue = makeQueue({ fail: options.queueFails });
@@ -152,6 +184,7 @@ function harness(jobs: PostJob[], options: { queueFails?: boolean; rejectTransit
     queue,
     clock: CLOCK,
     logger: recordingLogger(lines),
+    users: options.users,
   });
   return { retryPostJob, repo, queue, lines };
 }
@@ -291,5 +324,93 @@ describe("retryPostJob — re-queue", () => {
       previous_error_code: "TOKEN_EXPIRED",
       actor_user_id: "u-9",
     });
+  });
+});
+
+describe("retryPostJob — audit actor", () => {
+  const USER_ID = "99999999-9999-9999-9999-999999999999";
+
+  it("resolves the session e-mail to an app_user id for the audit row", async () => {
+    const users = makeUsers({ "van@example.com": USER_ID });
+    const { retryPostJob, repo } = harness([makeJob()], { users });
+
+    await retryPostJob({
+      tenantId: TENANT,
+      postJobId: makeJob().id,
+      actorEmail: "  Van@Example.com ",
+    });
+
+    // Lower-cased before the lookup: app_user.email is stored lower-cased.
+    expect((users as unknown as { asked: string[] }).asked).toEqual(["van@example.com"]);
+    expect(repo.transitions[0]).toMatchObject({ to: "queued", actorUserId: USER_ID });
+  });
+
+  it("prefers an explicit actorUserId and never queries app_user", async () => {
+    const users = makeUsers({ "van@example.com": USER_ID });
+    const { retryPostJob, repo } = harness([makeJob()], { users });
+
+    await retryPostJob({
+      tenantId: TENANT,
+      postJobId: makeJob().id,
+      actorUserId: "11111111-2222-3333-4444-555555555555",
+      actorEmail: "van@example.com",
+    });
+
+    expect((users as unknown as { asked: string[] }).asked).toEqual([]);
+    expect(repo.transitions[0].actorUserId).toBe("11111111-2222-3333-4444-555555555555");
+  });
+
+  it("still retries (anonymously) when the e-mail has no app_user row", async () => {
+    const users = makeUsers({});
+    const { retryPostJob, repo, queue, lines } = harness([makeJob()], { users });
+
+    const result = await retryPostJob({
+      tenantId: TENANT,
+      postJobId: makeJob().id,
+      actorEmail: "nguoi-la@example.com",
+    });
+
+    expect(result.status).toBe("queued");
+    expect(queue.enqueued).toHaveLength(1);
+    expect(repo.transitions[0].actorUserId).toBeNull();
+    expect(
+      lines.some((line) => line.level === "warn" && line.context?.reason === "ACTOR_NOT_FOUND"),
+    ).toBe(true);
+  });
+
+  it("still retries when the app_user lookup itself fails", async () => {
+    const users = makeUsers({}, { fail: true });
+    const { retryPostJob, queue, lines } = harness([makeJob()], { users });
+
+    const result = await retryPostJob({
+      tenantId: TENANT,
+      postJobId: makeJob().id,
+      actorEmail: "van@example.com",
+    });
+
+    expect(result.status).toBe("queued");
+    expect(queue.enqueued).toHaveLength(1);
+    expect(
+      lines.some((line) => line.level === "warn" && line.context?.reason === "ACTOR_LOOKUP_FAILED"),
+    ).toBe(true);
+  });
+
+  it("warns when an e-mail is given but no resolver is wired", async () => {
+    const { retryPostJob, repo, lines } = harness([makeJob()]);
+
+    await retryPostJob({ tenantId: TENANT, postJobId: makeJob().id, actorEmail: "van@example.com" });
+
+    expect(repo.transitions[0].actorUserId).toBeNull();
+    expect(
+      lines.some(
+        (line) => line.level === "warn" && line.context?.reason === "ACTOR_RESOLVER_NOT_WIRED",
+      ),
+    ).toBe(true);
+  });
+
+  it("writes no actor at all for an automated retry", async () => {
+    const { retryPostJob, repo } = harness([makeJob()], { users: makeUsers({}) });
+    await retryPostJob({ tenantId: TENANT, postJobId: makeJob().id });
+    expect(repo.transitions[0].actorUserId).toBeNull();
   });
 });

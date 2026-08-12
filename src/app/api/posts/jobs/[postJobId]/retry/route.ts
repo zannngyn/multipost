@@ -17,12 +17,15 @@ import { AppError } from "@/core/domain/errors";
  * call (business rule 3), so a job blocked for "hết hàng" that is retried while
  * the sheet still says 0 goes straight back to `blocked`.
  *
- * Who re-ran it is read from the SESSION, never from the body. It is logged
- * (structured, with the job id) rather than written to `audit_log.actor_user_id`:
- * that column is a FK to `app_user.id` and the session only carries an e-mail —
- * mapping one to the other needs a usecase this epic does not own.
- * NOTE(orchestrator): E10.4 / auth epic should expose that lookup so the audit
- * row names the operator too.
+ * Who re-ran it is read from the SESSION, never from the body, and handed to the
+ * usecase as `actorEmail` so the audit row names the operator: the usecase
+ * resolves it to an `app_user.id` through the wired user repository.
+ *
+ * An e-mail that maps to no account (the dev bypass `dev@localhost`, or an
+ * allowed domain signing in before the account row exists) is NOT an error: the
+ * usecase logs a warning and writes the audit row with no actor. Refusing to
+ * re-queue a post because we cannot name the operator would trade a real
+ * problem (the post is not live) for a bookkeeping one.
  */
 
 const ROUTE = "POST /api/posts/jobs/[postJobId]/retry";
@@ -68,6 +71,7 @@ export async function POST(
     const result = await container.usecases.retryPostJob({
       tenantId: body.tenantId,
       postJobId: parsedId.data,
+      actorEmail: session?.email ?? null,
     });
 
     container.logger.info("Post job re-queued from the operator UI", {

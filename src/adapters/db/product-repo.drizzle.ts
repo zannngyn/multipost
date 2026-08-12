@@ -5,6 +5,7 @@ import type { Product } from "@/core/domain/product";
 import type { ProductRepo } from "@/core/ports/product-repo";
 
 import type { Database } from "./client";
+import { wrapDbError } from "./db-errors";
 import { products, type ProductRow } from "./schema";
 import { forTenant } from "./tenant-scope";
 
@@ -58,7 +59,7 @@ export class DrizzleProductRepo implements ProductRepo {
         .where(scope.where(products, eq(products.code, normalised)))
         .limit(1);
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
         product_code: normalised,
         operation: "product.findByCode",
@@ -118,8 +119,9 @@ export class DrizzleProductRepo implements ProductRepo {
           .returning({ id: products.id });
         written += result.length;
       } catch (error) {
-        throw AppError.from(error, "DB_ERROR", {
+        throw wrapDbError(error, {
           tenant_id: scope.tenantId,
+          field: "syncRunId",
           operation: "product.upsertMany",
           chunk_start: start,
           chunk_size: chunk.length,
@@ -139,8 +141,9 @@ export class DrizzleProductRepo implements ProductRepo {
         .returning({ id: products.id });
       return deleted.length;
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
+        field: "syncRunId",
         operation: "product.deleteStale",
         sync_run_id: syncRunId,
       });

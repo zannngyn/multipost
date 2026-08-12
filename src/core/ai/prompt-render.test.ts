@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { assertTemplateValid, extractVariables, renderPrompt } from "@/core/ai/prompt-render";
+import {
+  assertTemplateValid,
+  extractVariables,
+  inspectTemplateBody,
+  renderPrompt,
+} from "@/core/ai/prompt-render";
 import { TEST_PROMPT_TEMPLATE } from "@/core/ai/testing";
 import { AppError } from "@/core/domain/errors";
 
@@ -52,5 +57,61 @@ describe("renderPrompt", () => {
 
   it("lists the variables a template declares", () => {
     expect(extractVariables("{{a}} {{b.c}} {{a}}")).toEqual(["a", "b.c"]);
+  });
+});
+
+describe("inspectTemplateBody (whitelist — CLAUDE.md business rule 2)", () => {
+  it("reports a required variable that is missing", () => {
+    const report = inspectTemplateBody("Chỉ có {{constraints}}", "facebook_content");
+    expect(report.missing).toEqual(["product.name"]);
+    expect(report.unknown).toEqual([]);
+  });
+
+  it("reports a variable outside the whitelist — price/stock can never render", () => {
+    const report = inspectTemplateBody(
+      "{{product.name}} {{constraints}} giá {{product.price}} tồn {{product.stock}}",
+      "facebook_content",
+    );
+    expect(report.unknown).toEqual(["product.price", "product.stock"]);
+    expect(report.missing).toEqual([]);
+  });
+
+  it("warns (does not block) when a recommended variable is unused", () => {
+    const report = inspectTemplateBody("{{product.name}}\n{{constraints}}", "facebook_content");
+    expect(report.missing).toEqual([]);
+    expect(report.unknown).toEqual([]);
+    expect(report.warnings.length).toBeGreaterThan(0);
+    expect(report.warnings.join(" ")).toContain("otherCaptions");
+  });
+
+  it("applies per-task requirements", () => {
+    expect(inspectTemplateBody("{{otherCaptions}}", "caption_dedupe_check").missing).toEqual([]);
+    expect(inspectTemplateBody("{{product.name}}", "caption_dedupe_check").missing).toEqual([
+      "otherCaptions",
+    ]);
+  });
+
+  it("accepts the shipped Facebook template", () => {
+    const report = inspectTemplateBody(
+      TEST_PROMPT_TEMPLATE.userPromptTemplate,
+      TEST_PROMPT_TEMPLATE.task,
+    );
+    expect(report.missing).toEqual([]);
+    expect(report.unknown).toEqual([]);
+  });
+});
+
+describe("assertTemplateValid — whitelist half", () => {
+  it("rejects a template that reads a forbidden column", () => {
+    try {
+      assertTemplateValid({
+        ...TEST_PROMPT_TEMPLATE,
+        userPromptTemplate: "{{product.name}} {{constraints}} {{product.price}}",
+      });
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(AppError.is(error)).toBe(true);
+      expect((error as AppError).context.unknown_variables).toEqual(["product.price"]);
+    }
   });
 });

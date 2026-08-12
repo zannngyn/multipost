@@ -179,9 +179,22 @@ export function openConfigSecrets<T>(config: T, box: SecretBox, context: SecretF
 /**
  * Secret-looking fields stored WITHOUT the envelope. Repos log this so an
  * operator can see which rows still need a re-save (never the values).
+ *
+ * Walks arrays as well as objects — `channels[]` is where the Page tokens
+ * actually live, so a scanner that only descended into objects reported "no
+ * plaintext" on precisely the blob that had it. Array entries are reported with
+ * an index: `channels[0].accessToken`.
  */
 export function findPlaintextSecretFields(config: unknown, prefix = "", depth = 0): string[] {
-  if (depth > MAX_DEPTH || !isPlainRecord(config)) return [];
+  if (depth > MAX_DEPTH) return [];
+
+  if (Array.isArray(config)) {
+    return config.flatMap((item, index) =>
+      findPlaintextSecretFields(item, `${prefix}[${index}]`, depth + 1),
+    );
+  }
+  if (!isPlainRecord(config)) return [];
+
   const found: string[] = [];
   for (const [rawKey, value] of Object.entries(config)) {
     const path = prefix ? `${prefix}.${rawKey}` : rawKey;

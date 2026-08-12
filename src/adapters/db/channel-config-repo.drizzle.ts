@@ -11,6 +11,7 @@ import {
 } from "@/core/ports/publisher";
 
 import type { Database } from "./client";
+import { wrapDbError } from "./db-errors";
 import { tenantIntegrations } from "./schema";
 import {
   findPlaintextSecretFields,
@@ -131,10 +132,11 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
         .limit(1);
       return rows[0] ?? null;
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "channelConfig.read",
         tenant_id: scope.tenantId,
         provider: META_PROVIDER,
-        operation: "channelConfig.read",
+        field: "tenantId",
       });
     }
   }

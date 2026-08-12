@@ -12,6 +12,7 @@ import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
 import { DrizzleProductRepo } from "@/adapters/db/product-repo.drizzle";
 import { DrizzleSyncRunRepo } from "@/adapters/db/sync-run-repo.drizzle";
 import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
+import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
@@ -36,13 +37,19 @@ import {
   makeManageChannelGroups,
   type ManageChannelGroups,
 } from "@/core/usecases/manage-channel-groups";
+import type { ManagePromptTemplates } from "@/core/usecases/manage-prompt-templates";
 import { makeRetryPostJob, type RetryPostJob } from "@/core/usecases/retry-post-job";
 import { makeGetSyncStatus, type GetSyncStatus } from "@/core/usecases/get-sync-status";
 import { makeHealthcheckTenant, type HealthcheckTenant } from "@/core/usecases/healthcheck-tenant";
 import { makePublishPost, type PublishPost } from "@/core/usecases/publish-post";
 import { makeSyncCatalog, type SyncCatalog } from "@/core/usecases/sync-catalog";
 
-import { makeLazyGenerateCaptions, type GenerateCaptions } from "./ai-engine";
+import {
+  closeAiStores,
+  makeLazyGenerateCaptions,
+  makeLazyPromptTemplates,
+  type GenerateCaptions,
+} from "./ai-engine";
 import {
   loadConfig,
   loadMediaConfig,
@@ -70,6 +77,8 @@ export interface Usecases {
   getSyncStatus: GetSyncStatus;
   composePost: ComposePost;
   generateCaptions: GenerateCaptions;
+  /** E10.7 — versioned prompt catalog (list/create/activate). */
+  promptTemplates: ManagePromptTemplates;
   /** E7.2 — fan a post out to N channels (called by the web API). */
   createPostBatch: CreatePostBatch;
   /** E7.4 — publish one job on one channel (called by the worker). */
@@ -258,7 +267,17 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     }),
     getSyncStatus: makeGetSyncStatus({ syncRuns, logger: deps.logger }),
     composePost: makeComposePost({ products, media, logger: deps.logger }),
-    generateCaptions: makeLazyGenerateCaptions({ logger: deps.logger, clock: deps.clock }),
+    generateCaptions: makeLazyGenerateCaptions({
+      logger: deps.logger,
+      clock: deps.clock,
+      db: deps.db,
+      redisUrl: deps.config.REDIS_URL,
+    }),
+    promptTemplates: makeLazyPromptTemplates({
+      logger: deps.logger,
+      clock: deps.clock,
+      db: deps.db,
+    }),
     createPostBatch: makeCreatePostBatch({
       postJobs,
       products,
@@ -290,6 +309,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       queue,
       clock: deps.clock,
       logger: deps.logger,
+      users: new DrizzleUserRepo(deps.db),
     }),
     channelGroups: makeManageChannelGroups({
       groups: channelGroups,
@@ -336,14 +356,15 @@ export function getContainer(): Container {
 export { MEDIA_QUERY_PARAMS, MEDIA_ROUTE_PREFIX } from "@/core/domain/media-url";
 
 /**
- * Drains the DB pool and any lazily built producer queue. For scripts and
- * graceful shutdown, not per request. (The worker's own queue/connection is
- * owned and closed by worker-container.)
+ * Drains the DB pool, any lazily built producer queue and the AI registry cache
+ * connection. For scripts and graceful shutdown, not per request. (The worker's
+ * own queue/connection is owned and closed by worker-container.)
  */
 export async function closeContainer(): Promise<void> {
   cached = null;
   const closers = [...lazyQueueClosers];
   lazyQueueClosers.clear();
   for (const close of closers) await close();
+  await closeAiStores();
   await closeDbHandle();
 }

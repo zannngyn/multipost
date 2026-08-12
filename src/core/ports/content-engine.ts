@@ -43,6 +43,9 @@ export interface ContentGenerationRequest {
   requestId?: string;
   postJobId?: string;
   channelId?: string;
+  /** Log-only context (ai_generation): never rendered into a prompt. */
+  batchId?: string;
+  productCode?: string;
 }
 
 export interface ContentGenerationAttemptInfo {

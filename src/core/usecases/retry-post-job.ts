@@ -12,6 +12,7 @@ import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ChannelConfigRepo } from "@/core/ports/publisher";
+import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
 
@@ -40,6 +41,11 @@ export interface RetryPostJobInput {
   readonly postJobId: string;
   /** Operator id for the audit trail; null for an automated retry. */
   readonly actorUserId?: string | null;
+  /**
+   * Operator e-mail from the session. Resolved to an app_user id when a
+   * `users` repo is wired; `actorUserId` always wins when both are given.
+   */
+  readonly actorEmail?: string | null;
 }
 
 export interface RetryPostJobResult {
@@ -62,6 +68,13 @@ export interface RetryPostJobDeps {
   queue: JobQueue;
   clock: Clock;
   logger: Logger;
+  /**
+   * Optional: resolves the session e-mail to an app_user id for the audit row.
+   * Optional and not required so the usecase keeps working (attributing the
+   * action to nobody, with a warning) wherever it is not wired yet — a retry
+   * must never fail because we could not name the operator.
+   */
+  users?: UserRepo;
 }
 
 export function makeRetryPostJob(deps: RetryPostJobDeps) {
@@ -118,6 +131,9 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
       throw appError;
     }
 
+    // --- Who is doing this? (audit trail) -----------------------------------
+    const actorUserId = await resolveActor(deps, tenantId, input, log);
+
     // --- Re-queue: DB first, queue second (a worker must see `queued`) -------
     const next = transitionPostJob(job, "queued", { reason: "OPERATOR_RETRY" });
     const queued = await deps.postJobs.applyTransition({
@@ -126,7 +142,7 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
       from: job.status,
       next,
       reason: "OPERATOR_RETRY",
-      actorUserId: input?.actorUserId ?? null,
+      actorUserId,
     });
     if (!queued) {
       // Somebody else moved the row between the read and the write (a second
@@ -190,7 +206,8 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
       queue_job_id: queueJobId,
       attempts: settings.maxAttempts,
       attempt_count: queued.attemptCount,
-      actor_user_id: input?.actorUserId ?? null,
+      actor_user_id: actorUserId,
+      actor_email: str(input?.actorEmail) || null,
     });
 
     return {
@@ -211,6 +228,58 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
 export type RetryPostJob = ReturnType<typeof makeRetryPostJob>;
 
 // --- helpers ----------------------------------------------------------------
+
+/**
+ * Who gets written into `audit_log.actor_user_id`.
+ *
+ * An explicit id wins (a caller that already knows it). Otherwise the session
+ * e-mail is looked up. Every failure to resolve is a WARNING, never an error:
+ * refusing to retry a post because we could not name the operator would trade a
+ * real problem (a post is not live) for a bookkeeping one.
+ */
+async function resolveActor(
+  deps: RetryPostJobDeps,
+  tenantId: string,
+  input: RetryPostJobInput,
+  log: Logger,
+): Promise<string | null> {
+  const explicitId = str(input?.actorUserId);
+  if (explicitId.length > 0) return explicitId;
+
+  const email = str(input?.actorEmail).toLowerCase();
+  if (email.length === 0) return null;
+
+  if (!deps.users) {
+    log.warn("Cannot attribute this retry: no user repository is wired", {
+      reason: "ACTOR_RESOLVER_NOT_WIRED",
+      actor_email: email,
+    });
+    return null;
+  }
+
+  try {
+    const userId = await deps.users.findUserIdByEmail(tenantId, email);
+    if (!userId) {
+      // A real case: an allowed domain signs in before the account row exists.
+      log.warn("Retry actor not found in app_user — audit row will have no actor", {
+        reason: "ACTOR_NOT_FOUND",
+        actor_email: email,
+      });
+      return null;
+    }
+    return userId;
+  } catch (error) {
+    // Logged with context and swallowed ON PURPOSE (the only place in this file):
+    // the retry itself is unaffected, and the warning above says the audit row
+    // will be anonymous.
+    log.warn("Could not resolve the retry actor — continuing without attribution", {
+      err: AppError.from(error, "DB_ERROR", { tenant_id: tenantId, actor_email: email }),
+      reason: "ACTOR_LOOKUP_FAILED",
+      actor_email: email,
+    });
+    return null;
+  }
+}
 
 /**
  * Best-effort rollback after a failed enqueue. Its own failure is logged and

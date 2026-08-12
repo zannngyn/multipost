@@ -110,6 +110,33 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # E11.4 — periodic pg_dump into the `backupdata` volume.
+  # Image matches the server (postgres:16-alpine): pg_dump refuses a server newer
+  # than itself, so these two versions must move together.
+  # Restore instructions live in deploy/backup/backup.sh (read them BEFORE the
+  # day you need them). One-off dump:
+  #   docker compose run --rm -e BACKUP_RUN_ONCE=true pg-backup
+  pg-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-mysp}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-mysp}
+      PGDATABASE: ${POSTGRES_DB:-mysp}
+      BACKUP_DIR: /backups
+      # Daily by default; keep a week of dumps.
+      BACKUP_INTERVAL: ${BACKUP_INTERVAL:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    entrypoint: ["/bin/sh", "/usr/local/bin/backup.sh"]
+    volumes:
+      - ./deploy/backup/backup.sh:/usr/local/bin/backup.sh:ro
+      - backupdata:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -137,6 +164,9 @@ services:
 
 volumes:
   pgdata:
+  # Dumps live in their own volume: a `docker compose down -v` of the app data
+  # must not be the same gesture that deletes the backups.
+  backupdata:
   redisdata:
   caddydata:
   caddyconfig:

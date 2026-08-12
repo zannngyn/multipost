@@ -7,6 +7,7 @@ import type { MediaAssetLookup } from "@/core/ports/drive-source";
 import type { MediaRepo } from "@/core/ports/product-repo";
 
 import type { Database } from "./client";
+import { wrapDbError } from "./db-errors";
 import { mediaAssets, type MediaAssetRow } from "./schema";
 import { forTenant } from "./tenant-scope";
 
@@ -78,7 +79,7 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
         .where(scope.where(mediaAssets, eq(mediaAssets.driveFileId, fileId)))
         .limit(1);
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
         drive_file_id: fileId,
         operation: "media.findByDriveFileId",
@@ -109,7 +110,7 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
         // NULLS LAST keeps unnumbered files behind numbered ones.
         .orderBy(asc(mediaAssets.sequence), asc(mediaAssets.fileName));
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
         product_code: normalised,
         operation: "media.listByProductCode",
@@ -178,8 +179,9 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
           .returning({ id: mediaAssets.id });
         written += result.length;
       } catch (error) {
-        throw AppError.from(error, "DB_ERROR", {
+        throw wrapDbError(error, {
           tenant_id: scope.tenantId,
+          field: "syncRunId",
           operation: "media.upsertMany",
           chunk_start: start,
           chunk_size: chunk.length,
@@ -199,8 +201,9 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
         .returning({ id: mediaAssets.id });
       return deleted.length;
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
+        field: "syncRunId",
         operation: "media.deleteStale",
         sync_run_id: syncRunId,
       });

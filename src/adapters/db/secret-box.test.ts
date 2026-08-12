@@ -251,6 +251,40 @@ describe("config helpers — the contract every repo follows", () => {
     expect(found.join(",")).not.toContain(TOKEN);
   });
 
+  it("finds a plaintext token inside an ARRAY of channels", () => {
+    // The real meta config shape: tokens live in channels[], not at the root.
+    const found = findPlaintextSecretFields({
+      spacingMs: 1_000,
+      channels: [
+        { channelId: "fbpage-a", name: "Shop A", accessToken: TOKEN },
+        { channelId: "fbpage-b", name: "Shop B", accessToken: box().sealSecret("sealed-one") },
+        { channelId: "fbpage-c", name: "Shop C", accessToken: "" },
+      ],
+    });
+
+    expect(found).toEqual(["channels[0].accessToken"]);
+    expect(found.join(",")).not.toContain(TOKEN);
+  });
+
+  it("walks arrays nested in objects and reports every offender", () => {
+    const found = findPlaintextSecretFields({
+      groups: [{ channels: [{ apiKey: "k1" }, { apiKey: box().sealSecret("k2") }] }],
+    });
+
+    expect(found).toEqual(["groups[0].channels[0].apiKey"]);
+  });
+
+  it("reports nothing when every array entry is sealed", () => {
+    const b = box();
+    const config = { channels: [{ accessToken: TOKEN }, { accessToken: "x" }] };
+    expect(findPlaintextSecretFields(sealConfigSecrets(config, b))).toEqual([]);
+  });
+
+  it("reports nothing for an empty array or a top-level array", () => {
+    expect(findPlaintextSecretFields({ channels: [] })).toEqual([]);
+    expect(findPlaintextSecretFields([{ accessToken: TOKEN }])).toEqual(["[0].accessToken"]);
+  });
+
   it("reports nothing for a catalog config — it holds ids, not credentials", () => {
     expect(
       findPlaintextSecretFields({

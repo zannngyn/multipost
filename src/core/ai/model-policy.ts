@@ -8,10 +8,12 @@
  */
 
 import { AppError } from "@/core/domain/errors";
+import { AI_TIERS } from "@/core/ports/ai";
 import type {
   AIFailureKind,
   AITier,
   ModelEntry,
+  ModelPolicyOverride,
   ResolvedModelPolicy,
 } from "@/core/ports/ai";
 
@@ -81,6 +83,95 @@ export function failureKindOf(error: unknown): AIFailureKind | undefined {
   if (!AppError.is(error)) return undefined;
   const kind = error.context.failure_kind;
   return typeof kind === "string" ? (kind as AIFailureKind) : undefined;
+}
+
+/**
+ * Overlay a per-tenant DB override on the YAML-resolved policy (ADR-001).
+ * Pure: the adapter parses + caches, this decides what the merge MEANS.
+ *
+ * Two hard rules, both enforced here so no store can skip them:
+ *  1. `tierModels` may only REFERENCE keys already present in the YAML registry.
+ *     A DB row can re-order or restrict providers; it can never introduce a
+ *     model string that no PR ever reviewed (model-routing.md §5).
+ *  2. The resulting policy must still be walkable — an override that empties the
+ *     primary tier is a configuration error, not a silent fallback to default.
+ */
+export function applyPolicyOverride(
+  base: ResolvedModelPolicy,
+  override: ModelPolicyOverride,
+  context: { tenantId: string },
+): ResolvedModelPolicy {
+  if (!override || Object.keys(override).length === 0) return base;
+
+  const catalog = new Map<string, ModelEntry>();
+  for (const tier of AI_TIERS) {
+    for (const entry of base.tiers[tier] ?? []) catalog.set(entry.key, entry);
+  }
+
+  const tiers: Record<AITier, readonly ModelEntry[]> = {
+    cheap: base.tiers.cheap ?? [],
+    mid: base.tiers.mid ?? [],
+    top: base.tiers.top ?? [],
+  };
+
+  for (const tier of AI_TIERS) {
+    const keys = override.tierModels?.[tier];
+    if (!keys) continue;
+
+    const entries = keys.map((key) => {
+      const entry = catalog.get(key);
+      if (!entry) {
+        throw new AppError("MODEL_NOT_CONFIGURED", {
+          message: `Tenant override for task "${base.task}" references model "${key}" that is not in the YAML registry`,
+          userMessage:
+            "Cấu hình model riêng của đơn vị trỏ tới model không có trong registry — cần quản trị viên sửa.",
+          context: {
+            tenant_id: context.tenantId,
+            task: base.task,
+            tier,
+            model_key: key,
+            registry_version: base.registryVersion,
+          },
+        });
+      }
+      return entry;
+    });
+
+    if (entries.length === 0) {
+      throw new AppError("MODEL_NOT_CONFIGURED", {
+        message: `Tenant override for task "${base.task}" empties tier "${tier}"`,
+        context: { tenant_id: context.tenantId, task: base.task, tier },
+      });
+    }
+    tiers[tier] = entries;
+  }
+
+  const policy = {
+    ...base.policy,
+    vision: override.vision ?? base.policy.vision,
+    primary: override.primary ?? base.policy.primary,
+    escalate: override.escalate ?? base.policy.escalate,
+    maxEscalations: override.maxEscalations ?? base.policy.maxEscalations,
+    maxOutputTokens: override.maxOutputTokens ?? base.policy.maxOutputTokens,
+    timeoutMs: override.timeoutMs ?? base.policy.timeoutMs,
+    temperature: override.temperature ?? base.policy.temperature,
+  };
+
+  const merged: ResolvedModelPolicy = {
+    ...base,
+    policy,
+    tiers,
+    budget: {
+      maxCostPerGenerationUsd:
+        override.budget?.maxCostPerGenerationUsd ?? base.budget.maxCostPerGenerationUsd,
+      dailyCostPerTenantUsd:
+        override.budget?.dailyCostPerTenantUsd ?? base.budget.dailyCostPerTenantUsd,
+    },
+  };
+
+  // Fail here, not on the first generation of the day.
+  for (const tier of tierLadder(merged)) selectPrimaryModel(merged, tier);
+  return merged;
 }
 
 export interface CostInput {

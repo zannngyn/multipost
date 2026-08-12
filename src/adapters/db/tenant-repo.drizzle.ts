@@ -3,6 +3,7 @@ import { isTenantStatus, type Tenant } from "@/core/domain/tenant";
 import type { TenantRepo } from "@/core/ports/tenant-repo";
 
 import type { Database } from "./client";
+import { wrapDbError } from "./db-errors";
 import { tenants } from "./schema";
 import { forTenant } from "./tenant-scope";
 
@@ -34,8 +35,9 @@ export class DrizzleTenantRepo implements TenantRepo {
         .limit(1);
     } catch (error) {
       // Driver errors (connection refused, timeout, syntax) become one code.
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
+        field: "tenantId",
         operation: "tenant.findById",
       });
     }

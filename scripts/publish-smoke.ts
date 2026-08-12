@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import {
   DrizzleChannelConfigRepo,
@@ -8,15 +8,18 @@ import {
 } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
 import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
+import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import {
   auditLogs,
   channelGroups,
+  users,
   postBatches,
   postJobs,
   products,
   tenantIntegrations,
   tenants,
 } from "@/adapters/db/schema";
+import { DEMO_TENANT_ID } from "@/adapters/db/seed-constants";
 import { makeFakeChannelPublisher } from "@/adapters/meta/fake-publisher";
 import { startBullMqJobConsumer } from "@/adapters/queue/bullmq-job-consumer";
 import { makeBullMqJobQueue } from "@/adapters/queue/bullmq-job-queue";
@@ -58,15 +61,6 @@ import { transitionPostJob } from "@/core/domain/post-job";
  *   DATABASE_URL=... REDIS_URL=... NODE_ENV=development \
  *     pnpm exec tsx scripts/publish-smoke.ts
  */
-
-/**
- * Same id as `DEMO_TENANT_ID` in adapters/db/seed.ts, copied instead of
- * imported: that module calls its own `main()` at import time, so importing the
- * constant ALSO runs a seed in parallel with this script — it races on the
- * tenant insert and sets process.exitCode = 1 even when the smoke passes.
- * Reported to the orchestrator (seed.ts belongs to data-pipeline).
- */
-const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001";
 
 const CHANNEL_A = "fbpage-a";
 const CHANNEL_B = "fbpage-b";
@@ -130,9 +124,12 @@ async function main(): Promise<void> {
     queue,
     clock: infra.clock,
     logger,
+    // E11.1 audit: session e-mail -> app_user.id (wiring note in the report).
+    users: new DrizzleUserRepo(db),
   });
+  const groupRepo = new DrizzleChannelGroupRepo(db);
   const groupUsecases = makeManageChannelGroups({
-    groups: new DrizzleChannelGroupRepo(db),
+    groups: groupRepo,
     channels: channelConfig,
     logger,
     newId: () => randomUUID(),
@@ -732,6 +729,115 @@ async function main(): Promise<void> {
       groupId: created.id,
     }),
     groups_left: (await groupUsecases.listChannelGroups({ tenantId: DEMO_TENANT_ID })).length,
+  });
+
+  // --- Case n: malformed uuid -> 400, not "database unreachable" -----------
+  heading("n) uuid/enum rác qua repo thật -> INVALID_INPUT (22P02), không phải DB_ERROR");
+  const badInputCases: Array<[string, () => Promise<unknown>]> = [
+    ["postJobRepo.findJobById('khong-phai-uuid')", () => repo.findJobById(DEMO_TENANT_ID, "khong-phai-uuid")],
+    ["postJobRepo.listJobsByBatch('lo-bay-gio')", () => repo.listJobsByBatch(DEMO_TENANT_ID, "lo-bay-gio")],
+    ["postJobRepo.getBatchSummary('###')", () => repo.getBatchSummary(DEMO_TENANT_ID, "###")],
+    ["channelGroupRepo.findGroupById('nhom-1')", () => groupRepo.findGroupById(DEMO_TENANT_ID, "nhom-1")],
+    ["channelGroupRepo.deleteGroup('nhom-1')", () => groupRepo.deleteGroup(DEMO_TENANT_ID, "nhom-1")],
+    ["retryPostJob(postJobId='abc')", () => retryPostJob({ tenantId: DEMO_TENANT_ID, postJobId: "abc" })],
+    [
+      "listPostJobs(cursor có id rác)",
+      () =>
+        listPostJobs({
+          tenantId: DEMO_TENANT_ID,
+          filter: { cursor: `${new Date().toISOString()}_khong-phai-uuid` },
+        }),
+    ],
+  ];
+  for (const [label, call] of badInputCases) {
+    try {
+      await call();
+      console.log(`!! expected INVALID_INPUT for: ${label}`);
+    } catch (error) {
+      const appError = AppError.from(error);
+      const ctx = appError.context as {
+        pg_code?: string;
+        field?: string;
+        invalid_type?: string;
+        operation?: string;
+      };
+      print({
+        case: label,
+        code: appError.code,
+        http: appError.code === "INVALID_INPUT" ? 400 : 503,
+        pg_code: ctx.pg_code ?? null,
+        field: ctx.field ?? null,
+        invalid_type: ctx.invalid_type ?? null,
+        operation: ctx.operation ?? null,
+        userMessage: appError.userMessage,
+      });
+    }
+  }
+
+  // --- Case o: audit actor (E11.1) -----------------------------------------
+  heading("o) retry kèm actorEmail -> audit_log ghi đúng actor_user_id");
+  const operatorId = randomUUID();
+  await db
+    .insert(users)
+    .values({
+      id: operatorId,
+      tenantId: DEMO_TENANT_ID,
+      email: "van@example.com",
+      name: "Nguyen The Van",
+      role: "owner",
+    })
+    .onConflictDoNothing();
+
+  // Two blocked jobs to re-run (one per actor case): re-queueing a blocked job
+  // is safe here — the consumer is closed, so nothing publishes behind our back.
+  const auditJobs = await db
+    .select({ id: postJobs.id })
+    .from(postJobs)
+    .where(and(eq(postJobs.batchId, batch4), eq(postJobs.status, "blocked")))
+    .orderBy(postJobs.channelId);
+  const auditJobId = auditJobs[0].id;
+  const anonJobId = auditJobs[1].id;
+
+  const auditedRetry = await retryPostJob({
+    tenantId: DEMO_TENANT_ID,
+    postJobId: auditJobId,
+    // Mixed case + spaces: exactly what a Google session hands over.
+    actorEmail: "  Van@Example.com ",
+  });
+  const auditRows = await db
+    .select({
+      action: auditLogs.action,
+      entityId: auditLogs.entityId,
+      actorUserId: auditLogs.actorUserId,
+      payload: auditLogs.payload,
+    })
+    .from(auditLogs)
+    .where(and(eq(auditLogs.entityId, auditJobId), eq(auditLogs.action, "post_job.queued")))
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(1);
+  print({
+    retried_job: auditedRetry.postJobId,
+    seeded_app_user_id: operatorId,
+    audit_row: auditRows[0],
+    actor_matches_app_user: auditRows[0]?.actorUserId === operatorId,
+  });
+
+  const unknownActor = await retryPostJob({
+    tenantId: DEMO_TENANT_ID,
+    postJobId: anonJobId,
+    actorEmail: "khong-co-trong-app-user@example.com",
+  });
+  const anonRow = (
+    await db
+      .select({ actorUserId: auditLogs.actorUserId })
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, anonJobId), eq(auditLogs.action, "post_job.queued")))
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(1)
+  )[0];
+  print({
+    unknown_actor_still_retried: unknownActor.status,
+    audit_actor_user_id: anonRow?.actorUserId ?? null,
   });
 
   // --- Case g: two concurrent claims of one job -----------------------------

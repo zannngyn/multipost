@@ -1,13 +1,13 @@
 /**
- * GenerationLog — log-only implementation for this sprint.
+ * GenerationLog — log-only implementation.
  *
- * TODO(ADR-001, sprint tích hợp): replace with the `ai_generation` table
- * (docs/ai/prompt-versioning.md §2) — the dashboard questions in §3 (cost per
- * published post, pass rate per model, fallback rate) need SQL, not log files.
+ * Production writes `ai_generation` rows (adapters/db/ai-generation-log.drizzle)
+ * because the dashboard questions of prompt-versioning.md §3 need SQL. This one
+ * stays for tests, smoke scripts and any process wired without a database.
  *
- * The generated text is intentionally NOT logged: it belongs in the future DB
- * column, and log files are the wrong place for public-facing copy plus model
- * output. Everything needed to answer "why did this caption fail" is kept.
+ * The generated text is intentionally NOT logged: it belongs in the DB column,
+ * and log files are the wrong place for public-facing copy plus model output.
+ * Everything needed to answer "why did this caption fail" is kept.
  */
 
 import type { GenerationLog, GenerationLogEntry } from "@/core/ports/ai";

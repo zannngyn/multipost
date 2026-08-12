@@ -1,10 +1,9 @@
 /**
  * PromptStore over the templates shipped in the repo.
  *
- * TODO(ADR-001, sprint tích hợp): add the `prompt_template` table so a tenant
- * can own a version without a deploy (docs/ai/prompt-versioning.md §1). Lookup
- * order will be tenant-specific active version first, built-in second — which is
- * why `getActive` already takes a tenantId.
+ * This is the FLOOR every tenant starts on: `db-prompt-store.ts` looks up the
+ * tenant's own active version first and falls back here when there is none
+ * (docs/ai/prompt-versioning.md §1).
  */
 
 import { AppError } from "@/core/domain/errors";

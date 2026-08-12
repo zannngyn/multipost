@@ -20,6 +20,7 @@ import type {
 } from "@/core/ports/post-job-repo";
 
 import type { Database, DbExecutor } from "./client";
+import { findPgError, isPgError, wrapDbError } from "./db-errors";
 import { auditLogs, postBatches, postJobs, type PostJobRow } from "./schema";
 import { forTenant } from "./tenant-scope";
 
@@ -38,35 +39,13 @@ import { forTenant } from "./tenant-scope";
  * transaction: a state change without a trace never happens.
  */
 
-/** Postgres unique_violation. */
+/** Postgres unique_violation — the anti-duplicate index firing. */
 const PG_UNIQUE_VIOLATION = "23505";
 
-interface PgError {
-  code?: string;
-  constraint_name?: string;
-  constraint?: string;
-  detail?: string;
-}
-
-/**
- * Drizzle wraps driver errors (DrizzleQueryError), so the SQLSTATE lives on the
- * `cause` chain, not on the thrown object. Walking it is the difference between
- * "DUPLICATE_POST_BLOCKED" and a meaningless DB_ERROR.
- */
-function findPgError(error: unknown, depth = 0): PgError | null {
-  if (!error || typeof error !== "object" || depth > 5) return null;
-  const candidate = error as PgError & { cause?: unknown };
-  if (typeof candidate.code === "string") return candidate;
-  return findPgError(candidate.cause, depth + 1);
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return findPgError(error)?.code === PG_UNIQUE_VIOLATION;
-}
-
+/** Constraint name of a violation, for the log ("which lock stopped me?"). */
 function constraintOf(error: unknown): string | null {
-  const pg = findPgError(error);
-  return pg?.constraint_name ?? pg?.constraint ?? null;
+  const pgError = findPgError(error) as { constraint_name?: string; constraint?: string } | null;
+  return pgError?.constraint_name ?? pgError?.constraint ?? null;
 }
 
 function toDomain(row: PostJobRow): PostJob {
@@ -180,7 +159,7 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         return { batchId: input.batch.id, jobs: rows.map(toDomain) };
       });
     } catch (error) {
-      if (isUniqueViolation(error)) {
+      if (isPgError(error, PG_UNIQUE_VIOLATION)) {
         // THE anti-duplicate lock firing (business rule 4).
         throw new AppError("DUPLICATE_POST_BLOCKED", {
           message: "A post job already exists for this (batch, code, colour, channel, format)",
@@ -194,10 +173,11 @@ export class DrizzlePostJobRepo implements PostJobRepo {
           cause: error,
         });
       }
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.createBatchWithJobs",
         tenant_id: scope.tenantId,
         batch_id: input.batch.id,
-        operation: "postJob.createBatchWithJobs",
+        field: "batchId",
       });
     }
   }
@@ -222,10 +202,11 @@ export class DrizzlePostJobRepo implements PostJobRepo {
       const row = rows[0];
       return row ? toDomain(row) : null;
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.findJobById",
         tenant_id: scope.tenantId,
         job_id: id,
-        operation: "postJob.findJobById",
+        field: "postJobId",
       });
     }
   }
@@ -240,10 +221,11 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         .orderBy(postJobs.channelId);
       return rows.map(toDomain);
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.listJobsByBatch",
         tenant_id: scope.tenantId,
         batch_id: batchId,
-        operation: "postJob.listJobsByBatch",
+        field: "batchId",
       });
     }
   }
@@ -295,12 +277,13 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         nextCursor: hasMore && last ? { createdAt: last.createdAt, id: last.id } : null,
       };
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.listJobs",
         tenant_id: scope.tenantId,
         batch_id: query?.batchId ?? null,
         channel: query?.channelId ?? null,
         status: query?.status ?? null,
-        operation: "postJob.listJobs",
+        field: "filter",
       });
     }
   }
@@ -370,12 +353,13 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         return toDomain(row);
       });
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.applyTransition",
         tenant_id: scope.tenantId,
         job_id: input.postJobId,
         from: input.from,
         to: next.status,
-        operation: "postJob.applyTransition",
+        field: "postJobId",
       });
     }
   }
@@ -405,10 +389,11 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         .limit(1);
       return rows[0]?.publishedAt ?? null;
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.findLastPublishedAt",
         tenant_id: scope.tenantId,
         channel,
-        operation: "postJob.findLastPublishedAt",
+        field: "channelId",
       });
     }
   }
@@ -430,10 +415,11 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         .set({ status: summary.status, updatedAt: new Date() })
         .where(scope.where(postBatches, eq(postBatches.id, batchId)));
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.refreshBatchStatus",
         tenant_id: scope.tenantId,
         batch_id: batchId,
-        operation: "postJob.refreshBatchStatus",
+        field: "batchId",
       });
     }
     return summary;
@@ -466,10 +452,11 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         .where(scope.where(postJobs, eq(postJobs.batchId, id)))
         .orderBy(postJobs.channelId);
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.buildSummary",
         tenant_id: scope.tenantId,
         batch_id: id,
-        operation: "postJob.buildSummary",
+        field: "batchId",
       });
     }
 
@@ -484,10 +471,11 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         .limit(1);
       batchCreatedAt = batchRows[0]?.createdAt ?? null;
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "postJob.buildSummary.batchRow",
         tenant_id: scope.tenantId,
         batch_id: id,
-        operation: "postJob.buildSummary.batchRow",
+        field: "batchId",
       });
     }
 

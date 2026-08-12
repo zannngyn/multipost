@@ -29,6 +29,13 @@
       "when": 1786564794413,
       "tag": "0003_channel_group_and_blocked_batch",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786570598635,
+      "tag": "0004_ai_persistence",
+      "breakpoints": true
     }
   ]
 }

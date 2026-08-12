@@ -2,11 +2,10 @@
  * ModelPolicyStore backed by `config/ai-models.yaml` (ADR-001 decision 12/08:
  * YAML-in-repo + per-tenant DB override, hot cache in Redis).
  *
- * Shipped in this sprint: the YAML half + an in-memory TTL cache.
- * TODO(ADR-001, sprint tích hợp): layer the `ai_model_policy_override` table on
- * top per tenant and move the hot cache into Redis with invalidation on change
- * (docs/ai/model-routing.md §2). The port signature already carries `tenantId`
- * so neither addition changes a caller.
+ * This file owns the YAML half only: parse, validate, keep in memory for a
+ * short TTL. The per-tenant `ai_model_policy_override` overlay and the Redis
+ * hot cache wrap it in `cached-model-policy-store.ts`, so "what the file says"
+ * and "what this tenant gets" never blur into one function.
  */
 
 import { readFileSync } from "node:fs";

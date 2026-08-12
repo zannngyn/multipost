@@ -9,7 +9,7 @@
 
 import { captionInputSchema, type CaptionInput } from "@/core/domain/caption";
 import { AppError } from "@/core/domain/errors";
-import type { PromptVariables } from "@/core/ai/prompt-render";
+import type { PromptVariableName, PromptVariables } from "@/core/ai/prompt-render";
 import { describeFailures } from "@/core/ai/validation";
 import type { ValidationFailure } from "@/core/ai/validation/types";
 import type { ContentGenerationRequest } from "@/core/ports/content-engine";
@@ -65,6 +65,9 @@ export function buildPromptVariables(input: PromptContextInput): PromptVariables
     (caption, index) => `--- Caption kênh ${index + 1} ---\n${caption}`,
   );
 
+  // `satisfies` keeps this object and PROMPT_VARIABLE_WHITELIST in lockstep: a
+  // whitelisted variable that stops being produced here breaks the build
+  // instead of rendering as a missing variable during a generation.
   return {
     "product.name": product.name,
     "product.description": product.description,
@@ -80,5 +83,5 @@ export function buildPromptVariables(input: PromptContextInput): PromptVariables
       previousFailures.length === 0
         ? ""
         : `Bản viết trước bị từ chối vì:\n${describeFailures(previousFailures)}\nHãy viết lại và sửa hết các lỗi trên.`,
-  };
+  } satisfies Record<PromptVariableName, string>;
 }

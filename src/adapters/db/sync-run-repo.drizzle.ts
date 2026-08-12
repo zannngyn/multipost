@@ -14,6 +14,7 @@ import {
 } from "@/core/ports/product-repo";
 
 import type { Database } from "./client";
+import { wrapDbError } from "./db-errors";
 import { syncRuns, type SyncRunRow } from "./schema";
 import { forTenant } from "./tenant-scope";
 
@@ -137,7 +138,7 @@ export class DrizzleSyncRunRepo implements SyncRunRepo {
       }
       return { id: row.id };
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
         operation: "syncRun.start",
       });
@@ -159,8 +160,9 @@ export class DrizzleSyncRunRepo implements SyncRunRepo {
         })
         .where(scope.where(syncRuns, eq(syncRuns.id, input.syncRunId)));
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
+        field: "syncRunId",
         sync_run_id: input?.syncRunId,
         operation: "syncRun.finish",
       });
@@ -181,8 +183,9 @@ export class DrizzleSyncRunRepo implements SyncRunRepo {
         .orderBy(desc(syncRuns.startedAt), desc(syncRuns.createdAt))
         .limit(1);
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
+        field: "tenantId",
         operation: "syncRun.findLatest",
       });
     }

@@ -6,6 +6,7 @@ import type { CatalogConfigRepo, CatalogSourceConfig } from "@/core/ports/drive-
 import type { Logger } from "@/core/ports/infra";
 
 import type { Database } from "./client";
+import { wrapDbError } from "./db-errors";
 import { tenantIntegrations } from "./schema";
 import { findPlaintextSecretFields } from "./secret-box";
 import { forTenant } from "./tenant-scope";
@@ -52,8 +53,9 @@ export class DrizzleCatalogConfigRepo implements CatalogConfigRepo {
         )
         .limit(1);
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
         tenant_id: scope.tenantId,
+        field: "tenantId",
         operation: "catalogConfig.find",
       });
     }

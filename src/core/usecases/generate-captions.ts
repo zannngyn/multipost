@@ -42,6 +42,9 @@ export interface GenerateCaptionsInput {
   brandVoice?: string;
   requestId?: string;
   postJobId?: string;
+  /** Log-only context written to `ai_generation`; never enters a prompt. */
+  batchId?: string;
+  productCode?: string;
 }
 
 export interface GeneratedChannelCaption {
@@ -98,7 +101,12 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
       });
     }
 
-    const log = deps.logger.child({ tenant_id: tenantId, job_id: input.postJobId });
+    const log = deps.logger.child({
+      tenant_id: tenantId,
+      job_id: input.postJobId,
+      batch_id: input.batchId,
+      product_code: input.productCode,
+    });
 
     const channels: readonly CaptionChannelRequest[] = Array.isArray(input.channels)
       ? input.channels
@@ -190,6 +198,8 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
         requestId: input.requestId,
         postJobId: input.postJobId,
         channelId: channel.channelId,
+        batchId: input.batchId,
+        productCode: input.productCode,
       };
 
       try {

@@ -5,6 +5,7 @@ import { AppError } from "@/core/domain/errors";
 import type { ChannelGroupRepo } from "@/core/ports/publisher";
 
 import type { Database } from "./client";
+import { isPgError, wrapDbError } from "./db-errors";
 import { channelGroups, type ChannelGroupRow } from "./schema";
 import { forTenant } from "./tenant-scope";
 
@@ -17,19 +18,8 @@ import { forTenant } from "./tenant-scope";
  * so the operator sees a sentence, not a Postgres error.
  */
 
+/** Postgres unique_violation — the (tenant_id, name) index firing. */
 const PG_UNIQUE_VIOLATION = "23505";
-
-interface PgError {
-  code?: string;
-}
-
-/** Drizzle wraps driver errors, so the SQLSTATE lives on the `cause` chain. */
-function isUniqueViolation(error: unknown, depth = 0): boolean {
-  if (!error || typeof error !== "object" || depth > 5) return false;
-  const candidate = error as PgError & { cause?: unknown };
-  if (typeof candidate.code === "string") return candidate.code === PG_UNIQUE_VIOLATION;
-  return isUniqueViolation(candidate.cause, depth + 1);
-}
 
 function nameTaken(tenantId: string, name: string, error: unknown): AppError {
   return new AppError("INVALID_INPUT", {
@@ -67,9 +57,10 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
         .orderBy(channelGroups.name);
       return rows.map(toDomain);
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
-        tenant_id: scope.tenantId,
+      throw wrapDbError(error, {
         operation: "channelGroup.list",
+        tenant_id: scope.tenantId,
+        field: "tenantId",
       });
     }
   }
@@ -88,10 +79,11 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
       const row = rows[0];
       return row ? toDomain(row) : null;
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "channelGroup.findGroupById",
         tenant_id: scope.tenantId,
         group_id: id,
-        operation: "channelGroup.findGroupById",
+        field: "groupId",
       });
     }
   }
@@ -126,11 +118,12 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
       }
       return toDomain(row);
     } catch (error) {
-      if (isUniqueViolation(error)) throw nameTaken(scope.tenantId, input.name, error);
-      throw AppError.from(error, "DB_ERROR", {
+      if (isPgError(error, PG_UNIQUE_VIOLATION)) throw nameTaken(scope.tenantId, input.name, error);
+      throw wrapDbError(error, {
+        operation: "channelGroup.createGroup",
         tenant_id: scope.tenantId,
         group_id: id,
-        operation: "channelGroup.createGroup",
+        field: "groupId",
       });
     }
   }
@@ -154,11 +147,12 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
       const row = rows[0];
       return row ? toDomain(row) : null;
     } catch (error) {
-      if (isUniqueViolation(error)) throw nameTaken(scope.tenantId, input.name, error);
-      throw AppError.from(error, "DB_ERROR", {
+      if (isPgError(error, PG_UNIQUE_VIOLATION)) throw nameTaken(scope.tenantId, input.name, error);
+      throw wrapDbError(error, {
+        operation: "channelGroup.updateGroup",
         tenant_id: scope.tenantId,
         group_id: id,
-        operation: "channelGroup.updateGroup",
+        field: "groupId",
       });
     }
   }
@@ -175,10 +169,11 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
         .returning({ id: channelGroups.id });
       return rows.length > 0;
     } catch (error) {
-      throw AppError.from(error, "DB_ERROR", {
+      throw wrapDbError(error, {
+        operation: "channelGroup.deleteGroup",
         tenant_id: scope.tenantId,
         group_id: id,
-        operation: "channelGroup.deleteGroup",
+        field: "groupId",
       });
     }
   }
