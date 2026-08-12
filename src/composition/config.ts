@@ -63,6 +63,48 @@ export const AuthConfigSchema = z.object({
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
 
 /**
+ * Service Account for Drive + Sheets (E2). Loaded on demand, like auth: the web
+ * process can boot and serve pages without it, and the sync fails with a clear
+ * message instead of the whole container refusing to start.
+ *
+ * Exactly one of the two variables is needed:
+ *   GOOGLE_SERVICE_ACCOUNT_JSON    — key file inlined (container/secret)
+ *   GOOGLE_APPLICATION_CREDENTIALS — path to the key file (local dev)
+ */
+export const GoogleConfigSchema = z
+  .object({
+    GOOGLE_SERVICE_ACCOUNT_JSON: z.string().trim().min(1).optional(),
+    GOOGLE_APPLICATION_CREDENTIALS: z.string().trim().min(1).optional(),
+  })
+  .refine(
+    (value) =>
+      Boolean(value.GOOGLE_SERVICE_ACCOUNT_JSON) || Boolean(value.GOOGLE_APPLICATION_CREDENTIALS),
+    {
+      message:
+        "Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS to reach Drive/Sheets",
+      path: ["GOOGLE_SERVICE_ACCOUNT_JSON"],
+    },
+  );
+
+export type GoogleConfig = z.infer<typeof GoogleConfigSchema>;
+
+/**
+ * AI gateway (E4, ADR-001). Loaded on demand like auth/google: processes that
+ * never generate content must boot without provider keys. Path/TTL are
+ * operational knobs with documented defaults, not secrets.
+ */
+export const AiConfigSchema = z.object({
+  /** Google AI Studio key — MUST be paid tier before real data flows (ADR-001). */
+  GOOGLE_AI_API_KEY: nonEmpty("GOOGLE_AI_API_KEY"),
+  /** Infrastructure fallback provider. */
+  OPENAI_API_KEY: nonEmpty("OPENAI_API_KEY"),
+  AI_MODELS_CONFIG_PATH: z.string().trim().min(1).default("./config/ai-models.yaml"),
+  AI_REGISTRY_CACHE_TTL_MS: z.coerce.number().int().positive().default(60_000),
+});
+
+export type AiConfig = z.infer<typeof AiConfigSchema>;
+
+/**
  * One throw listing every bad key — a fresh deploy reports all gaps at once
  * instead of one restart per missing variable.
  */
@@ -88,4 +130,12 @@ export function loadConfig(env: EnvRecord = process.env): Config {
 
 export function loadAuthConfig(env: EnvRecord = process.env): AuthConfig {
   return parseEnv(AuthConfigSchema, env, "auth");
+}
+
+export function loadGoogleConfig(env: EnvRecord = process.env): GoogleConfig {
+  return parseEnv(GoogleConfigSchema, env, "google");
+}
+
+export function loadAiConfig(env: EnvRecord = process.env): AiConfig {
+  return parseEnv(AiConfigSchema, env, "ai");
 }

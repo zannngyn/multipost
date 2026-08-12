@@ -1,0 +1,136 @@
+# AI Model Registry — the ONLY place a model string may live (ADR-001, docs/ai/model-routing.md §2).
+# Business code passes a `task`; it never passes a model.
+#
+# Owner decision 12/08/2026: Google AI Studio (Gemini) primary on every tier,
+# OpenAI as INFRASTRUCTURE fallback only. PAID TIER IS MANDATORY wherever real
+# shop data flows — the free tier grants Google training rights over the data
+# (docs/ai/provider-strategy.md §3).
+#
+# Changing a model here requires benchmark numbers in the PR (model-routing.md §5).
+# Prices are USD per 1M tokens, taken from docs/ai/provider-strategy.md §2
+# (aggregator sourced — re-verify against the official pricing pages before go-live).
+
+version: 1
+
+models:
+  "google:gemini-3.5-flash-lite":
+    provider: google
+    model: gemini-3.5-flash-lite
+    pricing:
+      inputPerMTokUsd: 0.30
+      outputPerMTokUsd: 2.50
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+
+  "google:gemini-3.6-flash":
+    provider: google
+    model: gemini-3.6-flash
+    pricing:
+      inputPerMTokUsd: 1.50
+      outputPerMTokUsd: 7.50
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+
+  "google:gemini-3.1-pro":
+    provider: google
+    model: gemini-3.1-pro
+    pricing:
+      inputPerMTokUsd: 2.00
+      outputPerMTokUsd: 12.00
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+
+  "openai:gpt-5-mini":
+    provider: openai
+    model: gpt-5-mini
+    pricing:
+      inputPerMTokUsd: 0.25
+      outputPerMTokUsd: 2.00
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+
+  "openai:gpt-5.4-mini":
+    provider: openai
+    model: gpt-5.4-mini
+    pricing:
+      inputPerMTokUsd: 0.75
+      outputPerMTokUsd: 4.50
+      cachedInputPerMTokUsd: 0.075
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+
+  "openai:gpt-5":
+    provider: openai
+    model: gpt-5
+    # PENDING(price-verify): provider-strategy.md §2 only says "cao hơn đáng kể".
+    # Placeholder kept deliberately HIGH so the per-generation budget ceiling blocks
+    # this model until the real numbers are filled in from the official price page.
+    pricing:
+      inputPerMTokUsd: 10.00
+      outputPerMTokUsd: 30.00
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+
+# Position 1 = primary. Position 2+ = provider fallback for INFRA failures only,
+# and it must be a different provider (provider-strategy.md §4).
+tiers:
+  cheap:
+    - "google:gemini-3.5-flash-lite"
+    - "openai:gpt-5-mini"
+  mid:
+    - "google:gemini-3.6-flash"
+    - "openai:gpt-5.4-mini"
+  top:
+    - "google:gemini-3.1-pro"
+    - "openai:gpt-5"
+
+tasks:
+  facebook_content:
+    vision: single
+    primary: cheap
+    escalate: [mid, top]
+    maxEscalations: 2
+    maxOutputTokens: 900
+    timeoutMs: 30000
+    temperature: 0.8
+
+  product_understanding:
+    vision: single
+    primary: cheap
+    escalate: [mid]
+    maxEscalations: 1
+    maxOutputTokens: 700
+    timeoutMs: 30000
+
+  caption_dedupe_check:
+    vision: none
+    primary: cheap
+    escalate: []
+    maxEscalations: 0
+    maxOutputTokens: 300
+    timeoutMs: 20000
+
+  difficult_content:
+    vision: single
+    primary: mid
+    escalate: [top]
+    maxEscalations: 1
+    maxOutputTokens: 900
+    timeoutMs: 45000
+
+# docs/ai/cost-model.md §3. The per-generation ceiling covers escalations too.
+budget:
+  maxCostPerGenerationUsd: 0.05
+  dailyCostPerTenantUsd: 5.00

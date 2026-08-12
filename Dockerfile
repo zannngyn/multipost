@@ -42,6 +42,8 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/public ./public
+# AI model registry (ADR-001) — read at runtime by the content engine.
+COPY --from=build --chown=node:node /app/config ./config
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
@@ -72,6 +74,8 @@ WORKDIR /app
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json tsconfig.json ./
 COPY --chown=node:node src ./src
+# AI model registry (ADR-001) — generate-captions runs in this process too.
+COPY --chown=node:node config ./config
 USER node
 # Liveness without an HTTP port: the worker refreshes a heartbeat file every
 # WORKER_HEARTBEAT_INTERVAL_MS (default 15s). A blocked event loop stops it.

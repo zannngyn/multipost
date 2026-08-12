@@ -1,0 +1,172 @@
+import { asc, eq, ne, sql } from "drizzle-orm";
+
+import { AppError } from "@/core/domain/errors";
+import { MEDIA_KINDS, type MediaKind } from "@/core/domain/media-file-name";
+import type { MediaAsset } from "@/core/domain/product";
+import type { MediaRepo } from "@/core/ports/product-repo";
+
+import type { Database } from "./client";
+import { mediaAssets, type MediaAssetRow } from "./schema";
+import { forTenant } from "./tenant-scope";
+
+/** Postgres caps a statement at 65,535 bind parameters; 18 columns per row. */
+const CHUNK_SIZE = 400;
+
+function toDomain(row: MediaAssetRow): MediaAsset {
+  // The DB enum can drift from the domain union across migrations.
+  if (!(MEDIA_KINDS as readonly string[]).includes(row.kind)) {
+    throw new AppError("DB_ERROR", {
+      message: `Unknown media kind '${row.kind}' returned by the database`,
+      userMessage: "Dữ liệu ảnh/video không hợp lệ. Vui lòng chạy lại đồng bộ.",
+      context: { drive_file_id: row.driveFileId, kind: row.kind },
+    });
+  }
+
+  return {
+    driveFileId: row.driveFileId,
+    fileName: row.fileName,
+    productCode: row.productCode,
+    color: row.color,
+    colorRaw: row.colorRaw,
+    sequence: row.sequence,
+    kind: row.kind as MediaKind,
+    variants: {
+      aiGenerated: row.aiGenerated,
+      realPhoto: row.realPhoto,
+      backView: row.backView,
+    },
+    mimeType: row.mimeType,
+    sizeBytes: row.sizeBytes,
+    modifiedTime: row.modifiedTime ? row.modifiedTime.toISOString() : null,
+    warnings: row.warnings ?? [],
+    needsReview: row.needsReview,
+  };
+}
+
+function toModifiedDate(value: string | null): Date | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+export class DrizzleMediaRepo implements MediaRepo {
+  constructor(private readonly db: Database) {}
+
+  async listByProductCode(tenantId: string, code: string): Promise<readonly MediaAsset[]> {
+    const scope = forTenant(this.db, tenantId);
+    const normalised = typeof code === "string" ? code.trim().toUpperCase() : "";
+    if (normalised.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "listByProductCode requires a product code",
+        userMessage: "Thiếu mã sản phẩm.",
+        context: { tenant_id: scope.tenantId },
+      });
+    }
+
+    let rows: MediaAssetRow[];
+    try {
+      rows = await scope.db
+        .select()
+        .from(mediaAssets)
+        .where(scope.where(mediaAssets, eq(mediaAssets.productCode, normalised)))
+        // NULLS LAST keeps unnumbered files behind numbered ones.
+        .orderBy(asc(mediaAssets.sequence), asc(mediaAssets.fileName));
+    } catch (error) {
+      throw AppError.from(error, "DB_ERROR", {
+        tenant_id: scope.tenantId,
+        product_code: normalised,
+        operation: "media.listByProductCode",
+      });
+    }
+
+    return rows.map(toDomain);
+  }
+
+  async upsertMany(
+    tenantId: string,
+    assets: readonly MediaAsset[],
+    syncRunId: string,
+  ): Promise<number> {
+    const scope = forTenant(this.db, tenantId);
+    if (!Array.isArray(assets) || assets.length === 0) return 0;
+
+    let written = 0;
+    for (let start = 0; start < assets.length; start += CHUNK_SIZE) {
+      const chunk = assets.slice(start, start + CHUNK_SIZE).map((asset) =>
+        scope.row({
+          driveFileId: asset.driveFileId,
+          fileName: asset.fileName,
+          productCode: asset.productCode,
+          color: asset.color,
+          colorRaw: asset.colorRaw,
+          sequence: asset.sequence,
+          kind: asset.kind,
+          aiGenerated: asset.variants.aiGenerated,
+          realPhoto: asset.variants.realPhoto,
+          backView: asset.variants.backView,
+          mimeType: asset.mimeType,
+          sizeBytes: asset.sizeBytes,
+          modifiedTime: toModifiedDate(asset.modifiedTime),
+          warnings: [...asset.warnings],
+          needsReview: asset.needsReview,
+          lastSyncRunId: syncRunId,
+        }),
+      );
+
+      try {
+        const result = await scope.db
+          .insert(mediaAssets)
+          .values(chunk)
+          .onConflictDoUpdate({
+            target: [mediaAssets.tenantId, mediaAssets.driveFileId],
+            set: {
+              fileName: sql`excluded.file_name`,
+              productCode: sql`excluded.product_code`,
+              color: sql`excluded.color`,
+              colorRaw: sql`excluded.color_raw`,
+              sequence: sql`excluded.sequence`,
+              kind: sql`excluded.kind`,
+              aiGenerated: sql`excluded.ai_generated`,
+              realPhoto: sql`excluded.real_photo`,
+              backView: sql`excluded.back_view`,
+              mimeType: sql`excluded.mime_type`,
+              sizeBytes: sql`excluded.size_bytes`,
+              modifiedTime: sql`excluded.modified_time`,
+              warnings: sql`excluded.warnings`,
+              needsReview: sql`excluded.needs_review`,
+              lastSyncRunId: sql`excluded.last_sync_run_id`,
+              updatedAt: new Date(),
+            },
+          })
+          .returning({ id: mediaAssets.id });
+        written += result.length;
+      } catch (error) {
+        throw AppError.from(error, "DB_ERROR", {
+          tenant_id: scope.tenantId,
+          operation: "media.upsertMany",
+          chunk_start: start,
+          chunk_size: chunk.length,
+        });
+      }
+    }
+
+    return written;
+  }
+
+  async deleteStale(tenantId: string, syncRunId: string): Promise<number> {
+    const scope = forTenant(this.db, tenantId);
+    try {
+      const deleted = await scope.db
+        .delete(mediaAssets)
+        .where(scope.where(mediaAssets, ne(mediaAssets.lastSyncRunId, syncRunId)))
+        .returning({ id: mediaAssets.id });
+      return deleted.length;
+    } catch (error) {
+      throw AppError.from(error, "DB_ERROR", {
+        tenant_id: scope.tenantId,
+        operation: "media.deleteStale",
+        sync_run_id: syncRunId,
+      });
+    }
+  }
+}

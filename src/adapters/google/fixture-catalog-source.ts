@@ -1,0 +1,161 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+import { AppError } from "@/core/domain/errors";
+import type { DriveFile, DriveSource, ListDriveFilesInput } from "@/core/ports/drive-source";
+import type { ReadSheetInput, SheetSnapshot, SheetSource } from "@/core/ports/sheet-source";
+
+import { buildSheetSnapshot } from "./sheet-values";
+
+/**
+ * DriveSource/SheetSource backed by `sample-data/` — the real 5,497-file listing
+ * and the real "Mẫu 2026" CSV export (docs/05).
+ *
+ * Why an adapter and not a test double: it is the only way to exercise the sync
+ * end to end (DB included) until a Service Account exists, and it keeps the very
+ * data docs/05 was measured on. It is dev/test only — never wired into a
+ * production container.
+ *
+ * The listing file carries names only, so file ids and modifiedTime are
+ * synthesised deterministically: later lines look "newer", which makes the
+ * duplicate-name rule (newest wins) reproducible.
+ */
+
+const SAMPLE_DIR = "sample-data";
+const LISTING_FILE = "drive-file-listing.txt";
+const SHEET_FILE = "sheet-mau2026-snapshot-2026-08-12.csv";
+
+/** The first lines of the listing are sub-folders, not files (docs/05 1.1). */
+const SUBFOLDER_NAMES = new Set(["Hàng Thiết Kế", "Nghệ sĩ", "Ảnh hiển thị tiktok và shopee"]);
+
+const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  heic: "image/heic",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+};
+
+function readSample(fileName: string, rootDir: string): string {
+  const path = resolve(rootDir, SAMPLE_DIR, fileName);
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    throw new AppError("DRIVE_ERROR", {
+      message: `Cannot read sample data file ${path}`,
+      userMessage: "Không đọc được dữ liệu mẫu để chạy thử đồng bộ.",
+      context: { path },
+      cause: error,
+    });
+  }
+}
+
+export interface FixtureSourceOptions {
+  /** Repo root; defaults to the process cwd (tests and scripts run from it). */
+  readonly rootDir?: string;
+}
+
+/** Parses the raw listing into DriveFile values with stable ids. */
+export function readFixtureDriveFiles(options: FixtureSourceOptions = {}): DriveFile[] {
+  const text = readSample(LISTING_FILE, options.rootDir ?? process.cwd());
+  const files: DriveFile[] = [];
+  const base = Date.UTC(2026, 0, 1);
+
+  text.split("\n").forEach((line, index) => {
+    // Trailing whitespace is data here (97 real names start with tabs/spaces),
+    // so only the line terminator is removed.
+    const name = line.replace(/\r$/, "");
+    if (name.trim().length === 0) return;
+    if (SUBFOLDER_NAMES.has(name.trim())) return;
+
+    const extension = /\.([A-Za-z0-9]{1,5})$/.exec(name.trim())?.[1]?.toLowerCase();
+    files.push({
+      id: `fixture-${index.toString().padStart(5, "0")}`,
+      name,
+      mimeType: (extension && MIME_BY_EXTENSION[extension]) ?? "application/octet-stream",
+      sizeBytes: 100_000 + index,
+      modifiedTime: new Date(base + index * 60_000).toISOString(),
+    });
+  });
+
+  return files;
+}
+
+export function makeFixtureDriveSource(options: FixtureSourceOptions = {}): DriveSource {
+  return {
+    async listFiles(input: ListDriveFilesInput): Promise<readonly DriveFile[]> {
+      const files = readFixtureDriveFiles(options);
+      const max = input?.maxFiles && input.maxFiles > 0 ? input.maxFiles : files.length;
+      return files.slice(0, max);
+    },
+  };
+}
+
+export function readFixtureSheetSnapshot(options: FixtureSourceOptions = {}): SheetSnapshot {
+  const text = readSample(SHEET_FILE, options.rootDir ?? process.cwd());
+  return buildSheetSnapshot(parseCsv(text));
+}
+
+export function makeFixtureSheetSource(options: FixtureSourceOptions = {}): SheetSource {
+  return {
+    async readRows(_input: ReadSheetInput): Promise<SheetSnapshot> {
+      return readFixtureSheetSnapshot(options);
+    },
+  };
+}
+
+/**
+ * Minimal RFC 4180 CSV reader (quoted fields, escaped quotes, newlines inside
+ * quotes — the real export has all three). Written by hand rather than adding a
+ * dependency for one fixture.
+ */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 1;
+          continue;
+        }
+        inQuotes = false;
+        continue;
+      }
+      field += char;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+    if (char === ",") {
+      row.push(field);
+      field = "";
+      continue;
+    }
+    if (char === "\r") continue;
+    if (char === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+      continue;
+    }
+    field += char;
+  }
+
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}

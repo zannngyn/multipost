@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
 
-import { loadAuthConfig, loadConfig, type EnvRecord } from "./config";
+import { loadAuthConfig, loadConfig, loadGoogleConfig, type EnvRecord } from "./config";
 
 const CORE_ENV = {
   NODE_ENV: "test",
@@ -134,6 +134,40 @@ describe("loadAuthConfig", () => {
 
   it("parses AUTH_ALLOWED_DOMAINS csv into a lower-cased, trimmed array", () => {
     expect(loadAuthConfig(AUTH_ENV).AUTH_ALLOWED_DOMAINS).toEqual(["example.com", "partner.vn"]);
+  });
+});
+
+describe("loadGoogleConfig — Service Account (E2)", () => {
+  it("rejects an env with neither credential variable", () => {
+    expect(issuePaths(catchError(() => loadGoogleConfig({})))).toEqual([
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+    ]);
+  });
+
+  it("rejects blank values (a defined-but-empty secret must not pass)", () => {
+    expect(
+      issuePaths(
+        catchError(() =>
+          loadGoogleConfig({ GOOGLE_SERVICE_ACCOUNT_JSON: "  ", GOOGLE_APPLICATION_CREDENTIALS: "" }),
+        ),
+      ),
+    ).toEqual(["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_SERVICE_ACCOUNT_JSON"]);
+  });
+
+  it("accepts the inlined key", () => {
+    expect(loadGoogleConfig({ GOOGLE_SERVICE_ACCOUNT_JSON: '{"a":1}' })).toMatchObject({
+      GOOGLE_SERVICE_ACCOUNT_JSON: '{"a":1}',
+    });
+  });
+
+  it("accepts the key path alone", () => {
+    expect(loadGoogleConfig({ GOOGLE_APPLICATION_CREDENTIALS: "./sa.json" })).toMatchObject({
+      GOOGLE_APPLICATION_CREDENTIALS: "./sa.json",
+    });
+  });
+
+  it("is not required by loadConfig — a worker boots without Google credentials", () => {
+    expect(() => loadConfig(CORE_ENV)).not.toThrow();
   });
 });
 
