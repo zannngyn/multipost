@@ -11,6 +11,9 @@ export const ERROR_CODES = [
   "INTERNAL",
   "TENANT_NOT_FOUND",
   "UNAUTHORIZED",
+  "DB_ERROR",
+  "QUEUE_ERROR",
+  "JOB_PAYLOAD_INVALID",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -24,6 +27,9 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   INTERNAL: "Hệ thống gặp sự cố. Vui lòng thử lại sau ít phút.",
   TENANT_NOT_FOUND: "Không tìm thấy đơn vị (tenant) tương ứng.",
   UNAUTHORIZED: "Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.",
+  DB_ERROR: "Không truy cập được cơ sở dữ liệu. Vui lòng thử lại sau ít phút.",
+  QUEUE_ERROR: "Hàng đợi công việc gặp sự cố. Vui lòng thử lại sau ít phút.",
+  JOB_PAYLOAD_INVALID: "Dữ liệu công việc nền không hợp lệ — công việc đã bị từ chối.",
 };
 
 /** English developer message. Falls back to the code itself. */
@@ -32,6 +38,9 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   INTERNAL: "Unexpected internal error",
   TENANT_NOT_FOUND: "Tenant not found",
   UNAUTHORIZED: "Missing or invalid credentials",
+  DB_ERROR: "Database operation failed",
+  QUEUE_ERROR: "Job queue operation failed",
+  JOB_PAYLOAD_INVALID: "Job payload failed schema validation",
 };
 
 export interface AppErrorOptions {
