@@ -33,7 +33,10 @@ import {
 } from "@/composition/container";
 import { makeGetBatchStatus } from "@/core/usecases/get-batch-status";
 import { makeListPostJobs } from "@/core/usecases/list-post-jobs";
+import { makeCancelScheduledJob } from "@/core/usecases/cancel-scheduled-job";
+import { makeListScheduledJobs } from "@/core/usecases/list-scheduled-jobs";
 import { makeManageChannelGroups } from "@/core/usecases/manage-channel-groups";
+import { makeReschedulePostJob } from "@/core/usecases/reschedule-post-job";
 import { PUBLISH_POST_JOB_NAME } from "@/core/usecases/publish-post";
 import { makeRetryPostJob } from "@/core/usecases/retry-post-job";
 import { makePublishPostHandler } from "@/worker/jobs/publish-post-job";
@@ -128,6 +131,21 @@ async function main(): Promise<void> {
     users: new DrizzleUserRepo(db),
   });
   const groupRepo = new DrizzleChannelGroupRepo(db);
+  const listScheduledJobs = makeListScheduledJobs({ postJobs: repo, clock: infra.clock, logger });
+  const reschedulePostJob = makeReschedulePostJob({
+    postJobs: repo,
+    channels: channelConfig,
+    queue,
+    clock: infra.clock,
+    logger,
+    users: new DrizzleUserRepo(db),
+  });
+  const cancelScheduledJob = makeCancelScheduledJob({
+    postJobs: repo,
+    queue,
+    logger,
+    users: new DrizzleUserRepo(db),
+  });
   const groupUsecases = makeManageChannelGroups({
     groups: groupRepo,
     channels: channelConfig,
@@ -180,6 +198,19 @@ async function main(): Promise<void> {
       });
   };
   await setChannels(SPACING_MS);
+
+  // Operator behind every audited action of this script (E11.1/E8.4).
+  const operatorId = randomUUID();
+  await db
+    .insert(users)
+    .values({
+      id: operatorId,
+      tenantId: DEMO_TENANT_ID,
+      email: "van@example.com",
+      name: "Nguyen The Van",
+      role: "owner",
+    })
+    .onConflictDoNothing();
 
   const syncRunId = randomUUID();
   const seedProduct = async (code: string, name: string, stockRaw: string): Promise<void> => {
@@ -668,6 +699,236 @@ async function main(): Promise<void> {
     print({ code: appError.code, context: appError.context });
   }
 
+  // --- E8: scheduling ------------------------------------------------------
+  heading("p) E8.1 hẹn giờ riêng theo kênh -> 2 job delayed đúng delay");
+  const batchS = randomUUID();
+  const scheduleA = new Date(Date.now() + 60 * 60_000);
+  const scheduleB = new Date(Date.now() + 2 * 60 * 60_000);
+  const scheduled = await usecases.createPostBatch({
+    tenantId: DEMO_TENANT_ID,
+    batchId: batchS,
+    productCode: PRODUCT_A,
+    color: "Tím",
+    channelIds: [CHANNEL_A, CHANNEL_B],
+    captionByChannel: captions,
+    media: MEDIA,
+    scheduledAtByChannel: { [CHANNEL_A]: scheduleA, [CHANNEL_B]: scheduleB },
+  });
+  const delayedIds = await connection.zrange("bull:mysp-jobs:delayed", "0", "-1");
+  const delayedDetails = await Promise.all(
+    scheduled.channels.map(async (entry) => {
+      const raw = await connection.hgetall(`bull:mysp-jobs:${entry.queueJobId}`);
+      return {
+        channel: entry.channelId,
+        queueJobId: entry.queueJobId,
+        scheduledAt: entry.scheduledAt?.toISOString() ?? null,
+        in_delayed_set: delayedIds.includes(entry.queueJobId ?? ""),
+        // BullMQ stores the delay on the job hash; timestamp + delay = due time.
+        due_at: raw.timestamp
+          ? new Date(Number(raw.timestamp) + Number(raw.delay ?? 0)).toISOString()
+          : null,
+      };
+    }),
+  );
+  print({ batchStatus: scheduled.batchStatus, channels: delayedDetails });
+  print({
+    scheduled_list: (
+      await listScheduledJobs({ tenantId: DEMO_TENANT_ID })
+    ).items.map((item) => ({
+      channel: item.channelId,
+      scheduledAt: item.scheduledAt.toISOString(),
+      startsInMin: Math.round(item.startsInMs / 60_000),
+      overdue: item.overdue,
+      canCancel: item.canCancel,
+      userMessage: item.userMessage,
+    })),
+  });
+
+  heading("q) E8.4 đổi giờ -> job cũ biến mất khỏi Redis, job mới delay đúng");
+  const jobA = scheduled.channels.find((entry) => entry.channelId === CHANNEL_A);
+  if (!jobA?.queueJobId) throw new Error("case q: channel A was not queued");
+  const newTime = new Date(Date.now() + 30 * 60_000);
+  const rescheduled = await reschedulePostJob({
+    tenantId: DEMO_TENANT_ID,
+    postJobId: jobA.postJobId,
+    newScheduledAt: newTime,
+    actorEmail: "van@example.com",
+  });
+  const afterReschedule = await connection.zrange("bull:mysp-jobs:delayed", "0", "-1");
+  const newRaw = await connection.hgetall(`bull:mysp-jobs:${rescheduled.queueJobId}`);
+  print({
+    previous_queue_job_id: jobA.queueJobId,
+    new_queue_job_id: rescheduled.queueJobId,
+    old_entry_gone_from_redis: !afterReschedule.includes(jobA.queueJobId),
+    new_entry_in_redis: afterReschedule.includes(rescheduled.queueJobId),
+    previousQueueEntryRemoved: rescheduled.previousQueueEntryRemoved,
+    scheduled_at: rescheduled.scheduledAt.toISOString(),
+    new_due_at: newRaw.timestamp
+      ? new Date(Number(newRaw.timestamp) + Number(newRaw.delay ?? 0)).toISOString()
+      : null,
+    delay_min: Math.round(rescheduled.delayMs / 60_000),
+    db_scheduled_at: (
+      await repo.findJobById(DEMO_TENANT_ID, jobA.postJobId)
+    )?.scheduledAt?.toISOString(),
+  });
+
+  heading("r) E8.4 huỷ bài hẹn -> blocked + audit + rời hàng đợi");
+  const jobB = scheduled.channels.find((entry) => entry.channelId === CHANNEL_B);
+  if (!jobB?.queueJobId) throw new Error("case r: channel B was not queued");
+  const cancelled = await cancelScheduledJob({
+    tenantId: DEMO_TENANT_ID,
+    postJobId: jobB.postJobId,
+    actorEmail: "van@example.com",
+    note: "khách đổi ý",
+  });
+  const afterCancel = await connection.zrange("bull:mysp-jobs:delayed", "0", "-1");
+  const cancelAudit = await db
+    .select({ action: auditLogs.action, actorUserId: auditLogs.actorUserId, payload: auditLogs.payload })
+    .from(auditLogs)
+    .where(and(eq(auditLogs.entityId, jobB.postJobId), eq(auditLogs.action, "post_job.cancelled")))
+    .limit(1);
+  const cancelledRow = await repo.findJobById(DEMO_TENANT_ID, jobB.postJobId);
+  print({
+    result: cancelled,
+    job_row: {
+      status: cancelledRow?.status,
+      errorCode: cancelledRow?.lastErrorCode,
+      userMessage: cancelledRow?.lastErrorMessage,
+      queueJobId: cancelledRow?.queueJobId,
+    },
+    queue_entry_gone: !afterCancel.includes(jobB.queueJobId),
+    audit_row: cancelAudit[0],
+  });
+  // Refuse a second cancel: the row is no longer queued.
+  try {
+    await cancelScheduledJob({ tenantId: DEMO_TENANT_ID, postJobId: jobB.postJobId });
+    console.log("!! expected INVALID_JOB_TRANSITION on a second cancel");
+  } catch (error) {
+    const appError = AppError.from(error);
+    print({ second_cancel: appError.code, userMessage: appError.userMessage });
+  }
+
+  heading("s) E8.2 đến giờ (delay 2s) -> worker đăng thật");
+  const batchDue = randomUUID();
+  const dueAt = new Date(Date.now() + 2_000);
+  const due = await usecases.createPostBatch({
+    tenantId: DEMO_TENANT_ID,
+    batchId: batchDue,
+    productCode: PRODUCT_A,
+    color: "Tím",
+    channelIds: [CHANNEL_A],
+    captionByChannel: captions,
+    media: MEDIA,
+    scheduledAt: dueAt,
+  });
+  const queuedAt = Date.now();
+  await waitForBatch(db, batchDue, ["published"], 60_000);
+  const dueJob = await repo.findJobById(DEMO_TENANT_ID, due.channels[0].postJobId);
+  print({
+    scheduled_at: dueAt.toISOString(),
+    published_at: dueJob?.publishedAt?.toISOString() ?? null,
+    waited_ms_at_least_the_delay: (dueJob?.publishedAt?.getTime() ?? 0) - queuedAt >= 1_500,
+    status: dueJob?.status,
+    postId: dueJob?.publishedPostId,
+  });
+
+  heading("t) E8.3 hẹn giờ + hết hàng trước giờ -> auto_cancelled + audit");
+  const batchAuto = randomUUID();
+  const autoDue = new Date(Date.now() + 3_000);
+  const auto = await usecases.createPostBatch({
+    tenantId: DEMO_TENANT_ID,
+    batchId: batchAuto,
+    productCode: PRODUCT_A,
+    color: "Tím",
+    channelIds: [CHANNEL_A],
+    captionByChannel: captions,
+    media: MEDIA,
+    scheduledAt: autoDue,
+  });
+  // "Trong đêm hàng bán hết" (brief §9), compressed into three seconds.
+  await db.update(products).set({ stockRaw: "0" }).where(eq(products.code, PRODUCT_A));
+  const callsBeforeAuto = publisher.callCount();
+  await waitForBatch(db, batchAuto, ["blocked"], 60_000);
+  const autoRow = await repo.findJobById(DEMO_TENANT_ID, auto.channels[0].postJobId);
+  const autoAudit = await db
+    .select({ action: auditLogs.action, payload: auditLogs.payload })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.entityId, auto.channels[0].postJobId),
+        eq(auditLogs.action, "post_job.auto_cancelled"),
+      ),
+    )
+    .limit(1);
+  print({
+    scheduled_at: autoDue.toISOString(),
+    status: autoRow?.status,
+    errorCode: autoRow?.lastErrorCode,
+    userMessage: autoRow?.lastErrorMessage,
+    audit_row: autoAudit[0],
+    publisher_calls_for_this_batch: publisher.callCount() - callsBeforeAuto,
+    proof: publisher.callCount() === callsBeforeAuto ? "publisher NEVER called" : "LEAK",
+  });
+  await db.update(products).set({ stockRaw: "104" }).where(eq(products.code, PRODUCT_A));
+
+  heading("u) E8.4 entry cũ SỐNG SÓT sau đổi giờ -> tới giờ cũ worker bỏ qua, giờ mới mới đăng");
+  const batchU = randomUUID();
+  const staleBatch = await usecases.createPostBatch({
+    tenantId: DEMO_TENANT_ID,
+    batchId: batchU,
+    productCode: PRODUCT_A,
+    color: "Tím",
+    channelIds: [CHANNEL_A],
+    captionByChannel: captions,
+    media: MEDIA,
+    scheduledAt: new Date(Date.now() + 60_000),
+  });
+  const staleJobId = staleBatch.channels[0].postJobId;
+  const oldEntryId = staleBatch.channels[0].queueJobId;
+  if (!oldEntryId) throw new Error("case u: no queue id stored");
+
+  const movedOn = await reschedulePostJob({
+    tenantId: DEMO_TENANT_ID,
+    postJobId: staleJobId,
+    newScheduledAt: new Date(Date.now() + 6_000),
+    actorEmail: "van@example.com",
+  });
+  // Simulates "remove failed": the OLD entry is back in Redis and will fire at
+  // the OLD hour. Nothing else about the job changes.
+  await queue.enqueue(
+    PUBLISH_POST_JOB_NAME,
+    { tenantId: DEMO_TENANT_ID, postJobId: staleJobId },
+    { jobId: oldEntryId, delayMs: 1_000, attempts: 1 },
+  );
+  const callsBeforeStale = publisher.callCount();
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
+  const afterStaleFired = await repo.findJobById(DEMO_TENANT_ID, staleJobId);
+  print({
+    old_entry_id: oldEntryId,
+    new_entry_id: movedOn.queueJobId,
+    after_the_OLD_hour: {
+      status: afterStaleFired?.status,
+      attempts: afterStaleFired?.attemptCount,
+      publishedPostId: afterStaleFired?.publishedPostId,
+      queueJobId: afterStaleFired?.queueJobId,
+      publisher_calls: publisher.callCount() - callsBeforeStale,
+      proof:
+        publisher.callCount() === callsBeforeStale && afterStaleFired?.status === "queued"
+          ? "stale entry ignored — nothing published, nothing burned"
+          : "LEAK",
+    },
+  });
+  await waitForBatch(db, batchU, ["published"], 60_000);
+  const afterNewHour = await repo.findJobById(DEMO_TENANT_ID, staleJobId);
+  print({
+    after_the_NEW_hour: {
+      status: afterNewHour?.status,
+      attempts: afterNewHour?.attemptCount,
+      postId: afterNewHour?.publishedPostId,
+      publishedAt: afterNewHour?.publishedAt?.toISOString() ?? null,
+    },
+  });
+
   await consumer.close();
 
   // --- Case l: channel groups (E7.6) ----------------------------------------
@@ -776,18 +1037,6 @@ async function main(): Promise<void> {
 
   // --- Case o: audit actor (E11.1) -----------------------------------------
   heading("o) retry kèm actorEmail -> audit_log ghi đúng actor_user_id");
-  const operatorId = randomUUID();
-  await db
-    .insert(users)
-    .values({
-      id: operatorId,
-      tenantId: DEMO_TENANT_ID,
-      email: "van@example.com",
-      name: "Nguyen The Van",
-      role: "owner",
-    })
-    .onConflictDoNothing();
-
   // Two blocked jobs to re-run (one per actor case): re-queueing a blocked job
   // is safe here — the consumer is closed, so nothing publishes behind our back.
   const auditJobs = await db

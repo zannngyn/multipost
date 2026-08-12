@@ -134,6 +134,12 @@ export interface CreatePostBatchParams {
   captionByChannel: Readonly<Record<string, string>>;
   /** Assets only, cover first. The public URL is minted server-side (E3.6). */
   media: readonly { driveFileId: string; fileName?: string; kind?: string }[];
+  /**
+   * E8.1 — publish time for every channel of this batch, as an INSTANT (ISO).
+   * Absent/null = đăng ngay. The window (tương lai, tối đa 30 ngày) is enforced
+   * by the domain: a bad time blocks ONE channel with a reason, never the lô.
+   */
+  scheduledAt?: string | null;
 }
 
 /**
@@ -174,12 +180,15 @@ export async function createPostBatch(
     });
   }
 
+  const scheduledAt = params.scheduledAt?.trim() ?? "";
+
   return apiRequest("/api/posts/batches", {
     method: "POST",
     body: {
       tenantId,
       productCode,
       ...(color ? { color } : {}),
+      ...(scheduledAt ? { scheduledAt } : {}),
       channelIds: [...params.channelIds],
       captionByChannel: params.captionByChannel,
       // Explicit field list: no URL, no stock, no price travels with a post.

@@ -57,8 +57,15 @@ export const postJobs = pgTable(
     captionText: text("caption_text").notNull(),
     /** Ordered album; index 0 is the cover. */
     media: jsonb("media").$type<PostJobMedia[]>().notNull().default([]),
-    /** Phase 2 scheduling; stored now so the column does not move later. */
+    /** When this job should publish. Null = as soon as a worker picks it up. */
     scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: "date" }),
+    /**
+     * Queue entry currently representing this job (E8.4). Stored because a
+     * delayed BullMQ job can only be REMOVED by id: an operator rescheduling or
+     * cancelling a post must be able to drop the old entry, or it fires anyway.
+     * Null whenever nothing is queued.
+     */
+    queueJobId: text("queue_job_id"),
     ...timestamps,
   },
   (table) => [
@@ -78,6 +85,8 @@ export const postJobs = pgTable(
       table.channelId,
       table.publishedAt,
     ),
+    // E8.4 "bài đã hẹn": status + time is the exact shape of that screen's query.
+    index("post_job_tenant_scheduled_idx").on(table.tenantId, table.status, table.scheduledAt),
   ],
 );
 

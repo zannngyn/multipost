@@ -6,7 +6,11 @@ import {
   canTransitionPostJob,
   deferredPostJobQueueId,
   deriveBatchStatus,
+  evaluateScheduledAt,
   isFinalPostJobStatus,
+  isPendingSchedule,
+  MAX_SCHEDULE_AHEAD_MS,
+  scheduleRejectionMessage,
   POST_JOB_STATUSES,
   postJobDuplicateKey,
   postJobOperatorMessage,
@@ -35,6 +39,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
     media: [{ driveFileId: "d1", fileName: "MGKVX6310-Tím (1).jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
+    queueJobId: null,
     ...overrides,
   };
 }
@@ -340,4 +345,92 @@ describe("postJobOperatorMessage", () => {
       expect(postJobOperatorMessage(makeJob({ status })).length).toBeGreaterThan(0);
     },
   );
+});
+
+// --- Scheduling (E8) --------------------------------------------------------
+
+describe("evaluateScheduledAt", () => {
+  const NOW = Date.parse("2026-08-13T02:00:00.000Z");
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a non-date object", {}],
+    ["gibberish", "khong-phai-ngay"],
+    ["an invalid Date", new Date("nope")],
+  ])("refuses %s", (_label, value) => {
+    expect(evaluateScheduledAt(value, NOW)).toMatchObject({ ok: false, reason: "NOT_A_DATE" });
+  });
+
+  it("refuses a time that already passed — it must never mean 'post now'", () => {
+    const past = new Date(NOW - 60_000);
+    expect(evaluateScheduledAt(past, NOW)).toMatchObject({ ok: false, reason: "IN_THE_PAST" });
+    // "Now" is also refused: a queue round trip cannot happen in zero time.
+    expect(evaluateScheduledAt(new Date(NOW), NOW)).toMatchObject({ reason: "IN_THE_PAST" });
+  });
+
+  it("refuses a time past the window (PENDING(E8-window): 30 days)", () => {
+    const tooFar = new Date(NOW + MAX_SCHEDULE_AHEAD_MS + 60_000);
+    expect(evaluateScheduledAt(tooFar, NOW)).toMatchObject({ ok: false, reason: "TOO_FAR_AHEAD" });
+    expect(evaluateScheduledAt(new Date(NOW + MAX_SCHEDULE_AHEAD_MS), NOW).ok).toBe(true);
+  });
+
+  it("accepts a future time and returns the delay the queue needs", () => {
+    const verdict = evaluateScheduledAt(new Date(NOW + 3_600_000), NOW);
+    expect(verdict).toMatchObject({ ok: true, delayMs: 3_600_000 });
+  });
+
+  it("accepts an ISO string (a JSON body never carries a Date)", () => {
+    const verdict = evaluateScheduledAt("2026-08-13T03:00:00.000Z", NOW);
+    expect(verdict.ok).toBe(true);
+    expect(verdict.at?.toISOString()).toBe("2026-08-13T03:00:00.000Z");
+  });
+
+  it("gives every rejection a Vietnamese sentence", () => {
+    for (const reason of ["NOT_A_DATE", "IN_THE_PAST", "TOO_FAR_AHEAD"] as const) {
+      expect(scheduleRejectionMessage(reason).length).toBeGreaterThan(10);
+    }
+    expect(scheduleRejectionMessage("TOO_FAR_AHEAD")).toContain("30 ngày");
+  });
+});
+
+describe("isPendingSchedule", () => {
+  const NOW = Date.parse("2026-08-13T02:00:00.000Z");
+
+  it("is true only for a queued job whose time is still ahead", () => {
+    expect(isPendingSchedule({ status: "queued", scheduledAt: new Date(NOW + 1) }, NOW)).toBe(true);
+    expect(isPendingSchedule({ status: "queued", scheduledAt: new Date(NOW - 1) }, NOW)).toBe(false);
+    expect(isPendingSchedule({ status: "queued", scheduledAt: null }, NOW)).toBe(false);
+    expect(isPendingSchedule({ status: "publishing", scheduledAt: new Date(NOW + 1) }, NOW)).toBe(
+      false,
+    );
+    expect(isPendingSchedule({ status: "published", scheduledAt: new Date(NOW + 1) }, NOW)).toBe(
+      false,
+    );
+  });
+});
+
+describe("transitionPostJob — queue id bookkeeping (E8.4)", () => {
+  it("stores the queue id on the transition that queues the job", () => {
+    const queued = transitionPostJob(makeJob(), "queued", { queueJobId: "pp.job-1.x" });
+    expect(queued.queueJobId).toBe("pp.job-1.x");
+  });
+
+  it("keeps the existing id when a retry does not pass a new one", () => {
+    const job = makeJob({ status: "failed", queueJobId: "pp.old" });
+    expect(transitionPostJob(job, "queued").queueJobId).toBe("pp.old");
+  });
+
+  it("clears it once the job is published or stopped — a stale id could delete someone else's entry", () => {
+    const publishing = makeJob({ status: "publishing", queueJobId: "pp.old" });
+    expect(
+      transitionPostJob(publishing, "published", { publishedPostId: "1_2" }).queueJobId,
+    ).toBeNull();
+    expect(
+      transitionPostJob(publishing, "blocked", { errorCode: "OUT_OF_STOCK" }).queueJobId,
+    ).toBeNull();
+    expect(
+      transitionPostJob(publishing, "failed", { errorCode: "PUBLISH_FAILED" }).queueJobId,
+    ).toBeNull();
+  });
 });

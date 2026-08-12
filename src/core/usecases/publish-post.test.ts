@@ -69,6 +69,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
+    queueJobId: null,
     ...overrides,
   };
 }
@@ -77,12 +78,15 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
 function makeMemoryRepo(jobs: PostJob[]) {
   const store = new Map(jobs.map((job) => [job.id, job]));
   const transitions: Array<{ from: PostJobStatus; to: PostJobStatus; reason: string; ok: boolean }> = [];
+  const transitionInputs: ApplyTransitionInput[] = [];
   const repo: PostJobRepo & {
     transitions: typeof transitions;
+    transitionInputs: ApplyTransitionInput[];
     get(id: string): PostJob | undefined;
     refreshCalls: string[];
   } = {
     transitions,
+    transitionInputs,
     refreshCalls: [],
     get: (id: string) => store.get(id),
     async createBatchWithJobs() {
@@ -99,12 +103,25 @@ function makeMemoryRepo(jobs: PostJob[]) {
       return { items: [], nextCursor: null };
     },
     async applyTransition(input: ApplyTransitionInput) {
+      transitionInputs.push(input);
       const current = store.get(input.postJobId);
       const ok = Boolean(current && current.status === input.from);
       transitions.push({ from: input.from, to: input.next.status, reason: input.reason, ok });
       if (!current || current.status !== input.from) return null;
       store.set(input.postJobId, input.next);
       return input.next;
+    },
+    async setQueueJobId(input: { postJobId: string; queueJobId: string | null }) {
+      const current = store.get(input.postJobId);
+      if (!current || current.status !== "queued") return false;
+      store.set(input.postJobId, { ...current, queueJobId: input.queueJobId });
+      return true;
+    },
+    async rescheduleJob() {
+      return null;
+    },
+    async listScheduledJobs() {
+      return { items: [], nextCursor: null };
     },
     async findLastPublishedAt(_tenantId: string, channelId: string) {
       const published = [...store.values()]
@@ -185,6 +202,9 @@ function makeQueue() {
     async enqueue(jobName, payload, opts) {
       enqueued.push({ name: jobName, payload, opts });
       return { jobId: opts?.jobId ?? "generated" };
+    },
+    async remove() {
+      return true;
     },
     async close() {},
   };
@@ -699,5 +719,153 @@ describe("publishPost — happy path", () => {
       "publish",
       "transition:published",
     ]);
+  });
+});
+
+describe("publishPost — scheduled posts (E8.2/E8.3/E8.5)", () => {
+  const SCHEDULED_AT = new Date("2026-08-13T01:00:00.000Z");
+
+  it("rechecks stock at the scheduled hour and auto-cancels a sold-out post", async () => {
+    // The brief's exact scenario: "hẹn hôm nay mai đăng, trong đêm hàng bán hết".
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: SCHEDULED_AT })],
+      product: makeProduct("0"),
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.errorCode).toBe("OUT_OF_STOCK");
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    // E8.3: the audit row names the EVENT, not just the status.
+    const blocked = h.repo.transitionInputs.find((input) => input.next.status === "blocked");
+    expect(blocked?.auditAction).toBe("post_job.auto_cancelled");
+  });
+
+  it("keeps the plain block action for an immediate post (no schedule)", async () => {
+    const h = harness({ jobs: [makeJob({ scheduledAt: null })], product: makeProduct("0") });
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    const blocked = h.repo.transitionInputs.find((input) => input.next.status === "blocked");
+    expect(blocked?.auditAction).toBeUndefined();
+  });
+
+  it("marks a scheduled post that fails at its hour with its own audit action (E8.5)", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: SCHEDULED_AT })],
+      publish: async () => {
+        throw new AppError("META_ERROR", {
+          message: "permission denied",
+          context: { retryable: false },
+        });
+      },
+    });
+
+    await expect(
+      h.publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ code: "PUBLISH_FAILED" });
+
+    const failed = h.repo.transitionInputs.find((input) => input.next.status === "failed");
+    expect(failed?.auditAction).toBe("post_job.scheduled_publish_failed");
+  });
+
+  it("publishes normally when the hour comes and stock is fine", async () => {
+    const h = harness({ jobs: [makeJob({ scheduledAt: SCHEDULED_AT })] });
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.outcome).toBe("published");
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("publishPost — stale queue entry guard (E8.4)", () => {
+  const NEW_ENTRY = "pp.job-1.MGKVX6310.T-M.fbpage-a.d1786574288282";
+
+  it("publishes when the running entry IS the one stored on the job", async () => {
+    const h = harness({ jobs: [makeJob({ queueJobId: NEW_ENTRY })] });
+
+    const result = await h.publish({
+      tenantId: TENANT,
+      postJobId: "job-1",
+      queueJobId: NEW_ENTRY,
+    });
+
+    expect(result.outcome).toBe("published");
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a STALE entry: the old hour must not publish after a reschedule", async () => {
+    const h = harness({
+      jobs: [makeJob({ queueJobId: NEW_ENTRY, scheduledAt: new Date("2026-08-13T09:00:00.000Z") })],
+    });
+
+    const result = await h.publish({
+      tenantId: TENANT,
+      postJobId: "job-1",
+      queueJobId: "pp.job-1.MGKVX6310.T-M.fbpage-a",
+      attempt: 1,
+      maxAttempts: 3,
+    });
+
+    expect(result).toMatchObject({ outcome: "skipped", skipReason: "STALE_QUEUE_ENTRY" });
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    // Nothing burned: no claim, no attempt, no audit row, status untouched.
+    expect(h.repo.transitions).toHaveLength(0);
+    expect(h.repo.get("job-1")).toMatchObject({ status: "queued", attemptCount: 0 });
+  });
+
+  it("still publishes a row created before the queue id existed (queue_job_id NULL)", async () => {
+    const h = harness({ jobs: [makeJob({ queueJobId: null })] });
+
+    const result = await h.publish({
+      tenantId: TENANT,
+      postJobId: "job-1",
+      queueJobId: "pp.whatever",
+    });
+
+    expect(result.outcome).toBe("published");
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not guard when the caller passes no queue id", async () => {
+    const h = harness({ jobs: [makeJob({ queueJobId: NEW_ENTRY })] });
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.outcome).toBe("published");
+  });
+});
+
+describe("publishPost — the deferred entry is not stale (E8.4 regression)", () => {
+  it("points the row at the deferred entry before re-enqueueing", async () => {
+    const h = harness({
+      jobs: [
+        makeJob({ queueJobId: "pp.first-entry" }),
+        makeJob({
+          id: "job-0",
+          status: "published",
+          publishedAt: new Date("2026-08-13T01:59:30.000Z"),
+          publishedPostId: "555000111_0",
+        }),
+      ],
+      settings: { spacingMs: 60_000 },
+    });
+
+    const deferred = await h.publish({
+      tenantId: TENANT,
+      postJobId: "job-1",
+      queueJobId: "pp.first-entry",
+    });
+
+    expect(deferred.outcome).toBe("deferred");
+    const newId = h.queue.enqueued[0].opts?.jobId;
+    expect(newId).not.toBe("pp.first-entry");
+    // Without this the deferred entry would look stale and never publish.
+    expect(h.repo.get("job-1")?.queueJobId).toBe(newId);
+
+    // And the deferred entry does publish once the spacing window has passed.
+    h.clock.advance(60_000);
+    const published = await h.publish({
+      tenantId: TENANT,
+      postJobId: "job-1",
+      queueJobId: newId,
+    });
+    expect(published.outcome).toBe("published");
   });
 });

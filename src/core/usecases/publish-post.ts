@@ -43,6 +43,13 @@ import type {
 /** Queue job name; the worker registers its handler under it. */
 export const PUBLISH_POST_JOB_NAME = "publish-post";
 
+/**
+ * Audit actions that name the EVENT, not just the resulting status (E8.3/E8.5).
+ * Kept here because the usecase decides when a block is an auto-cancellation.
+ */
+export const AUTO_CANCELLED_AUDIT_ACTION = "post_job.auto_cancelled";
+export const SCHEDULED_FAILED_AUDIT_ACTION = "post_job.scheduled_publish_failed";
+
 export type PublishPostOutcome =
   | "published"
   /** The job was already live — a re-run after a crash. Nothing was called. */
@@ -57,6 +64,15 @@ export type PublishPostOutcome =
 export interface PublishPostInput {
   readonly tenantId: string;
   readonly postJobId: string;
+  /**
+   * Id of the QUEUE entry that woke this run up (BullMQ `job.id`). Compared with
+   * `post_job.queue_job_id` before anything is claimed: after a reschedule whose
+   * old entry could not be removed, the OLD entry still fires at the OLD time —
+   * and the status guard alone cannot tell the two apart, because the row is
+   * legitimately `queued` for the NEW time.
+   * Null/absent = no check (a caller that is not the queue).
+   */
+  readonly queueJobId?: string | null;
   /** 1-based attempt of the QUEUE job (BullMQ decides whether one more runs). */
   readonly attempt?: number;
   readonly maxAttempts?: number;
@@ -77,6 +93,8 @@ export interface PublishPostResult {
   readonly userMessage: string | null;
   /** Set when outcome = "deferred". */
   readonly deferredMs: number | null;
+  /** Machine-readable why, when outcome = "skipped". */
+  readonly skipReason: string | null;
 }
 
 export interface PublishPostDeps {
@@ -162,6 +180,33 @@ export function makePublishPost(deps: PublishPostDeps) {
       return result(job, "skipped", { deferredMs: null });
     }
 
+    // --- 1b. Stale queue entry guard (E8.4) ---------------------------------
+    // A rescheduled job whose OLD entry survived (remove failed, or the message
+    // was already in flight) would otherwise publish at the OLD hour, silently.
+    const runningQueueJobId = str(input?.queueJobId);
+    if (runningQueueJobId.length > 0 && job.queueJobId && runningQueueJobId !== job.queueJobId) {
+      // Not an error: nothing is wrong with the job, this MESSAGE is obsolete.
+      // Returning (instead of throwing) leaves the attempt counter, the status
+      // and the audit trail untouched — the live entry still owns the job.
+      log.warn("Publish skipped: this queue entry is stale (the post was rescheduled)", {
+        outcome: "skipped",
+        reason: "STALE_QUEUE_ENTRY",
+        expected_queue_job_id: job.queueJobId,
+        actual_queue_job_id: runningQueueJobId,
+        scheduled_at: job.scheduledAt?.toISOString() ?? null,
+        attempt,
+      });
+      return result(job, "skipped", { deferredMs: null, skipReason: "STALE_QUEUE_ENTRY" });
+    }
+    if (runningQueueJobId.length > 0 && !job.queueJobId) {
+      // Rows created before migration 0005 carry no queue id; guarding on a null
+      // would strand every one of them. Visible, but not blocking.
+      log.debug("No queue id stored on this job — stale-entry guard skipped", {
+        reason: "QUEUE_ID_NOT_STORED",
+        actual_queue_job_id: runningQueueJobId,
+      });
+    }
+
     const settings = await deps.channels.getPublishSettings(tenantId);
     const maxAttempts = maxAttemptsFromQueue ?? settings.maxAttempts;
 
@@ -171,18 +216,50 @@ export function makePublishPost(deps: PublishPostDeps) {
     if (waitMs > 0) {
       // A NEW queue id: BullMQ silently drops an `add` whose id is still
       // retained, which would lose this post entirely.
-      await deps.queue.enqueue(
-        PUBLISH_POST_JOB_NAME,
-        { tenantId, postJobId: job.id },
-        {
-          jobId: deferredPostJobQueueId(job, deps.clock.nowMs()),
-          delayMs: waitMs,
-          attempts: maxAttempts,
-          backoff: { strategy: "exponential", delayMs: settings.retryBackoffMs },
-        },
-      );
+      const deferredQueueJobId = deferredPostJobQueueId(job, deps.clock.nowMs());
+      // The row must point at the entry that will actually run, or the guard
+      // above would treat the deferred entry as stale and the post would never
+      // go out. Written BEFORE the enqueue, rolled back if the enqueue fails.
+      const pointed = await deps.postJobs.setQueueJobId({
+        tenantId,
+        postJobId: job.id,
+        queueJobId: deferredQueueJobId,
+      });
+      if (!pointed) {
+        log.warn("Publish skipped: the job left `queued` while the spacing gate ran", {
+          outcome: "skipped",
+          reason: "ROW_CHANGED_DURING_DEFERRAL",
+          attempt,
+        });
+        return result(job, "skipped", { deferredMs: null, skipReason: "ROW_CHANGED_DURING_DEFERRAL" });
+      }
+      try {
+        await deps.queue.enqueue(
+          PUBLISH_POST_JOB_NAME,
+          { tenantId, postJobId: job.id },
+          {
+            jobId: deferredQueueJobId,
+            delayMs: waitMs,
+            attempts: maxAttempts,
+            backoff: { strategy: "exponential", delayMs: settings.retryBackoffMs },
+          },
+        );
+      } catch (error) {
+        // Put the pointer back on the entry that is running right now, so the
+        // queue retry of THIS message is not rejected as stale.
+        await deps.postJobs
+          .setQueueJobId({ tenantId, postJobId: job.id, queueJobId: job.queueJobId })
+          .catch(() => false);
+        throw AppError.from(error, "QUEUE_ERROR", {
+          tenant_id: tenantId,
+          job_id: job.id,
+          channel: job.channelId,
+          operation: "publishPost.deferForSpacing",
+        });
+      }
       log.info("Publish deferred by the spacing gate", {
         outcome: "deferred",
+        queue_job_id: deferredQueueJobId,
         wait_ms: waitMs,
         spacing_ms: settings.spacingMs,
         last_published_at: lastPublishedAt?.toISOString() ?? null,
@@ -223,22 +300,35 @@ export function makePublishPost(deps: PublishPostDeps) {
     if (inventory.blocked) {
       const userMessage =
         inventory.operatorMessage ?? `Mã ${claimed.productCode} đã hết hàng — không đăng`;
+      // E8.3 — a SCHEDULED post killed by the stock recheck is an automatic
+      // cancellation, not a plain block: the operator scheduled it hours ago and
+      // must be able to see, in the audit trail, that the system withdrew it.
+      const wasScheduled = claimed.scheduledAt instanceof Date;
       const blocked = await block(
         deps,
         claimed,
         "OUT_OF_STOCK",
         userMessage,
         inventory.reason ?? "BLOCKED",
+        wasScheduled ? AUTO_CANCELLED_AUDIT_ACTION : undefined,
       );
       // PENDING(E3): the alert channel is undecided — log + DB row for now.
-      log.warn("Publish blocked by the stock recheck — nothing was sent to the channel", {
-        outcome: "blocked",
-        error_code: "OUT_OF_STOCK",
-        reason: inventory.reason,
-        stock: inventory.stock,
-        attempt,
-        alert: "OPERATOR_ATTENTION",
-      });
+      log.warn(
+        wasScheduled
+          ? "Scheduled post auto-cancelled by the stock recheck — nothing was sent to the channel"
+          : "Publish blocked by the stock recheck — nothing was sent to the channel",
+        {
+          outcome: "blocked",
+          error_code: "OUT_OF_STOCK",
+          reason: inventory.reason,
+          stock: inventory.stock,
+          attempt,
+          auto_cancelled: wasScheduled,
+          scheduled_at: claimed.scheduledAt?.toISOString() ?? null,
+          audit_action: wasScheduled ? AUTO_CANCELLED_AUDIT_ACTION : "post_job.blocked",
+          alert: "OPERATOR_ATTENTION",
+        },
+      );
       return result(blocked ?? claimed, "blocked", {
         deferredMs: null,
         errorCode: "OUT_OF_STOCK",
@@ -502,23 +592,37 @@ async function handlePublishError(
     },
     cause: appError,
   });
-  await move(deps, job, "failed", {
-    reason: retryable ? "RETRIES_EXHAUSTED" : "NON_RETRYABLE_PLATFORM_ERROR",
-    errorCode: "PUBLISH_FAILED",
-    errorMessage: `${finalError.userMessage} (${appError.userMessage})`,
-  });
+  // E8.5 — "đến giờ mà đăng lỗi thì phải báo": a scheduled post that fails is
+  // its own audit event, because nobody is watching the screen at that hour.
+  const wasScheduled = job.scheduledAt instanceof Date;
+  await move(
+    deps,
+    job,
+    "failed",
+    {
+      reason: retryable ? "RETRIES_EXHAUSTED" : "NON_RETRYABLE_PLATFORM_ERROR",
+      errorCode: "PUBLISH_FAILED",
+      errorMessage: `${finalError.userMessage} (${appError.userMessage})`,
+    },
+    wasScheduled ? SCHEDULED_FAILED_AUDIT_ACTION : undefined,
+  );
   await deps.postJobs.refreshBatchStatus(job.tenantId, job.batchId);
-  log.error("Publish failed permanently", {
-    err: finalError,
-    error_code: "PUBLISH_FAILED",
-    original_code: appError.code,
-    attempt: ctx.attempt,
-    max_attempts: ctx.maxAttempts,
-    duration_ms: ctx.durationMs,
-    will_retry: false,
-    retryable_platform_error: retryable,
-    alert: "OPERATOR_ATTENTION",
-  });
+  log.error(
+    wasScheduled ? "Scheduled publish failed permanently" : "Publish failed permanently",
+    {
+      err: finalError,
+      error_code: "PUBLISH_FAILED",
+      original_code: appError.code,
+      attempt: ctx.attempt,
+      max_attempts: ctx.maxAttempts,
+      duration_ms: ctx.durationMs,
+      will_retry: false,
+      retryable_platform_error: retryable,
+      scheduled_at: job.scheduledAt?.toISOString() ?? null,
+      audit_action: wasScheduled ? SCHEDULED_FAILED_AUDIT_ACTION : "post_job.failed",
+      alert: "OPERATOR_ATTENTION",
+    },
+  );
   throw finalError;
 }
 
@@ -528,6 +632,7 @@ async function move(
   job: PostJob,
   to: PostJobStatus,
   meta: TransitionMeta & { reason: string },
+  auditAction?: string,
 ): Promise<PostJob | null> {
   const next = transitionPostJob(job, to, meta);
   return deps.postJobs.applyTransition({
@@ -536,6 +641,7 @@ async function move(
     from: job.status,
     next,
     reason: meta.reason,
+    ...(auditAction ? { auditAction } : {}),
   });
 }
 
@@ -545,8 +651,15 @@ async function block(
   errorCode: string,
   userMessage: string,
   reason: string,
+  auditAction?: string,
 ): Promise<PostJob | null> {
-  const blocked = await move(deps, job, "blocked", { reason, errorCode, errorMessage: userMessage });
+  const blocked = await move(
+    deps,
+    job,
+    "blocked",
+    { reason, errorCode, errorMessage: userMessage },
+    auditAction,
+  );
   await deps.postJobs.refreshBatchStatus(job.tenantId, job.batchId);
   return blocked;
 }
@@ -554,7 +667,12 @@ async function block(
 function result(
   job: PostJob,
   outcome: PublishPostOutcome,
-  extra: { deferredMs: number | null; errorCode?: string | null; userMessage?: string | null },
+  extra: {
+    deferredMs: number | null;
+    errorCode?: string | null;
+    userMessage?: string | null;
+    skipReason?: string | null;
+  },
 ): PublishPostResult {
   return {
     tenantId: job.tenantId,
@@ -569,6 +687,7 @@ function result(
     errorCode: extra.errorCode ?? job.lastErrorCode,
     userMessage: extra.userMessage ?? job.lastErrorMessage,
     deferredMs: extra.deferredMs,
+    skipReason: extra.skipReason ?? null,
   };
 }
 
@@ -585,6 +704,10 @@ export function spacingWaitMs(
   const elapsed = nowMs - last;
   if (elapsed < 0) return Math.min(spacingMs, Math.abs(elapsed) + spacingMs);
   return elapsed >= spacingMs ? 0 : spacingMs - elapsed;
+}
+
+function str(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function positiveInt(value: unknown): number | null {

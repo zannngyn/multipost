@@ -105,6 +105,7 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
           captionText: job.captionText,
           media: job.media,
           scheduledAt: job.scheduledAt,
+        queueJobId: null,
         };
         store.set(created.id, created);
         return created;
@@ -126,6 +127,15 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
       if (!current || current.status !== input.from) return null;
       store.set(input.postJobId, input.next);
       return input.next;
+    },
+    async setQueueJobId() {
+      return true;
+    },
+    async rescheduleJob() {
+      return null;
+    },
+    async listScheduledJobs() {
+      return { items: [], nextCursor: null };
     },
     async findLastPublishedAt() {
       return null;
@@ -162,6 +172,9 @@ function makeQueue(options: { failFor?: string } = {}) {
       }
       enqueued.push({ payload: typed, opts });
       return { jobId: opts?.jobId ?? "generated" };
+    },
+    async remove() {
+      return true;
     },
     async close() {},
   };
@@ -536,5 +549,104 @@ describe("createPostBatch — logging", () => {
     );
     expect(blocked?.level).toBe("warn");
     expect(blocked?.context).toMatchObject({ error_code: "CHANNEL_NOT_CONFIGURED" });
+  });
+});
+
+describe("createPostBatch — scheduling (E8.1)", () => {
+  const IN_ONE_HOUR = new Date(Date.parse("2026-08-13T03:00:00.000Z"));
+  const IN_TWO_HOURS = new Date(Date.parse("2026-08-13T04:00:00.000Z"));
+
+  it("delays every channel by the batch time and stores it on each job", async () => {
+    const { createPostBatch, repo, queue } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, scheduledAt: IN_ONE_HOUR });
+
+    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([3_600_000, 3_600_000]);
+    for (const job of repo.store.values()) {
+      expect(job.scheduledAt).toEqual(IN_ONE_HOUR);
+    }
+    expect(result.channels.map((entry) => entry.scheduledAt)).toEqual([IN_ONE_HOUR, IN_ONE_HOUR]);
+  });
+
+  it("gives each channel its OWN hour (brief §9: khung giờ vàng khác nhau)", async () => {
+    const { createPostBatch, repo, queue } = harness();
+
+    const result = await createPostBatch({
+      ...BASE_INPUT,
+      scheduledAtByChannel: { "fbpage-a": IN_ONE_HOUR, "fbpage-b": IN_TWO_HOURS },
+    });
+
+    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([3_600_000, 7_200_000]);
+    const jobs = [...repo.store.values()];
+    expect(jobs.map((job) => job.scheduledAt)).toEqual([IN_ONE_HOUR, IN_TWO_HOURS]);
+    expect(result.channels.map((entry) => entry.scheduledAt)).toEqual([IN_ONE_HOUR, IN_TWO_HOURS]);
+  });
+
+  it("lets a per-channel time win over the batch time, and keeps the batch time elsewhere", async () => {
+    const { createPostBatch, queue } = harness();
+    await createPostBatch({
+      ...BASE_INPUT,
+      scheduledAt: IN_ONE_HOUR,
+      scheduledAtByChannel: { "fbpage-b": IN_TWO_HOURS },
+    });
+    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([3_600_000, 7_200_000]);
+  });
+
+  it("blocks ONLY the channel with a bad hour (rule 6)", async () => {
+    const { createPostBatch, repo, queue } = harness();
+
+    const result = await createPostBatch({
+      ...BASE_INPUT,
+      scheduledAtByChannel: {
+        "fbpage-a": IN_ONE_HOUR,
+        // Yesterday: a typo or a stale form must never mean "post now".
+        "fbpage-b": new Date(Date.parse("2026-08-12T03:00:00.000Z")),
+      },
+    });
+
+    expect(queue.enqueued).toHaveLength(1);
+    expect(result.channels[0]).toMatchObject({ channelId: "fbpage-a", queued: true });
+    expect(result.channels[1]).toMatchObject({
+      channelId: "fbpage-b",
+      queued: false,
+      status: "blocked",
+      errorCode: "INVALID_INPUT",
+      scheduledAt: null,
+    });
+    expect(result.channels[1].userMessage).toContain("đã trôi qua");
+    expect([...repo.store.values()].map((job) => job.status)).toEqual(["queued", "blocked"]);
+  });
+
+  it("refuses a per-channel entry for a channel that is not in the batch", async () => {
+    const { createPostBatch, queue } = harness();
+    await expect(
+      createPostBatch({
+        ...BASE_INPUT,
+        scheduledAtByChannel: { "fbpage-zzz": IN_ONE_HOUR },
+      }),
+    ).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      context: { unknown_channels: ["fbpage-zzz"] },
+    });
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("queues immediately (no delay, no scheduled_at) when no time is given", async () => {
+    const { createPostBatch, repo, queue } = harness();
+    await createPostBatch(BASE_INPUT);
+    expect(queue.enqueued.every((entry) => entry.opts?.delayMs === undefined)).toBe(true);
+    expect([...repo.store.values()].every((job) => job.scheduledAt === null)).toBe(true);
+  });
+
+  it("stores the queue id on the job so it can be cancelled later (E8.4)", async () => {
+    const { createPostBatch, repo, queue } = harness();
+    await createPostBatch({ ...BASE_INPUT, scheduledAt: IN_ONE_HOUR });
+    const jobs = [...repo.store.values()];
+    expect(jobs.every((job) => typeof job.queueJobId === "string" && job.queueJobId.length > 0)).toBe(
+      true,
+    );
+    expect(jobs.map((job) => job.queueJobId)).toEqual(
+      queue.enqueued.map((entry) => entry.opts?.jobId),
+    );
   });
 });

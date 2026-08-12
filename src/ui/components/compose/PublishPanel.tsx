@@ -6,10 +6,12 @@ import { useId, useMemo, useState } from "react";
 
 import { ChannelGroupPicker } from "@/ui/components/compose/ChannelGroupPicker";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+import { SchedulePicker } from "@/ui/components/scheduled/SchedulePicker";
 import { Button } from "@/ui/components/ui/button";
 import { Textarea } from "@/ui/components/ui/textarea";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useCreatePostBatch } from "@/ui/hooks/usePostBatch";
+import { useScheduleChoice } from "@/ui/hooks/useScheduleChoice";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
 import { COMPOSE_CHANNELS } from "@/ui/schemas/compose.schema";
 
@@ -41,6 +43,7 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
 
   const groups = useChannelGroups(tenantId);
   const createBatch = useCreatePostBatch();
+  const schedule = useScheduleChoice();
 
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [shareCaption, setShareCaption] = useState(true);
@@ -112,6 +115,10 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
       setFormError(`Các kênh sau chưa có caption: ${missing.join(", ")}.`);
       return;
     }
+    // The schedule is validated LAST, against the clock at this instant: the
+    // panel may have been open for an hour. Its own message lands on the field.
+    const resolved = schedule.resolve();
+    if (!resolved.ok) return;
 
     createBatch.mutate(
       {
@@ -120,6 +127,7 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
         color: wizard.form.getValues().color,
         channelIds: selectedIds,
         captionByChannel,
+        scheduledAt: resolved.scheduledAt,
         // Cover first — `composePost` already ordered the album that way.
         media: composed.media.map((asset) => ({
           driveFileId: asset.driveFileId,
@@ -128,8 +136,14 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
         })),
       },
       {
-        // The batch now has its own URL: the operator can close this tab.
-        onSuccess: (result) => router.push(`/batches/${encodeURIComponent(result.batchId)}`),
+        onSuccess: (result) => {
+          // A scheduled lô has nothing to watch for hours: send the operator to
+          // the list of what is coming (where it can still be moved or cancelled)
+          // instead of a batch page that would poll an unchanging "chờ đăng".
+          // An immediate lô goes to its own URL — the operator can close the tab.
+          if (resolved.scheduledAt) router.push("/scheduled");
+          else router.push(`/batches/${encodeURIComponent(result.batchId)}`);
+        },
       },
     );
   }
@@ -231,6 +245,12 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
         )}
       </div>
 
+      <SchedulePicker
+        choice={schedule}
+        disabled={createBatch.isPending}
+        scopeNote="Áp dụng cho mọi kênh đã chọn ở trên. Hẹn giờ riêng cho từng kênh sẽ bổ sung sau."
+      />
+
       <p className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm">
         Trước khi đăng, hệ thống kiểm tra tồn kho lần thứ hai ngay trước lời gọi đăng. Nếu lúc đó mã
         đã hết hàng, bài sẽ bị chặn và không lên — dù bước 1 vẫn báo còn hàng.
@@ -251,10 +271,16 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
           onClick={handleSubmit}
           disabled={createBatch.isPending || groupItems.length === 0}
         >
-          {createBatch.isPending ? "Đang tạo lô…" : "Tạo lô đăng"}
+          {createBatch.isPending
+            ? "Đang tạo lô…"
+            : schedule.mode === "scheduled"
+              ? "Tạo lô hẹn giờ"
+              : "Tạo lô đăng"}
         </Button>
         <p className="text-muted-foreground text-sm">
-          Tạo xong sẽ chuyển sang màn theo dõi lô. Bạn có thể đóng tab — lô vẫn chạy.
+          {schedule.mode === "scheduled"
+            ? "Tạo xong sẽ chuyển sang màn “Bài đã hẹn”, nơi đổi giờ hoặc huỷ được trước khi tới giờ. Bạn có thể đóng tab — lịch vẫn chạy."
+            : "Tạo xong sẽ chuyển sang màn theo dõi lô. Bạn có thể đóng tab — lô vẫn chạy."}
         </p>
       </div>
 

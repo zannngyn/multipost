@@ -15,6 +15,7 @@ import type { ChannelConfigRepo } from "@/core/ports/publisher";
 import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
+import { resolveActorUserId } from "./resolve-actor";
 
 /**
  * E11.1 — an operator presses "chạy lại" on ONE post job.
@@ -132,10 +133,14 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
     }
 
     // --- Who is doing this? (audit trail) -----------------------------------
-    const actorUserId = await resolveActor(deps, tenantId, input, log);
+    const actorUserId = await resolveActorUserId(deps, tenantId, input, log);
 
     // --- Re-queue: DB first, queue second (a worker must see `queued`) -------
-    const next = transitionPostJob(job, "queued", { reason: "OPERATOR_RETRY" });
+    // A NEW queue id every time: BullMQ ignores an `add` whose id is still in
+    // the retained set. It is stored IN the transition, so the stale-entry guard
+    // in publish-post recognises the entry this retry is about to create.
+    const queueJobId = deferredPostJobQueueId(job, deps.clock.nowMs());
+    const next = transitionPostJob(job, "queued", { reason: "OPERATOR_RETRY", queueJobId });
     const queued = await deps.postJobs.applyTransition({
       tenantId,
       postJobId: job.id,
@@ -162,10 +167,6 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
     }
 
     const settings = await deps.channels.getPublishSettings(tenantId);
-    // A NEW queue id every time: BullMQ ignores an `add` whose id is still in the
-    // retained set, and the first run's id is exactly the one likely retained —
-    // the retry would vanish without a trace.
-    const queueJobId = deferredPostJobQueueId(queued, deps.clock.nowMs());
 
     try {
       await deps.queue.enqueue(
@@ -228,58 +229,6 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
 export type RetryPostJob = ReturnType<typeof makeRetryPostJob>;
 
 // --- helpers ----------------------------------------------------------------
-
-/**
- * Who gets written into `audit_log.actor_user_id`.
- *
- * An explicit id wins (a caller that already knows it). Otherwise the session
- * e-mail is looked up. Every failure to resolve is a WARNING, never an error:
- * refusing to retry a post because we could not name the operator would trade a
- * real problem (a post is not live) for a bookkeeping one.
- */
-async function resolveActor(
-  deps: RetryPostJobDeps,
-  tenantId: string,
-  input: RetryPostJobInput,
-  log: Logger,
-): Promise<string | null> {
-  const explicitId = str(input?.actorUserId);
-  if (explicitId.length > 0) return explicitId;
-
-  const email = str(input?.actorEmail).toLowerCase();
-  if (email.length === 0) return null;
-
-  if (!deps.users) {
-    log.warn("Cannot attribute this retry: no user repository is wired", {
-      reason: "ACTOR_RESOLVER_NOT_WIRED",
-      actor_email: email,
-    });
-    return null;
-  }
-
-  try {
-    const userId = await deps.users.findUserIdByEmail(tenantId, email);
-    if (!userId) {
-      // A real case: an allowed domain signs in before the account row exists.
-      log.warn("Retry actor not found in app_user — audit row will have no actor", {
-        reason: "ACTOR_NOT_FOUND",
-        actor_email: email,
-      });
-      return null;
-    }
-    return userId;
-  } catch (error) {
-    // Logged with context and swallowed ON PURPOSE (the only place in this file):
-    // the retry itself is unaffected, and the warning above says the audit row
-    // will be anonymous.
-    log.warn("Could not resolve the retry actor — continuing without attribution", {
-      err: AppError.from(error, "DB_ERROR", { tenant_id: tenantId, actor_email: email }),
-      reason: "ACTOR_LOOKUP_FAILED",
-      actor_email: email,
-    });
-    return null;
-  }
-}
 
 /**
  * Best-effort rollback after a failed enqueue. Its own failure is logged and

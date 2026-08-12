@@ -4,7 +4,9 @@ import { normalizeColorName } from "@/core/domain/media-file-name";
 import {
   MAX_ALBUM_MEDIA,
   PHASE_1_FORMATS,
+  evaluateScheduledAt,
   isPostFormat,
+  scheduleRejectionMessage,
   postJobDuplicateKey,
   postJobQueueId,
   transitionPostJob,
@@ -13,6 +15,8 @@ import {
   type PostJob,
   type PostJobMedia,
   type PostJobStatus,
+  type ScheduleRejection,
+  type TransitionMeta,
 } from "@/core/domain/post-job";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Clock, Logger } from "@/core/ports/infra";
@@ -72,8 +76,17 @@ export interface CreatePostBatchInput {
   readonly captionByChannel: Readonly<Record<string, string>>;
   /** 1..10 assets, cover first. URLs are minted here, not by the caller. */
   readonly media: readonly PostMediaInput[];
-  /** Phase 2 scheduling; a future date simply delays the queue job. */
+  /**
+   * E8.1 — publish time for EVERY channel of this batch. Absent/null = now.
+   * Must be at least a second ahead and at most MAX_SCHEDULE_AHEAD_MS.
+   */
   readonly scheduledAt?: Date | null;
+  /**
+   * E8.1 — per-channel publish time; wins over `scheduledAt` for the channels
+   * it names (brief §9: "hẹn giờ riêng cho từng kênh, vì Facebook và TikTok có
+   * khung giờ vàng khác nhau"). A bad time blocks ONLY that channel.
+   */
+  readonly scheduledAtByChannel?: Readonly<Record<string, Date | null | undefined>>;
   readonly createdBy?: string | null;
   readonly note?: string | null;
 }
@@ -86,6 +99,8 @@ export interface CreatePostBatchChannelResult {
   readonly queueJobId: string | null;
   readonly errorCode: string | null;
   readonly userMessage: string | null;
+  /** Publish time actually stored for this channel; null = as soon as possible. */
+  readonly scheduledAt: Date | null;
 }
 
 export interface CreatePostBatchResult {
@@ -208,6 +223,11 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
     const signed = signMedia(deps, tenantId, assets, { batch_id: batchId, product_code: productCode });
     const media = signed.media;
 
+    // --- Publish time per channel (E8.1) -----------------------------------
+    // Resolved BEFORE the insert so post_job.scheduled_at is right from the
+    // first write; a rejected time blocks only its own channel (rule 6).
+    const schedules = resolveSchedules(input, channelIds, deps.clock.nowMs());
+
     // --- Create batch + jobs in ONE transaction (the lock) ------------------
     const newJobs: NewPostJob[] = channelIds.map((channelId) => ({
       id: deps.newId(),
@@ -219,7 +239,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
       format,
       captionText: captions.get(channelId) ?? "",
       media,
-      scheduledAt: input?.scheduledAt ?? null,
+      scheduledAt: schedules.get(channelId)?.at ?? null,
     }));
 
     const created = await deps.postJobs.createBatchWithJobs({
@@ -264,6 +284,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
           queueJobId: null,
           errorCode: "OUT_OF_STOCK",
           userMessage,
+          scheduledAt: job.scheduledAt,
         });
       }
       const summary = await deps.postJobs.refreshBatchStatus(tenantId, batchId);
@@ -288,11 +309,37 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
 
     // --- Fan out: one queue job per channel, failures isolated (rule 6) -----
     const settings = await deps.channels.getPublishSettings(tenantId);
-    const scheduledDelayMs = scheduleDelayMs(input?.scheduledAt, deps.clock.nowMs());
     const channels: CreatePostBatchChannelResult[] = [];
 
     for (const job of created.jobs) {
       const jobLog = log.child({ job_id: job.id, channel: job.channelId });
+      const schedule = schedules.get(job.channelId);
+
+      // A time this channel cannot be scheduled at: block THIS row, keep going.
+      if (schedule && !schedule.ok) {
+        const userMessage = schedule.userMessage;
+        const blocked = await moveJob(deps, job, "blocked", {
+          reason: `SCHEDULE_${schedule.reason}`,
+          errorCode: "INVALID_INPUT",
+          errorMessage: userMessage,
+        });
+        jobLog.warn("Channel blocked: invalid schedule; other channels continue", {
+          error_code: "INVALID_INPUT",
+          reason: schedule.reason,
+          requested_scheduled_at: schedule.requested?.toISOString() ?? null,
+        });
+        channels.push({
+          channelId: job.channelId,
+          postJobId: job.id,
+          status: blocked?.status ?? "blocked",
+          queued: false,
+          queueJobId: null,
+          errorCode: "INVALID_INPUT",
+          userMessage,
+          scheduledAt: null,
+        });
+        continue;
+      }
 
       const channel = await deps.channels.findChannel(tenantId, job.channelId);
       if (!channel || channel.status !== "active") {
@@ -314,12 +361,19 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
           queueJobId: null,
           errorCode: "CHANNEL_NOT_CONFIGURED",
           userMessage,
+          scheduledAt: job.scheduledAt,
         });
         continue;
       }
 
       // DB first, queue second: a worker must never find the row still `draft`.
-      const queuedJob = await moveJob(deps, job, "queued", { reason: "ENQUEUEING" });
+      // The queue id is written IN the same transition: an operator must be able
+      // to cancel/reschedule this entry later (E8.4).
+      const queueJobId = postJobQueueId(job);
+      const queuedJob = await moveJob(deps, job, "queued", {
+        reason: "ENQUEUEING",
+        queueJobId,
+      });
       if (!queuedJob) {
         // Another writer moved the row — do not enqueue on top of it.
         jobLog.warn("Skipped enqueue: the job row changed under us", {
@@ -333,11 +387,12 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
           queueJobId: null,
           errorCode: "INVALID_JOB_TRANSITION",
           userMessage: "Bài này đang được xử lý ở nơi khác — không đưa vào hàng đợi lần nữa",
+          scheduledAt: job.scheduledAt,
         });
         continue;
       }
 
-      const queueJobId = postJobQueueId(queuedJob);
+      const delayMs = schedule?.ok ? schedule.delayMs : 0;
       try {
         await deps.queue.enqueue(
           PUBLISH_POST_JOB_NAME,
@@ -346,7 +401,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
             jobId: queueJobId,
             attempts: settings.maxAttempts,
             backoff: { strategy: "exponential", delayMs: settings.retryBackoffMs },
-            ...(scheduledDelayMs > 0 ? { delayMs: scheduledDelayMs } : {}),
+            ...(delayMs > 0 ? { delayMs } : {}),
           },
         );
       } catch (error) {
@@ -375,13 +430,15 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
           queueJobId: null,
           errorCode: appError.code,
           userMessage,
+          scheduledAt: queuedJob.scheduledAt,
         });
         continue;
       }
 
       jobLog.info("Post job queued", {
         queue_job_id: queueJobId,
-        delay_ms: scheduledDelayMs,
+        delay_ms: delayMs,
+        scheduled_at: queuedJob.scheduledAt?.toISOString() ?? null,
         attempts: settings.maxAttempts,
       });
       channels.push({
@@ -392,6 +449,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
         queueJobId,
         errorCode: null,
         userMessage: null,
+        scheduledAt: queuedJob.scheduledAt,
       });
     }
 
@@ -417,7 +475,7 @@ async function moveJob(
   deps: CreatePostBatchDeps,
   job: PostJob,
   to: PostJobStatus,
-  meta: { reason: string; errorCode?: string; errorMessage?: string },
+  meta: TransitionMeta & { reason: string },
 ): Promise<PostJob | null> {
   const next = transitionPostJob(job, to, meta);
   return deps.postJobs.applyTransition({
@@ -572,9 +630,56 @@ function findSharedCaption(captions: ReadonlyMap<string, string>): string[] | nu
   return null;
 }
 
-function scheduleDelayMs(scheduledAt: Date | null | undefined, nowMs: number): number {
-  if (!scheduledAt || !(scheduledAt instanceof Date)) return 0;
-  const at = scheduledAt.getTime();
-  if (!Number.isFinite(at)) return 0;
-  return Math.max(0, at - nowMs);
+/** One channel's resolved publish time: either a delay, or a reason it is refused. */
+type ChannelSchedule =
+  | { readonly ok: true; readonly at: Date | null; readonly delayMs: number }
+  | {
+      readonly ok: false;
+      readonly reason: ScheduleRejection;
+      readonly requested: Date | null;
+      readonly userMessage: string;
+      readonly at: null;
+    };
+
+/**
+ * Per-channel publish times (E8.1). `scheduledAtByChannel` wins over the batch
+ * `scheduledAt`; a channel with no entry anywhere publishes as soon as possible.
+ * A key naming a channel that is not in this batch is a caller bug and is
+ * reported — silently ignoring it would hide a wrong channel id.
+ */
+function resolveSchedules(
+  input: CreatePostBatchInput,
+  channelIds: readonly string[],
+  nowMs: number,
+): Map<string, ChannelSchedule> {
+  const byChannel = input?.scheduledAtByChannel ?? {};
+  const unknownKeys = Object.keys(byChannel).filter((key) => !channelIds.includes(key.trim()));
+  if (unknownKeys.length > 0) {
+    throw invalid("scheduledAtByChannel names channels that are not in this batch", {
+      unknown_channels: unknownKeys,
+      channels: channelIds,
+    });
+  }
+
+  const result = new Map<string, ChannelSchedule>();
+  for (const channelId of channelIds) {
+    const requested = byChannel[channelId] ?? input?.scheduledAt ?? null;
+    if (requested === null || requested === undefined) {
+      result.set(channelId, { ok: true, at: null, delayMs: 0 });
+      continue;
+    }
+    const verdict = evaluateScheduledAt(requested, nowMs);
+    if (verdict.ok) {
+      result.set(channelId, { ok: true, at: verdict.at, delayMs: verdict.delayMs });
+      continue;
+    }
+    result.set(channelId, {
+      ok: false,
+      reason: verdict.reason,
+      requested: verdict.at,
+      userMessage: `Kênh "${channelId}": ${scheduleRejectionMessage(verdict.reason)}`,
+      at: null,
+    });
+  }
+  return result;
 }

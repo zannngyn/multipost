@@ -39,6 +39,18 @@ import {
 } from "@/core/usecases/manage-channel-groups";
 import type { ManagePromptTemplates } from "@/core/usecases/manage-prompt-templates";
 import { makeRetryPostJob, type RetryPostJob } from "@/core/usecases/retry-post-job";
+import {
+  makeCancelScheduledJob,
+  type CancelScheduledJob,
+} from "@/core/usecases/cancel-scheduled-job";
+import {
+  makeListScheduledJobs,
+  type ListScheduledJobs,
+} from "@/core/usecases/list-scheduled-jobs";
+import {
+  makeReschedulePostJob,
+  type ReschedulePostJob,
+} from "@/core/usecases/reschedule-post-job";
 import { makeGetSyncStatus, type GetSyncStatus } from "@/core/usecases/get-sync-status";
 import { makeHealthcheckTenant, type HealthcheckTenant } from "@/core/usecases/healthcheck-tenant";
 import { makePublishPost, type PublishPost } from "@/core/usecases/publish-post";
@@ -91,6 +103,12 @@ export interface Usecases {
   retryPostJob: RetryPostJob;
   /** E7.6 — preset channel groups (list/create/update/delete). */
   channelGroups: ManageChannelGroups;
+  /** E8.4 — "bài đã hẹn": what publishes next, soonest first. */
+  listScheduledJobs: ListScheduledJobs;
+  /** E8.4 — move a scheduled post to another time. */
+  reschedulePostJob: ReschedulePostJob;
+  /** E8.4 — cancel a scheduled post before it goes out. */
+  cancelScheduledJob: CancelScheduledJob;
   /** E3.6 — serve one media asset to Meta's fetcher (called by /api/media). */
   getMediaContent: GetMediaContent;
   /**
@@ -170,6 +188,7 @@ function makeLazyJobQueue(config: Config, logger: Logger): JobQueue {
 
   return {
     enqueue: (jobName, payload, opts) => build().enqueue(jobName, payload, opts),
+    remove: (jobId) => build().remove(jobId),
     close: async () => {
       if (closer) await closer();
       real = null;
@@ -228,6 +247,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     logger: deps.logger,
   });
   const channelGroups = new DrizzleChannelGroupRepo(deps.db);
+  // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
+  const users = new DrizzleUserRepo(deps.db);
   const google = makeLazyGoogleSources({ logger: deps.logger });
   const queue = overrides.queue ?? makeLazyJobQueue(deps.config, deps.logger);
   const publisher = overrides.publisher ?? makeLazyPublisher(deps.logger);
@@ -309,7 +330,26 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       queue,
       clock: deps.clock,
       logger: deps.logger,
-      users: new DrizzleUserRepo(deps.db),
+      users,
+    }),
+    listScheduledJobs: makeListScheduledJobs({
+      postJobs,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+    reschedulePostJob: makeReschedulePostJob({
+      postJobs,
+      channels,
+      queue,
+      clock: deps.clock,
+      logger: deps.logger,
+      users,
+    }),
+    cancelScheduledJob: makeCancelScheduledJob({
+      postJobs,
+      queue,
+      logger: deps.logger,
+      users,
     }),
     channelGroups: makeManageChannelGroups({
       groups: channelGroups,

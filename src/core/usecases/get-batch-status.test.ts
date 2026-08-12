@@ -52,6 +52,7 @@ function job(overrides: Partial<PostJob> = {}): PostJob {
     captionText: "caption",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
+    queueJobId: null,
     ...overrides,
   };
 }

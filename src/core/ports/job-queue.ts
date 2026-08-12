@@ -44,6 +44,17 @@ export interface JobQueue {
     payload: TPayload,
     opts?: EnqueueOptions,
   ): Promise<EnqueueResult>;
+  /**
+   * Drops a job that has not run yet (E8.4: reschedule / cancel a scheduled
+   * post). Returns false when there is nothing to remove — an unknown id, or a
+   * job the broker is already running.
+   *
+   * NOT a guarantee that the work will not happen: a job picked up a
+   * millisecond earlier keeps running. The authority stays the post_job row +
+   * the optimistic `queued -> publishing` claim, which is why callers write the
+   * new state to the database BEFORE touching the queue.
+   */
+  remove(jobId: string): Promise<boolean>;
   close(): Promise<void>;
 }
 

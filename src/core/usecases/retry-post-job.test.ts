@@ -63,6 +63,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
+    queueJobId: null,
     ...overrides,
   };
 }
@@ -108,6 +109,15 @@ function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {})
       store.set(input.postJobId, input.next);
       return input.next;
     },
+    async setQueueJobId() {
+      return true;
+    },
+    async rescheduleJob() {
+      return null;
+    },
+    async listScheduledJobs() {
+      return { items: [], nextCursor: null };
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -141,6 +151,9 @@ function makeQueue(options: { fail?: boolean } = {}) {
       if (options.fail) throw new AppError("QUEUE_ERROR", { message: "redis down" });
       enqueued.push({ name, payload, opts });
       return { jobId: opts?.jobId ?? "generated" };
+    },
+    async remove() {
+      return true;
     },
     async close() {},
   };

@@ -9,10 +9,12 @@ import { BulkCodesField } from "@/ui/components/bulk/BulkCodesField";
 import { BulkProgressTable } from "@/ui/components/bulk/BulkProgressTable";
 import { ChannelGroupPicker } from "@/ui/components/compose/ChannelGroupPicker";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { SchedulePicker } from "@/ui/components/scheduled/SchedulePicker";
 import { Button } from "@/ui/components/ui/button";
 import { Textarea } from "@/ui/components/ui/textarea";
 import { useBulkRun } from "@/ui/hooks/useBulkRun";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
+import { useScheduleChoice } from "@/ui/hooks/useScheduleChoice";
 import {
   BULK_CAPTION_MODES,
   BULK_CAPTION_MODE_LABELS,
@@ -52,9 +54,12 @@ export function BulkRunScreen() {
 
   const groups = useChannelGroups(tenantId);
   const run = useBulkRun();
+  const schedule = useScheduleChoice();
   const summaryRef = useRef<HTMLDivElement>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [channelError, setChannelError] = useState<string | null>(null);
+  /** Whether the run in the table was scheduled — decides where its link points. */
+  const [ranScheduled, setRanScheduled] = useState(false);
 
   const form = useForm<BulkRunFormValues>({
     resolver: zodResolver(BulkRunFormSchema),
@@ -118,12 +123,18 @@ export function BulkRunScreen() {
     }
     setChannelError(null);
 
+    // Validated against the clock at submit time; its message lands on the field.
+    const resolved = schedule.resolve();
+    if (!resolved.ok) return;
+    setRanScheduled(resolved.scheduledAt !== null);
+
     void run.start({
       tenantId: values.tenantId,
       codes: parseBulkCodes(values.codesText).codes.map((item) => item.code),
       channelIds: selectedIds,
       captionMode: values.captionMode,
       captionTemplate: values.captionTemplate,
+      scheduledAt: resolved.scheduledAt,
     });
   }
 
@@ -250,9 +261,19 @@ export function BulkRunScreen() {
           ) : null}
         </fieldset>
 
+        <SchedulePicker
+          choice={schedule}
+          disabled={isRunning}
+          scopeNote="Áp dụng cho mọi mã và mọi kênh trong lượt chạy này. Các bài vẫn được đăng giãn cách theo cấu hình kênh, không lên cùng lúc."
+        />
+
         <div className="flex flex-wrap items-center gap-2 border-t pt-4">
           <Button type="submit" disabled={isRunning}>
-            {isRunning ? "Đang chạy…" : `Chạy ${parsed.codes.length} mã`}
+            {isRunning
+              ? "Đang chạy…"
+              : schedule.mode === "scheduled"
+                ? `Hẹn giờ ${parsed.codes.length} mã`
+                : `Chạy ${parsed.codes.length} mã`}
           </Button>
           {isRunning ? (
             <Button type="button" variant="destructive" onClick={run.stop} disabled={phase === "stopping"}>
@@ -300,11 +321,20 @@ export function BulkRunScreen() {
               </p>
               <p className="text-muted-foreground mt-1">
                 {summary.cancelled > 0
-                  ? `${summary.cancelled} mã chưa chạy nên không bị ảnh hưởng gì. Các lô đã tạo vẫn chạy tiếp trên máy chủ — xem ở `
+                  ? `${summary.cancelled} mã chưa chạy nên không bị ảnh hưởng gì. `
+                  : ""}
+                {ranScheduled
+                  ? "Các lô đã tạo đang chờ tới giờ hẹn — đổi giờ hoặc huỷ ở "
                   : "Các lô đã tạo chạy tiếp trên máy chủ kể cả khi bạn rời trang — xem ở "}
-                <Link href="/jobs" className="underline underline-offset-4">
-                  Nhật ký đăng bài
-                </Link>
+                {ranScheduled ? (
+                  <Link href="/scheduled" className="underline underline-offset-4">
+                    Bài đã hẹn
+                  </Link>
+                ) : (
+                  <Link href="/jobs" className="underline underline-offset-4">
+                    Nhật ký đăng bài
+                  </Link>
+                )}
                 .
               </p>
             </div>

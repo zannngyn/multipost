@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { href: "/bulk", label: "Chạy hàng loạt" },
   { href: "/channels", label: "Nhóm kênh" },
   { href: "/prompts", label: "Mẫu prompt" },
+  { href: "/scheduled", label: "Bài đã hẹn" },
   { href: "/jobs", label: "Nhật ký đăng bài" },
 ] as const;
 

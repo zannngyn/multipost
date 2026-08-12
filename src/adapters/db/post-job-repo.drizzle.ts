@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull, lt, or, type SQL } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNotNull, lt, or, type SQL } from "drizzle-orm";
 
 import { AppError } from "@/core/domain/errors";
 import {
@@ -11,6 +11,9 @@ import {
 import type {
   ApplyTransitionInput,
   ListPostJobsQuery,
+  ListScheduledJobsQuery,
+  RescheduleJobInput,
+  ScheduledJobPage,
   NewPostBatch,
   NewPostJob,
   PostBatchSummary,
@@ -68,6 +71,7 @@ function toDomain(row: PostJobRow): PostJob {
     captionText: row.captionText,
     media: row.media ?? [],
     scheduledAt: row.scheduledAt,
+    queueJobId: row.queueJobId,
   };
 }
 
@@ -317,6 +321,9 @@ export class DrizzlePostJobRepo implements PostJobRepo {
             publishedPostId: next.publishedPostId,
             publishedUrl: next.publishedUrl,
             publishedAt: next.publishedAt,
+            // Written in the SAME statement as the status: a `queued` row whose
+            // queue id was lost cannot be cancelled or rescheduled (E8.4).
+            queueJobId: next.queueJobId,
             updatedAt: new Date(),
           })
           .where(
@@ -333,16 +340,22 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         await tx.insert(auditLogs).values(
           txScope.row({
             actorUserId: input.actorUserId ?? null,
-            action: `post_job.${next.status}`,
+            // Default names the state; a caller may name the EVENT instead
+            // (E8.3 auto-cancel, E8.5 scheduled publish failure).
+            action: input.auditAction ?? `post_job.${next.status}`,
             entityType: "post_job",
             entityId: row.id,
             payload: {
+              // Caller extras first: the fields below are the record of what
+              // actually happened and must win over anything passed in.
+              ...(input.auditPayload ?? {}),
               batch_id: row.batchId,
               product_code: row.productCode,
               channel: row.channelId,
               from: input.from,
               to: next.status,
               reason: input.reason,
+              scheduled_at: row.scheduledAt?.toISOString() ?? null,
               attempt_count: row.attemptCount,
               error_code: row.lastErrorCode,
               published_post_id: row.publishedPostId,
@@ -360,6 +373,160 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         from: input.from,
         to: next.status,
         field: "postJobId",
+      });
+    }
+  }
+
+  async setQueueJobId(input: {
+    tenantId: string;
+    postJobId: string;
+    queueJobId: string | null;
+  }): Promise<boolean> {
+    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const id = typeof input?.postJobId === "string" ? input.postJobId.trim() : "";
+    if (id.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "setQueueJobId requires a post job id",
+        userMessage: "Thiếu mã bài đăng.",
+        context: { tenant_id: scope.tenantId },
+      });
+    }
+
+    try {
+      const rows = await scope.db
+        .update(postJobs)
+        .set({ queueJobId: input.queueJobId, updatedAt: new Date() })
+        .where(scope.where(postJobs, and(eq(postJobs.id, id), eq(postJobs.status, "queued"))))
+        .returning({ id: postJobs.id });
+      return rows.length > 0;
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.setQueueJobId",
+        tenant_id: scope.tenantId,
+        job_id: id,
+        field: "postJobId",
+      });
+    }
+  }
+
+  /**
+   * E8.4 — move a scheduled job to another time.
+   *
+   * `WHERE status = 'queued'` is the whole safety story: if a worker claimed the
+   * job while the operator was typing, 0 rows change and the caller reports it
+   * instead of rewriting the schedule of a post that is already going out.
+   */
+  async rescheduleJob(input: RescheduleJobInput): Promise<PostJob | null> {
+    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const id = typeof input?.postJobId === "string" ? input.postJobId.trim() : "";
+    if (id.length === 0 || !(input?.scheduledAt instanceof Date)) {
+      throw new AppError("INVALID_INPUT", {
+        message: "rescheduleJob requires a post job id and a scheduled time",
+        userMessage: "Yêu cầu đổi giờ đăng không hợp lệ.",
+        context: { tenant_id: scope.tenantId, job_id: id || null },
+      });
+    }
+
+    try {
+      return await this.db.transaction(async (tx) => {
+        const txScope = forTenant(tx, scope.tenantId);
+        const rows = await tx
+          .update(postJobs)
+          .set({
+            scheduledAt: input.scheduledAt,
+            queueJobId: input.queueJobId,
+            updatedAt: new Date(),
+          })
+          .where(
+            txScope.where(
+              postJobs,
+              and(eq(postJobs.id, id), eq(postJobs.status, "queued")),
+            ),
+          )
+          .returning();
+
+        const row = rows[0];
+        if (!row) return null;
+
+        await tx.insert(auditLogs).values(
+          txScope.row({
+            actorUserId: input.actorUserId ?? null,
+            action: "post_job.rescheduled",
+            entityType: "post_job",
+            entityId: row.id,
+            payload: {
+              batch_id: row.batchId,
+              product_code: row.productCode,
+              channel: row.channelId,
+              reason: input.reason,
+              from_scheduled_at: input.previousScheduledAt?.toISOString() ?? null,
+              to_scheduled_at: input.scheduledAt.toISOString(),
+              from_queue_job_id: input.previousQueueJobId,
+              to_queue_job_id: input.queueJobId,
+            },
+          }),
+        );
+
+        return toDomain(row);
+      });
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.rescheduleJob",
+        tenant_id: scope.tenantId,
+        job_id: id,
+        field: "postJobId",
+      });
+    }
+  }
+
+  /**
+   * E8.4 — the "bài đã hẹn" screen: queued jobs with a publish time, SOONEST
+   * FIRST (the opposite of the job log: here the next thing to happen matters).
+   * Keyset on (scheduled_at, id) for the same reason as listJobs.
+   */
+  async listScheduledJobs(query: ListScheduledJobsQuery): Promise<ScheduledJobPage> {
+    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 20;
+
+    const filters: Array<SQL | undefined> = [
+      eq(postJobs.status, "queued"),
+      isNotNull(postJobs.scheduledAt),
+    ];
+    if (query?.from instanceof Date) filters.push(gte(postJobs.scheduledAt, query.from));
+    if (query?.to instanceof Date) filters.push(lt(postJobs.scheduledAt, query.to));
+    if (query?.channelId) filters.push(eq(postJobs.channelId, query.channelId));
+    if (query?.cursor) {
+      filters.push(
+        or(
+          gt(postJobs.scheduledAt, query.cursor.scheduledAt),
+          and(eq(postJobs.scheduledAt, query.cursor.scheduledAt), gt(postJobs.id, query.cursor.id)),
+        ),
+      );
+    }
+
+    try {
+      const rows = await scope.db
+        .select()
+        .from(postJobs)
+        .where(scope.where(postJobs, ...filters))
+        .orderBy(postJobs.scheduledAt, postJobs.id)
+        .limit(limit + 1);
+
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const last = page[page.length - 1];
+      return {
+        items: page.map(toListItem),
+        // scheduled_at is NOT NULL in every row here (the filter guarantees it).
+        nextCursor:
+          hasMore && last?.scheduledAt ? { scheduledAt: last.scheduledAt, id: last.id } : null,
+      };
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.listScheduledJobs",
+        tenant_id: scope.tenantId,
+        channel: query?.channelId ?? null,
+        field: "filter",
       });
     }
   }

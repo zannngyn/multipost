@@ -112,8 +112,15 @@ export interface PostJob {
   readonly publishedAt: Date | null;
   readonly captionText: string;
   readonly media: readonly PostJobMedia[];
-  /** Phase 2 scheduling; stored today so the column does not move later. */
+  /** When this job should publish. Null = as soon as the worker picks it up. */
   readonly scheduledAt: Date | null;
+  /**
+   * Id of the queue entry currently representing this job (E8.4). Needed to
+   * REMOVE a delayed job when an operator reschedules or cancels it: without it
+   * the old entry would still fire and publish at the old time.
+   * Null when nothing is queued (draft, blocked, published...).
+   */
+  readonly queueJobId: string | null;
 }
 
 export interface TransitionMeta {
@@ -124,6 +131,12 @@ export interface TransitionMeta {
   readonly publishedPostId?: string | null;
   readonly publishedUrl?: string | null;
   readonly publishedAt?: Date | null;
+  /**
+   * Queue entry that will carry this job. Set it in the SAME transition that
+   * moves a job to `queued`, so the id is stored atomically with the state —
+   * a `queued` row whose queue id was never written cannot be cancelled.
+   */
+  readonly queueJobId?: string | null;
 }
 
 export function isPostJobStatus(value: unknown): value is PostJobStatus {
@@ -218,6 +231,9 @@ export function transitionPostJob(
       // The post is live: whatever failed on an earlier attempt is history.
       lastErrorCode: null,
       lastErrorMessage: null,
+      // Nothing is queued any more; keeping a stale id would let a cancel or a
+      // reschedule remove someone else's queue entry later.
+      queueJobId: null,
     };
   }
 
@@ -235,6 +251,8 @@ export function transitionPostJob(
       status: to,
       lastErrorCode: errorCode,
       lastErrorMessage: normaliseString(meta.errorMessage),
+      // A stopped job owns no queue entry (the caller removes it).
+      queueJobId: null,
     };
   }
 
@@ -250,7 +268,89 @@ export function transitionPostJob(
     status: "queued",
     lastErrorCode: normaliseString(meta.errorCode) ?? job.lastErrorCode,
     lastErrorMessage: normaliseString(meta.errorMessage) ?? job.lastErrorMessage,
+    queueJobId: normaliseString(meta.queueJobId) ?? job.queueJobId,
   };
+}
+
+// --- Scheduling (E8) --------------------------------------------------------
+
+/**
+ * How far ahead a post may be scheduled.
+ * PENDING(E8-window): the brief only says "chọn ngày giờ cụ thể" without a
+ * ceiling. 30 days is a deliberate guard, not a product rule: a signed media URL
+ * lives 6h and a Page token ~60 days, so a post scheduled for next year would
+ * fail on credentials nobody remembers granting.
+ */
+export const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Smallest gap that still counts as "later". Below it, "hẹn giờ" is really
+ * "đăng ngay" and the delay is not worth a queue round trip.
+ */
+export const MIN_SCHEDULE_AHEAD_MS = 1_000;
+
+export const SCHEDULE_REJECTIONS = ["NOT_A_DATE", "IN_THE_PAST", "TOO_FAR_AHEAD"] as const;
+export type ScheduleRejection = (typeof SCHEDULE_REJECTIONS)[number];
+
+export type ScheduleVerdict =
+  | { readonly ok: true; readonly at: Date; readonly delayMs: number }
+  /** `at` is kept when parsable, so the caller can name it in the message. */
+  | { readonly ok: false; readonly reason: ScheduleRejection; readonly at: Date | null };
+
+/**
+ * Validates one requested publish time. Returns a verdict (never throws) so a
+ * per-channel loop can reject ONE channel without losing the others — the same
+ * rule as fan-out (business rule 6).
+ */
+export function evaluateScheduledAt(
+  scheduledAt: unknown,
+  nowMs: number,
+  maxAheadMs: number = MAX_SCHEDULE_AHEAD_MS,
+): ScheduleVerdict {
+  // --- Edge cases first -----------------------------------------------------
+  const at = toDate(scheduledAt);
+  if (!at) return { ok: false, reason: "NOT_A_DATE", at: null };
+  if (!Number.isFinite(nowMs)) return { ok: false, reason: "NOT_A_DATE", at };
+
+  const delayMs = at.getTime() - nowMs;
+  // A time already gone is a mistake (typo, wrong timezone, stale form), never
+  // "post immediately": silently publishing NOW is the surprise nobody wants.
+  if (delayMs < MIN_SCHEDULE_AHEAD_MS) return { ok: false, reason: "IN_THE_PAST", at };
+  if (delayMs > maxAheadMs) return { ok: false, reason: "TOO_FAR_AHEAD", at };
+  return { ok: true, at, delayMs };
+}
+
+/** Vietnamese explanation for a rejected time — shown next to the channel row. */
+export function scheduleRejectionMessage(reason: ScheduleRejection, maxAheadMs = MAX_SCHEDULE_AHEAD_MS): string {
+  switch (reason) {
+    case "NOT_A_DATE":
+      return "Giờ hẹn đăng không hợp lệ.";
+    case "IN_THE_PAST":
+      return "Giờ hẹn đăng đã trôi qua — hãy chọn một thời điểm trong tương lai.";
+    case "TOO_FAR_AHEAD":
+      return `Chỉ được hẹn đăng trong vòng ${Math.floor(maxAheadMs / (24 * 60 * 60 * 1000))} ngày.`;
+    default:
+      return "Giờ hẹn đăng không hợp lệ.";
+  }
+}
+
+/** True while the job is waiting for its scheduled time (nothing published yet). */
+export function isPendingSchedule(
+  job: Pick<PostJob, "status" | "scheduledAt">,
+  nowMs: number,
+): boolean {
+  if (job.status !== "queued") return false;
+  if (!(job.scheduledAt instanceof Date)) return false;
+  return job.scheduledAt.getTime() > nowMs;
+}
+
+function toDate(value: unknown): Date | null {
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  }
+  return null;
 }
 
 // --- Anti-duplicate key (business rule 4) -----------------------------------

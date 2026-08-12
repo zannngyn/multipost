@@ -81,6 +81,10 @@ export function makePublishPostHandler(deps: PublishPostHandlerDeps): JobHandler
         postJobId: payload.postJobId,
         attempt: job.attempt,
         maxAttempts: job.maxAttempts,
+        // Which QUEUE ENTRY woke us up (E8.4 stale-entry guard). The consumer
+        // uses "unknown" when the broker gave no id; passing that through would
+        // make every job look stale, so it becomes "no id, no check".
+        queueJobId: job.jobId && job.jobId !== "unknown" ? job.jobId : null,
       });
 
       // A blocked/skipped outcome is a FINISHED job, not a queue failure: the
@@ -96,6 +100,7 @@ export function makePublishPostHandler(deps: PublishPostHandlerDeps): JobHandler
         error_code: result.errorCode,
         user_message: result.userMessage,
         deferred_ms: result.deferredMs,
+        skip_reason: result.skipReason,
       });
     } catch (error) {
       // Never swallowed: log with context, then rethrow so the queue adapter

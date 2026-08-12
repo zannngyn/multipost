@@ -114,6 +114,8 @@ export const CreateBatchChannelResultSchema = z.object({
   queueJobId: z.string().nullable(),
   errorCode: z.string().nullable(),
   userMessage: z.string().nullable(),
+  /** E8.1 — publish time actually stored for this channel; null = đăng ngay. */
+  scheduledAt: z.iso.datetime().nullable(),
 });
 export type CreateBatchChannelResult = z.infer<typeof CreateBatchChannelResultSchema>;
 

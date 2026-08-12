@@ -67,7 +67,32 @@ const BodySchema = z.object({
     .array(MediaItemSchema)
     .min(1, "Bài đăng cần ít nhất một ảnh.")
     .max(MAX_ALBUM_MEDIA, `Một bài chỉ đăng tối đa ${MAX_ALBUM_MEDIA} ảnh.`),
+  /**
+   * E8.1 — publish time for every channel of this batch. Absent = đăng ngay.
+   * An INSTANT: the browser owns the operator's timezone and converts the wall
+   * clock they typed. The window (ít nhất 1 giây, tối đa 30 ngày) belongs to
+   * the domain, not to this schema — a bad time must block ONE channel with a
+   * reason, not reject the whole lô (business rule 6).
+   */
+  scheduledAt: z.iso.datetime({ error: "Giờ hẹn đăng không hợp lệ." }).optional(),
+  /** E8.1 — per-channel override; wins over `scheduledAt` where it is set. */
+  scheduledAtByChannel: z
+    .record(
+      z.string().trim().min(1, "Mã kênh không hợp lệ."),
+      z.iso.datetime({ error: "Giờ hẹn đăng của kênh không hợp lệ." }),
+    )
+    .optional(),
 });
+
+/** ISO strings -> Date, one entry per channel actually named by the caller. */
+function toScheduleMap(
+  raw: Record<string, string> | undefined,
+): Record<string, Date> | undefined {
+  if (!raw) return undefined;
+  const entries = Object.entries(raw);
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries.map(([channelId, iso]) => [channelId, new Date(iso)]));
+}
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +105,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const body = await readJsonBody(request, BodySchema, { route: ROUTE });
     const color = body.color?.trim() ?? "";
+    const scheduledAtByChannel = toScheduleMap(body.scheduledAtByChannel);
 
     const result = await container.usecases.createPostBatch({
       tenantId: body.tenantId,
@@ -89,6 +115,8 @@ export async function POST(request: Request): Promise<Response> {
       channelIds: body.channelIds,
       captionByChannel: body.captionByChannel,
       media: body.media,
+      ...(body.scheduledAt ? { scheduledAt: new Date(body.scheduledAt) } : {}),
+      ...(scheduledAtByChannel ? { scheduledAtByChannel } : {}),
     });
 
     // 201: the batch and its per-channel jobs now exist as rows, whatever the

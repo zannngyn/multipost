@@ -55,6 +55,12 @@ export interface BulkRunInput {
   channelIds: readonly string[];
   captionMode: BulkCaptionMode;
   captionTemplate: string;
+  /**
+   * E8.1 — one publish instant (ISO) for EVERY code and channel of this run;
+   * null = đăng ngay. The spacing gate still keeps the posts of one channel
+   * apart, so a run of 20 codes hẹn cùng giờ goes out in order, not at once.
+   */
+  scheduledAt?: string | null;
 }
 
 export type BulkRunPhase = "idle" | "running" | "stopping" | "finished";
@@ -263,6 +269,7 @@ export function useBulkRun() {
               productCode: composed.content.code,
               channelIds: input.channelIds,
               captionByChannel,
+              scheduledAt: input.scheduledAt ?? null,
               // Cover first — `composePost` already ordered the album that way.
               media: composed.media.map((asset) => ({
                 driveFileId: asset.driveFileId,

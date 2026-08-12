@@ -57,6 +57,54 @@ export interface ApplyTransitionInput {
   /** Machine-readable why, stored in the audit trail. */
   readonly reason: string;
   readonly actorUserId?: string | null;
+  /**
+   * Overrides the audit action (default `post_job.<new status>`). Used when the
+   * STATUS alone hides what happened: a scheduled post killed by the stock
+   * recheck is `post_job.auto_cancelled` (E8.3), not a plain "blocked".
+   */
+  readonly auditAction?: string;
+  /**
+   * Extra fields merged into the audit payload (an operator note, a cancel
+   * reason...). Merged UNDER the repo's own fields, so a caller cannot overwrite
+   * `from`/`to`/`reason` and rewrite history.
+   */
+  readonly auditPayload?: Readonly<Record<string, unknown>>;
+}
+
+/** E8.4 — change the publish time of a job that has not run yet. */
+export interface RescheduleJobInput {
+  readonly tenantId: string;
+  readonly postJobId: string;
+  readonly scheduledAt: Date;
+  /** New queue entry id; replaces the stored one. */
+  readonly queueJobId: string;
+  /** Previous values, for the audit row. */
+  readonly previousScheduledAt: Date | null;
+  readonly previousQueueJobId: string | null;
+  readonly actorUserId?: string | null;
+  readonly reason: string;
+}
+
+/** E8.4 — "bài đã hẹn" list, ordered by publish time (soonest first). */
+export interface ScheduledJobCursor {
+  readonly scheduledAt: Date;
+  readonly id: string;
+}
+
+export interface ListScheduledJobsQuery {
+  readonly tenantId: string;
+  /** Inclusive lower bound on scheduled_at. */
+  readonly from?: Date;
+  /** Exclusive upper bound on scheduled_at. */
+  readonly to?: Date;
+  readonly channelId?: string;
+  readonly limit: number;
+  readonly cursor?: ScheduledJobCursor;
+}
+
+export interface ScheduledJobPage {
+  readonly items: readonly PostJobListItem[];
+  readonly nextCursor: ScheduledJobCursor | null;
 }
 
 export interface PostBatchSummary {
@@ -132,6 +180,29 @@ export interface PostJobRepo {
 
   /** Returns the updated job, or null when another worker won the race. */
   applyTransition(input: ApplyTransitionInput): Promise<PostJob | null>;
+
+  /**
+   * Points the row at ANOTHER queue entry while it stays `queued` (spacing
+   * deferral, operator retry). No audit row: this is plumbing, not a state
+   * change — but it must happen, or the new entry looks stale to the guard in
+   * publish-post. False = the row was no longer `queued`.
+   */
+  setQueueJobId(input: {
+    readonly tenantId: string;
+    readonly postJobId: string;
+    readonly queueJobId: string | null;
+  }): Promise<boolean>;
+
+  /**
+   * E8.4 — new publish time + new queue id, ONLY while the row is still
+   * `queued` (same optimistic guard as applyTransition: null = a worker claimed
+   * the job first and the operator must be told, not silently overruled).
+   * Writes its own audit row.
+   */
+  rescheduleJob(input: RescheduleJobInput): Promise<PostJob | null>;
+
+  /** E8.4 — jobs waiting for their scheduled time, soonest first. */
+  listScheduledJobs(query: ListScheduledJobsQuery): Promise<ScheduledJobPage>;
 
   /**
    * `published_at` of the newest published job on that channel — the input of

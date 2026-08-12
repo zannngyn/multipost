@@ -80,6 +80,44 @@ class BullMqJobQueue implements JobQueue {
     }
   }
 
+  /**
+   * Drops a not-yet-running job (E8.4). BullMQ's `Queue.remove` deletes the job
+   * hash and returns how many keys it removed: 0 means "nothing to remove" —
+   * either an unknown id or a job that is ALREADY ACTIVE, since BullMQ refuses
+   * to remove a locked job. Both are the same answer for the caller: the queue
+   * no longer guarantees anything, the post_job row decides (see the port note).
+   */
+  async remove(jobId: string): Promise<boolean> {
+    const id = typeof jobId === "string" ? jobId.trim() : "";
+    if (id.length === 0) {
+      throw new AppError("QUEUE_ERROR", {
+        message: "remove requires a job id",
+        userMessage: "Không huỷ được công việc nền: thiếu mã công việc.",
+        context: { queue: this.queueName },
+      });
+    }
+
+    try {
+      const removed = await this.queue.remove(id);
+      const ok = removed > 0;
+      this.logger.info("job removed from the queue", {
+        job_id: id,
+        removed: ok,
+        // Not an error: an already-running job is handled by the state machine.
+        reason: ok ? "REMOVED" : "NOT_FOUND_OR_ACTIVE",
+      });
+      return ok;
+    } catch (error) {
+      const appError = AppError.from(error, "QUEUE_ERROR", {
+        queue: this.queueName,
+        job_id: id,
+        operation: "queue.remove",
+      });
+      this.logger.error("queue remove failed", { err: appError, job_id: id });
+      throw appError;
+    }
+  }
+
   async close(): Promise<void> {
     try {
       await this.queue.close();

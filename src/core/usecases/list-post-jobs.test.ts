@@ -50,6 +50,7 @@ function item(overrides: Partial<PostJobListItem> = {}): PostJobListItem {
     captionText: "caption",
     media: [],
     scheduledAt: null,
+    queueJobId: null,
   };
   return {
     ...base,
