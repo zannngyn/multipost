@@ -25,8 +25,8 @@ import { ApiError, CLIENT_ERROR_CODES } from "./api-error";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 export interface ApiRequestOptions<T> {
-  method?: "GET" | "POST";
-  /** Serialised as JSON. Omitted for GET. */
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  /** Serialised as JSON. Omitted when absent (GET, DELETE with query params). */
   body?: unknown;
   /** Contract of the success payload — parsed before it reaches React. */
   schema: z.ZodType<T>;

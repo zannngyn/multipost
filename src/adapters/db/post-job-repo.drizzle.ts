@@ -1,17 +1,21 @@
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, lt, or, type SQL } from "drizzle-orm";
 
 import { AppError } from "@/core/domain/errors";
 import {
   deriveBatchStatus,
   isPostFormat,
+  isSettledPostJobStatus,
   type PostJob,
   type PostJobStatus,
 } from "@/core/domain/post-job";
 import type {
   ApplyTransitionInput,
+  ListPostJobsQuery,
   NewPostBatch,
   NewPostJob,
   PostBatchSummary,
+  PostJobListItem,
+  PostJobPage,
   PostJobRepo,
 } from "@/core/ports/post-job-repo";
 
@@ -86,6 +90,11 @@ function toDomain(row: PostJobRow): PostJob {
     media: row.media ?? [],
     scheduledAt: row.scheduledAt,
   };
+}
+
+/** Domain job + the row timestamps the job log (E11.1) pages and displays by. */
+function toListItem(row: PostJobRow): PostJobListItem {
+  return { ...toDomain(row), createdAt: row.createdAt, updatedAt: row.updatedAt };
 }
 
 function emptyCounts(): Record<PostJobStatus, number> {
@@ -235,6 +244,63 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         tenant_id: scope.tenantId,
         batch_id: batchId,
         operation: "postJob.listJobsByBatch",
+      });
+    }
+  }
+
+  /**
+   * E11.1 job log. Keyset pagination on (created_at, id): both columns are read
+   * because created_at alone is not unique — two jobs of the same batch are
+   * inserted in the same statement, and a created_at-only cursor would drop the
+   * second one from the next page.
+   *
+   * Reads `limit + 1` rows to tell "there is more" from "that was the last page"
+   * without a second COUNT query.
+   */
+  async listJobs(query: ListPostJobsQuery): Promise<PostJobPage> {
+    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 20;
+
+    const filters: Array<SQL | undefined> = [];
+    if (query?.batchId) filters.push(eq(postJobs.batchId, query.batchId));
+    if (query?.status) filters.push(eq(postJobs.status, query.status));
+    if (query?.channelId) filters.push(eq(postJobs.channelId, query.channelId));
+    if (query?.productCode) filters.push(eq(postJobs.productCode, query.productCode));
+    if (query?.cursor) {
+      // "Strictly older than the last row already shown", written out instead of
+      // a row-value comparison: a `(a, b) < ($1, $2)` tuple leaves Postgres
+      // guessing the parameter types (it fails on the timestamptz), while these
+      // operators carry the column types drizzle already knows.
+      filters.push(
+        or(
+          lt(postJobs.createdAt, query.cursor.createdAt),
+          and(eq(postJobs.createdAt, query.cursor.createdAt), lt(postJobs.id, query.cursor.id)),
+        ),
+      );
+    }
+
+    try {
+      const rows = await scope.db
+        .select()
+        .from(postJobs)
+        .where(scope.where(postJobs, ...filters))
+        .orderBy(desc(postJobs.createdAt), desc(postJobs.id))
+        .limit(limit + 1);
+
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const last = page[page.length - 1];
+      return {
+        items: page.map(toListItem),
+        nextCursor: hasMore && last ? { createdAt: last.createdAt, id: last.id } : null,
+      };
+    } catch (error) {
+      throw AppError.from(error, "DB_ERROR", {
+        tenant_id: scope.tenantId,
+        batch_id: query?.batchId ?? null,
+        channel: query?.channelId ?? null,
+        status: query?.status ?? null,
+        operation: "postJob.listJobs",
       });
     }
   }
@@ -409,9 +475,36 @@ export class DrizzlePostJobRepo implements PostJobRepo {
 
     if (rows.length === 0) return null;
 
+    let batchCreatedAt: Date | null;
+    try {
+      const batchRows = await scope.db
+        .select({ createdAt: postBatches.createdAt })
+        .from(postBatches)
+        .where(scope.where(postBatches, eq(postBatches.id, id)))
+        .limit(1);
+      batchCreatedAt = batchRows[0]?.createdAt ?? null;
+    } catch (error) {
+      throw AppError.from(error, "DB_ERROR", {
+        tenant_id: scope.tenantId,
+        batch_id: id,
+        operation: "postJob.buildSummary.batchRow",
+      });
+    }
+
     const jobs = rows.map(toDomain);
     const byStatus = emptyCounts();
     for (const job of jobs) byStatus[job.status] += 1;
+
+    // The batch row always exists (post_job.batch_id is a FK), but a summary
+    // must not invent a time if it somehow does not: fall back to the oldest job.
+    const startedAt =
+      batchCreatedAt ?? new Date(Math.min(...rows.map((row) => row.createdAt.getTime())));
+    // Only a run where NOTHING is still moving has an end time (rule: an
+    // unfinished batch showing a finish time would look complete).
+    const settled = jobs.every((job) => isSettledPostJobStatus(job.status));
+    const finishedAt = settled
+      ? new Date(Math.max(...rows.map((row) => row.updatedAt.getTime())))
+      : null;
 
     return {
       batchId: id,
@@ -420,6 +513,8 @@ export class DrizzlePostJobRepo implements PostJobRepo {
       status: deriveBatchStatus(jobs.map((job) => job.status)),
       total: jobs.length,
       byStatus,
+      startedAt,
+      finishedAt,
       jobs,
     };
   }

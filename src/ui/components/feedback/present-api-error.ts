@@ -61,14 +61,25 @@ export function toApiError(error: unknown): ApiError {
   });
 }
 
+/**
+ * Config keys of the media bridge (E3.6). Missing them has one very concrete
+ * consequence an operator can be told about: Facebook has no public address to
+ * fetch the photo from, so nothing can be posted.
+ */
+const MEDIA_CONFIG_KEYS = ["MEDIA_PUBLIC_BASE_URL", "MEDIA_SIGNING_SECRET"];
+
 export function presentApiError(error: ApiError): ApiErrorView {
   if (isSystemConfigError(error)) {
     const keys = missingConfigKeys(error);
+    const isMediaConfig = keys.some((key) => MEDIA_CONFIG_KEYS.includes(key));
     return {
       kind: "config",
-      title: "Hệ thống chưa được cấu hình đủ",
-      description:
-        "Tính năng này cần thông tin kết nối mà máy chủ chưa có. Người vận hành không tự khắc phục được — hãy gửi phần dưới đây cho quản trị viên.",
+      title: isMediaConfig
+        ? "Hệ thống chưa cấu hình URL công khai cho ảnh"
+        : "Hệ thống chưa được cấu hình đủ",
+      description: isMediaConfig
+        ? "Facebook phải tự tải ảnh về từ một địa chỉ công khai của hệ thống, mà địa chỉ đó chưa được khai báo. Chưa đăng được bài nào cho tới khi quản trị viên khai báo xong — không phải lỗi thao tác."
+        : "Tính năng này cần thông tin kết nối mà máy chủ chưa có. Người vận hành không tự khắc phục được — hãy gửi phần dưới đây cho quản trị viên.",
       hint:
         keys.length > 0
           ? `Thiếu biến cấu hình: ${keys.join(", ")}. Khai báo trong .env.local của máy chủ rồi khởi động lại.`
@@ -173,6 +184,51 @@ export function presentApiError(error: ApiError): ApiErrorView {
         kind: "server",
         title: "Không đọc được Google Drive / Sheet",
         description: error.userMessage,
+        canRetry: true,
+      };
+
+    case "INVALID_JOB_TRANSITION":
+      return {
+        kind: "business",
+        title: "Không chạy lại được bài này",
+        description: error.userMessage,
+        hint: "Chỉ bài đang ở trạng thái Lỗi hoặc Bị chặn mới chạy lại được. Tải lại nhật ký để xem trạng thái mới nhất.",
+        canRetry: false,
+      };
+
+    case "DUPLICATE_POST_BLOCKED":
+      return {
+        kind: "business",
+        title: "Bài này đã được tạo trước đó",
+        description: error.userMessage,
+        hint: "Khoá chống đăng trùng đã chặn lần tạo thứ hai. Mở nhật ký đăng bài để xem lô đã có.",
+        canRetry: false,
+      };
+
+    case "CHANNEL_NOT_CONFIGURED":
+      return {
+        kind: "config",
+        title: "Kênh chưa được cấu hình",
+        description: error.userMessage,
+        hint: "Kênh cần Page ID và token hợp lệ trong cấu hình đơn vị. Nhờ quản trị viên kết nối kênh rồi thử lại.",
+        canRetry: false,
+      };
+
+    case "QUEUE_ERROR":
+      return {
+        kind: "server",
+        title: "Không đưa được bài vào hàng đợi",
+        description: `${error.userMessage} Bài vẫn giữ nguyên trạng thái cũ — chưa có gì được đăng.`,
+        canRetry: true,
+      };
+
+    case "META_ERROR":
+    case "PUBLISH_FAILED":
+      return {
+        kind: "server",
+        title: "Facebook từ chối bài đăng",
+        description: error.userMessage,
+        hint: "Xem nhật ký đăng bài để biết kênh nào lỗi, rồi bấm “Chạy lại” trên đúng dòng đó.",
         canRetry: true,
       };
 

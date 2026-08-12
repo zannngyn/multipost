@@ -1,0 +1,227 @@
+import { describe, expect, it } from "vitest";
+
+import type { PostJob } from "@/core/domain/post-job";
+import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
+import type {
+  ListPostJobsQuery,
+  PostJobListItem,
+  PostJobRepo,
+} from "@/core/ports/post-job-repo";
+
+import {
+  DEFAULT_POST_JOB_PAGE_SIZE,
+  MAX_POST_JOB_PAGE_SIZE,
+  decodePostJobCursor,
+  encodePostJobCursor,
+  makeListPostJobs,
+} from "./list-post-jobs";
+
+/** E11.1 job log: filters, keyset paging and the Vietnamese explanation column. */
+
+const TENANT = "00000000-0000-0000-0000-000000000001";
+
+function silentLogger(): Logger {
+  const logger: Logger = {
+    child: (_bindings: LogBindings) => logger,
+    debug: (_message: string, _context?: LogContext) => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  };
+  return logger;
+}
+
+function item(overrides: Partial<PostJobListItem> = {}): PostJobListItem {
+  const base: PostJob = {
+    id: "job-1",
+    tenantId: TENANT,
+    batchId: "batch-1",
+    productCode: "MGKVX6310",
+    color: "TÍM",
+    channelId: "fbpage-a",
+    format: "image_post",
+    status: "published",
+    attemptCount: 1,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    publishedPostId: "100_200",
+    publishedUrl: "https://facebook.com/100_200",
+    publishedAt: new Date("2026-08-13T02:03:00.000Z"),
+    captionText: "caption",
+    media: [],
+    scheduledAt: null,
+  };
+  return {
+    ...base,
+    createdAt: new Date("2026-08-13T02:00:00.000Z"),
+    updatedAt: new Date("2026-08-13T02:03:00.000Z"),
+    ...overrides,
+  };
+}
+
+function harness(items: PostJobListItem[]) {
+  const queries: ListPostJobsQuery[] = [];
+  const postJobs = {
+    async listJobs(query: ListPostJobsQuery) {
+      queries.push(query);
+      return { items, nextCursor: null };
+    },
+  } as unknown as PostJobRepo;
+  return { listPostJobs: makeListPostJobs({ postJobs, logger: silentLogger() }), queries };
+}
+
+// --- Edge cases first -------------------------------------------------------
+
+describe("listPostJobs — rejected calls", () => {
+  it("rejects a malformed tenant id", async () => {
+    const { listPostJobs, queries } = harness([]);
+    await expect(listPostJobs({ tenantId: "nope" })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    expect(queries).toHaveLength(0);
+  });
+
+  it("rejects an unknown status instead of silently listing everything", async () => {
+    const { listPostJobs, queries } = harness([]);
+    await expect(
+      listPostJobs({ tenantId: TENANT, filter: { status: "gone" } }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { field: "status" } });
+    expect(queries).toHaveLength(0);
+  });
+
+  it.each([0, -5, 2.5, "20" as unknown as number])("rejects limit %p", async (limit) => {
+    const { listPostJobs } = harness([]);
+    await expect(listPostJobs({ tenantId: TENANT, filter: { limit } })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      context: { field: "limit" },
+    });
+  });
+
+  it("rejects a malformed cursor instead of restarting from page 1", async () => {
+    const { listPostJobs } = harness([]);
+    await expect(
+      listPostJobs({ tenantId: TENANT, filter: { cursor: "not-a-cursor" } }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { field: "cursor" } });
+  });
+
+  it("returns an empty page without failing when nothing matches", async () => {
+    const { listPostJobs } = harness([]);
+    const result = await listPostJobs({ tenantId: TENANT, filter: { batchId: "unknown" } });
+    expect(result.items).toEqual([]);
+    expect(result.nextCursor).toBeNull();
+  });
+});
+
+// --- Filters and paging -----------------------------------------------------
+
+describe("listPostJobs — query building", () => {
+  it("caps the page size and defaults it", async () => {
+    const { listPostJobs, queries } = harness([]);
+    await listPostJobs({ tenantId: TENANT });
+    await listPostJobs({ tenantId: TENANT, filter: { limit: 1_000 } });
+    expect(queries[0].limit).toBe(DEFAULT_POST_JOB_PAGE_SIZE);
+    expect(queries[1].limit).toBe(MAX_POST_JOB_PAGE_SIZE);
+  });
+
+  it("passes every filter down, product code upper-cased", async () => {
+    const { listPostJobs, queries } = harness([]);
+    await listPostJobs({
+      tenantId: TENANT,
+      filter: {
+        batchId: " batch-1 ",
+        status: "failed",
+        channelId: "fbpage-b",
+        productCode: " mgkvx6310 ",
+        limit: 5,
+      },
+    });
+    expect(queries[0]).toMatchObject({
+      tenantId: TENANT,
+      batchId: "batch-1",
+      status: "failed",
+      channelId: "fbpage-b",
+      productCode: "MGKVX6310",
+      limit: 5,
+    });
+  });
+
+  it("decodes the cursor it produced (round trip)", async () => {
+    const cursor = { createdAt: new Date("2026-08-13T02:00:00.000Z"), id: "job-9" };
+    const encoded = encodePostJobCursor(cursor);
+    expect(encoded).toBe("2026-08-13T02:00:00.000Z_job-9");
+    expect(decodePostJobCursor(encoded)).toEqual(cursor);
+
+    const { listPostJobs, queries } = harness([]);
+    await listPostJobs({ tenantId: TENANT, filter: { cursor: encoded } });
+    expect(queries[0].cursor).toEqual(cursor);
+  });
+
+  it("treats an empty cursor as 'first page'", async () => {
+    expect(decodePostJobCursor(null)).toBeNull();
+    expect(decodePostJobCursor("   ")).toBeNull();
+    expect(encodePostJobCursor(null)).toBeNull();
+  });
+
+  it("returns the repo cursor encoded for the caller", async () => {
+    const next = { createdAt: new Date("2026-08-13T01:00:00.000Z"), id: "job-5" };
+    const postJobs = {
+      async listJobs() {
+        return { items: [item()], nextCursor: next };
+      },
+    } as unknown as PostJobRepo;
+    const listPostJobs = makeListPostJobs({ postJobs, logger: silentLogger() });
+    const result = await listPostJobs({ tenantId: TENANT });
+    expect(result.nextCursor).toBe("2026-08-13T01:00:00.000Z_job-5");
+  });
+});
+
+// --- The rows the operator reads -------------------------------------------
+
+describe("listPostJobs — entries", () => {
+  it("carries the Vietnamese reason and the retry flag for a blocked job", async () => {
+    const { listPostJobs } = harness([
+      item({
+        id: "job-2",
+        status: "blocked",
+        attemptCount: 0,
+        publishedPostId: null,
+        publishedUrl: null,
+        publishedAt: null,
+        lastErrorCode: "OUT_OF_STOCK",
+        lastErrorMessage: "Mã MGKVX6310 đã hết hàng — không đăng",
+      }),
+    ]);
+
+    const result = await listPostJobs({ tenantId: TENANT });
+
+    expect(result.items[0]).toMatchObject({
+      postJobId: "job-2",
+      status: "blocked",
+      lastErrorCode: "OUT_OF_STOCK",
+      userMessage: "Mã MGKVX6310 đã hết hàng — không đăng",
+      canRetry: true,
+    });
+  });
+
+  it.each([
+    ["published", false],
+    ["queued", false],
+    ["publishing", false],
+    ["draft", false],
+    ["failed", true],
+    ["blocked", true],
+  ] as Array<[PostJob["status"], boolean]>)("marks canRetry=%s for %s", async (status, canRetry) => {
+    const { listPostJobs } = harness([
+      item({ status, lastErrorCode: "PUBLISH_FAILED", lastErrorMessage: "lỗi" }),
+    ]);
+    const result = await listPostJobs({ tenantId: TENANT });
+    expect(result.items[0].canRetry).toBe(canRetry);
+  });
+
+  it("keeps the row timestamps so the log can be read chronologically", async () => {
+    const { listPostJobs } = harness([item()]);
+    const result = await listPostJobs({ tenantId: TENANT });
+    expect(result.items[0].createdAt).toEqual(new Date("2026-08-13T02:00:00.000Z"));
+    expect(result.items[0].updatedAt).toEqual(new Date("2026-08-13T02:03:00.000Z"));
+  });
+});

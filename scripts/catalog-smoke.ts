@@ -1,7 +1,7 @@
 import { count, eq } from "drizzle-orm";
 
 import { makeFixtureDriveSource, makeFixtureSheetSource } from "@/adapters/google/fixture-catalog-source";
-import { DEMO_TENANT_ID } from "@/adapters/db/seed";
+import { DEMO_TENANT_ID } from "@/adapters/db/seed-constants";
 import { mediaAssets, products, syncRuns, tenantIntegrations, tenants } from "@/adapters/db/schema";
 import { AppError } from "@/core/domain/errors";
 import { loadConfig } from "@/composition/config";

@@ -8,3 +8,4 @@ export * from "./product";
 export * from "./media-asset";
 export * from "./post-batch";
 export * from "./post-job";
+export * from "./channel-group";

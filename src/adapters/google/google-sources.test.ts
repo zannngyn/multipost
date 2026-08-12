@@ -10,11 +10,12 @@ import type { Logger } from "@/core/ports/infra";
  */
 
 const listMock = vi.fn();
+const getMock = vi.fn();
 const valuesGetMock = vi.fn();
 
 vi.mock("googleapis", () => ({
   google: {
-    drive: () => ({ files: { list: listMock } }),
+    drive: () => ({ files: { list: listMock, get: getMock } }),
     sheets: () => ({ spreadsheets: { values: { get: valuesGetMock } } }),
     auth: { JWT: class {} },
   },
@@ -192,6 +193,109 @@ describe("makeGoogleDriveSource", () => {
 
     expect(files).toHaveLength(2);
     expect(listMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("makeGoogleDriveSource.download", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+  });
+
+  it("rejects an empty file id before calling Drive", async () => {
+    const drive = makeGoogleDriveSource({ auth, logger: makeLogger() });
+    await expect(drive.download({ tenantId: TENANT, fileId: "  " })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    expect(getMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["404 (deleted)", 404],
+    ["403 (no longer shared)", 403],
+  ])("maps %s to MEDIA_NOT_FOUND, not to an outage", async (_label, status) => {
+    getMock.mockRejectedValueOnce(Object.assign(new Error("File not found"), { code: status }));
+    const drive = makeGoogleDriveSource({ auth, logger: makeLogger() });
+
+    const error = await drive
+      .download({ tenantId: TENANT, fileId: "file-1" })
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "MEDIA_NOT_FOUND" });
+    expect((error as { context: Record<string, unknown> }).context).toMatchObject({
+      tenant_id: TENANT,
+      drive_file_id: "file-1",
+      operation: "drive.files.get",
+      http_status: status,
+    });
+  });
+
+  it("wraps any other transport failure as DRIVE_ERROR", async () => {
+    getMock.mockRejectedValueOnce(Object.assign(new Error("backend error"), { code: 500 }));
+    const drive = makeGoogleDriveSource({ auth, logger: makeLogger() });
+    await expect(drive.download({ tenantId: TENANT, fileId: "file-1" })).rejects.toMatchObject({
+      code: "DRIVE_ERROR",
+    });
+  });
+
+  it("refuses a body that is not binary content", async () => {
+    getMock.mockResolvedValueOnce({ data: { error: "quota" }, headers: {} });
+    const drive = makeGoogleDriveSource({ auth, logger: makeLogger() });
+    await expect(drive.download({ tenantId: TENANT, fileId: "file-1" })).rejects.toMatchObject({
+      code: "DRIVE_ERROR",
+    });
+  });
+
+  it("refuses a file bigger than the caller's byte budget", async () => {
+    getMock.mockResolvedValueOnce({
+      data: new Uint8Array(64).buffer,
+      headers: { "content-type": "image/jpeg" },
+    });
+    const drive = makeGoogleDriveSource({ auth, logger: makeLogger() });
+
+    const error = await drive
+      .download({ tenantId: TENANT, fileId: "file-1", maxBytes: 32 })
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "DRIVE_ERROR" });
+    expect((error as { context: Record<string, unknown> }).context).toMatchObject({
+      reason: "CONTENT_TOO_LARGE",
+      size_bytes: 64,
+      max_bytes: 32,
+    });
+  });
+
+  it("returns bytes with the mime type from the response header", async () => {
+    const payload = new Uint8Array([137, 80, 78, 71]);
+    getMock.mockResolvedValueOnce({
+      data: payload.buffer,
+      headers: { "content-type": "image/png; charset=binary" },
+    });
+
+    const content = await makeGoogleDriveSource({ auth, logger: makeLogger() }).download({
+      tenantId: TENANT,
+      fileId: "file-1",
+    });
+
+    expect(content).toEqual({
+      fileId: "file-1",
+      bytes: payload,
+      mimeType: "image/png",
+      sizeBytes: 4,
+    });
+    expect(getMock.mock.calls[0][0]).toMatchObject({ fileId: "file-1", alt: "media" });
+    expect(getMock.mock.calls[0][1]).toMatchObject({ responseType: "arraybuffer" });
+  });
+
+  it("reports a null mime type when Drive sends no content-type", async () => {
+    getMock.mockResolvedValueOnce({ data: Buffer.from([1, 2, 3]), headers: {} });
+    const content = await makeGoogleDriveSource({ auth, logger: makeLogger() }).download({
+      tenantId: TENANT,
+      fileId: "file-2",
+    });
+    expect(content.mimeType).toBeNull();
+    expect(content.sizeBytes).toBe(3);
   });
 });
 

@@ -19,7 +19,7 @@ import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { NewPostJob, PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
-import type { ChannelConfigRepo } from "@/core/ports/publisher";
+import type { ChannelConfigRepo, SignMediaUrlFn } from "@/core/ports/publisher";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
 
@@ -39,6 +39,23 @@ import { PUBLISH_POST_JOB_NAME } from "./publish-post";
  * job) hits it and raises DUPLICATE_POST_BLOCKED.
  */
 
+/**
+ * What a caller (UI / API route) hands over per photo: the ASSET, not a URL.
+ * A structural subset of `MediaAsset` (core/domain/product), so the compose
+ * screen forwards its own items untouched.
+ *
+ * The public URL is minted here (see `signMediaUrl` below): how Facebook reaches
+ * a Drive file is transport, not something a screen should know or be able to
+ * forge.
+ */
+export interface PostMediaInput {
+  /** Drive file id — the asset identity carried by post_job.media. */
+  readonly driveFileId: string;
+  readonly fileName?: string;
+  /** Phase 1 publishes images only; a video item is refused here. */
+  readonly kind?: string;
+}
+
 export interface CreatePostBatchInput {
   readonly tenantId: string;
   /**
@@ -53,7 +70,8 @@ export interface CreatePostBatchInput {
   readonly channelIds: readonly string[];
   /** One caption per channel (brief §7.2 — never share a caption). */
   readonly captionByChannel: Readonly<Record<string, string>>;
-  readonly media: readonly PostJobMedia[];
+  /** 1..10 assets, cover first. URLs are minted here, not by the caller. */
+  readonly media: readonly PostMediaInput[];
   /** Phase 2 scheduling; a future date simply delays the queue job. */
   readonly scheduledAt?: Date | null;
   readonly createdBy?: string | null;
@@ -91,6 +109,16 @@ export interface CreatePostBatchDeps {
   logger: Logger;
   /** Injected so tests get deterministic ids. */
   newId: () => string;
+  /** Mints the public URL Graph API fetches (E3.6). */
+  signMediaUrl: SignMediaUrlFn;
+  /**
+   * Public origin, read LAZILY (a function, not a value): a missing
+   * MEDIA_PUBLIC_BASE_URL must fail when someone tries to post, with a message
+   * naming the variable — not at process boot, where nothing can act on it.
+   */
+  mediaBaseUrl: () => string;
+  /** Optional override; the signer clamps it to [1min, 24h]. */
+  mediaUrlTtlMs?: number;
 }
 
 export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
@@ -125,8 +153,8 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
       });
     }
 
-    const media = normaliseMedia(input?.media);
-    if (media instanceof AppError) throw media;
+    const assets = normaliseMediaInput(input?.media);
+    if (assets instanceof AppError) throw assets;
 
     const captions = new Map<string, string>();
     const missingCaptions: string[] = [];
@@ -174,6 +202,12 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
     const warnings: string[] = [];
     if (inventory.operatorMessage) warnings.push(inventory.operatorMessage);
 
+    // --- Mint one signed URL per photo (E3.6) -------------------------------
+    // Before the insert: a misconfigured signer must not leave a half-created
+    // batch of jobs pointing at nothing.
+    const signed = signMedia(deps, tenantId, assets, { batch_id: batchId, product_code: productCode });
+    const media = signed.media;
+
     // --- Create batch + jobs in ONE transaction (the lock) ------------------
     const newJobs: NewPostJob[] = channelIds.map((channelId) => ({
       id: deps.newId(),
@@ -205,6 +239,8 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
       channels: channelIds,
       job_count: created.jobs.length,
       media_count: media.length,
+      // Expiry only — a signed URL carries a MAC and never belongs in a log.
+      media_url_expires_at: new Date(signed.expiresAtMs).toISOString(),
       stock: inventory.stock,
       inventory_status: inventory.status,
       duplicate_keys: created.jobs.map((job) => postJobDuplicateKey(job)),
@@ -422,7 +458,15 @@ function normaliseColor(raw: unknown): string {
   return normalizeColorName(value) ?? value.toUpperCase();
 }
 
-function normaliseMedia(media: readonly PostJobMedia[] | undefined): PostJobMedia[] | AppError {
+interface NormalisedAsset {
+  readonly driveFileId: string;
+  readonly fileName: string;
+}
+
+/** Validates the ASSET list. No URL is involved yet — signing comes after. */
+function normaliseMediaInput(
+  media: readonly PostMediaInput[] | undefined,
+): NormalisedAsset[] | AppError {
   if (!Array.isArray(media) || media.length === 0) {
     return invalid("createPostBatch requires at least one media item", { media_count: 0 });
   }
@@ -432,25 +476,88 @@ function normaliseMedia(media: readonly PostJobMedia[] | undefined): PostJobMedi
       max: MAX_ALBUM_MEDIA,
     });
   }
-  const result: PostJobMedia[] = [];
+
+  const result: NormalisedAsset[] = [];
+  const seen = new Set<string>();
   for (const [index, item] of media.entries()) {
-    const url = str(item?.url);
-    // The platform fetches this URL itself: a non-HTTP(S) value fails at the
-    // API call, i.e. after the job is queued. Reject it here instead.
-    if (!/^https?:\/\/\S+$/i.test(url)) {
-      return invalid(`Media #${index + 1} has no usable public URL`, {
+    const driveFileId = str(item?.driveFileId);
+    if (driveFileId.length === 0) {
+      // Without the asset id there is nothing to sign, and nothing to re-sign
+      // later at publish time — the post would go out with a dead link.
+      return invalid(`Media #${index + 1} has no driveFileId`, {
         media_index: index,
         file_name: str(item?.fileName) || null,
-        url: url || null,
       });
     }
-    result.push({
-      driveFileId: str(item?.driveFileId),
-      fileName: str(item?.fileName),
-      url,
-    });
+    if (seen.has(driveFileId)) {
+      // The same photo twice in one album is always a caller bug, and it would
+      // silently shrink the post the operator previewed.
+      return invalid(`Media #${index + 1} repeats drive file ${driveFileId}`, {
+        media_index: index,
+        drive_file_id: driveFileId,
+      });
+    }
+    const kind = str(item?.kind).toLowerCase();
+    if (kind.length > 0 && kind !== "image") {
+      return invalid(`Media #${index + 1} is a ${kind}; Phase 1 publishes images only`, {
+        media_index: index,
+        drive_file_id: driveFileId,
+        kind,
+      });
+    }
+    seen.add(driveFileId);
+    result.push({ driveFileId, fileName: str(item?.fileName) });
   }
   return result;
+}
+
+/**
+ * Signs every asset with the SAME base URL and clock reading. Any failure
+ * (missing MEDIA_PUBLIC_BASE_URL / MEDIA_SIGNING_SECRET, malformed asset id)
+ * aborts the whole batch: half an album is not a post.
+ */
+function signMedia(
+  deps: CreatePostBatchDeps,
+  tenantId: string,
+  assets: readonly NormalisedAsset[],
+  context: Record<string, unknown>,
+): { media: PostJobMedia[]; expiresAtMs: number } {
+  let baseUrl: string;
+  try {
+    baseUrl = deps.mediaBaseUrl();
+  } catch (error) {
+    // Config error, not a caller error: name the variable and keep the cause.
+    throw AppError.from(error, "INVALID_INPUT", {
+      ...context,
+      tenant_id: tenantId,
+      reason: "MEDIA_BASE_URL_UNAVAILABLE",
+      hint: "MEDIA_PUBLIC_BASE_URL",
+    });
+  }
+
+  const media: PostJobMedia[] = [];
+  let earliestExpiry = Number.POSITIVE_INFINITY;
+  for (const [index, asset] of assets.entries()) {
+    try {
+      const url = deps.signMediaUrl({
+        tenantId,
+        assetId: asset.driveFileId,
+        baseUrl,
+        ttlMs: deps.mediaUrlTtlMs,
+      });
+      earliestExpiry = Math.min(earliestExpiry, url.expiresAtMs);
+      media.push({ driveFileId: asset.driveFileId, fileName: asset.fileName, url: url.url });
+    } catch (error) {
+      throw AppError.from(error, "INVALID_INPUT", {
+        ...context,
+        tenant_id: tenantId,
+        media_index: index,
+        drive_file_id: asset.driveFileId,
+        reason: "MEDIA_URL_SIGNING_FAILED",
+      });
+    }
+  }
+  return { media, expiresAtMs: Number.isFinite(earliestExpiry) ? earliestExpiry : 0 };
 }
 
 /** Two channels sharing one caption — returns the offending channel pair. */

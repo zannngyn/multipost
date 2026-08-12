@@ -11,7 +11,12 @@ import type {
   PostJobRepo,
 } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
-import type { ChannelConfig, ChannelConfigRepo, PublishSettings } from "@/core/ports/publisher";
+import type {
+  ChannelConfig,
+  ChannelConfigRepo,
+  PublishSettings,
+  SignMediaUrlFn,
+} from "@/core/ports/publisher";
 
 import { makePublishPost, spacingWaitMs } from "./publish-post";
 
@@ -89,6 +94,10 @@ function makeMemoryRepo(jobs: PostJob[]) {
     async listJobsByBatch(_tenantId: string, batchId: string) {
       return [...store.values()].filter((job) => job.batchId === batchId);
     },
+    async listJobs() {
+      // Not exercised here: the job log has its own test (list-post-jobs).
+      return { items: [], nextCursor: null };
+    },
     async applyTransition(input: ApplyTransitionInput) {
       const current = store.get(input.postJobId);
       const ok = Boolean(current && current.status === input.from);
@@ -114,6 +123,8 @@ function makeMemoryRepo(jobs: PostJob[]) {
         status: deriveBatchStatus(list.map((job) => job.status)),
         total: list.length,
         byStatus: { draft: 0, queued: 0, publishing: 0, published: 0, failed: 0, blocked: 0 },
+        startedAt: new Date("2026-08-13T02:00:00.000Z"),
+        finishedAt: null,
         jobs: list,
       };
     },
@@ -186,6 +197,24 @@ interface Harness {
   queue: ReturnType<typeof makeQueue>;
   publisher: { publishImagePost: ReturnType<typeof vi.fn> };
   clock: ReturnType<typeof fixedClock>;
+  signer: ReturnType<typeof fakeSigner>;
+}
+
+const MEDIA_BASE_URL = "https://mysp.example.com";
+
+/**
+ * Stand-in for the HMAC signer. The expiry is derived from the CLOCK, so a test
+ * can prove that a later attempt gets a LATER expiry — i.e. a fresh link.
+ */
+function fakeSigner(clock: Clock) {
+  const calls: Array<{ assetId: string; baseUrl: string; expiresAtMs: number }> = [];
+  const sign: SignMediaUrlFn = (input) => {
+    const expiresAtMs = clock.nowMs() + (input.ttlMs ?? 6 * 60 * 60 * 1000);
+    calls.push({ assetId: input.assetId, baseUrl: input.baseUrl, expiresAtMs });
+    const path = `/api/media/${input.assetId}?tenant=${input.tenantId}&expires=${expiresAtMs}&sig=deadbeef`;
+    return { url: `${input.baseUrl}${path}`, path, expiresAtMs, signature: "deadbeef" };
+  };
+  return { sign, calls };
 }
 
 function harness(options: {
@@ -194,6 +223,8 @@ function harness(options: {
   channel?: ChannelConfig | null;
   settings?: Partial<PublishSettings>;
   publish?: () => Promise<{ postId: string; url: string | null }>;
+  signMediaUrl?: SignMediaUrlFn;
+  mediaBaseUrl?: () => string;
 } = {}): Harness {
   const repo = makeMemoryRepo(options.jobs ?? [makeJob()]);
   const queue = makeQueue();
@@ -203,11 +234,13 @@ function harness(options: {
       options.publish ?? (async () => ({ postId: "555000111_1", url: "https://fb/555000111_1" })),
     ),
   };
+  const signer = fakeSigner(clock);
   return {
     repo,
     queue,
     clock,
     publisher,
+    signer,
     publish: makePublishPost({
       postJobs: repo,
       products: makeProducts(options.product === undefined ? makeProduct("104") : options.product),
@@ -216,6 +249,8 @@ function harness(options: {
       queue,
       clock,
       logger: silentLogger(),
+      signMediaUrl: options.signMediaUrl ?? signer.sign,
+      mediaBaseUrl: options.mediaBaseUrl ?? (() => MEDIA_BASE_URL),
     }),
   };
 }
@@ -495,6 +530,90 @@ describe("publishPost — platform failures", () => {
   });
 });
 
+describe("publishPost — signed media URLs (E3.6)", () => {
+  it("re-signs every photo immediately before the API call", async () => {
+    const h = harness({
+      jobs: [
+        makeJob({
+          media: [
+            { driveFileId: "drive-1", fileName: "1.jpg", url: "https://old.example/stale-1.jpg" },
+            { driveFileId: "drive-2", fileName: "2.jpg", url: "https://old.example/stale-2.jpg" },
+          ],
+        }),
+      ],
+    });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const input = h.publisher.publishImagePost.mock.calls[0][0];
+    expect(h.signer.calls.map((call) => call.assetId)).toEqual(["drive-1", "drive-2"]);
+    expect(input.media.map((item: { url: string }) => item.url)).toEqual([
+      `${MEDIA_BASE_URL}/api/media/drive-1?tenant=${TENANT}&expires=${h.signer.calls[0].expiresAtMs}&sig=deadbeef`,
+      `${MEDIA_BASE_URL}/api/media/drive-2?tenant=${TENANT}&expires=${h.signer.calls[1].expiresAtMs}&sig=deadbeef`,
+    ]);
+    // The row keeps the URL it was created with; only the outbound call is fresh.
+    expect(h.repo.get("job-1")?.media[0].url).toBe("https://old.example/stale-1.jpg");
+  });
+
+  it("gives a RETRIED attempt a newer link than the first one (TTL < queue wait)", async () => {
+    let fail = true;
+    const h = harness({
+      publish: async () => {
+        if (fail) {
+          fail = false;
+          throw new AppError("META_ERROR", { message: "temporary", context: { retryable: true } });
+        }
+        return { postId: "555000111_2", url: null };
+      },
+    });
+
+    await expect(
+      h.publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ code: "META_ERROR" });
+
+    // The job waited in the queue longer than a signed link lives.
+    h.clock.advance(7 * 60 * 60 * 1000);
+    await h.publish({ tenantId: TENANT, postJobId: "job-1", attempt: 2, maxAttempts: 3 });
+
+    const first = h.publisher.publishImagePost.mock.calls[0][0].media[0].url;
+    const second = h.publisher.publishImagePost.mock.calls[1][0].media[0].url;
+    expect(second).not.toBe(first);
+    expect(h.signer.calls[1].expiresAtMs).toBeGreaterThan(h.signer.calls[0].expiresAtMs);
+  });
+
+  it("blocks the job (never calls the platform) when the base URL is missing", async () => {
+    const h = harness({
+      mediaBaseUrl: () => {
+        throw new AppError("INVALID_INPUT", { message: "MEDIA_PUBLIC_BASE_URL is missing" });
+      },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("blocked");
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(h.repo.get("job-1")).toMatchObject({
+      status: "blocked",
+      lastErrorCode: "INVALID_INPUT",
+    });
+    expect(result.userMessage).toContain("MEDIA_PUBLIC_BASE_URL");
+  });
+
+  it("publishes a legacy item without a drive file id using its stored URL", async () => {
+    const h = harness({
+      jobs: [
+        makeJob({ media: [{ driveFileId: "", fileName: "old.jpg", url: "https://cdn/old.jpg" }] }),
+      ],
+    });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const input = h.publisher.publishImagePost.mock.calls[0][0];
+    expect(input.media[0].url).toBe("https://cdn/old.jpg");
+    expect(h.signer.calls).toHaveLength(0);
+  });
+});
+
 describe("publishPost — happy path", () => {
   let h: Harness;
   beforeEach(() => {
@@ -525,7 +644,8 @@ describe("publishPost — happy path", () => {
     const input = h.publisher.publishImagePost.mock.calls[0][0];
     expect(input.caption).toBe("Giannal – MỘT NGÀY DỊU DÀNG");
     expect(input.media).toHaveLength(1);
-    expect(input.idempotencyKey).toBe("batch-1|MGKVX6310|TÍM|fbpage-a|image_post");
+    // Same tuple as post_job_duplicate_uq, tenant included (gate note #3).
+    expect(input.idempotencyKey).toBe(`${TENANT}|batch-1|MGKVX6310|TÍM|fbpage-a|image_post`);
     expect(input.channel.channelId).toBe("fbpage-a");
   });
 
@@ -566,6 +686,8 @@ describe("publishPost — happy path", () => {
       queue: makeQueue(),
       clock: fixedClock(),
       logger: silentLogger(),
+      signMediaUrl: fakeSigner(fixedClock()).sign,
+      mediaBaseUrl: () => MEDIA_BASE_URL,
     });
 
     await publish({ tenantId: TENANT, postJobId: "job-1" });

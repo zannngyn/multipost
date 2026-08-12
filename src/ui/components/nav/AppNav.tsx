@@ -14,6 +14,8 @@ const NAV_ITEMS = [
   { href: "/", label: "Tổng quan" },
   { href: "/sync", label: "Đồng bộ dữ liệu" },
   { href: "/compose", label: "Soạn bài" },
+  { href: "/channels", label: "Nhóm kênh" },
+  { href: "/jobs", label: "Nhật ký đăng bài" },
 ] as const;
 
 export function AppNav() {

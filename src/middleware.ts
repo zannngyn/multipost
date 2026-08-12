@@ -27,6 +27,10 @@ const PUBLIC_PREFIXES = [
   "/signin", // the door itself — must stay outside the guard, or redirect loop
   "/api/auth", // Auth.js flow endpoints
   "/api/health", // liveness probe for Docker/Caddy, called without a session
+  // Signed media bridge (E3.6). Meta's fetcher downloads the photo with no
+  // cookie at all, so a session guard here would break every Facebook post.
+  // Its bearer is the HMAC in `?sig=`, verified inside `getMediaContent`.
+  "/api/media",
 ] as const;
 
 /**

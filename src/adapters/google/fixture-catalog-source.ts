@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { AppError } from "@/core/domain/errors";
-import type { DriveFile, DriveSource, ListDriveFilesInput } from "@/core/ports/drive-source";
+import type {
+  DownloadDriveFileInput,
+  DriveFile,
+  DriveFileContent,
+  DriveSource,
+  ListDriveFilesInput,
+} from "@/core/ports/drive-source";
 import type { ReadSheetInput, SheetSnapshot, SheetSource } from "@/core/ports/sheet-source";
 
 import { buildSheetSnapshot } from "./sheet-values";
@@ -82,12 +88,48 @@ export function readFixtureDriveFiles(options: FixtureSourceOptions = {}): Drive
   return files;
 }
 
+/**
+ * 1x1 transparent PNG. `download` must return bytes a real image decoder (and
+ * Facebook's fetcher) accepts, otherwise the fixture proves nothing about the
+ * media route; padding keeps every file a different length.
+ */
+const PNG_1X1_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 export function makeFixtureDriveSource(options: FixtureSourceOptions = {}): DriveSource {
+  let index: Map<string, DriveFile> | null = null;
+  const byId = (): Map<string, DriveFile> => {
+    index ??= new Map(readFixtureDriveFiles(options).map((file) => [file.id, file]));
+    return index;
+  };
+
   return {
     async listFiles(input: ListDriveFilesInput): Promise<readonly DriveFile[]> {
       const files = readFixtureDriveFiles(options);
       const max = input?.maxFiles && input.maxFiles > 0 ? input.maxFiles : files.length;
       return files.slice(0, max);
+    },
+
+    async download(input: DownloadDriveFileInput): Promise<DriveFileContent> {
+      const fileId = typeof input?.fileId === "string" ? input.fileId.trim() : "";
+      const file = fileId.length > 0 ? byId().get(fileId) : undefined;
+      if (!file) {
+        // Same verdict as the real adapter for a deleted/unshared file.
+        throw new AppError("MEDIA_NOT_FOUND", {
+          message: `Fixture Drive has no file with id ${fileId || "(empty)"}`,
+          userMessage: "Không tìm thấy file ảnh trên Drive (dữ liệu mẫu).",
+          context: {
+            tenant_id: typeof input?.tenantId === "string" ? input.tenantId : null,
+            drive_file_id: fileId || null,
+          },
+        });
+      }
+
+      // Same bytes for every file — the listing carries names only, so there is
+      // no real content to serve. The mime type still follows the file name, so
+      // a caller can see the extension-less files (docs/05 1.3) coming through.
+      const bytes = new Uint8Array(Buffer.from(PNG_1X1_BASE64, "base64"));
+      return { fileId, bytes, mimeType: file.mimeType ?? "image/png", sizeBytes: bytes.length };
     },
   };
 }

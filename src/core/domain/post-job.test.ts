@@ -9,6 +9,7 @@ import {
   isFinalPostJobStatus,
   POST_JOB_STATUSES,
   postJobDuplicateKey,
+  postJobOperatorMessage,
   postJobQueueId,
   transitionPostJob,
   type PostJob,
@@ -210,21 +211,42 @@ describe("transitionPostJob — allowed edges", () => {
 // --- Anti-duplicate key -----------------------------------------------------
 
 describe("postJobDuplicateKey", () => {
-  it("is the (batch, code, colour, channel, format) tuple, case-normalised", () => {
+  it("is the (tenant, batch, code, colour, channel, format) tuple, case-normalised", () => {
     const key = postJobDuplicateKey({
+      tenantId: "tenant-1",
       batchId: "batch-1",
       productCode: " mgkvx6310 ",
       color: " tím ",
       channelId: "fbpage-a",
       format: "image_post",
     });
-    expect(key).toBe("batch-1|MGKVX6310|TÍM|fbpage-a|image_post");
+    // Same columns, same order as the post_job_duplicate_uq index (gate note #3).
+    expect(key).toBe("tenant-1|batch-1|MGKVX6310|TÍM|fbpage-a|image_post");
   });
 
   it("separates two colours of the same code on the same channel", () => {
-    const base = { batchId: "b", productCode: "X", channelId: "c", format: "image_post" } as const;
+    const base = {
+      tenantId: "t",
+      batchId: "b",
+      productCode: "X",
+      channelId: "c",
+      format: "image_post",
+    } as const;
     expect(postJobDuplicateKey({ ...base, color: "TÍM" })).not.toBe(
       postJobDuplicateKey({ ...base, color: "TÔM" }),
+    );
+  });
+
+  it("separates two tenants that reuse the same batch/product tuple", () => {
+    const base = {
+      batchId: "b",
+      productCode: "X",
+      color: "TÍM",
+      channelId: "c",
+      format: "image_post",
+    } as const;
+    expect(postJobDuplicateKey({ ...base, tenantId: "t1" })).not.toBe(
+      postJobDuplicateKey({ ...base, tenantId: "t2" }),
     );
   });
 });
@@ -261,9 +283,61 @@ describe("deriveBatchStatus", () => {
     [["published", "published"], "completed"],
     [["published", "blocked"], "partial"],
     [["published", "failed"], "partial"],
+    [["published", "blocked", "failed"], "partial"],
+    // Gate note #2: nothing was ever sent to a channel -> "blocked", not "failed".
+    [["blocked", "blocked"], "blocked"],
+    [["blocked"], "blocked"],
+    // A real platform failure is present: it must not be softened to "blocked".
     [["blocked", "failed"], "failed"],
-    [["blocked", "blocked"], "failed"],
+    [["failed", "failed"], "failed"],
   ] as Array<[PostJobStatus[], string]>)("%j -> %s", (statuses, expected) => {
     expect(deriveBatchStatus(statuses)).toBe(expected);
   });
+});
+
+describe("postJobOperatorMessage", () => {
+  it("prefers the stored Vietnamese reason of a blocked job", () => {
+    const message = postJobOperatorMessage(
+      makeJob({
+        status: "blocked",
+        lastErrorCode: "OUT_OF_STOCK",
+        lastErrorMessage: "Mã MGKVX6310 đã hết hàng — không đăng",
+      }),
+    );
+    expect(message).toBe("Mã MGKVX6310 đã hết hàng — không đăng");
+  });
+
+  it("still explains a blocked job that lost its message", () => {
+    const message = postJobOperatorMessage(
+      makeJob({ status: "blocked", lastErrorCode: "TOKEN_EXPIRED", lastErrorMessage: null }),
+    );
+    expect(message).toContain("TOKEN_EXPIRED");
+    expect(message).toContain("chặn");
+  });
+
+  it("names the attempt count of a failed job", () => {
+    const message = postJobOperatorMessage(
+      makeJob({
+        status: "failed",
+        attemptCount: 3,
+        lastErrorCode: "PUBLISH_FAILED",
+        lastErrorMessage: null,
+      }),
+    );
+    expect(message).toContain("3 lần thử");
+  });
+
+  it("reports the platform post id of a published job", () => {
+    const message = postJobOperatorMessage(
+      makeJob({ status: "published", publishedPostId: "1234_5678" }),
+    );
+    expect(message).toContain("1234_5678");
+  });
+
+  it.each(["draft", "queued", "publishing"] as PostJobStatus[])(
+    "gives a non-empty Vietnamese line for %s too",
+    (status) => {
+      expect(postJobOperatorMessage(makeJob({ status })).length).toBeGreaterThan(0);
+    },
+  );
 });

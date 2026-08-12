@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
 
-import { loadAuthConfig, loadConfig, loadGoogleConfig, type EnvRecord } from "./config";
+import {
+  loadAuthConfig,
+  loadConfig,
+  loadGoogleConfig,
+  loadMediaConfig,
+  loadSecretsConfig,
+  type EnvRecord,
+} from "./config";
 
 const CORE_ENV = {
   NODE_ENV: "test",
@@ -168,6 +175,74 @@ describe("loadGoogleConfig — Service Account (E2)", () => {
 
   it("is not required by loadConfig — a worker boots without Google credentials", () => {
     expect(() => loadConfig(CORE_ENV)).not.toThrow();
+  });
+});
+
+describe("loadMediaConfig / loadSecretsConfig (E3 hardening)", () => {
+  const KEY_32_BYTES = Buffer.alloc(32, 7).toString("base64");
+
+  it("neither group is required by loadConfig — a process boots without them", () => {
+    expect(() => loadConfig(CORE_ENV)).not.toThrow();
+  });
+
+  const MEDIA_BASE = "https://media.example.com";
+
+  it("rejects a missing or too short media signing secret", () => {
+    expect(issuePaths(catchError(() => loadMediaConfig({}))).sort()).toEqual([
+      "MEDIA_PUBLIC_BASE_URL",
+      "MEDIA_SIGNING_SECRET",
+    ]);
+    expect(
+      issuePaths(
+        catchError(() =>
+          loadMediaConfig({ MEDIA_SIGNING_SECRET: "short", MEDIA_PUBLIC_BASE_URL: MEDIA_BASE }),
+        ),
+      ),
+    ).toEqual(["MEDIA_SIGNING_SECRET"]);
+  });
+
+  it("rejects a public base url that is not http(s)", () => {
+    const secret = "0123456789012345678901234567890123456789";
+    expect(
+      issuePaths(
+        catchError(() =>
+          loadMediaConfig({ MEDIA_SIGNING_SECRET: secret, MEDIA_PUBLIC_BASE_URL: "ftp://x" }),
+        ),
+      ),
+    ).toEqual(["MEDIA_PUBLIC_BASE_URL"]);
+  });
+
+  it("accepts a media signing secret of at least 32 chars", () => {
+    const secret = "0123456789012345678901234567890123456789";
+    expect(
+      loadMediaConfig({ MEDIA_SIGNING_SECRET: secret, MEDIA_PUBLIC_BASE_URL: MEDIA_BASE }),
+    ).toEqual({
+      MEDIA_SIGNING_SECRET: secret,
+      MEDIA_PUBLIC_BASE_URL: MEDIA_BASE,
+    });
+  });
+
+  it.each([
+    ["missing", {}],
+    ["blank", { TENANT_SECRETS_ENC_KEY: "   " }],
+    ["not base64", { TENANT_SECRETS_ENC_KEY: "nope!!!" }],
+    ["16 bytes", { TENANT_SECRETS_ENC_KEY: Buffer.alloc(16).toString("base64") }],
+    ["64 bytes", { TENANT_SECRETS_ENC_KEY: Buffer.alloc(64).toString("base64") }],
+  ])("rejects an encryption key that is %s", (_label, env) => {
+    expect(issuePaths(catchError(() => loadSecretsConfig(env)))).toEqual([
+      "TENANT_SECRETS_ENC_KEY",
+    ]);
+  });
+
+  it("accepts base64 of exactly 32 bytes", () => {
+    expect(loadSecretsConfig({ TENANT_SECRETS_ENC_KEY: KEY_32_BYTES })).toEqual({
+      TENANT_SECRETS_ENC_KEY: KEY_32_BYTES,
+    });
+  });
+
+  it("never echoes the value back in the error (only the variable name)", () => {
+    const error = catchError(() => loadSecretsConfig({ TENANT_SECRETS_ENC_KEY: "super-secret!!" }));
+    expect(JSON.stringify(error)).not.toContain("super-secret!!");
   });
 });
 

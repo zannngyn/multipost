@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
-import { deriveBatchStatus, type PostJob, type PostJobMedia } from "@/core/domain/post-job";
+import { deriveBatchStatus, type PostJob } from "@/core/domain/post-job";
 import type { Product } from "@/core/domain/product";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
 import type { NewPostJob, PostBatchSummary, PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
-import type { ChannelConfig, ChannelConfigRepo } from "@/core/ports/publisher";
+import type {
+  ChannelConfig,
+  ChannelConfigRepo,
+  SignMediaUrlFn,
+} from "@/core/ports/publisher";
 
-import { makeCreatePostBatch } from "./create-post-batch";
+import { makeCreatePostBatch, type PostMediaInput } from "./create-post-batch";
 
 const TENANT = "00000000-0000-0000-0000-000000000001";
 
@@ -35,10 +39,25 @@ const CLOCK: Clock = {
   nowMs: () => Date.parse("2026-08-13T02:00:00.000Z"),
 };
 
-const MEDIA: PostJobMedia[] = [
-  { driveFileId: "d1", fileName: "MGKVX6310-Tím (1).jpg", url: "https://cdn.example/1.jpg" },
-  { driveFileId: "d2", fileName: "MGKVX6310-Tím (2).jpg", url: "https://cdn.example/2.jpg" },
+/** Callers hand over ASSETS; the usecase mints the URL (E3.6). */
+const MEDIA: PostMediaInput[] = [
+  { driveFileId: "d1", fileName: "MGKVX6310-Tím (1).jpg", kind: "image" },
+  { driveFileId: "d2", fileName: "MGKVX6310-Tím (2).jpg", kind: "image" },
 ];
+
+const MEDIA_BASE_URL = "https://mysp.example.com";
+
+/** Deterministic stand-in for the HMAC signer wired in composition. */
+function fakeSigner(nowMs = CLOCK.nowMs()) {
+  const calls: Array<{ tenantId: string; assetId: string; baseUrl: string }> = [];
+  const sign: SignMediaUrlFn = (input) => {
+    calls.push({ tenantId: input.tenantId, assetId: input.assetId, baseUrl: input.baseUrl });
+    const expiresAtMs = nowMs + (input.ttlMs ?? 6 * 60 * 60 * 1000);
+    const path = `/api/media/${input.assetId}?tenant=${input.tenantId}&expires=${expiresAtMs}&sig=deadbeef`;
+    return { url: `${input.baseUrl}${path}`, path, expiresAtMs, signature: "deadbeef" };
+  };
+  return { sign, calls };
+}
 
 function makeProduct(stockRaw = "104", noteRaw = ""): Product {
   return {
@@ -98,6 +117,10 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
     async listJobsByBatch(_tenantId, batchId) {
       return [...store.values()].filter((job) => job.batchId === batchId);
     },
+    async listJobs() {
+      // Not exercised here: the job log has its own test (list-post-jobs).
+      return { items: [], nextCursor: null };
+    },
     async applyTransition(input) {
       const current = store.get(input.postJobId);
       if (!current || current.status !== input.from) return null;
@@ -116,6 +139,8 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
         status: deriveBatchStatus(jobs.map((job) => job.status)),
         total: jobs.length,
         byStatus: { draft: 0, queued: 0, publishing: 0, published: 0, failed: 0, blocked: 0 },
+        startedAt: CLOCK.now(),
+        finishedAt: null,
         jobs,
       };
     },
@@ -148,6 +173,8 @@ function harness(options: {
   channels?: ChannelConfig[];
   repo?: ReturnType<typeof makeRepo>;
   queue?: ReturnType<typeof makeQueue>;
+  signMediaUrl?: SignMediaUrlFn;
+  mediaBaseUrl?: () => string;
 } = {}) {
   const lines: LogLine[] = [];
   const repo = options.repo ?? makeRepo();
@@ -165,6 +192,7 @@ function harness(options: {
     getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 }),
   };
   let counter = 0;
+  const signer = fakeSigner();
   const createPostBatch = makeCreatePostBatch({
     postJobs: repo,
     products,
@@ -173,8 +201,10 @@ function harness(options: {
     clock: CLOCK,
     logger: recordingLogger(lines),
     newId: () => `id-${++counter}`,
+    signMediaUrl: options.signMediaUrl ?? signer.sign,
+    mediaBaseUrl: options.mediaBaseUrl ?? (() => MEDIA_BASE_URL),
   });
-  return { createPostBatch, repo, queue, lines };
+  return { createPostBatch, repo, queue, lines, signer };
 }
 
 const BASE_INPUT = {
@@ -208,14 +238,64 @@ describe("createPostBatch — rejected calls", () => {
     expect(queue.enqueued).toHaveLength(0);
   });
 
-  it("rejects media without a public http(s) URL (Facebook fetches it itself)", async () => {
+  it("rejects a media item without a driveFileId (nothing to sign, now or later)", async () => {
+    const { createPostBatch } = harness();
+    await expect(
+      createPostBatch({ ...BASE_INPUT, media: [{ driveFileId: "  ", fileName: "f.jpg" }] }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { media_index: 0 } });
+  });
+
+  it("rejects the same photo twice in one album", async () => {
+    const { createPostBatch } = harness();
+    await expect(
+      createPostBatch({ ...BASE_INPUT, media: [MEDIA[0], { driveFileId: "d1" }] }),
+    ).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      context: { media_index: 1, drive_file_id: "d1" },
+    });
+  });
+
+  it("rejects a video item — Phase 1 publishes images only", async () => {
     const { createPostBatch } = harness();
     await expect(
       createPostBatch({
         ...BASE_INPUT,
-        media: [{ driveFileId: "d", fileName: "f.jpg", url: "drive://file/d" }],
+        media: [{ driveFileId: "d1", fileName: "clip.mp4", kind: "video" }],
       }),
-    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { media_index: 0 } });
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { kind: "video" } });
+  });
+
+  it("fails the WHOLE batch when the signer is misconfigured (no half album)", async () => {
+    const { createPostBatch, repo, queue } = harness({
+      mediaBaseUrl: () => {
+        throw new AppError("INVALID_INPUT", { message: "MEDIA_PUBLIC_BASE_URL is missing" });
+      },
+    });
+    await expect(createPostBatch(BASE_INPUT)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      context: { reason: "MEDIA_BASE_URL_UNAVAILABLE", hint: "MEDIA_PUBLIC_BASE_URL" },
+    });
+    expect(repo.store.size).toBe(0);
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("fails the batch when signing one photo throws", async () => {
+    const { createPostBatch, repo } = harness({
+      signMediaUrl: (input) => {
+        if (input.assetId === "d2") throw new AppError("INVALID_INPUT", { message: "bad asset id" });
+        return {
+          url: `${input.baseUrl}/api/media/${input.assetId}`,
+          path: `/api/media/${input.assetId}`,
+          expiresAtMs: 1,
+          signature: "x",
+        };
+      },
+    });
+    await expect(createPostBatch(BASE_INPUT)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      context: { reason: "MEDIA_URL_SIGNING_FAILED", media_index: 1, drive_file_id: "d2" },
+    });
+    expect(repo.store.size).toBe(0);
   });
 
   it("rejects a channel without its own caption (brief §7.2)", async () => {
@@ -257,7 +337,8 @@ describe("createPostBatch — stock gate runs first (business rule 1)", () => {
     const result = await createPostBatch(BASE_INPUT);
 
     expect(queue.enqueued).toHaveLength(0);
-    expect(result.batchStatus).toBe("failed");
+    // Gate note #2: every job stopped by the stock rule -> "blocked", not "failed".
+    expect(result.batchStatus).toBe("blocked");
     expect(result.channels.map((entry) => entry.errorCode)).toEqual([
       "OUT_OF_STOCK",
       "OUT_OF_STOCK",
@@ -299,6 +380,32 @@ describe("createPostBatch — fan-out (business rule 6)", () => {
     ]);
     // Product code and colour normalised — the unique key must be stable.
     expect(jobs.every((job) => job.productCode === "MGKVX6310" && job.color === "TÍM")).toBe(true);
+  });
+
+  it("mints one signed URL per photo and stores it on every job (E3.6)", async () => {
+    const { createPostBatch, repo, signer, lines } = harness();
+
+    await createPostBatch(BASE_INPUT);
+
+    // One signature per asset per batch — the same URLs land on both channels.
+    expect(signer.calls).toEqual([
+      { tenantId: TENANT, assetId: "d1", baseUrl: MEDIA_BASE_URL },
+      { tenantId: TENANT, assetId: "d2", baseUrl: MEDIA_BASE_URL },
+    ]);
+    for (const job of repo.store.values()) {
+      expect(job.media).toHaveLength(2);
+      for (const item of job.media) {
+        expect(item.url).toMatch(
+          /^https:\/\/mysp\.example\.com\/api\/media\/[^?]+\?tenant=[^&]+&expires=\d+&sig=\w+$/,
+        );
+        expect(item.driveFileId).not.toBe("");
+      }
+    }
+    // The log carries the expiry, never the signed URL itself.
+    const created = lines.find((line) => line.message === "Post batch created");
+    expect(created?.context).toMatchObject({ media_count: 2 });
+    expect(String(created?.context?.media_url_expires_at)).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(JSON.stringify(created?.context)).not.toContain("sig=");
   });
 
   it("blocks only the unconfigured channel; the other one still goes out", async () => {
@@ -412,8 +519,8 @@ describe("createPostBatch — logging", () => {
     const created = lines.find((line) => line.message === "Post batch created");
     expect(created?.context).toMatchObject({
       duplicate_keys: [
-        "batch-1|MGKVX6310|TÍM|fbpage-a|image_post",
-        "batch-1|MGKVX6310|TÍM|fbpage-b|image_post",
+        `${TENANT}|batch-1|MGKVX6310|TÍM|fbpage-a|image_post`,
+        `${TENANT}|batch-1|MGKVX6310|TÍM|fbpage-b|image_post`,
       ],
       job_count: 2,
       media_count: 2,

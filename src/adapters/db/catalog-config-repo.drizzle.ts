@@ -3,9 +3,11 @@ import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
 import type { CatalogConfigRepo, CatalogSourceConfig } from "@/core/ports/drive-source";
+import type { Logger } from "@/core/ports/infra";
 
 import type { Database } from "./client";
 import { tenantIntegrations } from "./schema";
+import { findPlaintextSecretFields } from "./secret-box";
 import { forTenant } from "./tenant-scope";
 
 /**
@@ -14,6 +16,12 @@ import { forTenant } from "./tenant-scope";
  *
  * The JSONB blob is external-ish data — someone edits it by hand — so it goes
  * through a schema before it is trusted (technical rule 2).
+ *
+ * Encryption: the google row holds NO credential (a folder id, a spreadsheet id
+ * and a tab name are not secrets — access comes from the Service Account key in
+ * env), so nothing here is sealed. What the repo does do is warn when a
+ * secret-looking field shows up unencrypted, which is how a token pasted into
+ * the wrong provider row becomes visible instead of silently stored in clear.
  */
 
 export const GOOGLE_PROVIDER = "google";
@@ -25,7 +33,11 @@ const CatalogConfigSchema = z.object({
 });
 
 export class DrizzleCatalogConfigRepo implements CatalogConfigRepo {
-  constructor(private readonly db: Database) {}
+  /** Logger is optional so existing call sites keep compiling; pass it in prod. */
+  constructor(
+    private readonly db: Database,
+    private readonly logger?: Logger,
+  ) {}
 
   async findCatalogConfig(tenantId: string): Promise<CatalogSourceConfig | null> {
     const scope = forTenant(this.db, tenantId);
@@ -54,6 +66,18 @@ export class DrizzleCatalogConfigRepo implements CatalogConfigRepo {
         message: "Google integration is disabled for this tenant",
         userMessage: "Tích hợp Google của đơn vị này đang bị tắt.",
         context: { tenant_id: scope.tenantId, provider: GOOGLE_PROVIDER },
+      });
+    }
+
+    const plaintextSecrets = findPlaintextSecretFields(row.config);
+    if (plaintextSecrets.length > 0) {
+      // Field NAMES only — a warning that leaks the token defeats its purpose.
+      this.logger?.warn("tenant_integration.config holds unencrypted secret-looking fields", {
+        scope: "secrets",
+        reason: "PLAINTEXT_LEGACY",
+        tenant_id: scope.tenantId,
+        provider: GOOGLE_PROVIDER,
+        fields: plaintextSecrets,
       });
     }
 

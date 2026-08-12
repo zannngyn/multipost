@@ -3,6 +3,7 @@ import { asc, eq, ne, sql } from "drizzle-orm";
 import { AppError } from "@/core/domain/errors";
 import { MEDIA_KINDS, type MediaKind } from "@/core/domain/media-file-name";
 import type { MediaAsset } from "@/core/domain/product";
+import type { MediaAssetLookup } from "@/core/ports/drive-source";
 import type { MediaRepo } from "@/core/ports/product-repo";
 
 import type { Database } from "./client";
@@ -49,8 +50,44 @@ function toModifiedDate(value: string | null): Date | null {
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
-export class DrizzleMediaRepo implements MediaRepo {
+export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
   constructor(private readonly db: Database) {}
+
+  /**
+   * Tenant-scoped resolution of a Drive file id (MediaAssetLookup). This is the
+   * isolation gate of the signed media route: the Service Account can read every
+   * tenant's folder, so a row that does not belong to `tenantId` must read as
+   * "not found" rather than as a Drive permission question.
+   */
+  async findByDriveFileId(tenantId: string, driveFileId: string): Promise<MediaAsset | null> {
+    const scope = forTenant(this.db, tenantId);
+    const fileId = typeof driveFileId === "string" ? driveFileId.trim() : "";
+    if (fileId.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "findByDriveFileId requires a Drive file id",
+        userMessage: "Thiếu mã file ảnh trên Drive.",
+        context: { tenant_id: scope.tenantId },
+      });
+    }
+
+    let rows: MediaAssetRow[];
+    try {
+      rows = await scope.db
+        .select()
+        .from(mediaAssets)
+        .where(scope.where(mediaAssets, eq(mediaAssets.driveFileId, fileId)))
+        .limit(1);
+    } catch (error) {
+      throw AppError.from(error, "DB_ERROR", {
+        tenant_id: scope.tenantId,
+        drive_file_id: fileId,
+        operation: "media.findByDriveFileId",
+      });
+    }
+
+    const row = rows[0];
+    return row ? toDomain(row) : null;
+  }
 
   async listByProductCode(tenantId: string, code: string): Promise<readonly MediaAsset[]> {
     const scope = forTenant(this.db, tenantId);

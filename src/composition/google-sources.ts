@@ -1,7 +1,11 @@
 import { makeGoogleDriveSource } from "@/adapters/google/drive-source.google";
 import { makeGoogleSheetSource } from "@/adapters/google/sheet-source.google";
 import { makeGoogleAuth } from "@/adapters/google/service-account";
-import type { DriveSource, ListDriveFilesInput } from "@/core/ports/drive-source";
+import type {
+  DownloadDriveFileInput,
+  DriveSource,
+  ListDriveFilesInput,
+} from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
 import type { ReadSheetInput, SheetSource } from "@/core/ports/sheet-source";
 
@@ -38,6 +42,7 @@ export function makeLazyGoogleSources(deps: { logger: Logger; env?: EnvRecord })
   return {
     drive: {
       listFiles: (input: ListDriveFilesInput) => build().drive.listFiles(input),
+      download: (input: DownloadDriveFileInput) => build().drive.download(input),
     },
     sheet: {
       readRows: (input: ReadSheetInput) => build().sheet.readRows(input),

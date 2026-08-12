@@ -10,6 +10,8 @@ export const postBatchStatusEnum = pgEnum("post_batch_status", [
   "running",
   "completed",
   "partial",
+  /** Added in migration 0003: every job stopped by a rule, nothing was sent. */
+  "blocked",
   "failed",
 ]);
 

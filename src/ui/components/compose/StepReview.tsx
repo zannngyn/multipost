@@ -1,6 +1,7 @@
 "use client";
 
 import { MediaGrid } from "@/ui/components/compose/MediaGrid";
+import { PublishPanel } from "@/ui/components/compose/PublishPanel";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
@@ -14,9 +15,9 @@ import { COMPOSE_CHANNELS } from "@/ui/schemas/compose.schema";
  * and NEVER stock, price or production notes. The internal stock block lives on
  * step 1 only; do not "helpfully" repeat it here.
  *
- * The final button is disabled on purpose: publishing (E5) is being built in
- * parallel and this sprint must not call it. A visible, explained disabled
- * button is honest; a button that silently does nothing is not.
+ * The publish action itself lives in <PublishPanel> (channel picker + per
+ * channel caption + "Tạo lô đăng"), so this file stays what it says it is: the
+ * preview of the post.
  */
 export function StepReview({ wizard }: { wizard: ComposeWizard }) {
   const { composed } = wizard;
@@ -54,26 +55,7 @@ export function StepReview({ wizard }: { wizard: ComposeWizard }) {
 
       <MediaGrid media={composed.media} />
 
-      <section
-        aria-labelledby="review-publish-heading"
-        className="border-border bg-muted/30 space-y-3 rounded-xl border p-5"
-      >
-        <h3 id="review-publish-heading" className="text-base font-semibold">
-          Đăng bài
-        </h3>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" size="lg" disabled aria-describedby="publish-disabled-reason">
-            Tạo lô đăng
-          </Button>
-          <p id="publish-disabled-reason" className="text-muted-foreground text-sm">
-            E5 đang hoàn thiện — sprint này chưa đăng. Nút sẽ mở khi phần đăng Facebook (hàng đợi
-            bài, khoá chống trùng, giãn cách) hoàn tất.
-          </p>
-        </div>
-        <p className="text-muted-foreground text-xs">
-          Tự động đăng luôn mặc định TẮT: bài chỉ rời khỏi màn hình này khi có người bấm duyệt.
-        </p>
-      </section>
+      <PublishPanel wizard={wizard} />
 
       <div className="flex flex-wrap gap-2 border-t pt-4">
         <Button type="button" variant="outline" onClick={() => wizard.goToStep("caption")}>

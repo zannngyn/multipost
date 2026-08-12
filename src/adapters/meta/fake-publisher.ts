@@ -29,6 +29,8 @@ export interface FakePublishCall {
   readonly pageId: string;
   readonly caption: string;
   readonly mediaCount: number;
+  /** URLs handed over for THIS call — the proof they were re-signed (E3.6). */
+  readonly mediaUrls: readonly string[];
   readonly idempotencyKey: string;
   readonly at: Date;
   readonly outcome: "published" | "error";
@@ -92,6 +94,7 @@ export function makeFakeChannelPublisher(options: {
           pageId: channel.externalId,
           caption: input.caption,
           mediaCount: input.media?.length ?? 0,
+          mediaUrls: (input.media ?? []).map((item) => item.url),
           idempotencyKey: input.idempotencyKey,
           at: new Date(),
           outcome,

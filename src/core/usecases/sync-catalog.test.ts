@@ -95,6 +95,10 @@ function makeHarness(options: {
       if (options.driveError) throw options.driveError;
       return options.files ?? [];
     },
+    // sync-catalog never downloads; the port method exists for the media route.
+    download: async () => {
+      throw new Error("download must not be called by sync-catalog");
+    },
   };
   const sheetSource: SheetSource = {
     readRows: async () => {

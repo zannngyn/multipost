@@ -1,0 +1,100 @@
+import { z } from "zod";
+
+import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
+import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { uuidField } from "@/app/api/_lib/ids";
+import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { getContainer } from "@/composition/container";
+
+/**
+ * E7.2 — the wizard's final action: fan one approved post out to N channels.
+ * Thin by contract (docs/07 §3.3): validate -> usecase -> map errors.
+ *
+ * What the body does NOT carry, on purpose:
+ *  - no image URL. The screen sends the ASSETS (drive file id + name + kind);
+ *    the signed public URL Facebook fetches is minted server-side by
+ *    `createPostBatch`, so a browser can neither forge nor leak one.
+ *  - no stock, no price, no note (business rule 2). The caption text is the
+ *    only free-form field, and it was approved by a human on step 2.
+ *
+ * The stock gate runs INSIDE the usecase before anything is queued (rule 1),
+ * and again in the worker right before the Graph call (rule 3) — this route
+ * adds no business decision of its own.
+ */
+
+const ROUTE = "POST /api/posts/batches";
+
+/** Facebook feed albums take at most 10 attachments (core/domain/post-job). */
+const MAX_ALBUM_MEDIA = 10;
+const MAX_CHANNELS = 50;
+/** A caption longer than this is a paste accident, not a post. */
+const MAX_CAPTION_LENGTH = 20_000;
+
+const MediaItemSchema = z.object({
+  driveFileId: z
+    .string({ error: "Thiếu mã file ảnh." })
+    .trim()
+    .min(1, "Thiếu mã file ảnh.")
+    .max(256, "Mã file ảnh quá dài."),
+  fileName: z.string().trim().max(512, "Tên file quá dài.").optional(),
+  /** Phase 1 publishes images; the usecase refuses a video item with a reason. */
+  kind: z.enum(["image", "video"]).optional(),
+});
+
+const BodySchema = z.object({
+  tenantId: z
+    .string({ error: "Thiếu mã đơn vị (tenant)." })
+    .trim()
+    .min(1, "Thiếu mã đơn vị (tenant)."),
+  /** Same id twice = the same batch (idempotency), never a second fan-out. */
+  batchId: uuidField("Mã lô bài đăng không hợp lệ.").optional(),
+  productCode: z
+    .string({ error: "Thiếu mã sản phẩm." })
+    .trim()
+    .min(1, "Thiếu mã sản phẩm.")
+    .max(64, "Mã sản phẩm quá dài."),
+  color: z.string().trim().max(64, "Tên màu quá dài.").optional(),
+  channelIds: z
+    .array(z.string().trim().min(1, "Mã kênh không hợp lệ."))
+    .min(1, "Chọn ít nhất một kênh để đăng.")
+    .max(MAX_CHANNELS, `Một lô chỉ đăng tối đa ${MAX_CHANNELS} kênh.`),
+  /** One caption per channel — the usecase rejects a missing one by name. */
+  captionByChannel: z.record(
+    z.string().trim().min(1),
+    z.string().trim().min(1, "Caption rỗng.").max(MAX_CAPTION_LENGTH, "Caption quá dài."),
+  ),
+  media: z
+    .array(MediaItemSchema)
+    .min(1, "Bài đăng cần ít nhất một ảnh.")
+    .max(MAX_ALBUM_MEDIA, `Một bài chỉ đăng tối đa ${MAX_ALBUM_MEDIA} ảnh.`),
+});
+
+export const dynamic = "force-dynamic";
+
+export async function POST(request: Request): Promise<Response> {
+  let logger: ErrorLogger = fallbackLogger;
+
+  try {
+    const container = getContainer();
+    logger = container.logger;
+
+    const body = await readJsonBody(request, BodySchema, { route: ROUTE });
+    const color = body.color?.trim() ?? "";
+
+    const result = await container.usecases.createPostBatch({
+      tenantId: body.tenantId,
+      batchId: body.batchId,
+      productCode: body.productCode,
+      color: color.length > 0 ? color : undefined,
+      channelIds: body.channelIds,
+      captionByChannel: body.captionByChannel,
+      media: body.media,
+    });
+
+    // 201: the batch and its per-channel jobs now exist as rows, whatever the
+    // queue did next (a blocked channel is a created job, not a failed call).
+    return Response.json(result, { status: 201 });
+  } catch (error) {
+    return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });
+  }
+}

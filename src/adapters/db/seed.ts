@@ -1,3 +1,5 @@
+import { pathToFileURL } from "node:url";
+
 import { eq } from "drizzle-orm";
 
 import { AppError } from "@/core/domain/errors";
@@ -5,21 +7,25 @@ import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 
 import { makeDbHandle, type Database } from "./client";
 import { tenants, users } from "./schema";
+import {
+  DEMO_TENANT_ID,
+  DEMO_TENANT_NAME,
+  DEMO_USER_EMAIL,
+  DEMO_USER_NAME,
+} from "./seed-constants";
 import { forTenant } from "./tenant-scope";
 
 /**
  * Idempotent development seed: `pnpm db:seed` any number of times converges to
  * the same rows. Run it against a migrated database.
  *
+ * Importing this module must stay harmless — `main()` only runs when the file
+ * IS the process entrypoint. The ids live in `./seed-constants` so nothing has
+ * to import this module just to know the demo tenant id.
+ *
  * Logging goes through a tiny console Logger implemented here on purpose: an
  * adapter must not import another adapter (adapters/logging) — see docs/07 §2.
  */
-
-/** Fixed id so fixtures, tests and manual API calls can hard-code one tenant. */
-export const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001";
-const DEMO_TENANT_NAME = "Demo Tenant";
-const DEMO_USER_EMAIL = "demo@mysp.local";
-const DEMO_USER_NAME = "Demo Operator";
 
 function makeConsoleLogger(bindings: LogBindings = {}): Logger {
   const write = (level: string, message: string, context?: LogContext) => {
@@ -133,9 +139,24 @@ async function main(): Promise<void> {
   }
 }
 
+/**
+ * True only when this file was started directly (`pnpm db:seed`). Importing the
+ * module — for `seed()` or, historically, for an id — must never write rows.
+ */
+function isEntrypoint(): boolean {
+  // No argv[1] at all (REPL, `node -e`) means "not the entrypoint".
+  const argv1 = process.argv[1];
+  if (typeof argv1 !== "string" || argv1.length === 0) return false;
+  return import.meta.url === pathToFileURL(argv1).href;
+}
+
 // Executed by `pnpm db:seed`. Any failure exits non-zero with a structured log.
-main().catch((error: unknown) => {
-  const wrapped = AppError.from(error, "INTERNAL", { operation: "seed" });
-  console.error(JSON.stringify({ level: "fatal", message: "Seed crashed", err: wrapped.toLogObject() }));
-  process.exitCode = 1;
-});
+if (isEntrypoint()) {
+  main().catch((error: unknown) => {
+    const wrapped = AppError.from(error, "INTERNAL", { operation: "seed" });
+    console.error(
+      JSON.stringify({ level: "fatal", message: "Seed crashed", err: wrapped.toLogObject() }),
+    );
+    process.exitCode = 1;
+  });
+}

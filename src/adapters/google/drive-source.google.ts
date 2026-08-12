@@ -2,7 +2,13 @@ import { google } from "googleapis";
 import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
-import type { DriveFile, DriveSource, ListDriveFilesInput } from "@/core/ports/drive-source";
+import type {
+  DownloadDriveFileInput,
+  DriveFile,
+  DriveFileContent,
+  DriveSource,
+  ListDriveFilesInput,
+} from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
 
 import type { GoogleAuthClient } from "./service-account";
@@ -137,7 +143,118 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
 
       return files;
     },
+
+    async download(input: DownloadDriveFileInput): Promise<DriveFileContent> {
+      // --- Edge cases first --------------------------------------------------
+      const fileId = typeof input?.fileId === "string" ? input.fileId.trim() : "";
+      const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+      if (fileId.length === 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "download requires a Drive file id",
+          userMessage: "Thiếu mã file trên Drive.",
+          context: { tenant_id: tenantId || null },
+        });
+      }
+
+      let payload: unknown;
+      let headerMime: string | null = null;
+      try {
+        const response = await drive.files.get(
+          { fileId, alt: "media", supportsAllDrives: true },
+          { responseType: "arraybuffer" },
+        );
+        payload = response.data;
+        headerMime = readHeaderMime(response.headers);
+      } catch (error) {
+        const status = httpStatusOf(error);
+        // 404 (deleted) and 403 (un-shared) are the same story for the operator:
+        // this file is not reachable any more — that is not an outage.
+        if (status === 404 || status === 403) {
+          throw AppError.from(error, "MEDIA_NOT_FOUND", {
+            tenant_id: tenantId || null,
+            drive_file_id: fileId,
+            operation: "drive.files.get",
+            http_status: status,
+          });
+        }
+        throw AppError.from(error, "DRIVE_ERROR", {
+          tenant_id: tenantId || null,
+          drive_file_id: fileId,
+          operation: "drive.files.get",
+          http_status: status ?? null,
+        });
+      }
+
+      const bytes = toBinary(payload);
+      if (!bytes) {
+        throw new AppError("DRIVE_ERROR", {
+          message: "Drive returned a body that is not binary content",
+          userMessage: "Không tải được nội dung file từ Drive. Vui lòng thử lại.",
+          context: {
+            tenant_id: tenantId || null,
+            drive_file_id: fileId,
+            body_type: typeof payload,
+          },
+        });
+      }
+
+      const maxBytes =
+        typeof input?.maxBytes === "number" && input.maxBytes > 0 ? input.maxBytes : null;
+      if (maxBytes !== null && bytes.length > maxBytes) {
+        throw new AppError("DRIVE_ERROR", {
+          message: "Drive file is larger than the caller's byte budget",
+          userMessage: "File trên Drive quá lớn để phục vụ trực tiếp.",
+          context: {
+            tenant_id: tenantId || null,
+            drive_file_id: fileId,
+            size_bytes: bytes.length,
+            max_bytes: maxBytes,
+            reason: "CONTENT_TOO_LARGE",
+          },
+        });
+      }
+
+      deps.logger.child({ tenant_id: tenantId }).debug("Drive file downloaded", {
+        drive_file_id: fileId,
+        bytes: bytes.length,
+        mime_type: headerMime,
+      });
+
+      return { fileId, bytes, mimeType: headerMime, sizeBytes: bytes.length };
+    },
   };
+}
+
+/** googleapis hands back ArrayBuffer/Buffer depending on the transport. */
+function toBinary(payload: unknown): Uint8Array | null {
+  if (payload instanceof Uint8Array) return payload;
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+  if (ArrayBuffer.isView(payload)) {
+    return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+  }
+  return null;
+}
+
+function readHeaderMime(headers: unknown): string | null {
+  if (!headers || typeof headers !== "object") return null;
+  const raw =
+    typeof (headers as Headers).get === "function"
+      ? (headers as Headers).get("content-type")
+      : (headers as Record<string, unknown>)["content-type"];
+  if (typeof raw !== "string") return null;
+  const mime = raw.split(";")[0]?.trim().toLowerCase() ?? "";
+  return mime.length > 0 ? mime : null;
+}
+
+/** Status of a googleapis error, whichever shape this version throws. */
+function httpStatusOf(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const candidate = error as { code?: unknown; status?: unknown; response?: { status?: unknown } };
+  for (const value of [candidate.status, candidate.code, candidate.response?.status]) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && /^\d{3}$/.test(value)) return Number.parseInt(value, 10);
+  }
+  return null;
 }
 
 function toBytes(size: string | null | undefined): number | null {

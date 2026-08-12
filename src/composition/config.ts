@@ -124,6 +124,53 @@ export const MetaConfigSchema = z.object({
 export type MetaConfig = z.infer<typeof MetaConfigSchema>;
 
 /**
+ * Cryptographic material (E3/E5 hardening). Its own group, loaded on demand, so
+ * a process that neither serves media nor reads a channel token still boots —
+ * and a missing key fails at the call site naming the variable, not at startup.
+ *
+ * MEDIA_SIGNING_SECRET   — HMAC key of the signed media URL Facebook fetches
+ *                          (adapters/crypto/media-signer). Rotating it
+ *                          invalidates links already handed to Meta.
+ * TENANT_SECRETS_ENC_KEY — AES-256-GCM key sealing the credentials inside
+ *                          tenant_integration.config (adapters/db/secret-box).
+ *                          Rotating it makes every sealed value unreadable, so
+ *                          re-save the configs first.
+ */
+export const MediaConfigSchema = z.object({
+  MEDIA_SIGNING_SECRET: nonEmpty("MEDIA_SIGNING_SECRET").min(
+    32,
+    "MEDIA_SIGNING_SECRET must be at least 32 chars",
+  ),
+  /** Public origin Meta fetches signed media URLs from (e.g. https://mysp.example.com). */
+  MEDIA_PUBLIC_BASE_URL: nonEmpty("MEDIA_PUBLIC_BASE_URL").refine(
+    (value) => value.startsWith("https://") || value.startsWith("http://"),
+    "MEDIA_PUBLIC_BASE_URL must be an http(s) origin",
+  ),
+});
+
+export type MediaConfig = z.infer<typeof MediaConfigSchema>;
+
+export const SecretsConfigSchema = z.object({
+  /** base64 of exactly 32 random bytes: `openssl rand -base64 32`. */
+  TENANT_SECRETS_ENC_KEY: nonEmpty("TENANT_SECRETS_ENC_KEY").refine(
+    (value) => decodesTo32Bytes(value),
+    "TENANT_SECRETS_ENC_KEY must be base64 of exactly 32 bytes",
+  ),
+});
+
+export type SecretsConfig = z.infer<typeof SecretsConfigSchema>;
+
+/**
+ * Length check without importing node:crypto: base64 of 32 bytes is 44 chars
+ * ending in one '='. The box re-validates by decoding — this only turns an
+ * obvious typo into a message naming the variable.
+ */
+function decodesTo32Bytes(value: string): boolean {
+  const normalised = value.trim().replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
+  return /^[A-Za-z0-9+/]{43}$/.test(normalised);
+}
+
+/**
  * One throw listing every bad key — a fresh deploy reports all gaps at once
  * instead of one restart per missing variable.
  */
@@ -161,4 +208,12 @@ export function loadAiConfig(env: EnvRecord = process.env): AiConfig {
 
 export function loadMetaConfig(env: EnvRecord = process.env): MetaConfig {
   return parseEnv(MetaConfigSchema, env, "meta");
+}
+
+export function loadMediaConfig(env: EnvRecord = process.env): MediaConfig {
+  return parseEnv(MediaConfigSchema, env, "media");
+}
+
+export function loadSecretsConfig(env: EnvRecord = process.env): SecretsConfig {
+  return parseEnv(SecretsConfigSchema, env, "secrets");
 }

@@ -5,6 +5,7 @@ import {
   postJobDuplicateKey,
   transitionPostJob,
   type PostJob,
+  type PostJobMedia,
   type PostJobStatus,
   type TransitionMeta,
 } from "@/core/domain/post-job";
@@ -13,7 +14,11 @@ import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
-import type { ChannelConfigRepo, ChannelPublisher } from "@/core/ports/publisher";
+import type {
+  ChannelConfigRepo,
+  ChannelPublisher,
+  SignMediaUrlFn,
+} from "@/core/ports/publisher";
 
 /**
  * E7.4 — publish ONE post job on ONE channel. Called by the worker (queued /
@@ -84,6 +89,16 @@ export interface PublishPostDeps {
   queue: JobQueue;
   clock: Clock;
   logger: Logger;
+  /**
+   * Re-mints the media URLs immediately before the API call. The link stored on
+   * the job was signed when the batch was built; a job that waited for spacing
+   * and two backed-off retries can outlive it (default TTL 6h), and Meta fetches
+   * the photo AFTER we hand over the URL.
+   */
+  signMediaUrl: SignMediaUrlFn;
+  /** Lazy: a missing MEDIA_PUBLIC_BASE_URL blocks the job, it never crashes boot. */
+  mediaBaseUrl: () => string;
+  mediaUrlTtlMs?: number;
 }
 
 export function makePublishPost(deps: PublishPostDeps) {
@@ -262,6 +277,53 @@ export function makePublishPost(deps: PublishPostDeps) {
       });
     }
 
+    // --- 6a. Fresh media URLs (E3.6) ----------------------------------------
+    // Signed links are short-lived on purpose; the ones minted when the batch
+    // was created may already be dead by the time this attempt runs.
+    let media: readonly PostJobMedia[];
+    try {
+      const resigned = resignMedia(deps, claimed);
+      media = resigned.media;
+      log.debug("Media URLs re-signed for this attempt", {
+        media_count: media.length,
+        // Expiry only: the URL itself carries a MAC.
+        media_url_expires_at: resigned.expiresAtMs
+          ? new Date(resigned.expiresAtMs).toISOString()
+          : null,
+        attempt,
+      });
+    } catch (error) {
+      const appError = AppError.from(error, "INVALID_INPUT", {
+        tenant_id: tenantId,
+        job_id: claimed.id,
+        channel: claimed.channelId,
+        reason: "MEDIA_URL_SIGNING_FAILED",
+      });
+      const userMessage =
+        "Không tạo được liên kết ảnh công khai cho bài này — kiểm tra cấu hình MEDIA_PUBLIC_BASE_URL / khoá ký liên kết.";
+      // Blocked, not failed: a retry cannot fix a configuration problem, and the
+      // platform was never called.
+      const blocked = await block(
+        deps,
+        claimed,
+        appError.code,
+        userMessage,
+        "MEDIA_URL_SIGNING_FAILED",
+      );
+      log.error("Publish blocked: could not sign the media URLs", {
+        err: appError,
+        outcome: "blocked",
+        error_code: appError.code,
+        attempt,
+        alert: "OPERATOR_ATTENTION",
+      });
+      return result(blocked ?? claimed, "blocked", {
+        deferredMs: null,
+        errorCode: appError.code,
+        userMessage,
+      });
+    }
+
     // --- 6. Publish ---------------------------------------------------------
     const startedAt = deps.clock.nowMs();
     let published: { postId: string; url: string | null };
@@ -270,7 +332,7 @@ export function makePublishPost(deps: PublishPostDeps) {
         tenantId,
         channel,
         caption: claimed.captionText,
-        media: claimed.media,
+        media,
         idempotencyKey: postJobDuplicateKey(claimed),
       });
     } catch (error) {
@@ -325,6 +387,46 @@ export function makePublishPost(deps: PublishPostDeps) {
 export type PublishPost = ReturnType<typeof makePublishPost>;
 
 // --- helpers ----------------------------------------------------------------
+
+/**
+ * Re-mints every media URL of the job. The stored URL is kept on the row as the
+ * record of what was built; what goes to the platform is always freshly signed.
+ *
+ * A job created before signed URLs existed (no driveFileId) keeps its stored
+ * URL — with a warning, so those rows are visible instead of silently failing.
+ */
+function resignMedia(
+  deps: PublishPostDeps,
+  job: PostJob,
+): { media: readonly PostJobMedia[]; expiresAtMs: number | null } {
+  if (!Array.isArray(job.media) || job.media.length === 0) {
+    return { media: job.media, expiresAtMs: null };
+  }
+
+  const baseUrl = deps.mediaBaseUrl();
+  let earliest = Number.POSITIVE_INFINITY;
+  const media = job.media.map((item) => {
+    const assetId = typeof item?.driveFileId === "string" ? item.driveFileId.trim() : "";
+    if (assetId.length === 0) {
+      deps.logger.warn("Media item without a drive file id — publishing the stored URL as is", {
+        tenant_id: job.tenantId,
+        job_id: job.id,
+        file_name: item?.fileName ?? null,
+        reason: "LEGACY_MEDIA_WITHOUT_ASSET_ID",
+      });
+      return item;
+    }
+    const signed = deps.signMediaUrl({
+      tenantId: job.tenantId,
+      assetId,
+      baseUrl,
+      ttlMs: deps.mediaUrlTtlMs,
+    });
+    earliest = Math.min(earliest, signed.expiresAtMs);
+    return { driveFileId: assetId, fileName: item.fileName, url: signed.url };
+  });
+  return { media, expiresAtMs: Number.isFinite(earliest) ? earliest : null };
+}
 
 /**
  * Publish failed. Three outcomes, never a swallowed error:

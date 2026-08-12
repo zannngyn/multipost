@@ -6,7 +6,27 @@
  * TikTok (Phase 2) implements the same ChannelPublisher; nothing in core changes.
  */
 
+import type { ChannelGroup } from "@/core/domain/channel-group";
+import type { SignedMediaUrl } from "@/core/domain/media-url";
 import type { PostJobMedia } from "@/core/domain/post-job";
+
+/**
+ * Mints the public, time-limited URL Graph API fetches for one media asset
+ * (E3.6). Declared as a port because the MAC lives in adapters/crypto: core
+ * builds posts, it never touches a signing secret.
+ *
+ * Both sides of the publish flow use it — create-post-batch when the job is
+ * built, publish-post again right before the API call, because a job may sit in
+ * the queue (spacing + retries) longer than a link lives.
+ */
+export type SignMediaUrlFn = (input: {
+  readonly tenantId: string;
+  /** Drive file id = `PostJobMedia.driveFileId`. */
+  readonly assetId: string;
+  /** Public origin Meta will call, e.g. `https://mysp.example.com`. */
+  readonly baseUrl: string;
+  readonly ttlMs?: number;
+}) => SignedMediaUrl;
 
 export const CHANNEL_PLATFORMS = ["facebook", "tiktok"] as const;
 export type ChannelPlatform = (typeof CHANNEL_PLATFORMS)[number];
@@ -67,6 +87,38 @@ export interface ChannelConfigRepo {
   listChannels(tenantId: string): Promise<readonly ChannelConfig[]>;
   /** Falls back to DEFAULT_PUBLISH_SETTINGS when the tenant set nothing. */
   getPublishSettings(tenantId: string): Promise<PublishSettings>;
+}
+
+/**
+ * Saved channel presets (E7.6). Separate from ChannelConfigRepo on purpose: the
+ * channels themselves live in `tenant_integration` (hand-edited config, secrets
+ * inside), the groups are plain operator data in their own table.
+ *
+ * Contract for every implementer:
+ * - tenant-scoped; a bad tenant id throws AppError('INVALID_INPUT');
+ * - a duplicate name for the same tenant throws AppError('INVALID_INPUT') with
+ *   `context.reason = 'CHANNEL_GROUP_NAME_TAKEN'` (the unique index is the
+ *   authority, not a pre-read);
+ * - driver failures surface as AppError('DB_ERROR').
+ */
+export interface ChannelGroupRepo {
+  listGroups(tenantId: string): Promise<readonly ChannelGroup[]>;
+  findGroupById(tenantId: string, groupId: string): Promise<ChannelGroup | null>;
+  createGroup(input: {
+    readonly id: string;
+    readonly tenantId: string;
+    readonly name: string;
+    readonly channelIds: readonly string[];
+  }): Promise<ChannelGroup>;
+  /** Null when the group does not exist for this tenant (never a silent insert). */
+  updateGroup(input: {
+    readonly tenantId: string;
+    readonly groupId: string;
+    readonly name: string;
+    readonly channelIds: readonly string[];
+  }): Promise<ChannelGroup | null>;
+  /** False when nothing was deleted — the caller reports "not found". */
+  deleteGroup(tenantId: string, groupId: string): Promise<boolean>;
 }
 
 export interface PublishImagePostInput {

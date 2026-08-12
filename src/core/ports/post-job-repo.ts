@@ -66,8 +66,51 @@ export interface PostBatchSummary {
   readonly status: PostBatchStatus;
   readonly total: number;
   readonly byStatus: Readonly<Record<PostJobStatus, number>>;
+  /** When the batch was created — the "bắt đầu" column of brief §6. */
+  readonly startedAt: Date;
+  /**
+   * When the LAST job settled (published/failed/blocked). Null while anything is
+   * still draft/queued/publishing — an unfinished run must never show an end
+   * time.
+   */
+  readonly finishedAt: Date | null;
   /** Per-channel result table of brief §3/§6 (link included when published). */
   readonly jobs: readonly PostJob[];
+}
+
+/** A post job plus its row timestamps — the job log of E11.1 needs both. */
+export interface PostJobListItem extends PostJob {
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/**
+ * Keyset cursor: the (createdAt, id) of the LAST item already returned. Opaque
+ * to the caller — core encodes/decodes it (core/usecases/list-post-jobs.ts), the
+ * adapter only compares it. Keyset, not OFFSET: the job list changes while an
+ * operator pages through it, and OFFSET would skip or repeat rows.
+ */
+export interface PostJobCursor {
+  readonly createdAt: Date;
+  readonly id: string;
+}
+
+export interface ListPostJobsQuery {
+  readonly tenantId: string;
+  readonly batchId?: string;
+  readonly status?: PostJobStatus;
+  readonly channelId?: string;
+  readonly productCode?: string;
+  /** Rows to read; the usecase caps it. */
+  readonly limit: number;
+  readonly cursor?: PostJobCursor;
+}
+
+export interface PostJobPage {
+  /** Newest first (createdAt DESC, id DESC). */
+  readonly items: readonly PostJobListItem[];
+  /** Cursor of the last item when another page may exist, else null. */
+  readonly nextCursor: PostJobCursor | null;
 }
 
 export interface PostJobRepo {
@@ -80,6 +123,12 @@ export interface PostJobRepo {
   findJobById(tenantId: string, postJobId: string): Promise<PostJob | null>;
 
   listJobsByBatch(tenantId: string, batchId: string): Promise<readonly PostJob[]>;
+
+  /**
+   * E11.1 job log. Filters are AND-ed; `limit` is read as given (the usecase
+   * already capped it) and the page is ordered newest first.
+   */
+  listJobs(query: ListPostJobsQuery): Promise<PostJobPage>;
 
   /** Returns the updated job, or null when another worker won the race. */
   applyTransition(input: ApplyTransitionInput): Promise<PostJob | null>;

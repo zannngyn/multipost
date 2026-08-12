@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
+import type { Logger } from "@/core/ports/infra";
 import {
   DEFAULT_PUBLISH_SETTINGS,
   type ChannelConfig,
@@ -11,6 +12,12 @@ import {
 
 import type { Database } from "./client";
 import { tenantIntegrations } from "./schema";
+import {
+  findPlaintextSecretFields,
+  openConfigSecrets,
+  sealConfigSecrets,
+  type SecretBox,
+} from "./secret-box";
 import { forTenant } from "./tenant-scope";
 
 /**
@@ -22,11 +29,13 @@ import { forTenant } from "./tenant-scope";
  * trusted (technical rule 2), and a malformed row raises
  * CHANNEL_NOT_CONFIGURED instead of publishing with half a configuration.
  *
- * SECURITY NOTE — carried to the orchestrator: `accessToken` sits in this JSONB
- * because there is no secret store yet, which contradicts the comment on
- * schema/tenant-integration.ts ("do NOT put raw tokens here"). It is never
- * logged or returned by this repo beyond the ChannelConfig the publisher needs.
- * E5.1 (token refresh) must move it to an encrypted column/vault.
+ * SECRETS: `accessToken` lives inside this JSONB, but SEALED — every read runs
+ * `openConfigSecrets` (adapters/db/secret-box), so what sits in the database is
+ * `enc:v1:<iv>:<tag>:<ciphertext>` and what the publisher receives is the token.
+ * Rows written before the box (plaintext) still open, with a warning naming the
+ * FIELD PATHS only — that is how the remaining ones stay visible instead of
+ * silently permanent. The opened token is never logged and never enters an
+ * AppError context (see redactToken in core/ports/publisher).
  */
 
 export const META_PROVIDER = "meta";
@@ -53,8 +62,26 @@ const MetaConfigSchema = z.object({
 
 type MetaConfig = z.infer<typeof MetaConfigSchema>;
 
+/**
+ * Seals the credentials of a meta config blob before it is written. There is no
+ * write path in this repo yet (E5.1 owns "connect a channel"), but seeding and
+ * scripts must not invent their own envelope: one seal helper, one contract.
+ */
+export function sealMetaConfig<T>(config: T, box: SecretBox): T {
+  return sealConfigSecrets(config, box);
+}
+
+export interface ChannelConfigRepoDeps {
+  /** Same box (same key + envelope) as every other repo touching this blob. */
+  box: SecretBox;
+  logger: Logger;
+}
+
 export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly deps: ChannelConfigRepoDeps,
+  ) {}
 
   async findChannel(tenantId: string, channelId: string): Promise<ChannelConfig | null> {
     const wanted = typeof channelId === "string" ? channelId.trim() : "";
@@ -112,8 +139,42 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
     }
   }
 
+  /**
+   * Opens the sealed fields, then validates. Order matters: the schema demands a
+   * non-empty accessToken, and an envelope only becomes a token after opening.
+   */
   private parse(tenantId: string, raw: unknown): MetaConfig {
-    const parsed = MetaConfigSchema.safeParse(raw ?? {});
+    const plaintextSecrets = findPlaintextSecretFields(raw);
+    if (plaintextSecrets.length > 0) {
+      // Field NAMES only — a warning that leaks the token defeats its purpose.
+      this.deps.logger.warn("tenant_integration.config (meta) holds unencrypted secrets", {
+        scope: "secrets",
+        reason: "PLAINTEXT_LEGACY",
+        tenant_id: tenantId,
+        provider: META_PROVIDER,
+        fields: plaintextSecrets,
+      });
+    }
+
+    let opened: unknown;
+    try {
+      opened = openConfigSecrets(raw ?? {}, this.deps.box, {
+        tenantId,
+        provider: META_PROVIDER,
+      });
+    } catch (error) {
+      // Wrong key or tampered ciphertext. Publishing with a half-read config is
+      // how a post lands on the wrong Page — refuse instead.
+      throw new AppError("CHANNEL_NOT_CONFIGURED", {
+        message: "Could not decrypt the credentials in tenant_integration.config (meta)",
+        userMessage:
+          "Không giải mã được token của kênh Facebook — kiểm tra khoá mã hoá của hệ thống.",
+        context: { tenant_id: tenantId, provider: META_PROVIDER, reason: "SECRET_UNREADABLE" },
+        cause: error,
+      });
+    }
+
+    const parsed = MetaConfigSchema.safeParse(opened);
     if (parsed.success) return parsed.data;
 
     // Never fall back to defaults for channels: publishing with a half-read

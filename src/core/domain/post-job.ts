@@ -69,6 +69,16 @@ const ALLOWED_TRANSITIONS: Readonly<Record<PostJobStatus, readonly PostJobStatus
 /** The only status a job never leaves. */
 export const FINAL_POST_JOB_STATUSES: readonly PostJobStatus[] = ["published"];
 
+/**
+ * Statuses where nothing is running any more: the queue is done with the job and
+ * only an operator (retry) can move it. Used to decide whether a BATCH is over.
+ */
+export const SETTLED_POST_JOB_STATUSES: readonly PostJobStatus[] = [
+  "published",
+  "failed",
+  "blocked",
+];
+
 export interface PostJobMedia {
   readonly driveFileId: string;
   readonly fileName: string;
@@ -126,6 +136,17 @@ export function isPostFormat(value: unknown): value is PostFormat {
 
 export function isFinalPostJobStatus(status: PostJobStatus): boolean {
   return FINAL_POST_JOB_STATUSES.includes(status);
+}
+
+export function isSettledPostJobStatus(status: PostJobStatus): boolean {
+  return SETTLED_POST_JOB_STATUSES.includes(status);
+}
+
+/** Statuses an operator may re-queue by hand (E11.1 "chạy lại"). */
+export const RETRYABLE_POST_JOB_STATUSES: readonly PostJobStatus[] = ["failed", "blocked"];
+
+export function isRetryablePostJobStatus(status: PostJobStatus): boolean {
+  return RETRYABLE_POST_JOB_STATUSES.includes(status);
 }
 
 export function canTransitionPostJob(from: PostJobStatus, to: PostJobStatus): boolean {
@@ -235,6 +256,7 @@ export function transitionPostJob(
 // --- Anti-duplicate key (business rule 4) -----------------------------------
 
 export interface PostJobKeyParts {
+  readonly tenantId: string;
   readonly batchId: string;
   readonly productCode: string;
   readonly color: string;
@@ -244,11 +266,23 @@ export interface PostJobKeyParts {
 
 /**
  * The tuple the DB enforces as UNIQUE (docs/02 §4). Returned as a string only
- * for logs and for the queue id below — the LOCK is the unique index, never
- * this string (a broker id is best-effort, see core/ports/job-queue.ts).
+ * for logs and for the publisher's tracing key — the LOCK is the unique index,
+ * never this string (a broker id is best-effort, see core/ports/job-queue.ts).
+ *
+ * TENANT ID IS PART OF THE KEY (gate note #3, decided here): the DB constraint
+ * is (tenant_id, batch_id, product_code, color, channel_id, format), so leaving
+ * the tenant out made the logged/traced key a DIFFERENT tuple from the one that
+ * actually protects us — a reviewer reading a log line could not tell whether
+ * two identical keys were the same row. Batch ids are UUIDs, so collisions
+ * across tenants were not a real risk, but "the key in the log == the key in the
+ * index" is worth more than the four characters saved.
+ *
+ * Cheap because nothing derives an identifier from this string: queue ids come
+ * from `postJobQueueId` (post job UUID), and the publisher only traces it.
  */
 export function postJobDuplicateKey(parts: PostJobKeyParts): string {
   return [
+    parts.tenantId.trim(),
     parts.batchId,
     parts.productCode.trim().toUpperCase(),
     parts.color.trim().toUpperCase(),
@@ -304,6 +338,8 @@ export const POST_BATCH_STATUSES = [
   "running",
   "completed",
   "partial",
+  /** Every job was stopped by a RULE; the platform was never called. */
+  "blocked",
   "failed",
 ] as const;
 export type PostBatchStatus = (typeof POST_BATCH_STATUSES)[number];
@@ -312,12 +348,20 @@ export type PostBatchStatus = (typeof POST_BATCH_STATUSES)[number];
  * Batch status derived from its jobs — never written independently, so it can
  * never disagree with them.
  *
- *   no job yet / all draft   -> pending
- *   any job still moving     -> running
- *   all published            -> completed
- *   some published, some not -> partial   (rule 6: one channel failing is not a
- *                                          batch failure)
- *   none published           -> failed
+ *   no job yet / all draft      -> pending
+ *   any job still moving        -> running
+ *   all published               -> completed
+ *   some published, some not    -> partial   (rule 6: one channel failing is not
+ *                                             a batch failure)
+ *   none published, all blocked -> blocked   (gate note #2: a sold-out code or a
+ *                                             missing channel is NOT a failure of
+ *                                             the tool — nothing was even sent.
+ *                                             The operator screen must say
+ *                                             "chặn" so the fix is obvious.)
+ *   none published, any failed  -> failed    (we did call the platform and lost;
+ *                                             mixed blocked+failed stays `failed`
+ *                                             because a real failure happened and
+ *                                             must not be softened away.)
  */
 export function deriveBatchStatus(statuses: readonly PostJobStatus[]): PostBatchStatus {
   if (!Array.isArray(statuses) || statuses.length === 0) return "pending";
@@ -328,7 +372,44 @@ export function deriveBatchStatus(statuses: readonly PostJobStatus[]): PostBatch
   const published = statuses.filter((status) => status === "published").length;
   if (published === statuses.length) return "completed";
   if (published > 0) return "partial";
+  if (statuses.every((status) => status === "blocked")) return "blocked";
   return "failed";
+}
+
+/**
+ * "Vì sao bài này không lên?" in one Vietnamese sentence, for the batch summary
+ * (E7.5) and the job log (E11.1). Pure: it only reads the job row, so the same
+ * text appears in the API, the UI and the smoke output.
+ *
+ * A stored `lastErrorMessage` always wins — it was written by whoever knew the
+ * real cause (stock gate, Graph error map, queue failure).
+ */
+export function postJobOperatorMessage(
+  job: Pick<PostJob, "status" | "lastErrorCode" | "lastErrorMessage" | "publishedPostId" | "attemptCount">,
+): string {
+  const stored = normaliseString(job.lastErrorMessage);
+  switch (job.status) {
+    case "published":
+      return `Đã đăng lên kênh (mã bài ${job.publishedPostId ?? "?"})`;
+    case "draft":
+      return "Bài đã soạn nhưng chưa được đưa vào hàng đợi";
+    case "queued":
+      return "Đang chờ trong hàng đợi để đăng";
+    case "publishing":
+      return `Đang gửi lên kênh (lần thử ${job.attemptCount})`;
+    case "blocked":
+      return (
+        stored ??
+        `Bài bị chặn trước khi gửi lên kênh (mã lỗi ${job.lastErrorCode ?? "không rõ"})`
+      );
+    case "failed":
+      return (
+        stored ??
+        `Đăng thất bại sau ${job.attemptCount} lần thử (mã lỗi ${job.lastErrorCode ?? "không rõ"})`
+      );
+    default:
+      return "Trạng thái bài đăng không xác định — cần kiểm tra thủ công";
+  }
 }
 
 function normaliseString(value: string | null | undefined): string | null {
