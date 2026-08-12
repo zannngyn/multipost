@@ -1,0 +1,99 @@
+# Single-VPS deployment (docs/07 section 1). Values come from .env — see .env.example.
+# Start order is enforced with service_healthy, not with sleeps:
+#   postgres/redis healthy -> web + worker -> caddy.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mysp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mysp}
+      POSTGRES_DB: ${POSTGRES_DB:-mysp}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mysp} -d ${POSTGRES_DB:-mysp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF on: queued jobs must survive a Redis restart.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      target: web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_PRETTY: "false"
+      # Service names, not localhost: containers talk over the compose network.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mysp}:${POSTGRES_PASSWORD:-mysp}@postgres:5432/${POSTGRES_DB:-mysp}
+      REDIS_URL: redis://redis:6379
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      AUTH_ALLOWED_DOMAINS: ${AUTH_ALLOWED_DOMAINS:-example.com}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+    expose:
+      - "3000"
+    ports:
+      # Direct access for debugging; Caddy is the normal entry point.
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_PRETTY: "false"
+      REDIS_URL: redis://redis:6379
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      WORKER_HEARTBEAT_FILE: /tmp/mysp-worker-heartbeat
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      # Host 8080 on purpose: never squat on the developer's 80/443.
+      # On the VPS use "80:80" and "443:443" together with a real hostname
+      # in deploy/caddy/Caddyfile.
+      - "${CADDY_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
+  caddyconfig:

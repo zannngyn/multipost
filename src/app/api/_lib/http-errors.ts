@@ -18,6 +18,9 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   UNAUTHORIZED: 401,
   TENANT_NOT_FOUND: 404,
   INTERNAL: 500,
+  DB_ERROR: 503,
+  QUEUE_ERROR: 503,
+  JOB_PAYLOAD_INVALID: 400,
 };
 
 /** Structural logger type — the app layer must not import ports or adapters. */

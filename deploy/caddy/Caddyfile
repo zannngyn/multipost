@@ -1,0 +1,21 @@
+# Dev/staging reverse proxy. Listens on :80 INSIDE the container; compose maps it
+# to 8080 on the host so nothing fights the developer's ports 80/443.
+#
+# On the VPS: replace `:80` with the real hostname (e.g. `dangbai.example.com`)
+# and map 80:80 + 443:443 in docker-compose.yml — Caddy then gets a certificate
+# automatically. Keep the /api/health passthrough for uptime checks.
+:80 {
+	encode zstd gzip
+
+	# Structured access logs, same spirit as pino output.
+	log {
+		output stdout
+		format json
+	}
+
+	reverse_proxy web:3000 {
+		health_uri /api/health
+		health_interval 30s
+		health_timeout 5s
+	}
+}

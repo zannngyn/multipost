@@ -1,23 +1,26 @@
 import { makeSystemClock } from "@/adapters/clock/system-clock";
+import { closeDbHandle, getDbHandle, type Database } from "@/adapters/db/client";
+import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import type { Clock, Logger } from "@/core/ports/infra";
+import { makeHealthcheckTenant, type HealthcheckTenant } from "@/core/usecases/healthcheck-tenant";
 
 import { loadConfig, type Config } from "./config";
 
 /**
  * Composition root — the ONLY place that knows both core and adapters.
- * DB, queue and Google adapters get wired here as their epics land (E2/E5).
+ * Queue and Google adapters get wired here as their epics land (E2/E5).
  */
 
 export interface Infra {
   config: Config;
   logger: Logger;
   clock: Clock;
+  db: Database;
 }
 
 export interface Usecases {
-  // Filled by feature epics, e.g. composePost: makeComposePost(deps).
-  readonly _placeholder?: never;
+  healthcheckTenant: HealthcheckTenant;
 }
 
 export interface Container extends Infra {
@@ -30,11 +33,19 @@ export function makeInfra(config: Config): Infra {
     pretty: config.LOG_PRETTY,
     base: { service: "mysp", env: config.NODE_ENV },
   });
-  return { config, logger, clock: makeSystemClock() };
+  const { db } = getDbHandle({ url: config.DATABASE_URL });
+  return { config, logger, clock: makeSystemClock(), db };
 }
 
-export function makeUsecases(_deps: Infra): Usecases {
-  return {};
+export function makeUsecases(deps: Infra): Usecases {
+  const tenants = new DrizzleTenantRepo(deps.db);
+  return {
+    healthcheckTenant: makeHealthcheckTenant({
+      tenants,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+  };
 }
 
 export function makeContainer(config: Config = loadConfig()): Container {
@@ -52,4 +63,10 @@ let cached: Container | null = null;
 export function getContainer(): Container {
   if (!cached) cached = makeContainer();
   return cached;
+}
+
+/** Drains the DB pool. For scripts and graceful shutdown, not per request. */
+export async function closeContainer(): Promise<void> {
+  cached = null;
+  await closeDbHandle();
 }

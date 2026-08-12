@@ -1,0 +1,33 @@
+# Build context hygiene: keep the image small and never bake secrets in.
+node_modules
+**/node_modules
+.next
+out
+build
+dist
+
+.git
+.gitignore
+.github
+.claude
+
+# Secrets — env values are injected by compose at runtime, never copied.
+.env
+.env.*
+!.env.example
+
+# Docs & sample data are not needed to run the app.
+docs
+sample-data
+*.md
+
+# Local artefacts
+*.tsbuildinfo
+coverage
+.DS_Store
+npm-debug.log*
+pnpm-debug.log*
+Dockerfile
+docker-compose.yml
+docker-compose.*.yml
+deploy
