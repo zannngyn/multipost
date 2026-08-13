@@ -19,7 +19,10 @@ PG_IMAGE=postgres:16-alpine   # same major as docker-compose.yml
 DB_URL="postgresql://mysp:mysp@127.0.0.1:${PORT}/mysp_live"
 
 MODE=live
-if [[ "${1:-}" == "--fixtures" ]]; then MODE=fixtures; fi
+case "${1:-}" in
+  --fixtures) MODE=fixtures ;;
+  --catalog)  MODE=catalog ;;
+esac
 
 cleanup() {
   if [[ "${KEEP_DB:-0}" == "1" ]]; then
@@ -66,7 +69,10 @@ pnpm exec tsx src/adapters/db/seed.ts
 
 # .env supplies the Service Account plus MEDIA_SIGNING_SECRET / MEDIA_PUBLIC_BASE_URL
 # (the signed media chain needs them in BOTH modes). Values exported above win.
-if [[ "${MODE}" == "fixtures" ]]; then
+if [[ "${MODE}" == "catalog" ]]; then
+  echo "== catalog-smoke (sample-data sync + catalog screen read models) =="
+  pnpm exec tsx --env-file-if-exists=.env scripts/catalog-smoke.ts
+elif [[ "${MODE}" == "fixtures" ]]; then
   echo "== live-sync-smoke --fixtures (harness self-test on sample-data) =="
   pnpm exec tsx --env-file-if-exists=.env scripts/live-sync-smoke.ts --fixtures
 else

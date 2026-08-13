@@ -115,3 +115,73 @@ export interface SyncRunRepo {
   /** Newest run by `startedAt`, or null when the tenant never synced. */
   findLatest(tenantId: string): Promise<SyncRunSummary | null>;
 }
+
+// --- Catalog read model (E2/E3 "nguồn dữ liệu + sản phẩm") -------------------
+
+/**
+ * Why a SEPARATE port instead of more methods on ProductRepo: this is a read
+ * model for one screen (list + counters), and its rows carry media counts that
+ * the write-side repo has no business knowing. Keeping it apart also means the
+ * sync/publish fakes do not grow methods they never call.
+ *
+ * Implemented by adapters/db (DrizzleProductRepo). Same contract as every other
+ * repo: tenant-scoped, AppError('DB_ERROR') on driver failures.
+ */
+
+/** One product row plus the media tally the screen shows next to it. */
+export interface CatalogProductRow {
+  readonly code: string;
+  readonly name: string;
+  readonly category: string | null;
+  readonly season: string | null;
+  /** `Tồn` verbatim — the decision table parses it, the adapter must not. */
+  readonly stockRaw: string;
+  /** `Lưu ý` verbatim. */
+  readonly noteRaw: string;
+  readonly hasConflict: boolean;
+  readonly mediaImageCount: number;
+  readonly mediaVideoCount: number;
+}
+
+export interface ListCatalogProductsQuery {
+  readonly tenantId: string;
+  /**
+   * Free text matched against code and name, case-insensitively. The ADAPTER
+   * escapes LIKE wildcards: a user typing `%` searches for a percent sign.
+   */
+  readonly search?: string;
+  /** Rows to read; the usecase has already capped it. */
+  readonly limit: number;
+  /** Keyset: return codes strictly AFTER this one (ascending order). */
+  readonly afterCode?: string;
+}
+
+export interface CatalogProductPage {
+  /** Ordered by `code` ascending. */
+  readonly items: readonly CatalogProductRow[];
+  /** Last code of the page when more rows may follow, else null. */
+  readonly nextAfterCode: string | null;
+}
+
+/**
+ * Counting bucket: every product sharing these four signals lands in one row,
+ * so the totals are computed by SQL (GROUP BY) while the decision table itself
+ * stays in core — duplicating the stock rules in SQL is exactly the drift the
+ * brief forbids.
+ */
+export interface CatalogSignalGroup {
+  readonly stockRaw: string;
+  readonly noteRaw: string;
+  readonly hasConflict: boolean;
+  readonly hasMedia: boolean;
+  readonly count: number;
+}
+
+export interface CatalogReadRepo {
+  listCatalog(query: ListCatalogProductsQuery): Promise<CatalogProductPage>;
+  /** Same filter as `listCatalog`, minus paging: one row per signal bucket. */
+  aggregateCatalog(query: {
+    readonly tenantId: string;
+    readonly search?: string;
+  }): Promise<readonly CatalogSignalGroup[]>;
+}

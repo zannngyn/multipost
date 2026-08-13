@@ -13,6 +13,7 @@ import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import {
   auditLogs,
   channelGroups,
+  mediaAssets,
   users,
   postBatches,
   postJobs,
@@ -22,6 +23,7 @@ import {
 } from "@/adapters/db/schema";
 import { DEMO_TENANT_ID } from "@/adapters/db/seed-constants";
 import { makeFakeChannelPublisher } from "@/adapters/meta/fake-publisher";
+import { makeFakeTikTokPublisher } from "@/adapters/tiktok/fake-tiktok-publisher";
 import { startBullMqJobConsumer } from "@/adapters/queue/bullmq-job-consumer";
 import { makeBullMqJobQueue } from "@/adapters/queue/bullmq-job-queue";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
@@ -70,6 +72,7 @@ import { transitionPostJob } from "@/core/domain/post-job";
 
 const CHANNEL_A = "fbpage-a";
 const CHANNEL_B = "fbpage-b";
+const CHANNEL_TIKTOK = "tiktok-shop";
 const PRODUCT_A = "MGKVX6310";
 const PRODUCT_B = "MR0AC6080";
 const SPACING_MS = 3_000;
@@ -97,6 +100,23 @@ function expiresOf(url: string): number | null {
   return match ? Number.parseInt(match[1], 10) : null;
 }
 
+/**
+ * Fixed spec for every video in this script. The smoke host has no ffmpeg and
+ * the fixture Drive has no real clip bytes: the BINARY probe is covered by the
+ * media adapter's own unit tests, and what this script exercises is the gate,
+ * the routing and the platform adapters.
+ */
+const SMOKE_VIDEO_SPEC = {
+  container: "mov,mp4,m4a,3gp,3g2,mj2",
+  videoCodec: "h264",
+  audioCodec: "aac",
+  width: 1080,
+  height: 1920,
+  durationSec: 12,
+  sizeBytes: 5_000_000,
+  fps: 30,
+};
+
 function heading(title: string): void {
   console.log(`\n=== ${title} ===`);
 }
@@ -113,7 +133,14 @@ async function main(): Promise<void> {
   const connection = createRedisConnection({ url: config.REDIS_URL, logger });
   const queue = makeBullMqJobQueue({ connection, logger });
   const publisher = makeFakeChannelPublisher();
-  const usecases = makeUsecases(infra, { queue, publisher });
+  // E6: the channel's platform decides which fake runs, exactly like production.
+  const tiktokPublisher = makeFakeTikTokPublisher();
+  const usecases = makeUsecases(infra, {
+    queue,
+    publisher,
+    publishers: { facebook: publisher, tiktok: tiktokPublisher },
+    videoProbe: { probeAsset: async () => SMOKE_VIDEO_SPEC },
+  });
   const repo = new DrizzlePostJobRepo(db);
 
   // Same box the container wires, so what this script seeds is what production
@@ -206,6 +233,40 @@ async function main(): Promise<void> {
         target: [tenantIntegrations.tenantId, tenantIntegrations.provider],
         set: { status: "active", config },
       });
+
+    // E6 — the TikTok account lives in its own provider row, same seal.
+    const tiktokConfig = sealMetaConfig(
+      {
+        spacingMs,
+        retryBackoffMs: 500,
+        maxAttempts: 3,
+        channels: [
+          {
+            channelId: CHANNEL_TIKTOK,
+            platform: "tiktok",
+            name: "Shop TikTok",
+            externalId: "open-id-demo",
+            accessToken: "fake-tiktok-token",
+            refreshToken: "fake-tiktok-refresh",
+            status: "active",
+            tiktok: { privacyLevel: "SELF_ONLY", isAigc: true, openId: "open-id-demo" },
+          },
+        ],
+      },
+      secretBox,
+    );
+    await db
+      .insert(tenantIntegrations)
+      .values({
+        tenantId: DEMO_TENANT_ID,
+        provider: "tiktok",
+        status: "active",
+        config: tiktokConfig,
+      })
+      .onConflictDoUpdate({
+        target: [tenantIntegrations.tenantId, tenantIntegrations.provider],
+        set: { status: "active", config: tiktokConfig },
+      });
   };
   await setChannels(SPACING_MS);
 
@@ -246,6 +307,25 @@ async function main(): Promise<void> {
       });
   };
   await seedProduct(PRODUCT_A, "Giannal", "104");
+  // One VIDEO asset: the publish-time spec gate looks the clip up by drive file
+  // id before it lets anything reach a platform (E5.3).
+  await db
+    .insert(mediaAssets)
+    .values({
+      tenantId: DEMO_TENANT_ID,
+      driveFileId: "drive-video-1",
+      fileName: `${PRODUCT_A}-Tím (1).mp4`,
+      productCode: PRODUCT_A,
+      color: "TÍM",
+      colorRaw: "Tím",
+      sequence: 1,
+      kind: "video",
+      mimeType: "video/mp4",
+      sizeBytes: 5_000_000,
+      needsReview: false,
+      lastSyncRunId: syncRunId,
+    })
+    .onConflictDoNothing();
   await seedProduct(PRODUCT_B, "Penny", "50");
 
   // Clean slate for repeated runs (post_job cascades from post_batch).
@@ -1185,17 +1265,8 @@ async function main(): Promise<void> {
     warnings: [],
     needsReview: false,
   };
-  const mediaAssets = { findByDriveFileId: async () => videoAsset };
-  const goodSpec = {
-    container: "mov,mp4,m4a,3gp,3g2,mj2",
-    videoCodec: "h264",
-    audioCodec: "aac",
-    width: 1080,
-    height: 1920,
-    durationSec: 12,
-    sizeBytes: 5_000_000,
-    fps: 30,
-  };
+  const videoAssetLookup = { findByDriveFileId: async () => videoAsset };
+  const goodSpec = SMOKE_VIDEO_SPEC;
 
   const publishWithProbe = (probe: { probeAsset: () => Promise<typeof goodSpec> }) =>
     makePublishPost({
@@ -1209,7 +1280,7 @@ async function main(): Promise<void> {
       signMediaUrl: usecases.signMediaUrl,
       mediaBaseUrl: () => mediaBaseUrl,
       videoProbe: probe as never,
-      mediaAssets: mediaAssets as never,
+      mediaAssets: videoAssetLookup as never,
     });
 
   const makeVideoBatch = async (format: "video_post" | "reels") => {
@@ -1288,6 +1359,112 @@ async function main(): Promise<void> {
       proof: publisher.callCount() === callsBeforeBroken ? "nothing uploaded" : "LEAK",
     },
   });
+
+  // --- E6: TikTok ------------------------------------------------------------
+  heading("aa) TikTok: video đăng qua fake (creator_info -> init -> status COMPLETE)");
+  const tiktokVideoMedia = [
+    { driveFileId: "drive-video-1", fileName: `${PRODUCT_A}-Tím (1).mp4`, kind: "video" },
+  ];
+  const makeTikTokBatch = async (channelId: string) => {
+    const batchId = randomUUID();
+    const created = await usecases.createPostBatch({
+      tenantId: DEMO_TENANT_ID,
+      batchId,
+      productCode: PRODUCT_A,
+      color: "Tím",
+      format: "video_post",
+      channelIds: [channelId],
+      captionByChannel: { [channelId]: "Giannal – TIKTOK" },
+      media: tiktokVideoMedia,
+    });
+    return { batchId, channel: created.channels[0] };
+  };
+
+  const ttOk = await makeTikTokBatch(CHANNEL_TIKTOK);
+  await waitForBatch(db, ttOk.batchId, ["published"], 60_000);
+  const ttRow = await repo.findJobById(DEMO_TENANT_ID, ttOk.channel.postJobId);
+  const ttCall = tiktokPublisher.calls[tiktokPublisher.calls.length - 1];
+  print({
+    tiktok_published: {
+      status: ttRow?.status,
+      postId: ttRow?.publishedPostId,
+      tiktok_calls: tiktokPublisher.callCount(),
+      // The fake records what the real adapter would send TikTok.
+      privacy_level: ttCall?.privacyLevel,
+      is_aigc: ttCall?.isAigc,
+      video_url_shape_ok: SIGNED_MEDIA_URL.test(ttCall?.videoUrl ?? ""),
+      facebook_untouched: publisher.callCount(CHANNEL_TIKTOK),
+    },
+  });
+
+  heading("ab) TikTok: app chưa audit -> failed non-retryable, chỉ gọi 1 lần");
+  tiktokPublisher.setScenario(CHANNEL_TIKTOK, {
+    errorCode: "unaudited_client_can_only_post_to_private_accounts",
+  });
+  const ttAudit = await makeTikTokBatch(CHANNEL_TIKTOK);
+  const callsBeforeAudit = tiktokPublisher.callCount();
+  await waitForBatch(db, ttAudit.batchId, ["failed", "blocked"], 60_000);
+  const auditRow = await repo.findJobById(DEMO_TENANT_ID, ttAudit.channel.postJobId);
+  print({
+    unaudited: {
+      status: auditRow?.status,
+      errorCode: auditRow?.lastErrorCode,
+      userMessage: auditRow?.lastErrorMessage,
+      attempts: auditRow?.attemptCount,
+      tiktok_calls: tiktokPublisher.callCount() - callsBeforeAudit,
+      proof:
+        tiktokPublisher.callCount() - callsBeforeAudit === 1
+          ? "non-retryable: called once"
+          : "RETRIED (unexpected)",
+    },
+  });
+  tiktokPublisher.setScenario(CHANNEL_TIKTOK, null);
+
+  heading("ac) TikTok: rate_limit_exceeded 2 lần -> retry rồi published");
+  tiktokPublisher.setScenario(CHANNEL_TIKTOK, { transientFailures: 2 });
+  const ttRetry = await makeTikTokBatch(CHANNEL_TIKTOK);
+  const callsBeforeRetry = tiktokPublisher.callCount();
+  await waitForBatch(db, ttRetry.batchId, ["published"], 60_000);
+  const retryRow = await repo.findJobById(DEMO_TENANT_ID, ttRetry.channel.postJobId);
+  print({
+    rate_limited_then_ok: {
+      status: retryRow?.status,
+      attempts: retryRow?.attemptCount,
+      tiktok_calls: tiktokPublisher.callCount() - callsBeforeRetry,
+      postId: retryRow?.publishedPostId,
+    },
+  });
+  tiktokPublisher.setScenario(CHANNEL_TIKTOK, null);
+
+  heading("ad) 2 lô song song 2 nền tảng: TikTok lỗi không cản Facebook");
+  tiktokPublisher.setScenario(CHANNEL_TIKTOK, { errorCode: "url_ownership_unverified" });
+  const fbBatchId = randomUUID();
+  const [fbBatch, ttBatch] = await Promise.all([
+    usecases.createPostBatch({
+      tenantId: DEMO_TENANT_ID,
+      batchId: fbBatchId,
+      productCode: PRODUCT_A,
+      color: "Tím",
+      channelIds: [CHANNEL_A],
+      captionByChannel: { [CHANNEL_A]: "Giannal – ẢNH SONG SONG" },
+      media: MEDIA,
+    }),
+    makeTikTokBatch(CHANNEL_TIKTOK),
+  ]);
+  await waitForBatch(db, fbBatchId, ["published"], 60_000);
+  await waitForBatch(db, ttBatch.batchId, ["failed", "blocked"], 60_000);
+  const fbRow = await repo.findJobById(DEMO_TENANT_ID, fbBatch.channels[0].postJobId);
+  const ttFailRow = await repo.findJobById(DEMO_TENANT_ID, ttBatch.channel.postJobId);
+  print({
+    facebook: { status: fbRow?.status, postId: fbRow?.publishedPostId },
+    tiktok: {
+      status: ttFailRow?.status,
+      errorCode: ttFailRow?.lastErrorCode,
+      userMessage: ttFailRow?.lastErrorMessage,
+    },
+    isolated: fbRow?.status === "published" && ttFailRow?.status !== "published",
+  });
+  tiktokPublisher.setScenario(CHANNEL_TIKTOK, null);
 
   await consumer.close();
 

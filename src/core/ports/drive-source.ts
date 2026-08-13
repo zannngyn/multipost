@@ -89,4 +89,35 @@ export interface CatalogSourceConfig {
 export interface CatalogConfigRepo {
   /** Null when the tenant has no google integration row yet. */
   findCatalogConfig(tenantId: string): Promise<CatalogSourceConfig | null>;
+  /**
+   * Read-model twin of `findCatalogConfig` for the "nguồn dữ liệu" panel.
+   *
+   * Difference, and the reason both exist: a half-filled or disabled
+   * integration row must STOP a sync (findCatalogConfig throws, so nobody reads
+   * an empty catalog as "nothing changed"), but it must only make the panel say
+   * "chưa cấu hình" (this returns null and logs a warning). Same row, two
+   * audiences, two verdicts.
+   */
+  findCatalogSource(tenantId: string): Promise<CatalogSourceConfig | null>;
+  /**
+   * Writes the three coordinates and returns what was there before (null on a
+   * first configuration), so the caller can log/show the change.
+   *
+   * Implementers MUST: keep any other key of `tenant_integration.config`
+   * untouched (a provider row is shared with future settings), and write the
+   * audit row in the SAME transaction as the update — an unattributed source
+   * change is the one thing nobody can reconstruct afterwards.
+   */
+  saveCatalogSource(input: SaveCatalogSourceInput): Promise<{
+    readonly previous: CatalogSourceConfig | null;
+  }>;
+}
+
+export interface SaveCatalogSourceInput {
+  readonly tenantId: string;
+  readonly source: CatalogSourceConfig;
+  /** `app_user.id`, or null when the actor could not be resolved. */
+  readonly actorUserId: string | null;
+  /** Kept in the audit payload even when the id is unknown. */
+  readonly actorEmail: string | null;
 }

@@ -199,6 +199,40 @@ export function useComposeWizard() {
     compose.mutate();
   }, [compose, form]);
 
+  /**
+   * Deep link from the product list: `/compose?code=MGKVX6310&color=TRẮNG`
+   * prefills step 1 and looks the code up straight away, so "Soạn bài" on a row
+   * lands on the composed post instead of a form the operator must re-submit.
+   *
+   * Guards (an auto-submitting effect is a loop waiting to happen):
+   *  - it runs ONCE per code — the ref is written BEFORE the request, so a
+   *    blocked/failed compose does not retry itself forever;
+   *  - it never fires on top of an existing composed post, so re-rendering on
+   *    step 2 cannot silently recompose;
+   *  - it is a shortcut, not a bypass: the same validation and the same stock
+   *    gate run as if the operator had typed the code and pressed the button.
+   */
+  const codeParam = searchParams.get("code");
+  const colorParam = searchParams.get("color");
+  const prefilledCodeRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const code = (codeParam ?? "").trim();
+    if (code.length === 0 || prefilledCodeRef.current === code) return;
+
+    prefilledCodeRef.current = code;
+    form.setValue("productCode", code.toUpperCase(), { shouldDirty: false });
+    form.setValue("color", (colorParam ?? "").trim(), { shouldDirty: false });
+
+    // Nothing composed yet = the operator just arrived. Otherwise leave the
+    // screen alone: they are already working on something.
+    if (composedKeyRef.current === null) void submitProductStep();
+    // `submitProductStep` is intentionally out of the dependency list: it is
+    // recreated on every mutation state change, and the ref above is what makes
+    // this effect run once per code.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeParam, colorParam, form]);
+
   // `useWatch`, not `form.watch()`: the latter returns a fresh function on every
   // render, which the React Compiler cannot memoise safely.
   const captionValues = useWatch({ control: form.control, name: "captions" });

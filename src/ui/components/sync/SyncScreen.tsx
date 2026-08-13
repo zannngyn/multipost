@@ -4,6 +4,7 @@ import { useId, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { CatalogSourceCard } from "@/ui/components/sync/CatalogSourceCard";
 import { RunSyncButton } from "@/ui/components/sync/RunSyncButton";
 import { SyncCountsGrid } from "@/ui/components/sync/SyncCountsGrid";
 import { SyncIssuesTable } from "@/ui/components/sync/SyncIssuesTable";
@@ -39,6 +40,8 @@ export function SyncScreen() {
   const [tenantIdInput, setTenantIdInput] = useState(DEMO_TENANT_ID);
   const [formError, setFormError] = useState<string | null>(null);
   const [activeTenantId, setActiveTenantId] = useState<string | null>(DEMO_TENANT_ID);
+  /** Set right after a source change — the next sync is no longer optional. */
+  const [sourceChanged, setSourceChanged] = useState(false);
 
   const status = useSyncStatus(activeTenantId);
   const run = useRunCatalogSync(activeTenantId);
@@ -60,6 +63,8 @@ export function SyncScreen() {
 
     setFormError(null);
     run.reset();
+    // The notice belongs to the tenant it was raised for, not to the screen.
+    setSourceChanged(false);
     setActiveTenantId(parsed.data.tenantId);
   }
 
@@ -107,9 +112,30 @@ export function SyncScreen() {
         </Button>
       </form>
 
+      {/* Which folder / which tab — first, because every number below only
+          means something once the operator knows where it came from. */}
+      <CatalogSourceCard
+        tenantId={activeTenantId}
+        onSourceChanged={() => setSourceChanged(true)}
+      />
+
+      {sourceChanged ? (
+        <p
+          role="status"
+          className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
+        >
+          Đã đổi nguồn dữ liệu. Số liệu bên dưới vẫn là của nguồn cũ cho tới khi bạn bấm{" "}
+          <span className="font-medium">Chạy đồng bộ</span> — lần chạy đó cũng sẽ xoá sản phẩm/ảnh
+          không còn thuộc nguồn mới.
+        </p>
+      ) : null}
+
       <div className="flex flex-wrap items-start gap-3">
         <RunSyncButton
-          onConfirm={() => run.mutate()}
+          onConfirm={() => {
+            setSourceChanged(false);
+            run.mutate();
+          }}
           isRunning={run.isPending}
           disabled={activeTenantId === null}
         />

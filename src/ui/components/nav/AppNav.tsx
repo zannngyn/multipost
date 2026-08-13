@@ -13,6 +13,7 @@ import { cn } from "@/shared/utils";
 const NAV_ITEMS = [
   { href: "/", label: "Tổng quan" },
   { href: "/sync", label: "Đồng bộ dữ liệu" },
+  { href: "/products", label: "Sản phẩm" },
   { href: "/compose", label: "Soạn bài" },
   { href: "/bulk", label: "Chạy hàng loạt" },
   { href: "/channels", label: "Nhóm kênh" },

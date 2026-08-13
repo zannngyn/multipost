@@ -41,6 +41,7 @@ export const ERROR_CODES = [
   // Video (E2/E3 Phase 2)
   "VIDEO_SPEC_INVALID",
   "VIDEO_PROBE_FAILED",
+  "TIKTOK_ERROR",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -80,6 +81,7 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   INVALID_JOB_TRANSITION: "Trạng thái công việc đăng bài không cho phép thao tác này.",
   VIDEO_SPEC_INVALID: "Video chưa đạt thông số của kênh — bài đăng bị chặn.",
   VIDEO_PROBE_FAILED: "Không kiểm tra được thông số video. Xem nhật ký để biết chi tiết.",
+  TIKTOK_ERROR: "TikTok trả về lỗi khi đăng bài. Xem chi tiết trong nhật ký đăng.",
 };
 
 /** English developer message. Falls back to the code itself. */
@@ -114,6 +116,7 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   INVALID_JOB_TRANSITION: "Post job state transition not allowed",
   VIDEO_SPEC_INVALID: "Video failed channel spec validation",
   VIDEO_PROBE_FAILED: "Could not probe video metadata",
+  TIKTOK_ERROR: "TikTok API call failed",
 };
 
 export interface AppErrorOptions {

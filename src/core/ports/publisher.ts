@@ -53,6 +53,32 @@ export interface ChannelConfig {
   readonly status: ChannelStatus;
   /** ISO date the token expires, when the platform tells us. */
   readonly tokenExpiresAt: Date | null;
+  /**
+   * TikTok-only settings (E6). Kept in its own block instead of widening the
+   * shared shape: a Facebook channel has no privacy level, and an optional
+   * field on the common type would let one platform's config leak into the
+   * other's code path unnoticed.
+   */
+  readonly tiktok?: TikTokChannelOptions;
+}
+
+/**
+ * TikTok Content Posting settings that live per channel.
+ * `privacyLevel` MUST be one of the values `creator_info` reports for that
+ * account: TikTok rejects anything else with privacy_level_option_mismatch.
+ */
+export interface TikTokChannelOptions {
+  readonly privacyLevel: string;
+  /**
+   * Declares AI-generated content. Default TRUE for this product: the captions
+   * are written by an LLM, and TikTok requires the disclosure.
+   */
+  readonly isAigc: boolean;
+  /** Creator open id, when the connect flow stored it. */
+  readonly openId: string | null;
+  readonly disableDuet?: boolean;
+  readonly disableStitch?: boolean;
+  readonly disableComment?: boolean;
 }
 
 /** Never log a raw token; this keeps the log useful without leaking it. */
@@ -158,6 +184,12 @@ export interface PublishVideoPostInput {
    */
   readonly videoUrl: string;
   readonly target: VideoTarget;
+  /**
+   * Probed duration, when the caller already measured the clip (E5.3 gate).
+   * TikTok needs it: `creator_info` reports a per-account maximum that no
+   * static table can know, and exceeding it wastes the whole upload.
+   */
+  readonly durationSec?: number | null;
   /** Tracing only, like the image path. */
   readonly idempotencyKey: string;
 }

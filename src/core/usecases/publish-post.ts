@@ -23,7 +23,9 @@ import type { ProductRepo } from "@/core/ports/product-repo";
 import type { MediaAssetLookup } from "@/core/ports/drive-source";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type {
+  ChannelConfig,
   ChannelConfigRepo,
+  ChannelPlatform,
   ChannelPublisher,
   SignMediaUrlFn,
   VideoTarget as PublisherVideoTarget,
@@ -111,7 +113,14 @@ export interface PublishPostDeps {
   /** Same repo the compose step used — the recheck must read live stock. */
   products: ProductRepo;
   channels: ChannelConfigRepo;
-  publisher: ChannelPublisher;
+  /**
+   * One publisher per platform (E6). The CHANNEL decides which one runs: a
+   * tenant with a Facebook Page and a TikTok account publishes the same product
+   * through two different APIs, and neither may see the other's job.
+   */
+  publishers?: Partial<Record<ChannelPlatform, ChannelPublisher>>;
+  /** Facebook publisher — the pre-E6 shape, still accepted as the default. */
+  publisher?: ChannelPublisher;
   /** Used only to re-enqueue a deferred job (spacing). */
   queue: JobQueue;
   clock: Clock;
@@ -385,12 +394,42 @@ export function makePublishPost(deps: PublishPostDeps) {
       });
     }
 
+    // --- 5b. Which API handles this channel (E6) -----------------------------
+    // A platform with no publisher wired is the same kind of problem as a
+    // channel that is not configured: a rule stops the job BEFORE any claim of
+    // "we tried", and the operator gets a sentence naming the platform.
+    const publisher = resolvePublisher(deps, channel);
+    if (!publisher) {
+      const userMessage = `Hệ thống chưa hỗ trợ đăng lên nền tảng "${channel.platform}" — kiểm tra cấu hình kênh.`;
+      const blocked = await block(
+        deps,
+        claimed,
+        "CHANNEL_NOT_CONFIGURED",
+        userMessage,
+        "PUBLISHER_NOT_WIRED",
+      );
+      log.error("Publish blocked: no publisher for this platform", {
+        outcome: "blocked",
+        error_code: "CHANNEL_NOT_CONFIGURED",
+        platform: channel.platform,
+        attempt,
+        alert: "OPERATOR_ATTENTION",
+      });
+      return result(blocked ?? claimed, "blocked", {
+        deferredMs: null,
+        errorCode: "CHANNEL_NOT_CONFIGURED",
+        userMessage,
+      });
+    }
+
     // --- 6a0. Video spec, re-checked before the upload (E5.3) ---------------
     // Same reasoning as the two stock checks: the compose-time verdict can be
     // hours old, the file may have been replaced on Drive, and an over-long clip
     // rejected AFTER a multi-megabyte upload wastes the operator's evening.
+    let videoDurationSec: number | null = null;
     if (claimed.format !== "image_post") {
       const gate = await checkVideoBeforeUpload(deps, claimed, log);
+      if (gate.ok) videoDurationSec = gate.durationSec;
       if (!gate.ok) {
         const blocked = await block(
           deps,
@@ -468,20 +507,22 @@ export function makePublishPost(deps: PublishPostDeps) {
     try {
       published =
         claimed.format === "image_post"
-          ? await deps.publisher.publishImagePost({
+          ? await publisher.publishImagePost({
               tenantId,
               channel,
               caption: claimed.captionText,
               media,
               idempotencyKey: postJobDuplicateKey(claimed),
             })
-          : await deps.publisher.publishVideoPost({
+          : await publisher.publishVideoPost({
               tenantId,
               channel,
               caption: claimed.captionText,
               // One video per post: media[0] is the file, the rest (if any) is
               // a thumbnail choice we do not use yet.
               videoUrl: media[0]?.url ?? "",
+              // TikTok compares it against the account's own cap (creator_info).
+              durationSec: videoDurationSec,
               target:
                 VIDEO_FORMAT_TARGETS[claimed.format === "reels" ? "reels" : "video_post"]
                   .publisher,
@@ -540,6 +581,22 @@ export type PublishPost = ReturnType<typeof makePublishPost>;
 
 // --- helpers ----------------------------------------------------------------
 
+/**
+ * Which publisher handles this channel. Null when the platform has none wired —
+ * the caller blocks the job instead of throwing, because "we do not support
+ * this platform yet" is a configuration answer, not a failed publish attempt.
+ */
+function resolvePublisher(
+  deps: PublishPostDeps,
+  channel: ChannelConfig,
+): ChannelPublisher | undefined {
+  return (
+    deps.publishers?.[channel.platform] ??
+    // Pre-E6 wiring: a single publisher always meant Facebook.
+    (channel.platform === "facebook" ? deps.publisher : undefined)
+  );
+}
+
 /** post_job.format -> the two vocabularies that describe the same thing. */
 export const VIDEO_FORMAT_TARGETS: Readonly<
   Record<"video_post" | "reels", { spec: SpecVideoTarget; publisher: PublisherVideoTarget }>
@@ -549,7 +606,7 @@ export const VIDEO_FORMAT_TARGETS: Readonly<
 };
 
 type VideoGateOutcome =
-  | { ok: true }
+  | { ok: true; durationSec: number | null }
   | {
       ok: false;
       errorCode: "VIDEO_SPEC_INVALID" | "VIDEO_PROBE_FAILED";
@@ -587,7 +644,7 @@ async function checkVideoBeforeUpload(
       video_target: targets.spec,
       ...context,
     });
-    return { ok: true };
+    return { ok: true, durationSec: null };
   };
 
   if (!deps.videoProbe || !deps.mediaAssets) {
@@ -663,7 +720,7 @@ async function checkVideoBeforeUpload(
   for (const warning of verdict.warnings) {
     log.info("Video spec warning (published anyway)", { warning, video_target: targets.spec });
   }
-  return { ok: true };
+  return { ok: true, durationSec: spec.durationSec };
 }
 
 /**

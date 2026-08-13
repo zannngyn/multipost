@@ -70,8 +70,8 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       AUTH_ALLOWED_DOMAINS: ${AUTH_ALLOWED_DOMAINS:-example.com}
       # Never derive the browser-visible origin from Docker's 0.0.0.0 bind.
-      # Local default matches WEB_PORT; production must set its HTTPS origin.
-      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
+      # Local default follows WEB_PORT; production must set its HTTPS origin.
+      AUTH_URL: ${AUTH_URL:-http://localhost:${WEB_PORT:-3000}}
       SESSION_SECRET: ${SESSION_SECRET:-}
       META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v23.0}
     expose:
@@ -79,6 +79,38 @@ services:
     ports:
       # Direct access for debugging; Caddy is the normal entry point.
       - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Local UI-only demo. It deliberately runs `next dev`, rather than the
+  # production image, so DEV_FAKE_SESSION can be used without weakening prod.
+  # Start explicitly: docker compose --profile demo up -d web-demo
+  # Browse: http://localhost:3001
+  web-demo:
+    profiles: ["demo"]
+    build:
+      context: .
+      target: deps
+    command: pnpm dev --hostname 0.0.0.0
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_PRETTY: "true"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mysp}:${POSTGRES_PASSWORD:-mysp}@postgres:5432/${POSTGRES_DB:-mysp}
+      REDIS_URL: redis://redis:6379
+      AUTH_URL: http://localhost:${DEMO_WEB_PORT:-3001}
+      DEV_FAKE_SESSION: "1"
+      SESSION_SECRET: ${SESSION_SECRET:-}
+    volumes:
+      - ./:/app
+      - webdemo_node_modules:/app/node_modules
+    ports:
+      - "${DEMO_WEB_PORT:-3001}:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -173,3 +205,4 @@ volumes:
   redisdata:
   caddydata:
   caddyconfig:
+  webdemo_node_modules:

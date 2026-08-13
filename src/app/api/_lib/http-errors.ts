@@ -44,6 +44,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   INVALID_JOB_TRANSITION: 409,
   VIDEO_SPEC_INVALID: 422,
   VIDEO_PROBE_FAILED: 422,
+  TIKTOK_ERROR: 502,
 };
 
 /** Structural logger type — the app layer must not import ports or adapters. */

@@ -17,6 +17,7 @@ import type { ProductRepo } from "@/core/ports/product-repo";
 import type {
   ChannelConfig,
   ChannelConfigRepo,
+  ChannelPublisher,
   PublishSettings,
   SignMediaUrlFn,
 } from "@/core/ports/publisher";
@@ -262,6 +263,7 @@ function harness(options: {
   settings?: Partial<PublishSettings>;
   publish?: () => Promise<{ postId: string; url: string | null }>;
   publishVideo?: () => Promise<{ postId: string; url: string | null }>;
+  publishers?: Partial<Record<"facebook" | "tiktok", ChannelPublisher>>;
   videoProbe?: VideoAssetProbe;
   mediaAssets?: MediaAssetLookup;
   signMediaUrl?: SignMediaUrlFn;
@@ -292,6 +294,7 @@ function harness(options: {
       products: makeProducts(options.product === undefined ? makeProduct("104") : options.product),
       channels: makeChannels(options.channel === undefined ? CHANNEL : options.channel, options.settings),
       publisher,
+      ...(options.publishers ? { publishers: options.publishers } : {}),
       queue,
       clock,
       logger: silentLogger(),
@@ -1162,5 +1165,105 @@ describe("publishPost — video spec gate (E5.3)", () => {
     });
     const blocked = await reel.publish({ tenantId: TENANT, postJobId: "job-1" });
     expect(blocked).toMatchObject({ outcome: "blocked", errorCode: "VIDEO_SPEC_INVALID" });
+  });
+});
+
+// --- E6: one publisher per platform -----------------------------------------
+
+const TIKTOK_CHANNEL: ChannelConfig = {
+  channelId: "tiktok-shop",
+  platform: "tiktok",
+  name: "Shop TikTok",
+  externalId: "open-id-1",
+  accessToken: "act.secret",
+  status: "active",
+  tokenExpiresAt: null,
+  tiktok: { privacyLevel: "SELF_ONLY", isAigc: true, openId: "open-id-1" },
+};
+
+describe("publishPost — platform routing (E6)", () => {
+  function tiktokSpy() {
+    return {
+      publishImagePost: vi.fn(async () => ({ postId: "never", url: null })),
+      publishVideoPost: vi.fn(async () => ({ postId: "v_pub_1", url: null })),
+    };
+  }
+
+  it("sends a TikTok channel's video to the TikTok publisher, not to Facebook", async () => {
+    const tiktok = tiktokSpy();
+    const h = harness({
+      jobs: [
+        makeJob({
+          format: "video_post",
+          channelId: "tiktok-shop",
+          media: [{ driveFileId: "drive-1", fileName: "clip.mp4", url: "https://old/clip.mp4" }],
+        }),
+      ],
+      channel: TIKTOK_CHANNEL,
+      publishers: { tiktok },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result).toMatchObject({ outcome: "published", publishedPostId: "v_pub_1" });
+    expect(tiktok.publishVideoPost).toHaveBeenCalledTimes(1);
+    expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("keeps sending Facebook channels to the Facebook publisher", async () => {
+    const tiktok = tiktokSpy();
+    const h = harness({ publishers: { tiktok } });
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(tiktok.publishVideoPost).not.toHaveBeenCalled();
+  });
+
+  it("passes the probed duration to the publisher (TikTok checks it per account)", async () => {
+    const tiktok = tiktokSpy();
+    const h = harness({
+      jobs: [
+        makeJob({
+          format: "video_post",
+          channelId: "tiktok-shop",
+          media: [{ driveFileId: "drive-video-1", fileName: "clip.mp4", url: "https://old/c.mp4" }],
+        }),
+      ],
+      channel: TIKTOK_CHANNEL,
+      publishers: { tiktok },
+      videoProbe: {
+        probeAsset: async () => ({
+          container: "mov,mp4,m4a,3gp,3g2,mj2",
+          videoCodec: "h264",
+          audioCodec: "aac",
+          width: 1080,
+          height: 1920,
+          durationSec: 42,
+          sizeBytes: 5_000_000,
+          fps: 30,
+        }),
+      },
+      mediaAssets: { findByDriveFileId: async () => VIDEO_ASSET },
+    });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const [videoInput] = tiktok.publishVideoPost.mock.calls[0] as unknown as [
+      { durationSec: number },
+    ];
+    expect(videoInput).toMatchObject({ durationSec: 42 });
+  });
+
+  it("blocks when no publisher is wired for the channel's platform", async () => {
+    const h = harness({
+      jobs: [makeJob({ channelId: "tiktok-shop" })],
+      channel: TIKTOK_CHANNEL,
+      // publishers.tiktok missing on purpose.
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "CHANNEL_NOT_CONFIGURED" });
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
   });
 });

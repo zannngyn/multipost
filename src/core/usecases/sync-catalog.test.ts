@@ -111,6 +111,9 @@ function makeHarness(options: {
       options.config === undefined
         ? { driveFolderId: "folder", spreadsheetId: "sheet", sheetName: "Mẫu 2026" }
         : options.config,
+    // Not used by the sync; present because the port is one interface.
+    findCatalogSource: async () => null,
+    saveCatalogSource: async () => ({ previous: null }),
   };
   const products: ProductRepo = {
     findByCode: async () => null,

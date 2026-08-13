@@ -33,16 +33,21 @@ function recordingLogger(lines: LogLine[]): Logger {
   return make();
 }
 
-/** Minimal stand-in for the drizzle chain the repo uses. */
-function stubDb(rows: Array<{ config: Record<string, unknown>; status: string }>): Database {
+/**
+ * Minimal stand-in for the drizzle chain the repo uses. `where()` is awaited
+ * directly now (the multi-provider read has no `limit`), so it is a thenable
+ * that also still answers `.limit()`.
+ */
+function stubDb(
+  rows: Array<{ provider?: string; config: Record<string, unknown>; status: string }>,
+): Database {
+  const withProvider = rows.map((row) => ({ provider: row.provider ?? "meta", ...row }));
+  const result = {
+    then: (resolve: (value: typeof withProvider) => unknown) => resolve(withProvider),
+    limit: async () => withProvider,
+  };
   return {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: async () => rows,
-        }),
-      }),
-    }),
+    select: () => ({ from: () => ({ where: () => result }) }),
   } as unknown as Database;
 }
 
@@ -64,11 +69,19 @@ function channelConfig(accessToken: string) {
   };
 }
 
-function harness(config: Record<string, unknown>, status = "active", key: string = TEST_KEY) {
+function harness(
+  config: Record<string, unknown>,
+  status = "active",
+  key: string = TEST_KEY,
+  provider = "meta",
+) {
   const lines: LogLine[] = [];
   const logger = recordingLogger(lines);
   const box = makeSecretBox({ logger, readKey: () => key });
-  const repo = new DrizzleChannelConfigRepo(stubDb([{ config, status }]), { box, logger });
+  const repo = new DrizzleChannelConfigRepo(stubDb([{ provider, config, status }]), {
+    box,
+    logger,
+  });
   return { repo, box, lines };
 }
 
@@ -160,5 +173,94 @@ describe("DrizzleChannelConfigRepo — sealed tokens", () => {
     const { repo } = harness(sealed, "disabled");
     const channels = await repo.listChannels(TENANT);
     expect(channels[0].status).toBe("disabled");
+  });
+});
+
+describe("DrizzleChannelConfigRepo — TikTok channels (E6)", () => {
+  function tiktokConfig(privacyLevel = "SELF_ONLY") {
+    return {
+      channels: [
+        {
+          channelId: "tiktok-shop",
+          platform: "tiktok",
+          name: "Shop TikTok",
+          externalId: "open-id-1",
+          accessToken: "act.tiktok",
+          refreshToken: "rft.tiktok",
+          status: "active",
+          tiktok: { privacyLevel, isAigc: true, openId: "open-id-1" },
+        },
+      ],
+    };
+  }
+
+  it("reads a tiktok provider row and carries its options", async () => {
+    const { repo } = harness(tiktokConfig() as unknown as Record<string, unknown>, "active", TEST_KEY, "tiktok");
+
+    const channels = await repo.listChannels(TENANT);
+
+    expect(channels[0]).toMatchObject({
+      channelId: "tiktok-shop",
+      platform: "tiktok",
+      accessToken: "act.tiktok",
+      tiktok: { privacyLevel: "SELF_ONLY", isAigc: true, openId: "open-id-1" },
+    });
+  });
+
+  it("seals BOTH tokens by name (accessToken and refreshToken)", async () => {
+    const { box } = harness({});
+    const sealed = sealMetaConfig(tiktokConfig(), box) as unknown as {
+      channels: Array<{ accessToken: string; refreshToken: string }>;
+    };
+    expect(sealed.channels[0].accessToken).toMatch(/^enc:v1:/);
+    expect(sealed.channels[0].refreshToken).toMatch(/^enc:v1:/);
+
+    const { repo } = harness(sealed as unknown as Record<string, unknown>, "active", TEST_KEY, "tiktok");
+    expect((await repo.listChannels(TENANT))[0].accessToken).toBe("act.tiktok");
+  });
+
+  it("defaults isAigc to true — every caption here is written by an LLM", async () => {
+    const config = {
+      channels: [
+        {
+          channelId: "tiktok-shop",
+          platform: "tiktok",
+          name: "Shop TikTok",
+          externalId: "open-id-1",
+          accessToken: "act.tiktok",
+          status: "active",
+          tiktok: { privacyLevel: "SELF_ONLY" },
+        },
+      ],
+    };
+    const { repo } = harness(config as unknown as Record<string, unknown>, "active", TEST_KEY, "tiktok");
+    expect((await repo.listChannels(TENANT))[0].tiktok?.isAigc).toBe(true);
+  });
+
+  it("refuses a privacy level TikTok does not define", async () => {
+    const bad = tiktokConfig("EVERYONE_IN_THE_WORLD");
+    const { repo } = harness(bad as unknown as Record<string, unknown>, "active", TEST_KEY, "tiktok");
+    await expect(repo.listChannels(TENANT)).rejects.toMatchObject({
+      code: "CHANNEL_NOT_CONFIGURED",
+    });
+  });
+
+  it("forces the platform to match the provider row", async () => {
+    // A tiktok row claiming platform:"facebook" is a config mistake, not a Page.
+    const config = {
+      channels: [
+        {
+          channelId: "tiktok-shop",
+          platform: "facebook",
+          name: "Shop TikTok",
+          externalId: "open-id-1",
+          accessToken: "act.tiktok",
+          status: "active",
+          tiktok: { privacyLevel: "SELF_ONLY" },
+        },
+      ],
+    };
+    const { repo } = harness(config as unknown as Record<string, unknown>, "active", TEST_KEY, "tiktok");
+    expect((await repo.listChannels(TENANT))[0].platform).toBe("tiktok");
   });
 });

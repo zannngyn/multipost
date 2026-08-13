@@ -1,11 +1,18 @@
-import { count, eq } from "drizzle-orm";
+import { and, count, eq } from "drizzle-orm";
 
 import { makeFixtureDriveSource, makeFixtureSheetSource } from "@/adapters/google/fixture-catalog-source";
 import { DEMO_TENANT_ID } from "@/adapters/db/seed-constants";
-import { mediaAssets, products, syncRuns, tenantIntegrations, tenants } from "@/adapters/db/schema";
+import {
+  auditLogs,
+  mediaAssets,
+  products,
+  syncRuns,
+  tenantIntegrations,
+  tenants,
+} from "@/adapters/db/schema";
 import { AppError } from "@/core/domain/errors";
 import { loadConfig } from "@/composition/config";
-import { closeContainer, makeContainer } from "@/composition/container";
+import { closeContainer, makeContainer, type Container } from "@/composition/container";
 
 /**
  * Dev script (NOT part of the app — it lives outside `src/` so no production
@@ -151,6 +158,8 @@ async function main(): Promise<void> {
         row.noteRaw.trim().toUpperCase() !== "HẾT HÀNG",
     )?.code ?? "MR0VX6076";
 
+  await catalogScreenSmoke(container);
+
   console.log("\n=== compose-post ===");
   for (const [label, code] of [
     ["happy", CASES.happy],
@@ -180,6 +189,184 @@ async function main(): Promise<void> {
         null,
         2,
       ),
+    );
+  }
+}
+
+/**
+ * The "nguồn dữ liệu + sản phẩm hợp lệ/không hợp lệ" screen against real rows:
+ * the SQL aggregate, the keyset page, the status filter and the search all run
+ * on Postgres here — a fake repo cannot prove the GROUP BY or the ILIKE escape.
+ */
+async function catalogScreenSmoke(container: Container): Promise<void> {
+  const { usecases } = container;
+
+  console.log("\n=== get-catalog-source ===");
+  console.log(JSON.stringify(await usecases.getCatalogSource({ tenantId: DEMO_TENANT_ID }), null, 2));
+
+  console.log("\n=== list-catalog-products (page 1) ===");
+  const firstPage = await usecases.listCatalogProducts({
+    tenantId: DEMO_TENANT_ID,
+    filter: { limit: 5 },
+  });
+  console.log(`totals: ${JSON.stringify(firstPage.totals)}`);
+  console.log(`nextCursor: ${firstPage.nextCursor}`);
+  console.log(JSON.stringify(firstPage.items, null, 2));
+
+  const okPage = await usecases.listCatalogProducts({
+    tenantId: DEMO_TENANT_ID,
+    filter: { status: "ok", limit: 5 },
+  });
+  console.log("\n=== status=ok ===");
+  console.log(
+    JSON.stringify(
+      okPage.items.map((item) => ({
+        code: item.code,
+        composable: item.composable,
+        stock: item.inventory.stock,
+        images: item.mediaImageCount,
+        videos: item.mediaVideoCount,
+      })),
+      null,
+      2,
+    ),
+  );
+  const notComposable = okPage.items.filter((item) => !item.composable);
+  console.log(`non-composable rows leaked into status=ok: ${notComposable.length}`);
+
+  const blockedPage = await usecases.listCatalogProducts({
+    tenantId: DEMO_TENANT_ID,
+    filter: { status: "blocked", limit: 5 },
+  });
+  console.log("\n=== status=blocked ===");
+  console.log(
+    JSON.stringify(
+      blockedPage.items.map((item) => ({
+        code: item.code,
+        reason: item.blockedReason?.code,
+        userMessage: item.blockedReason?.userMessage,
+        inventoryReason: item.inventory.reason,
+      })),
+      null,
+      2,
+    ),
+  );
+
+  const search = await usecases.listCatalogProducts({
+    tenantId: DEMO_TENANT_ID,
+    filter: { q: "MGKVX", limit: 5 },
+  });
+  console.log("\n=== q=MGKVX ===");
+  console.log(`totals: ${JSON.stringify(search.totals)}`);
+  console.log(JSON.stringify(search.items.map((item) => item.code), null, 2));
+
+  // A LIKE metacharacter must be a literal, not a wildcard matching everything.
+  const wildcard = await usecases.listCatalogProducts({
+    tenantId: DEMO_TENANT_ID,
+    filter: { q: "%", limit: 5 },
+  });
+  console.log(`q="%" -> ${wildcard.totals.total} products (0 = wildcards are escaped)`);
+
+  // Paging must not repeat a code across two pages.
+  const pageTwo = await usecases.listCatalogProducts({
+    tenantId: DEMO_TENANT_ID,
+    filter: { limit: 5, cursor: firstPage.nextCursor },
+  });
+  const overlap = pageTwo.items.filter((item) =>
+    firstPage.items.some((first) => first.code === item.code),
+  );
+  console.log(
+    `\npage 2 starts at ${pageTwo.items[0]?.code} — overlap with page 1: ${overlap.length}`,
+  );
+
+  // Cross-check: the SQL GROUP BY totals must equal what the decision table
+  // says when every row is walked one by one. If these ever disagree, the
+  // aggregate is lying to the counters on screen.
+  let walkedTotal = 0;
+  let walkedOk = 0;
+  let walkCursor: string | null = null;
+  for (let page = 0; page < 50; page += 1) {
+    const chunk = await usecases.listCatalogProducts({
+      tenantId: DEMO_TENANT_ID,
+      filter: { limit: 100, cursor: walkCursor },
+    });
+    walkedTotal += chunk.items.length;
+    walkedOk += chunk.items.filter((item) => item.composable).length;
+    walkCursor = chunk.nextCursor;
+    if (walkCursor === null) break;
+  }
+  const totalsAgree =
+    walkedTotal === firstPage.totals.total && walkedOk === firstPage.totals.ok;
+  console.log(
+    `\ntotals cross-check: sql=${JSON.stringify(firstPage.totals)} walked={"total":${walkedTotal},"ok":${walkedOk},"blocked":${walkedTotal - walkedOk}} agree=${totalsAgree}`,
+  );
+  if (!totalsAgree) {
+    console.error("FAIL: SQL totals disagree with the per-row decision table");
+    process.exitCode = 1;
+  }
+
+  console.log("\n=== update-catalog-source (round trip) ===");
+  const before = await usecases.getCatalogSource({ tenantId: DEMO_TENANT_ID });
+  const updated = await usecases.updateCatalogSource({
+    tenantId: DEMO_TENANT_ID,
+    // Pasted exactly as a browser would give it, to prove the URL parser.
+    driveFolder: "https://drive.google.com/drive/folders/1bA48sjugz9BczcoR0-zOc-VNlIYikp4v?usp=sharing",
+    spreadsheet:
+      "https://docs.google.com/spreadsheets/d/1Qdhp9YS0mePn7G3focqAhqV3Mb1eymFqbX0EC1bFCVs/edit#gid=0",
+    sheetName: "Mẫu 2026",
+    actorEmail: "demo@mysp.local",
+  });
+  console.log(JSON.stringify(updated, null, 2));
+  console.log(`unchanged after round trip: ${before?.driveFolderId === updated.driveFolderId}`);
+
+  const audit = await container.db
+    .select({ action: auditLogs.action, payload: auditLogs.payload })
+    .from(auditLogs)
+    .where(eq(auditLogs.tenantId, DEMO_TENANT_ID));
+  console.log(
+    `audit rows: ${JSON.stringify(audit.filter((entry) => entry.action === "catalog_source.updated"))}`,
+  );
+
+  // Point somewhere else, then back: proves the audit row records a REAL change
+  // and that the panel reads what was written.
+  await usecases.updateCatalogSource({
+    tenantId: DEMO_TENANT_ID,
+    driveFolder: "0AAbbCCddEEffGGhhIIjjKK",
+    spreadsheet: "1zzzYYYxxxWWWvvvUUUtttSSSrrrQQQpppOOO",
+    sheetName: "Tab thử",
+    actorEmail: "demo@mysp.local",
+  });
+  console.log(
+    `after switch: ${JSON.stringify(await usecases.getCatalogSource({ tenantId: DEMO_TENANT_ID }))}`,
+  );
+  const switchAudit = await container.db
+    .select({ payload: auditLogs.payload })
+    .from(auditLogs)
+    .where(
+      and(eq(auditLogs.tenantId, DEMO_TENANT_ID), eq(auditLogs.action, "catalog_source.updated")),
+    );
+  console.log(`audit rows now: ${switchAudit.length}, last: ${JSON.stringify(switchAudit.at(-1))}`);
+  await usecases.updateCatalogSource({
+    tenantId: DEMO_TENANT_ID,
+    driveFolder: "1bA48sjugz9BczcoR0-zOc-VNlIYikp4v",
+    spreadsheet: "1Qdhp9YS0mePn7G3focqAhqV3Mb1eymFqbX0EC1bFCVs",
+    sheetName: "Mẫu 2026",
+    actorEmail: "demo@mysp.local",
+  });
+
+  try {
+    await usecases.updateCatalogSource({
+      tenantId: DEMO_TENANT_ID,
+      driveFolder: "https://dropbox.com/folders/khong-phai-google",
+      spreadsheet: "1Qdhp9YS0mePn7G3focqAhqV3Mb1eymFqbX0EC1bFCVs",
+      sheetName: "Mẫu 2026",
+    });
+    console.error("FAIL: a non-Google link was accepted");
+    process.exitCode = 1;
+  } catch (error) {
+    const appError = AppError.is(error) ? error : null;
+    console.log(
+      `bad link rejected: ${appError?.code} field=${String(appError?.context.field)} — ${appError?.userMessage}`,
     );
   }
 }

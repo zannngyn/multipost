@@ -18,6 +18,8 @@ import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
 import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
+import { makeTikTokClient } from "@/adapters/tiktok/tiktok-client";
+import { makeTikTokPublisher } from "@/adapters/tiktok/tiktok-publisher";
 import { makeBullMqJobQueue } from "@/adapters/queue/bullmq-job-queue";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
 import { AppError } from "@/core/domain/errors";
@@ -30,7 +32,7 @@ import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
-import type { ChannelPublisher } from "@/core/ports/publisher";
+import type { ChannelPlatform, ChannelPublisher } from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
 import { makeCreatePostBatch, type CreatePostBatch } from "@/core/usecases/create-post-batch";
@@ -56,6 +58,15 @@ import {
   makeReschedulePostJob,
   type ReschedulePostJob,
 } from "@/core/usecases/reschedule-post-job";
+import { makeGetCatalogSource, type GetCatalogSource } from "@/core/usecases/get-catalog-source";
+import {
+  makeListCatalogProducts,
+  type ListCatalogProducts,
+} from "@/core/usecases/list-catalog-products";
+import {
+  makeUpdateCatalogSource,
+  type UpdateCatalogSource,
+} from "@/core/usecases/update-catalog-source";
 import { makeGetSyncStatus, type GetSyncStatus } from "@/core/usecases/get-sync-status";
 import { makeHealthcheckTenant, type HealthcheckTenant } from "@/core/usecases/healthcheck-tenant";
 import { makePublishPost, type PublishPost } from "@/core/usecases/publish-post";
@@ -93,6 +104,12 @@ export interface Usecases {
   healthcheckTenant: HealthcheckTenant;
   syncCatalog: SyncCatalog;
   getSyncStatus: GetSyncStatus;
+  /** E2 — "nguồn dữ liệu" panel: which Drive folder / Sheet this tenant reads. */
+  getCatalogSource: GetCatalogSource;
+  /** E2 — point the tenant at another folder/sheet. Does NOT trigger a sync. */
+  updateCatalogSource: UpdateCatalogSource;
+  /** E2/E3 — catalog screen: products with their composable/blocked verdict. */
+  listCatalogProducts: ListCatalogProducts;
   composePost: ComposePost;
   generateCaptions: GenerateCaptions;
   /** E10.7 — versioned prompt catalog (list/create/activate). */
@@ -151,6 +168,8 @@ export interface UsecaseOverrides {
   /** Worker passes its own queue so one process holds ONE Redis connection. */
   queue?: JobQueue;
   publisher?: ChannelPublisher;
+  /** E6 — override per platform; the key wins over `publisher` for that platform. */
+  publishers?: Partial<Record<ChannelPlatform, ChannelPublisher>>;
   /** E3 Phase 2 — tests/scripts inject a probe instead of spawning ffprobe. */
   videoProbe?: VideoAssetProbe;
 }
@@ -223,6 +242,24 @@ function makeLazyPublisher(logger: Logger): ChannelPublisher {
       graph: makeGraphClient({ logger, version: loadMetaConfig().META_GRAPH_VERSION }),
       logger,
     });
+    return real;
+  };
+  return {
+    publishImagePost: (input) => build().publishImagePost(input),
+    publishVideoPost: (input) => build().publishVideoPost(input),
+  };
+}
+
+/**
+ * TikTok publisher (E6), built on first use like every other outbound adapter:
+ * a process that never posts to TikTok must not need its transport.
+ * Live posting additionally needs the app audit + domain verification
+ * (PENDING(tiktok-live-verify) / PENDING(tiktok-domain-verify) in the adapter).
+ */
+function makeLazyTikTokPublisher(logger: Logger): ChannelPublisher {
+  let real: ChannelPublisher | null = null;
+  const build = (): ChannelPublisher => {
+    real ??= makeTikTokPublisher({ client: makeTikTokClient({ logger }), logger });
     return real;
   };
   return {
@@ -318,6 +355,11 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const google = makeLazyGoogleSources({ logger: deps.logger });
   const queue = overrides.queue ?? makeLazyJobQueue(deps.config, deps.logger);
   const publisher = overrides.publisher ?? makeLazyPublisher(deps.logger);
+  // One publisher per platform: the channel decides which API a job goes to.
+  const publishers: Partial<Record<ChannelPlatform, ChannelPublisher>> = {
+    facebook: overrides.publishers?.facebook ?? publisher,
+    tiktok: overrides.publishers?.tiktok ?? makeLazyTikTokPublisher(deps.logger),
+  };
   const drive = overrides.drive ?? google.drive;
   const mediaSign = makeLazyMediaSigner();
   /**
@@ -353,6 +395,13 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       logger: deps.logger,
     }),
     getSyncStatus: makeGetSyncStatus({ syncRuns, logger: deps.logger }),
+    getCatalogSource: makeGetCatalogSource({ catalogConfig, logger: deps.logger }),
+    updateCatalogSource: makeUpdateCatalogSource({
+      catalogConfig,
+      logger: deps.logger,
+      users,
+    }),
+    listCatalogProducts: makeListCatalogProducts({ catalog: products, logger: deps.logger }),
     composePost: makeComposePost({
       products,
       media,
@@ -385,7 +434,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       postJobs,
       products,
       channels,
-      publisher,
+      publishers,
       queue,
       clock: deps.clock,
       logger: deps.logger,
