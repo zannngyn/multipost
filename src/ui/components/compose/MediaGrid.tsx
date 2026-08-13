@@ -10,14 +10,20 @@ import type { MediaAsset } from "@/ui/schemas/compose.schema";
  * "approve" photos they never saw.
  */
 export function MediaGrid({ media }: { media: readonly MediaAsset[] }) {
+  // A video post carries exactly one clip, so "ảnh bìa"/"thứ tự đăng" would be
+  // nonsense there — the words follow the kind that was actually composed.
+  const isVideo = media[0]?.kind === "video";
+
   return (
     <section aria-labelledby="media-heading" className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 id="media-heading" className="text-base font-semibold">
-          Ảnh sẽ đăng ({media.length})
+          {isVideo ? "Clip sẽ đăng" : "Ảnh sẽ đăng"} ({media.length})
         </h3>
         <p className="text-muted-foreground text-xs">
-          Thứ tự bên dưới là thứ tự đăng. Ảnh đầu tiên là ảnh bìa.
+          {isVideo
+            ? "Một bài video chỉ dùng đúng một clip."
+            : "Thứ tự bên dưới là thứ tự đăng. Ảnh đầu tiên là ảnh bìa."}
         </p>
       </div>
 
@@ -29,7 +35,7 @@ export function MediaGrid({ media }: { media: readonly MediaAsset[] }) {
           >
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-muted-foreground text-xs tabular-nums">#{index + 1}</span>
-              {index === 0 ? <Badge tone="success">Ảnh bìa</Badge> : null}
+              {index === 0 && !isVideo ? <Badge tone="success">Ảnh bìa</Badge> : null}
               {asset.color ? <Badge tone="info">{asset.color}</Badge> : null}
               {asset.needsReview ? <Badge tone="warning">Cần rà soát</Badge> : null}
             </div>
@@ -48,8 +54,9 @@ export function MediaGrid({ media }: { media: readonly MediaAsset[] }) {
       </ul>
 
       <p className="text-muted-foreground text-xs">
-        Chưa xem được ảnh trực tiếp trên màn hình này — Phase 1 chưa có đường tải ảnh từ Drive về
-        trình duyệt. Kiểm tra bằng tên file, hoặc mở thư mục Drive tương ứng.
+        {isVideo
+          ? "Chưa xem trước được clip trên màn hình này — chưa có đường tải video từ Drive về trình duyệt. Kiểm tra bằng tên file và bảng thông số, hoặc mở thư mục Drive tương ứng."
+          : "Chưa xem được ảnh trực tiếp trên màn hình này — Phase 1 chưa có đường tải ảnh từ Drive về trình duyệt. Kiểm tra bằng tên file, hoặc mở thư mục Drive tương ứng."}
       </p>
     </section>
   );

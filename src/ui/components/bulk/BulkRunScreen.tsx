@@ -149,6 +149,14 @@ export function BulkRunScreen() {
           qua kèm lý do — cả lô vẫn chạy tiếp. Trang này chạy trong trình duyệt: đừng đóng tab giữa
           chừng, các lô đã tạo thì vẫn chạy tiếp trên máy chủ.
         </p>
+        <p className="text-muted-foreground max-w-prose text-sm">
+          Màn này chỉ chạy <strong className="text-foreground font-medium">bài ảnh</strong>. Bài
+          video cần chọn đích đăng và kiểm thông số từng clip, nên làm ở màn{" "}
+          <Link href="/compose" className="underline underline-offset-4">
+            Soạn bài
+          </Link>
+          .
+        </p>
       </header>
 
       <form noValidate className="space-y-6" onSubmit={form.handleSubmit(handleSubmit)}>

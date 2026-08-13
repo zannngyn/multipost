@@ -3,7 +3,9 @@ import {
   ComposeResponseSchema,
   type CaptionsResponse,
   type ComposeResponse,
+  type MediaKind,
   type ProductContent,
+  type VideoTarget,
 } from "@/ui/schemas/compose.schema";
 import {
   BatchStatusResponseSchema,
@@ -12,6 +14,7 @@ import {
   RetryPostJobResponseSchema,
   type BatchStatusResponse,
   type CreateBatchResponse,
+  type PostFormat,
   type PostJobLogResponse,
   type PostJobStatus,
   type RetryPostJobResponse,
@@ -45,6 +48,10 @@ export interface ComposeParams {
   productCode: string;
   /** Any spelling; empty means "every colour of this code". */
   color?: string;
+  /** Absent = ảnh. A video post gathers clips instead and checks their specs. */
+  mediaKind?: MediaKind;
+  /** Only sent for a video post — the server ignores it for photos anyway. */
+  videoTarget?: VideoTarget;
 }
 
 export async function composePost(
@@ -54,6 +61,7 @@ export async function composePost(
   const tenantId = params.tenantId?.trim() ?? "";
   const productCode = params.productCode?.trim() ?? "";
   const color = params.color?.trim() ?? "";
+  const mediaKind: MediaKind = params.mediaKind === "video" ? "video" : "image";
 
   // Guards: both are required by the usecase, so a round-trip would only
   // produce the same 400 we can raise here.
@@ -68,7 +76,15 @@ export async function composePost(
 
   return apiRequest("/api/posts/compose", {
     method: "POST",
-    body: { tenantId, productCode, ...(color ? { color } : {}) },
+    body: {
+      tenantId,
+      productCode,
+      ...(color ? { color } : {}),
+      mediaKind,
+      // A video destination is meaningless on a photo post; sending it anyway
+      // would let a stale radio value travel with an album.
+      ...(mediaKind === "video" && params.videoTarget ? { videoTarget: params.videoTarget } : {}),
+    },
     schema: ComposeResponseSchema,
     signal,
     malformedMessage:
@@ -129,6 +145,8 @@ export interface CreatePostBatchParams {
   tenantId: string;
   productCode: string;
   color?: string;
+  /** Absent = `image_post`. A video format takes exactly one video asset. */
+  format?: PostFormat;
   channelIds: readonly string[];
   /** One caption per channel id — the server refuses a missing one by name. */
   captionByChannel: Readonly<Record<string, string>>;
@@ -179,6 +197,17 @@ export async function createPostBatch(
       userMessage: "Bài đăng chưa có ảnh nào.",
     });
   }
+  // A video post carries exactly one clip (core/domain/post-job). Catching it
+  // here names the problem before a round trip; the server enforces it too.
+  const isVideoFormat = params.format === "video_post" || params.format === "reels";
+  if (isVideoFormat && params.media.length !== 1) {
+    throw new ApiError({
+      code: "INVALID_INPUT",
+      status: 0,
+      message: `A ${params.format} post takes exactly one video, got ${params.media.length}`,
+      userMessage: "Bài video chỉ đăng được đúng một clip. Hãy soạn lại bài.",
+    });
+  }
 
   const scheduledAt = params.scheduledAt?.trim() ?? "";
 
@@ -188,6 +217,7 @@ export async function createPostBatch(
       tenantId,
       productCode,
       ...(color ? { color } : {}),
+      ...(params.format ? { format: params.format } : {}),
       ...(scheduledAt ? { scheduledAt } : {}),
       channelIds: [...params.channelIds],
       captionByChannel: params.captionByChannel,

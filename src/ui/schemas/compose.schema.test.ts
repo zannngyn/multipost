@@ -4,6 +4,12 @@ import {
   CaptionsResponseSchema,
   ComposeResponseSchema,
   ComposeWizardSchema,
+  formatCodecs,
+  formatDurationSec,
+  formatFileSize,
+  formatFps,
+  formatResolution,
+  postFormatForVideo,
 } from "./compose.schema";
 import { SyncStatusResponseSchema } from "./sync.schema";
 import { DEMO_TENANT_ID } from "./tenant-health.schema";
@@ -45,10 +51,38 @@ const VALID_COMPOSE = {
   ],
   availableColors: ["TRẮNG"],
   warnings: [],
+  video: null,
+};
+
+const VALID_SPEC = {
+  container: "mov,mp4,m4a,3gp,3g2,mj2",
+  videoCodec: "h264",
+  audioCodec: "aac",
+  width: 1080,
+  height: 1920,
+  durationSec: 12.5,
+  sizeBytes: 24_000_000,
+  fps: 30,
 };
 
 describe("ComposeWizardSchema", () => {
-  const base = { tenantId: DEMO_TENANT_ID, productCode: "MGKVX6310", captions: {} };
+  const base = {
+    tenantId: DEMO_TENANT_ID,
+    productCode: "MGKVX6310",
+    mediaKind: "image",
+    videoTarget: "facebook_video",
+    captions: {},
+  };
+
+  it("rejects a media kind the server does not know", () => {
+    expect(ComposeWizardSchema.safeParse({ ...base, mediaKind: "gif" }).success).toBe(false);
+  });
+
+  it("rejects a video target spelled differently from the server's", () => {
+    // "reels" is the POST FORMAT, not the video target — mixing them up would
+    // send a value composePost refuses.
+    expect(ComposeWizardSchema.safeParse({ ...base, videoTarget: "reels" }).success).toBe(false);
+  });
 
   it("rejects a tenant id that is not a UUID", () => {
     const result = ComposeWizardSchema.safeParse({ ...base, tenantId: "demo" });
@@ -87,6 +121,32 @@ describe("ComposeResponseSchema", () => {
     );
   });
 
+  it("refuses a video block whose target is not one the server sends", () => {
+    const result = ComposeResponseSchema.safeParse({
+      ...VALID_COMPOSE,
+      video: { target: "tiktok", spec: null },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a video post whose spec could not be probed (worker will check)", () => {
+    const result = ComposeResponseSchema.safeParse({
+      ...VALID_COMPOSE,
+      video: { target: "facebook_reels", spec: null },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.video?.spec).toBeNull();
+  });
+
+  it("accepts a probed video spec", () => {
+    const result = ComposeResponseSchema.safeParse({
+      ...VALID_COMPOSE,
+      video: { target: "facebook_video", spec: VALID_SPEC },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.video?.spec?.width).toBe(1080);
+  });
+
   it("drops fields outside the caption whitelist instead of exposing them", () => {
     const result = ComposeResponseSchema.safeParse({
       ...VALID_COMPOSE,
@@ -97,6 +157,40 @@ describe("ComposeResponseSchema", () => {
       expect(result.data.content).not.toHaveProperty("price");
       expect(result.data.content).not.toHaveProperty("stock");
     }
+  });
+});
+
+describe("postFormatForVideo", () => {
+  it("returns image_post when nothing was composed as video", () => {
+    expect(postFormatForVideo(null)).toBe("image_post");
+  });
+
+  it("maps the two video targets onto the two video formats", () => {
+    expect(postFormatForVideo({ target: "facebook_video" })).toBe("video_post");
+    expect(postFormatForVideo({ target: "facebook_reels" })).toBe("reels");
+  });
+});
+
+describe("video spec formatting", () => {
+  it("does not invent numbers for an unreadable spec", () => {
+    expect(formatDurationSec(Number.NaN)).toBe("—");
+    expect(formatFileSize(-1)).toBe("—");
+    expect(formatResolution(0, 1920)).toBe("—");
+    expect(formatFps(null)).toBe("không đọc được");
+  });
+
+  it("reads the numbers the way an operator says them", () => {
+    expect(formatDurationSec(12.5)).toBe("12,5 giây");
+    expect(formatDurationSec(150)).toBe("2,5 phút");
+    expect(formatFileSize(24_000_000)).toBe("24,0 MB");
+    expect(formatFileSize(1_200_000_000)).toBe("1,2 GB");
+    expect(formatResolution(1080, 1920)).toBe("1080x1920 (9:16)");
+    expect(formatFps(30)).toBe("30 fps");
+  });
+
+  it("says out loud that a clip has no sound", () => {
+    expect(formatCodecs("h264", null)).toBe("H264, không có tiếng");
+    expect(formatCodecs("h264", "aac")).toBe("H264 + AAC");
   });
 });
 

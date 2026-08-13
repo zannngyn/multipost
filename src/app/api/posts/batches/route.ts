@@ -54,6 +54,16 @@ const BodySchema = z.object({
     .min(1, "Thiếu mã sản phẩm.")
     .max(64, "Mã sản phẩm quá dài."),
   color: z.string().trim().max(64, "Tên màu quá dài.").optional(),
+  /**
+   * Absent = `image_post` (Phase 1 behaviour). Spelled exactly as `PostFormat`
+   * (core/domain/post-job). A video format takes EXACTLY one video item — the
+   * usecase enforces that and names the mismatch, this schema does not guess.
+   */
+  format: z
+    .enum(["image_post", "video_post", "reels"], {
+      error: "Loại bài chỉ nhận bài ảnh, video thường hoặc Reels.",
+    })
+    .optional(),
   channelIds: z
     .array(z.string().trim().min(1, "Mã kênh không hợp lệ."))
     .min(1, "Chọn ít nhất một kênh để đăng.")
@@ -112,6 +122,7 @@ export async function POST(request: Request): Promise<Response> {
       batchId: body.batchId,
       productCode: body.productCode,
       color: color.length > 0 ? color : undefined,
+      ...(body.format ? { format: body.format } : {}),
       channelIds: body.channelIds,
       captionByChannel: body.captionByChannel,
       media: body.media,

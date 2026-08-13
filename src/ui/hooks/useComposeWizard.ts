@@ -46,9 +46,22 @@ function stepFromSlug(value: string | null): (typeof COMPOSE_STEPS)[number] {
   return COMPOSE_STEPS.find((step) => step.slug === value) ?? FIRST_STEP;
 }
 
-/** Identity of what was composed — changing it invalidates the captions. */
-function composeKey(values: Pick<ComposeWizardValues, "productCode" | "color">): string {
-  return `${values.productCode.trim().toUpperCase()}|${(values.color ?? "").trim().toLowerCase()}`;
+/**
+ * Identity of what was composed — changing it invalidates the captions.
+ * The media kind is part of it: a caption written for an album is not the same
+ * post as a caption for a Reel, and letting it survive silently would be the
+ * "im lặng xoá / im lặng giữ" mistake core-wizard forbids.
+ */
+function composeKey(
+  values: Pick<ComposeWizardValues, "productCode" | "color" | "mediaKind" | "videoTarget">,
+): string {
+  const target = values.mediaKind === "video" ? values.videoTarget : "-";
+  return [
+    values.productCode.trim().toUpperCase(),
+    (values.color ?? "").trim().toLowerCase(),
+    values.mediaKind,
+    target,
+  ].join("|");
 }
 
 function emptyCaptions(): Record<string, string> {
@@ -67,6 +80,9 @@ export function useComposeWizard() {
       tenantId: DEMO_TENANT_ID,
       productCode: "",
       color: "",
+      // Ảnh is the default: Phase 1 is an album tool, video is opt-in.
+      mediaKind: "image",
+      videoTarget: "facebook_video",
       captions: emptyCaptions(),
     },
   });
@@ -115,6 +131,8 @@ export function useComposeWizard() {
         tenantId: values.tenantId,
         productCode: values.productCode,
         color: values.color,
+        mediaKind: values.mediaKind,
+        videoTarget: values.videoTarget,
       });
     },
     retry: false,

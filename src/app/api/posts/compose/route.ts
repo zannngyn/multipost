@@ -38,7 +38,31 @@ const BodySchema = z.object({
   /** Any spelling — the domain normalises TRANG/TRẮNG before matching. */
   color: z.string().trim().max(64, "Tên màu quá dài.").optional(),
   channel: z.literal(DEFAULT_CHANNEL).optional(),
+  /** Phase 2: which files to gather. Absent = ảnh, the Phase 1 behaviour. */
+  mediaKind: z.enum(["image", "video"], { error: "Loại bài chỉ nhận Ảnh hoặc Video." }).optional(),
+  /**
+   * Destination the clip must satisfy. Spelled exactly as `VideoTarget`
+   * (core/domain/video-spec) — the usecase rejects anything else. Ignored for a
+   * photo post; the usecase applies its own default when absent.
+   */
+  videoTarget: z
+    .enum(["facebook_video", "facebook_reels"], {
+      error: "Đích đăng video chỉ nhận Video thường hoặc Reels.",
+    })
+    .optional(),
 });
+
+/**
+ * `composePost` reports a video failure as a block whose `code` predates the
+ * dedicated error codes (INVALID_INPUT / INTERNAL) and whose `reason` carries
+ * the real meaning. This route is the HTTP boundary, so it restores the honest
+ * code — 422 VIDEO_SPEC_INVALID / 422 VIDEO_PROBE_FAILED — instead of telling
+ * the operator their input was malformed or that the server crashed.
+ */
+const BLOCK_REASON_TO_CODE = {
+  VIDEO_SPEC_INVALID: "VIDEO_SPEC_INVALID",
+  VIDEO_PROBE_FAILED: "VIDEO_PROBE_FAILED",
+} as const;
 
 export const dynamic = "force-dynamic";
 
@@ -52,16 +76,23 @@ export async function POST(request: Request): Promise<Response> {
     const body = await readJsonBody(request, BodySchema, { route: ROUTE });
     const color = body.color?.trim() ?? "";
 
+    const mediaKind = body.mediaKind ?? "image";
     const result = await container.usecases.composePost({
       tenantId: body.tenantId,
       productCode: body.productCode,
       channel: body.channel ?? DEFAULT_CHANNEL,
       colors: color.length > 0 ? [color] : undefined,
+      mediaKind,
+      ...(body.videoTarget ? { videoTarget: body.videoTarget } : {}),
     });
 
     // --- Blocked first: nothing downstream may see a half-composed post -----
     if (result.blocked) {
-      throw new AppError(result.blocked.code, {
+      const code =
+        BLOCK_REASON_TO_CODE[result.blocked.reason as keyof typeof BLOCK_REASON_TO_CODE] ??
+        result.blocked.code;
+
+      throw new AppError(code, {
         message: `Compose blocked: ${result.blocked.reason}`,
         userMessage: result.blocked.userMessage,
         context: {
@@ -71,6 +102,8 @@ export async function POST(request: Request): Promise<Response> {
           channel: body.channel ?? DEFAULT_CHANNEL,
           reason: result.blocked.reason,
           available_colors: result.availableColors,
+          media_kind: mediaKind,
+          video_target: result.video?.target ?? body.videoTarget ?? null,
         },
       });
     }

@@ -1,16 +1,27 @@
 "use client";
 
 import { useId } from "react";
+import { useWatch, type UseFormRegisterReturn } from "react-hook-form";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { MediaGrid } from "@/ui/components/compose/MediaGrid";
+import { VideoSpecCard } from "@/ui/components/compose/VideoSpecCard";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import { Input } from "@/ui/components/ui/input";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
-import { INVENTORY_STATUS_LABELS, type ComposeResponse } from "@/ui/schemas/compose.schema";
+import {
+  INVENTORY_STATUS_LABELS,
+  MEDIA_KINDS,
+  MEDIA_KIND_HINTS,
+  MEDIA_KIND_LABELS,
+  VIDEO_TARGETS,
+  VIDEO_TARGET_HINTS,
+  VIDEO_TARGET_LABELS,
+  type ComposeResponse,
+} from "@/ui/schemas/compose.schema";
 
 /**
  * Step 1 — pick the product: type a code (and optionally a colour), pull the
@@ -26,6 +37,9 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
   const { form, compose, composed } = wizard;
   const errors = form.formState.errors;
   const showSkeleton = useDelayedFlag(compose.isPending);
+  // `useWatch` (not `form.watch()`): the destination block must appear the
+  // instant "Video" is picked, and the value re-renders nothing else.
+  const mediaKind = useWatch({ control: form.control, name: "mediaKind" }) ?? "image";
 
   const hasTypedCaption = Object.values(wizard.captionValues ?? {}).some(
     (text) => text.trim().length > 0,
@@ -89,9 +103,44 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
           </Field>
         </div>
 
+        {/* Two fixed options -> radio (core-form-inputs: native first). */}
+        <RadioField
+          legend="Loại bài"
+          hint="Bài ảnh gom 5–10 ảnh; bài video dùng đúng một clip và được kiểm thông số trước khi đăng."
+          name="mediaKind"
+          options={MEDIA_KINDS.map((kind) => ({
+            value: kind,
+            label: MEDIA_KIND_LABELS[kind],
+            hint: MEDIA_KIND_HINTS[kind],
+          }))}
+          register={form.register("mediaKind")}
+          disabled={compose.isPending}
+          error={errors.mediaKind?.message}
+        />
+
+        {mediaKind === "video" ? (
+          <RadioField
+            legend="Đích đăng video"
+            hint="Reels có ràng buộc chặt hơn Video thường; chọn sai thì clip bị chặn ngay ở bước này."
+            name="videoTarget"
+            options={VIDEO_TARGETS.map((target) => ({
+              value: target,
+              label: VIDEO_TARGET_LABELS[target],
+              hint: VIDEO_TARGET_HINTS[target],
+            }))}
+            register={form.register("videoTarget")}
+            disabled={compose.isPending}
+            error={errors.videoTarget?.message}
+          />
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" size="lg" disabled={compose.isPending}>
-            {compose.isPending ? "Đang tra dữ liệu…" : "Tra dữ liệu sản phẩm"}
+            {compose.isPending
+              ? "Đang tra dữ liệu…"
+              : mediaKind === "video"
+                ? "Tra dữ liệu và kiểm video"
+                : "Tra dữ liệu sản phẩm"}
           </Button>
           {hasTypedCaption ? (
             <p className="text-muted-foreground text-xs">
@@ -123,7 +172,11 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
         <EmptyState
           kind="idle"
           title="Chưa tra mã nào"
-          description="Nhập mã sản phẩm rồi bấm “Tra dữ liệu sản phẩm”. Hệ thống sẽ kiểm tra tồn kho trước, sau đó gom ảnh từ Drive."
+          description={
+            mediaKind === "video"
+              ? "Nhập mã sản phẩm rồi bấm “Tra dữ liệu và kiểm video”. Hệ thống kiểm tồn kho trước, sau đó lấy clip từ Drive và kiểm thông số theo đích đăng đã chọn."
+              : "Nhập mã sản phẩm rồi bấm “Tra dữ liệu sản phẩm”. Hệ thống sẽ kiểm tra tồn kho trước, sau đó gom ảnh từ Drive."
+          }
         />
       )}
     </div>
@@ -141,6 +194,9 @@ function ComposeResult({
     <div className="space-y-6">
       <ContentFacts composed={composed} />
       <InternalOperatorInfo composed={composed} />
+      {composed.video ? (
+        <VideoSpecCard video={composed.video} clip={composed.media[0]} />
+      ) : null}
       <MediaGrid media={composed.media} />
 
       <div className="flex flex-wrap gap-2 border-t pt-4">
@@ -283,6 +339,76 @@ function Field({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Radio group for a small fixed set (core-form-inputs: native `<input
+ * type="radio">` first, no custom widget for two options).
+ *
+ * `<fieldset>` + `<legend>` is what makes the group a group for assistive tech;
+ * each option carries its own hint, wired through `aria-describedby`.
+ */
+function RadioField({
+  legend,
+  hint,
+  name,
+  options,
+  register,
+  disabled,
+  error,
+}: {
+  legend: string;
+  hint: string;
+  name: string;
+  options: readonly { value: string; label: string; hint: string }[];
+  register: UseFormRegisterReturn;
+  disabled?: boolean;
+  error?: string;
+}) {
+  const hintId = `${name}-hint`;
+  const errorId = `${name}-error`;
+
+  return (
+    <fieldset
+      className="space-y-2"
+      aria-describedby={error ? `${errorId} ${hintId}` : hintId}
+      aria-invalid={Boolean(error)}
+    >
+      <legend className="text-sm font-medium">{legend}</legend>
+      <p id={hintId} className="text-muted-foreground text-xs">
+        {hint}
+      </p>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        {options.map((option) => (
+          <label
+            key={option.value}
+            htmlFor={`${name}-${option.value}`}
+            className="bg-card hover:bg-muted/40 has-checked:border-primary flex cursor-pointer items-start gap-2 rounded-lg border p-3 text-sm"
+          >
+            <input
+              {...register}
+              id={`${name}-${option.value}`}
+              type="radio"
+              value={option.value}
+              disabled={disabled}
+              className="accent-primary mt-0.5 size-4"
+            />
+            <span>
+              {option.label}
+              <span className="text-muted-foreground block text-xs">{option.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {error ? (
+        <p id={errorId} role="alert" className="text-destructive text-xs">
+          {error}
+        </p>
+      ) : null}
+    </fieldset>
   );
 }
 

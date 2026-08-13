@@ -9,6 +9,8 @@ export interface ErrorStateProps {
   title: string;
   /** What happened + why + what to do next. Vietnamese, no stack traces. */
   description: string;
+  /** One line per reason when an error has several (e.g. video specs). */
+  details?: readonly string[];
   /** Short reference shown to operators for support ("Mã: a91f..."). */
   referenceCode?: string;
   /** Omit to hide the retry button (403/404 — retrying is pointless). */
@@ -26,6 +28,7 @@ export interface ErrorStateProps {
 export function ErrorState({
   title,
   description,
+  details,
   referenceCode,
   onRetry,
   retryLabel = "Thử lại",
@@ -51,6 +54,14 @@ export function ErrorState({
     >
       <h2 className="text-lg font-semibold">{title}</h2>
       <p className="text-muted-foreground text-sm">{description}</p>
+
+      {details && details.length > 0 ? (
+        <ul className="list-disc space-y-1 pl-5 text-sm">
+          {details.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
 
       {referenceCode ? (
         <p className="text-muted-foreground/80 font-mono text-xs">Mã tham chiếu: {referenceCode}</p>

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { PostFormat } from "./post-batch.schema";
 import { tenantIdField } from "./tenant-health.schema";
 
 /**
@@ -24,6 +25,58 @@ export const COMPOSE_CHANNELS = [
 
 export type ComposeChannelId = (typeof COMPOSE_CHANNELS)[number]["id"];
 
+// --- Media kind + video destination (Phase 2, E10.1) ------------------------
+
+/**
+ * Mirrors `MediaKind` (core/domain/media-file-name) and `VideoTarget`
+ * (core/domain/video-spec). The spellings MUST match the server exactly — the
+ * API route forwards them straight into `composePost`.
+ */
+export const MEDIA_KINDS = ["image", "video"] as const;
+export const MediaKindSchema = z.enum(MEDIA_KINDS);
+export type MediaKind = z.infer<typeof MediaKindSchema>;
+
+export const VIDEO_TARGETS = ["facebook_video", "facebook_reels"] as const;
+export const VideoTargetSchema = z.enum(VIDEO_TARGETS);
+export type VideoTarget = z.infer<typeof VideoTargetSchema>;
+
+export const MEDIA_KIND_LABELS: Record<MediaKind, string> = {
+  image: "Ảnh",
+  video: "Video",
+};
+
+export const MEDIA_KIND_HINTS: Record<MediaKind, string> = {
+  image: "Một bài ảnh gồm 5–10 ảnh, ảnh đầu tiên là ảnh bìa.",
+  video: "Một bài video dùng đúng một clip của mã sản phẩm.",
+};
+
+export const VIDEO_TARGET_LABELS: Record<VideoTarget, string> = {
+  facebook_video: "Video thường",
+  facebook_reels: "Reels",
+};
+
+/**
+ * Short operator-facing summary of the limits enforced server-side
+ * (core/domain/video-spec). Kept deliberately short: the binding check is the
+ * server's, this text only helps the operator pick the right destination.
+ */
+export const VIDEO_TARGET_HINTS: Record<VideoTarget, string> = {
+  facebook_video: "Đăng lên dòng thời gian của Trang. Tỷ lệ 9:16 đến 16:9, tối đa 240 phút.",
+  facebook_reels: "Chỉ nhận video dọc 9:16, dài 3–90 giây, tối thiểu 540x960.",
+};
+
+/**
+ * Post format sent to POST /api/posts/batches — mirrors `PostFormat`.
+ *
+ * Derived from what the server actually COMPOSED (`ComposeResponse.video`),
+ * never from the form: the operator may have changed the radio after composing,
+ * and the album on screen is the one that must be published.
+ */
+export function postFormatForVideo(video: { target: VideoTarget } | null): PostFormat {
+  if (!video) return "image_post";
+  return video.target === "facebook_reels" ? "reels" : "video_post";
+}
+
 // --- Step 1: the wizard form (ONE schema for the whole flow, core-wizard) ---
 
 const PRODUCT_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -38,6 +91,10 @@ export const ComposeWizardSchema = z.object({
     .regex(PRODUCT_CODE_PATTERN, "Mã sản phẩm chỉ gồm chữ, số và các ký tự . _ -"),
   /** Optional colour filter, any spelling — the server normalises TRẮNG/TRANG. */
   color: z.string().trim().max(64, "Tên màu quá dài (tối đa 64 ký tự).").optional(),
+  /** Ảnh (mặc định) hay video. Decides which files compose gathers. */
+  mediaKind: MediaKindSchema,
+  /** Only meaningful for a video post; ignored by the server for photos. */
+  videoTarget: VideoTargetSchema,
   /** Caption per channel, edited by hand or filled in by the AI step. */
   captions: z.record(z.string(), z.string()),
 });
@@ -45,7 +102,13 @@ export const ComposeWizardSchema = z.object({
 export type ComposeWizardValues = z.infer<typeof ComposeWizardSchema>;
 
 /** Fields step 1 owns — `trigger()` must not validate steps not reached yet. */
-export const STEP_PRODUCT_FIELDS = ["tenantId", "productCode", "color"] as const;
+export const STEP_PRODUCT_FIELDS = [
+  "tenantId",
+  "productCode",
+  "color",
+  "mediaKind",
+  "videoTarget",
+] as const;
 
 // --- Step 1 response --------------------------------------------------------
 
@@ -80,6 +143,35 @@ export const InventoryDecisionSchema = z.object({
 });
 export type InventoryDecision = z.infer<typeof InventoryDecisionSchema>;
 
+/**
+ * What ffprobe read from the clip — mirrors `VideoSpec` (core/domain/video-spec).
+ * INTERNAL operator information, like `inventory`: never part of a caption.
+ */
+export const VideoSpecSchema = z.object({
+  container: z.string(),
+  videoCodec: z.string(),
+  audioCodec: z.string().nullable(),
+  width: z.number(),
+  height: z.number(),
+  durationSec: z.number(),
+  sizeBytes: z.number(),
+  fps: z.number().nullable(),
+  rotationDegrees: z.number().optional(),
+});
+export type VideoSpec = z.infer<typeof VideoSpecSchema>;
+
+/**
+ * Present on every compose response; `null` for a photo post. `spec` is null
+ * when nothing could be probed in the web process — NOT a block: the worker
+ * owns ffprobe and re-checks before uploading a byte (same two-pass logic as
+ * the stock gate).
+ */
+export const ComposeVideoSchema = z.object({
+  target: VideoTargetSchema,
+  spec: VideoSpecSchema.nullable(),
+});
+export type ComposeVideo = z.infer<typeof ComposeVideoSchema>;
+
 export const ComposeResponseSchema = z.object({
   tenantId: z.string().min(1),
   productCode: z.string().min(1),
@@ -90,6 +182,7 @@ export const ComposeResponseSchema = z.object({
   availableColors: z.array(z.string()),
   /** Operator notes: several colours, files needing review, low stock… */
   warnings: z.array(z.string()),
+  video: ComposeVideoSchema.nullable(),
 });
 export type ComposeResponse = z.infer<typeof ComposeResponseSchema>;
 
@@ -98,6 +191,49 @@ export const INVENTORY_STATUS_LABELS: Record<InventoryDecision["status"], string
   low_stock: "Sắp hết",
   blocked: "Bị chặn",
 };
+
+// --- Reading a video spec out loud (operator area only) ---------------------
+
+/** "12,5 giây" / "2,0 phút" — same wording as the server's own messages. */
+export function formatDurationSec(durationSec: number): string {
+  if (!Number.isFinite(durationSec) || durationSec < 0) return "—";
+  if (durationSec >= 60) return `${(durationSec / 60).toFixed(1).replace(".", ",")} phút`;
+  return `${durationSec.toFixed(1).replace(".", ",")} giây`;
+}
+
+/** Decimal MB/GB, matching the server's reading of Facebook's limits. */
+export function formatFileSize(sizeBytes: number): string {
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return "—";
+  if (sizeBytes >= 1_000_000_000) return `${(sizeBytes / 1_000_000_000).toFixed(1).replace(".", ",")} GB`;
+  return `${(sizeBytes / 1_000_000).toFixed(1).replace(".", ",")} MB`;
+}
+
+/** "1080x1920 (9:16)" — the ratio is what decides Reels, so it is spelled out. */
+export function formatResolution(width: number, height: number): string {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return "—";
+  return `${width}x${height} (${formatAspectRatio(width / height)})`;
+}
+
+function formatAspectRatio(ratio: number): string {
+  const tolerance = 0.01;
+  if (Math.abs(ratio - 9 / 16) < tolerance) return "9:16";
+  if (Math.abs(ratio - 16 / 9) < tolerance) return "16:9";
+  if (Math.abs(ratio - 1) < tolerance) return "1:1";
+  if (Math.abs(ratio - 4 / 5) < tolerance) return "4:5";
+  return `${ratio.toFixed(2).replace(".", ",")}:1`;
+}
+
+export function formatFps(fps: number | null): string {
+  if (fps === null || !Number.isFinite(fps) || fps <= 0) return "không đọc được";
+  return `${Number.isInteger(fps) ? fps : fps.toFixed(1).replace(".", ",")} fps`;
+}
+
+/** "H264 + AAC" / "H264, không có tiếng". */
+export function formatCodecs(videoCodec: string, audioCodec: string | null): string {
+  const video = videoCodec.trim().toUpperCase() || "—";
+  if (!audioCodec || audioCodec.trim().length === 0) return `${video}, không có tiếng`;
+  return `${video} + ${audioCodec.trim().toUpperCase()}`;
+}
 
 // --- Step 2 response --------------------------------------------------------
 

@@ -2,10 +2,11 @@
 
 import { MediaGrid } from "@/ui/components/compose/MediaGrid";
 import { PublishPanel } from "@/ui/components/compose/PublishPanel";
+import { VideoSpecCard } from "@/ui/components/compose/VideoSpecCard";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
-import { COMPOSE_CHANNELS } from "@/ui/schemas/compose.schema";
+import { COMPOSE_CHANNELS, VIDEO_TARGET_LABELS } from "@/ui/schemas/compose.schema";
 
 /**
  * Step 3 — review before anything is published.
@@ -32,7 +33,12 @@ export function StepReview({ wizard }: { wizard: ComposeWizard }) {
           <h3 id="review-post-heading" className="text-base font-semibold">
             Bài sẽ đăng
           </h3>
-          <Badge tone="info">{composed.content.code}</Badge>
+          <div className="flex flex-wrap gap-2">
+            <Badge tone="info">{composed.content.code}</Badge>
+            <Badge tone="neutral">
+              {composed.video ? VIDEO_TARGET_LABELS[composed.video.target] : "Bài ảnh"}
+            </Badge>
+          </div>
         </div>
 
         <p className="text-sm">
@@ -52,6 +58,8 @@ export function StepReview({ wizard }: { wizard: ComposeWizard }) {
           </article>
         ))}
       </section>
+
+      {composed.video ? <VideoSpecCard video={composed.video} clip={composed.media[0]} /> : null}
 
       <MediaGrid media={composed.media} />
 

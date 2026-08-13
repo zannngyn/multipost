@@ -13,7 +13,11 @@ import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useCreatePostBatch } from "@/ui/hooks/usePostBatch";
 import { useScheduleChoice } from "@/ui/hooks/useScheduleChoice";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
-import { COMPOSE_CHANNELS } from "@/ui/schemas/compose.schema";
+import {
+  COMPOSE_CHANNELS,
+  VIDEO_TARGET_LABELS,
+  postFormatForVideo,
+} from "@/ui/schemas/compose.schema";
 
 /**
  * Step 3, second half: pick the channels and create the batch (E7.2 + E10.3).
@@ -104,6 +108,14 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
       return;
     }
 
+    // Format follows what was COMPOSED, never the radio on step 1: the album on
+    // screen is the one being approved (business rule 6 — no surprise content).
+    const format = postFormatForVideo(composed.video);
+    if (composed.video && composed.media.length !== 1) {
+      setFormError("Bài video chỉ đăng được đúng một clip. Hãy quay lại bước 1 và soạn lại bài.");
+      return;
+    }
+
     const captionByChannel: Record<string, string> = {};
     const missing: string[] = [];
     for (const channelId of selectedIds) {
@@ -125,6 +137,7 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
         tenantId: composed.tenantId,
         productCode: composed.content.code,
         color: wizard.form.getValues().color,
+        format,
         channelIds: selectedIds,
         captionByChannel,
         scheduledAt: resolved.scheduledAt,
@@ -161,6 +174,14 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
         </h3>
         <p className="text-muted-foreground text-sm">
           Mỗi kênh được tạo thành một bài riêng. Một kênh lỗi không làm dừng các kênh còn lại.
+        </p>
+        <p className="text-muted-foreground text-sm">
+          Loại bài sẽ tạo:{" "}
+          <span className="text-foreground font-medium">
+            {composed.video
+              ? `${VIDEO_TARGET_LABELS[composed.video.target]} — 1 clip`
+              : `Bài ảnh — ${composed.media.length} ảnh`}
+          </span>
         </p>
       </div>
 

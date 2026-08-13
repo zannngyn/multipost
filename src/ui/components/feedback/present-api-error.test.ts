@@ -130,3 +130,46 @@ describe("presentApiError", () => {
     expect(presentApiError(makeError({ code: "NETWORK_ERROR", status: 0 })).canRetry).toBe(true);
   });
 });
+
+describe("presentApiError — video posts (E10.1 Phase 2)", () => {
+  const SPEC_MESSAGE =
+    'Video "MGKVX6310 TRẮNG 1.mp4" chưa đạt thông số để đăng: Video dài 2,0 giây — Reels Facebook yêu cầu tối thiểu 3,0 giây; Tỷ lệ khung hình 16:9 (1920x1080) không hợp lệ — Reels Facebook cần tỷ lệ 9:16';
+
+  it("lists every violation instead of gluing them into one sentence", () => {
+    const view = presentApiError(
+      makeError({ code: "VIDEO_SPEC_INVALID", status: 422, userMessage: SPEC_MESSAGE }),
+    );
+    expect(view.kind).toBe("business");
+    expect(view.canRetry).toBe(false);
+    expect(view.details).toHaveLength(2);
+    expect(view.details?.[0]).toContain("tối thiểu 3,0 giây");
+    expect(view.details?.[1]).toContain("9:16");
+    // The file name stays in the headline, not repeated in every bullet.
+    expect(view.description).toContain("MGKVX6310");
+  });
+
+  it("keeps a single-reason message readable with no bullet list", () => {
+    const view = presentApiError(
+      makeError({
+        code: "VIDEO_SPEC_INVALID",
+        status: 422,
+        userMessage: "Video chưa đạt thông số để đăng",
+      }),
+    );
+    expect(view.details).toBeUndefined();
+    expect(view.description).toBe("Video chưa đạt thông số để đăng.");
+  });
+
+  it("never offers a retry when the clip could not be probed", () => {
+    const view = presentApiError(
+      makeError({
+        code: "VIDEO_PROBE_FAILED",
+        status: 422,
+        userMessage: "Không kiểm tra được thông số video.",
+      }),
+    );
+    expect(view.kind).toBe("business");
+    expect(view.canRetry).toBe(false);
+    expect(view.hint).toBeTruthy();
+  });
+});

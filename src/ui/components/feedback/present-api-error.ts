@@ -28,6 +28,27 @@ export interface ApiErrorView {
   canRetry: boolean;
   /** Extra guidance shown under the message (admin steps, next action). */
   hint?: string;
+  /** One line per reason, listed instead of glued into one sentence. */
+  details?: string[];
+}
+
+/**
+ * A rejected clip usually breaks SEVERAL rules at once (tỷ lệ + thời lượng +
+ * fps), and the operator re-exporting it wants the whole list, not the first
+ * item. The server joins them with "; " (core `summarizeViolations`), so the
+ * list is split back here.
+ *
+ * PENDING(video-violations): a structured `violations[]` field on the error body
+ * would be sturdier than splitting a sentence. Asked for; until it exists this
+ * degrades safely — no separator simply means one line.
+ */
+function splitVideoViolations(userMessage: string): string[] {
+  const afterColon = userMessage.split(/:\s/).slice(1).join(": ");
+  const source = afterColon.trim().length > 0 ? afterColon : userMessage;
+  return source
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
 }
 
 /**
@@ -138,6 +159,30 @@ export function presentApiError(error: ApiError): ApiErrorView {
         title: "Chưa có ảnh dùng được",
         description: error.userMessage,
         hint: "Kiểm tra thư mục Drive và tên file, sau đó chạy lại đồng bộ dữ liệu.",
+        canRetry: false,
+      };
+
+    case "VIDEO_SPEC_INVALID": {
+      const details = splitVideoViolations(error.userMessage);
+      const listed = details.length > 0 && details[0] !== error.userMessage;
+      // Everything before the colon names the file; the rules go to `details`.
+      const headline = listed ? error.userMessage.split(/:\s/)[0] : error.userMessage;
+      return {
+        kind: "business",
+        title: "Video chưa đạt thông số để đăng",
+        description: headline.endsWith(".") ? headline : `${headline}.`,
+        details: listed ? details : undefined,
+        hint: "Xuất lại clip theo đúng yêu cầu bên trên, hoặc đổi đích đăng (Reels chặt hơn Video thường), rồi tra lại mã.",
+        canRetry: false,
+      };
+    }
+
+    case "VIDEO_PROBE_FAILED":
+      return {
+        kind: "business",
+        title: "Không kiểm tra được thông số video",
+        description: error.userMessage,
+        hint: "File có thể hỏng, không phải video, hoặc chưa tải được từ Drive. Kiểm tra file trên Drive rồi chạy lại đồng bộ; hệ thống không đăng clip chưa kiểm được.",
         canRetry: false,
       };
 

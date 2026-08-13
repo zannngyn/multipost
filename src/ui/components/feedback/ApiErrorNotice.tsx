@@ -31,6 +31,7 @@ export function ApiErrorNotice({
       className={className ?? "mx-0 max-w-none"}
       title={view.title}
       description={view.hint ? `${view.description} ${view.hint}` : view.description}
+      details={view.details}
       referenceCode={apiError.code}
       onRetry={view.canRetry && onRetry ? onRetry : undefined}
       secondaryAction={
