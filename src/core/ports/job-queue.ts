@@ -55,7 +55,34 @@ export interface JobQueue {
    * new state to the database BEFORE touching the queue.
    */
   remove(jobId: string): Promise<boolean>;
+  /**
+   * Is this job still known to the broker (waiting, delayed, active or retained)?
+   *
+   * Used by the reaper to tell "the post is queued and an entry will fire" from
+   * "the post is queued and NOTHING will ever fire" — the state a lost/evicted
+   * entry leaves behind, which no status alone can express. `false` is never
+   * proof that the work did not happen: retention may simply have evicted a
+   * finished job. The caller pairs it with the post_job row.
+   */
+  has(jobId: string): Promise<boolean>;
+  /**
+   * Registers (or updates) a job that repeats every `everyMs`. Idempotent by
+   * `schedulerId`: calling it on every worker boot must not create a second
+   * schedule — that is the whole reason this is not a plain `enqueue` with a
+   * delay the handler re-arms.
+   */
+  enqueueRepeatable<TPayload>(input: RepeatableJobInput<TPayload>): Promise<EnqueueResult>;
   close(): Promise<void>;
+}
+
+export interface RepeatableJobInput<TPayload> {
+  /** Stable identity of the SCHEDULE (not of one run). */
+  readonly schedulerId: string;
+  readonly jobName: string;
+  readonly payload: TPayload;
+  readonly everyMs: number;
+  /** Attempts per RUN. A periodic job should not pile up retries: default 1. */
+  readonly attempts?: number;
 }
 
 /** What a handler receives. `payload` is UNTRUSTED — validate it with a schema. */

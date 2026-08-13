@@ -137,6 +137,12 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
     async listScheduledJobs() {
       return { items: [], nextCursor: null };
     },
+    async findStalePublishing() {
+      return [];
+    },
+    async findOverdueQueued() {
+      return [];
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -175,6 +181,12 @@ function makeQueue(options: { failFor?: string } = {}) {
     },
     async remove() {
       return true;
+    },
+    async has() {
+      return true;
+    },
+    async enqueueRepeatable() {
+      return { jobId: "repeatable" };
     },
     async close() {},
   };
@@ -242,7 +254,6 @@ describe("createPostBatch — rejected calls", () => {
     ["no channel", { channelIds: [] }],
     ["no media", { media: [] }],
     ["11 photos", { media: Array.from({ length: 11 }, () => MEDIA[0]) }],
-    ["a Phase 2 format", { format: "video_post" as const }],
   ])("rejects %s", async (_label, patch) => {
     const { createPostBatch, queue } = harness();
     await expect(createPostBatch({ ...BASE_INPUT, ...patch })).rejects.toMatchObject({
@@ -648,5 +659,63 @@ describe("createPostBatch — scheduling (E8.1)", () => {
     expect(jobs.map((job) => job.queueJobId)).toEqual(
       queue.enqueued.map((entry) => entry.opts?.jobId),
     );
+  });
+});
+
+describe("createPostBatch — video formats (Phase 2)", () => {
+  const VIDEO = [{ driveFileId: "clip-1", fileName: "MGKVX6310-Tím (1).mp4", kind: "video" }];
+
+  it.each(["video_post", "reels"] as const)("creates a %s job with one clip", async (format) => {
+    const { createPostBatch, repo, queue } = harness();
+
+    const result = await createPostBatch({
+      ...BASE_INPUT,
+      channelIds: ["fbpage-a"],
+      captionByChannel: { "fbpage-a": "Giannal – REEL" },
+      format,
+      media: VIDEO,
+    });
+
+    expect(result.format).toBe(format);
+    expect(queue.enqueued).toHaveLength(1);
+    const job = [...repo.store.values()][0];
+    expect(job.format).toBe(format);
+    expect(job.media).toHaveLength(1);
+    expect(job.media[0].driveFileId).toBe("clip-1");
+  });
+
+  it("refuses more than one clip: three clips mean three posts, not a dropped two", async () => {
+    const { createPostBatch, repo } = harness();
+    await expect(
+      createPostBatch({
+        ...BASE_INPUT,
+        format: "reels",
+        media: [...VIDEO, { driveFileId: "clip-2", kind: "video" }],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { media_count: 2, format: "reels" } });
+    expect(repo.store.size).toBe(0);
+  });
+
+  it("refuses an image in a video post and a video in an image post", async () => {
+    const { createPostBatch } = harness();
+    await expect(
+      createPostBatch({ ...BASE_INPUT, format: "reels", media: [{ driveFileId: "p1", kind: "image" }] }),
+    ).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      context: { kind: "image", expected_kind: "video" },
+    });
+    await expect(
+      createPostBatch({ ...BASE_INPUT, media: [{ driveFileId: "c1", kind: "video" }] }),
+    ).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      context: { kind: "video", expected_kind: "image" },
+    });
+  });
+
+  it("still refuses an unknown format", async () => {
+    const { createPostBatch } = harness();
+    await expect(
+      createPostBatch({ ...BASE_INPUT, format: "story" as unknown as "image_post" }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 });

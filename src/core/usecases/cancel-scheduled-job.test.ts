@@ -102,6 +102,12 @@ function makeRepo(job: PostJob | null, options: { rejectTransition?: boolean } =
     async listScheduledJobs() {
       return { items: [], nextCursor: null };
     },
+    async findStalePublishing() {
+      return [];
+    },
+    async findOverdueQueued() {
+      return [];
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -136,6 +142,12 @@ function makeQueue(options: { removed?: boolean; fail?: boolean } = {}) {
       removedIds.push(jobId);
       if (options.fail) throw new AppError("QUEUE_ERROR", { message: "redis down" });
       return options.removed ?? true;
+    },
+    async has() {
+      return true;
+    },
+    async enqueueRepeatable() {
+      return { jobId: "repeatable" };
     },
     async close() {},
   };

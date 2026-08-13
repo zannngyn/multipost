@@ -42,6 +42,8 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   DUPLICATE_POST_BLOCKED: 409,
   PUBLISH_FAILED: 502,
   INVALID_JOB_TRANSITION: 409,
+  VIDEO_SPEC_INVALID: 422,
+  VIDEO_PROBE_FAILED: 422,
 };
 
 /** Structural logger type — the app layer must not import ports or adapters. */

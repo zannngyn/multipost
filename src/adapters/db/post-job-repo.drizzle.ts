@@ -18,8 +18,10 @@ import type {
   NewPostJob,
   PostBatchSummary,
   PostJobListItem,
+  OverdueScanQuery,
   PostJobPage,
   PostJobRepo,
+  StaleScanQuery,
 } from "@/core/ports/post-job-repo";
 
 import type { Database, DbExecutor } from "./client";
@@ -381,6 +383,10 @@ export class DrizzlePostJobRepo implements PostJobRepo {
     tenantId: string;
     postJobId: string;
     queueJobId: string | null;
+    auditAction?: string;
+    auditPayload?: Readonly<Record<string, unknown>>;
+    reason?: string;
+    actorUserId?: string | null;
   }): Promise<boolean> {
     const scope = forTenant(this.db, input?.tenantId ?? "");
     const id = typeof input?.postJobId === "string" ? input.postJobId.trim() : "";
@@ -393,12 +399,40 @@ export class DrizzlePostJobRepo implements PostJobRepo {
     }
 
     try {
-      const rows = await scope.db
-        .update(postJobs)
-        .set({ queueJobId: input.queueJobId, updatedAt: new Date() })
-        .where(scope.where(postJobs, and(eq(postJobs.id, id), eq(postJobs.status, "queued"))))
-        .returning({ id: postJobs.id });
-      return rows.length > 0;
+      return await this.db.transaction(async (tx) => {
+        const txScope = forTenant(tx, scope.tenantId);
+        const rows = await tx
+          .update(postJobs)
+          .set({ queueJobId: input.queueJobId, updatedAt: new Date() })
+          .where(txScope.where(postJobs, and(eq(postJobs.id, id), eq(postJobs.status, "queued"))))
+          .returning();
+
+        const row = rows[0];
+        if (!row) return false;
+
+        // Only when the caller names an event: routine re-pointing (spacing
+        // deferral) would otherwise flood the trail with noise.
+        if (input.auditAction) {
+          await tx.insert(auditLogs).values(
+            txScope.row({
+              actorUserId: input.actorUserId ?? null,
+              action: input.auditAction,
+              entityType: "post_job",
+              entityId: row.id,
+              payload: {
+                ...(input.auditPayload ?? {}),
+                batch_id: row.batchId,
+                product_code: row.productCode,
+                channel: row.channelId,
+                reason: input.reason ?? "QUEUE_ID_UPDATED",
+                queue_job_id: input.queueJobId,
+                scheduled_at: row.scheduledAt?.toISOString() ?? null,
+              },
+            }),
+          );
+        }
+        return true;
+      });
     } catch (error) {
       throw wrapDbError(error, {
         operation: "postJob.setQueueJobId",
@@ -527,6 +561,78 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         tenant_id: scope.tenantId,
         channel: query?.channelId ?? null,
         field: "filter",
+      });
+    }
+  }
+
+  /**
+   * CROSS-TENANT SCAN — the one place in this file that does not go through
+   * `forTenant` (business rule 7's documented exception, mirrored in the port).
+   *
+   * Why it must be: the reaper runs from the queue with no tenant in scope, and
+   * a job stuck in `publishing` is exactly the row nobody is watching. The
+   * result never leaves the worker; every follow-up write IS tenant-scoped,
+   * because it goes through applyTransition with the row's own tenant id.
+   */
+  async findStalePublishing(query: StaleScanQuery): Promise<readonly PostJob[]> {
+    const olderThan = query?.olderThan;
+    const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 50;
+    if (!(olderThan instanceof Date) || !Number.isFinite(olderThan.getTime())) {
+      throw new AppError("INVALID_INPUT", {
+        message: "findStalePublishing requires an `olderThan` date",
+        userMessage: "Tham số quét bài kẹt không hợp lệ.",
+        context: { operation: "postJob.findStalePublishing" },
+      });
+    }
+
+    try {
+      const rows = await this.db
+        .select()
+        .from(postJobs)
+        .where(and(eq(postJobs.status, "publishing"), lt(postJobs.updatedAt, olderThan)))
+        .orderBy(postJobs.updatedAt)
+        .limit(limit);
+      return rows.map(toDomain);
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.findStalePublishing",
+        older_than: olderThan.toISOString(),
+        scope: "CROSS_TENANT",
+      });
+    }
+  }
+
+  /** CROSS-TENANT SCAN — see the note on findStalePublishing. */
+  async findOverdueQueued(query: OverdueScanQuery): Promise<readonly PostJob[]> {
+    const dueBefore = query?.dueBefore;
+    const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 50;
+    if (!(dueBefore instanceof Date) || !Number.isFinite(dueBefore.getTime())) {
+      throw new AppError("INVALID_INPUT", {
+        message: "findOverdueQueued requires a `dueBefore` date",
+        userMessage: "Tham số quét bài quá giờ không hợp lệ.",
+        context: { operation: "postJob.findOverdueQueued" },
+      });
+    }
+
+    try {
+      const rows = await this.db
+        .select()
+        .from(postJobs)
+        .where(
+          and(
+            eq(postJobs.status, "queued"),
+            isNotNull(postJobs.scheduledAt),
+            lt(postJobs.scheduledAt, dueBefore),
+          ),
+        )
+        .orderBy(postJobs.scheduledAt)
+        .limit(limit);
+      return rows.map(toDomain);
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.findOverdueQueued",
+        due_before: dueBefore.toISOString(),
+        scope: "CROSS_TENANT",
       });
     }
   }

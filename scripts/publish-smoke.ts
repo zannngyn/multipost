@@ -8,6 +8,7 @@ import {
 } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
 import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
+import { DrizzleProductRepo } from "@/adapters/db/product-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import {
   auditLogs,
@@ -36,6 +37,8 @@ import { makeListPostJobs } from "@/core/usecases/list-post-jobs";
 import { makeCancelScheduledJob } from "@/core/usecases/cancel-scheduled-job";
 import { makeListScheduledJobs } from "@/core/usecases/list-scheduled-jobs";
 import { makeManageChannelGroups } from "@/core/usecases/manage-channel-groups";
+import { makePublishPost } from "@/core/usecases/publish-post";
+import { makeReapPostJobs } from "@/core/usecases/reap-post-jobs";
 import { makeReschedulePostJob } from "@/core/usecases/reschedule-post-job";
 import { PUBLISH_POST_JOB_NAME } from "@/core/usecases/publish-post";
 import { makeRetryPostJob } from "@/core/usecases/retry-post-job";
@@ -145,6 +148,13 @@ async function main(): Promise<void> {
     queue,
     logger,
     users: new DrizzleUserRepo(db),
+  });
+  const reapPostJobs = makeReapPostJobs({
+    postJobs: repo,
+    queue,
+    channels: channelConfig,
+    clock: infra.clock,
+    logger,
   });
   const groupUsecases = makeManageChannelGroups({
     groups: groupRepo,
@@ -926,6 +936,356 @@ async function main(): Promise<void> {
       attempts: afterNewHour?.attemptCount,
       postId: afterNewHour?.publishedPostId,
       publishedAt: afterNewHour?.publishedAt?.toISOString() ?? null,
+    },
+  });
+
+  // --- Reaper: the two silent deaths ---------------------------------------
+  heading("v) reaper: job kẹt `publishing` -> failed + audit, KHÔNG tự đăng lại");
+  const batchV = randomUUID();
+  const stuckBatch = await usecases.createPostBatch({
+    tenantId: DEMO_TENANT_ID,
+    batchId: batchV,
+    productCode: PRODUCT_A,
+    color: "Tím",
+    channelIds: [CHANNEL_A],
+    captionByChannel: captions,
+    media: MEDIA,
+    // Far enough away that the worker never touches it during this run.
+    scheduledAt: new Date(Date.now() + 20 * 60_000),
+  });
+  const stuckJobId = stuckBatch.channels[0].postJobId;
+  // Simulate the crash: a worker claimed the row and died 30 minutes ago.
+  await db
+    .update(postJobs)
+    .set({
+      status: "publishing",
+      attemptCount: 1,
+      updatedAt: new Date(Date.now() - 30 * 60_000),
+    })
+    .where(eq(postJobs.id, stuckJobId));
+
+  const callsBeforeReap = publisher.callCount();
+  const sweep = await reapPostJobs({ publishingStaleMs: 15 * 60_000, overdueQueuedMs: 10 * 60_000 });
+  const reapedRow = await repo.findJobById(DEMO_TENANT_ID, stuckJobId);
+  const reapAudit = await db
+    .select({ action: auditLogs.action, payload: auditLogs.payload })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.entityId, stuckJobId),
+        eq(auditLogs.action, "post_job.failed_stale_publishing"),
+      ),
+    )
+    .limit(1);
+  print({
+    sweep: {
+      scannedStalePublishing: sweep.scannedStalePublishing,
+      failed: sweep.failed,
+      requeued: sweep.requeued,
+      skipped: sweep.skipped,
+    },
+    job_row: {
+      status: reapedRow?.status,
+      errorCode: reapedRow?.lastErrorCode,
+      userMessage: reapedRow?.lastErrorMessage,
+    },
+    audit_row: reapAudit[0],
+    publisher_calls_during_sweep: publisher.callCount() - callsBeforeReap,
+    proof:
+      publisher.callCount() === callsBeforeReap
+        ? "reaper NEVER republished"
+        : "LEAK",
+  });
+
+  // ... and the operator can pick it up from there.
+  const reapedRetry = await retryPostJob({
+    tenantId: DEMO_TENANT_ID,
+    postJobId: stuckJobId,
+    actorEmail: "van@example.com",
+  });
+  await waitForBatch(db, batchV, ["published"], 60_000);
+  const afterReapRetry = await repo.findJobById(DEMO_TENANT_ID, stuckJobId);
+  print({
+    retry_after_reap: {
+      previousStatus: reapedRetry.previousStatus,
+      status: afterReapRetry?.status,
+      postId: afterReapRetry?.publishedPostId,
+    },
+  });
+
+  heading("w) reaper: job hẹn giờ quá hạn mà entry Redis biến mất -> re-enqueue");
+  const batchW = randomUUID();
+  const lostBatch = await usecases.createPostBatch({
+    tenantId: DEMO_TENANT_ID,
+    batchId: batchW,
+    productCode: PRODUCT_A,
+    color: "Tím",
+    channelIds: [CHANNEL_A],
+    captionByChannel: captions,
+    media: MEDIA,
+    scheduledAt: new Date(Date.now() + 30 * 60_000),
+  });
+  const lostJobId = lostBatch.channels[0].postJobId;
+  const lostEntryId = lostBatch.channels[0].queueJobId;
+  if (!lostEntryId) throw new Error("case w: no queue id stored");
+  // The entry disappears (evicted, flushed, a failed cleanup) and the hour passes.
+  await queue.remove(lostEntryId);
+  await db
+    .update(postJobs)
+    .set({ scheduledAt: new Date(Date.now() - 20 * 60_000) })
+    .where(eq(postJobs.id, lostJobId));
+
+  const sweepW = await reapPostJobs({ overdueQueuedMs: 10 * 60_000 });
+  const requeuedRow = await repo.findJobById(DEMO_TENANT_ID, lostJobId);
+  const requeueAudit = await db
+    .select({ action: auditLogs.action, payload: auditLogs.payload })
+    .from(auditLogs)
+    .where(
+      and(eq(auditLogs.entityId, lostJobId), eq(auditLogs.action, "post_job.requeued_by_reaper")),
+    )
+    .limit(1);
+  print({
+    sweep: { scannedOverdueQueued: sweepW.scannedOverdueQueued, requeued: sweepW.requeued },
+    entry_before: lostEntryId,
+    entry_after: requeuedRow?.queueJobId,
+    entry_changed: requeuedRow?.queueJobId !== lostEntryId,
+    audit_row: requeueAudit[0],
+  });
+  await waitForBatch(db, batchW, ["published"], 60_000);
+  const afterRequeue = await repo.findJobById(DEMO_TENANT_ID, lostJobId);
+  print({ after_requeue: { status: afterRequeue?.status, postId: afterRequeue?.publishedPostId } });
+
+  heading("x) reaper KHÔNG đụng job còn entry / job publishing mới");
+  const batchX = randomUUID();
+  const healthy = await usecases.createPostBatch({
+    tenantId: DEMO_TENANT_ID,
+    batchId: batchX,
+    productCode: PRODUCT_A,
+    color: "Tím",
+    channelIds: [CHANNEL_A],
+    captionByChannel: captions,
+    media: MEDIA,
+    scheduledAt: new Date(Date.now() + 45 * 60_000),
+  });
+  const healthyJobId = healthy.channels[0].postJobId;
+  // Overdue on paper, but its queue entry is alive -> must be left alone.
+  await db
+    .update(postJobs)
+    .set({ scheduledAt: new Date(Date.now() - 20 * 60_000) })
+    .where(eq(postJobs.id, healthyJobId));
+
+  // And a job that entered `publishing` seconds ago: not stale yet.
+  const batchX2 = randomUUID();
+  const freshBatch = await usecases.createPostBatch({
+    tenantId: DEMO_TENANT_ID,
+    batchId: batchX2,
+    productCode: PRODUCT_A,
+    color: "Tím",
+    channelIds: [CHANNEL_B],
+    captionByChannel: captions,
+    media: MEDIA,
+    scheduledAt: new Date(Date.now() + 45 * 60_000),
+  });
+  const freshJobId = freshBatch.channels[0].postJobId;
+  await db
+    .update(postJobs)
+    .set({ status: "publishing", updatedAt: new Date() })
+    .where(eq(postJobs.id, freshJobId));
+
+  const sweepX = await reapPostJobs({ publishingStaleMs: 15 * 60_000, overdueQueuedMs: 10 * 60_000 });
+  const healthyRow = await repo.findJobById(DEMO_TENANT_ID, healthyJobId);
+  const freshRow = await repo.findJobById(DEMO_TENANT_ID, freshJobId);
+  print({
+    sweep: {
+      scannedStalePublishing: sweepX.scannedStalePublishing,
+      scannedOverdueQueued: sweepX.scannedOverdueQueued,
+      failed: sweepX.failed,
+      requeued: sweepX.requeued,
+      skipped: sweepX.skipped,
+      reasons: sweepX.jobs.map((entry) => entry.reason),
+    },
+    overdue_but_queued: { status: healthyRow?.status, queueJobId: healthyRow?.queueJobId },
+    fresh_publishing: { status: freshRow?.status },
+    untouched: healthyRow?.status === "queued" && freshRow?.status === "publishing",
+  });
+  // Leave nothing running behind us.
+  await cancelScheduledJob({ tenantId: DEMO_TENANT_ID, postJobId: healthyJobId });
+
+  heading("y) publishVideoPost (fake): video + reels + token hết hạn");
+  const videoChannel = await channelConfig.findChannel(DEMO_TENANT_ID, CHANNEL_A);
+  if (!videoChannel) throw new Error("case y: channel A missing");
+  const videoUrl = usecases.signMediaUrl({
+    tenantId: DEMO_TENANT_ID,
+    assetId: "drive-video-1",
+    baseUrl: mediaBaseUrl,
+  }).url;
+  const videoResults: Array<Record<string, unknown>> = [];
+  for (const target of ["video", "reels"] as const) {
+    const published = await publisher.publishVideoPost({
+      tenantId: DEMO_TENANT_ID,
+      channel: videoChannel,
+      caption: `Giannal – ${target.toUpperCase()}`,
+      videoUrl,
+      target,
+      idempotencyKey: `${DEMO_TENANT_ID}|video-smoke|${target}`,
+    });
+    const call = publisher.calls[publisher.calls.length - 1];
+    videoResults.push({
+      target,
+      postId: published.postId,
+      url: published.url,
+      recorded_kind: call.kind,
+      recorded_url: redactUrl(call.mediaUrls[0] ?? ""),
+      url_shape_ok: SIGNED_MEDIA_URL.test(call.mediaUrls[0] ?? ""),
+    });
+  }
+  print({ video_calls: videoResults });
+
+  publisher.setScenario(CHANNEL_A, {
+    graphError: { code: 190, error_subcode: 463, message: "Session expired" },
+  });
+  try {
+    await publisher.publishVideoPost({
+      tenantId: DEMO_TENANT_ID,
+      channel: videoChannel,
+      caption: "Reel với token hỏng",
+      videoUrl,
+      target: "reels",
+      idempotencyKey: `${DEMO_TENANT_ID}|video-smoke|expired`,
+    });
+    console.log("!! expected TOKEN_EXPIRED from the video path");
+  } catch (error) {
+    const appError = AppError.from(error);
+    print({
+      video_token_expired: appError.code,
+      userMessage: appError.userMessage,
+      retryable: (appError.context as { retryable?: boolean }).retryable ?? null,
+    });
+  }
+  publisher.setScenario(CHANNEL_A, null);
+
+  // --- z) video: spec gate before the upload (E5.3) -------------------------
+  heading("z) video: spec đạt -> published; spec hỏng -> VIDEO_SPEC_INVALID; probe hỏng -> VIDEO_PROBE_FAILED");
+  // The host running this script has no ffmpeg, and the fixture Drive has no
+  // real video bytes: the BINARY side of the probe is covered by 7A's adapter
+  // unit tests. Here we inject a fake VideoAssetProbe with fixed specs and test
+  // what this domain owns — the gate, the codes, and "nothing is uploaded".
+  const videoAsset = {
+    driveFileId: "drive-video-1",
+    fileName: `${PRODUCT_A}-Tím (1).mp4`,
+    productCode: PRODUCT_A,
+    color: "TÍM",
+    colorRaw: "Tím",
+    sequence: 1,
+    kind: "video" as const,
+    variants: { aiGenerated: false, realPhoto: true, backView: false },
+    mimeType: "video/mp4",
+    sizeBytes: 5_000_000,
+    modifiedTime: "2026-08-01T00:00:00.000Z",
+    warnings: [],
+    needsReview: false,
+  };
+  const mediaAssets = { findByDriveFileId: async () => videoAsset };
+  const goodSpec = {
+    container: "mov,mp4,m4a,3gp,3g2,mj2",
+    videoCodec: "h264",
+    audioCodec: "aac",
+    width: 1080,
+    height: 1920,
+    durationSec: 12,
+    sizeBytes: 5_000_000,
+    fps: 30,
+  };
+
+  const publishWithProbe = (probe: { probeAsset: () => Promise<typeof goodSpec> }) =>
+    makePublishPost({
+      postJobs: repo,
+      products: new DrizzleProductRepo(db),
+      channels: channelConfig,
+      publisher,
+      queue,
+      clock: infra.clock,
+      logger,
+      signMediaUrl: usecases.signMediaUrl,
+      mediaBaseUrl: () => mediaBaseUrl,
+      videoProbe: probe as never,
+      mediaAssets: mediaAssets as never,
+    });
+
+  const makeVideoBatch = async (format: "video_post" | "reels") => {
+    const batchId = randomUUID();
+    const created = await usecases.createPostBatch({
+      tenantId: DEMO_TENANT_ID,
+      batchId,
+      productCode: PRODUCT_A,
+      color: "Tím",
+      format,
+      channelIds: [CHANNEL_A],
+      captionByChannel: { [CHANNEL_A]: `Giannal – ${format}` },
+      media: [{ driveFileId: "drive-video-1", fileName: videoAsset.fileName, kind: "video" }],
+      // Scheduled far away so the RUNNING worker leaves the row `queued`: this
+      // case drives publish-post directly, with its own fake probe.
+      scheduledAt: new Date(Date.now() + 30 * 60_000),
+    });
+    return created.channels[0];
+  };
+
+  // 1. A clip that fits: published through the fake publisher.
+  const okJob = await makeVideoBatch("reels");
+  const callsBeforeVideo = publisher.callCount();
+  const okResult = await publishWithProbe({ probeAsset: async () => goodSpec })({
+    tenantId: DEMO_TENANT_ID,
+    postJobId: okJob.postJobId,
+  });
+  const okRow = await repo.findJobById(DEMO_TENANT_ID, okJob.postJobId);
+  print({
+    spec_ok: {
+      outcome: okResult.outcome,
+      status: okRow?.status,
+      postId: okRow?.publishedPostId,
+      publisher_kind: publisher.calls[publisher.calls.length - 1]?.kind,
+      publisher_calls: publisher.callCount() - callsBeforeVideo,
+    },
+  });
+
+  // 2. A 2-second Reel: blocked, nothing uploaded.
+  const shortJob = await makeVideoBatch("reels");
+  const callsBeforeShort = publisher.callCount();
+  const shortResult = await publishWithProbe({
+    probeAsset: async () => ({ ...goodSpec, durationSec: 2 }),
+  })({ tenantId: DEMO_TENANT_ID, postJobId: shortJob.postJobId });
+  const shortRow = await repo.findJobById(DEMO_TENANT_ID, shortJob.postJobId);
+  print({
+    spec_invalid: {
+      outcome: shortResult.outcome,
+      errorCode: shortResult.errorCode,
+      userMessage: shortResult.userMessage,
+      status: shortRow?.status,
+      publisher_calls: publisher.callCount() - callsBeforeShort,
+      proof: publisher.callCount() === callsBeforeShort ? "nothing uploaded" : "LEAK",
+    },
+  });
+
+  // 3. A file ffprobe cannot read: blocked, not retried.
+  const brokenJob = await makeVideoBatch("video_post");
+  const callsBeforeBroken = publisher.callCount();
+  const brokenResult = await publishWithProbe({
+    probeAsset: async () => {
+      throw new AppError("INVALID_INPUT", {
+        message: "ffprobe found no video stream",
+        context: { reason: "NOT_A_VIDEO" },
+      });
+    },
+  })({ tenantId: DEMO_TENANT_ID, postJobId: brokenJob.postJobId });
+  const brokenRow = await repo.findJobById(DEMO_TENANT_ID, brokenJob.postJobId);
+  print({
+    probe_failed: {
+      outcome: brokenResult.outcome,
+      errorCode: brokenResult.errorCode,
+      userMessage: brokenResult.userMessage,
+      status: brokenRow?.status,
+      publisher_calls: publisher.callCount() - callsBeforeBroken,
+      proof: publisher.callCount() === callsBeforeBroken ? "nothing uploaded" : "LEAK",
     },
   });
 

@@ -1,5 +1,11 @@
 import { AppError } from "@/core/domain/errors";
-import type { ChannelPublisher, PublishImagePostInput, PublishResult } from "@/core/ports/publisher";
+import type {
+  ChannelPublisher,
+  PublishImagePostInput,
+  PublishResult,
+  PublishVideoPostInput,
+  VideoTarget,
+} from "@/core/ports/publisher";
 
 import { mapGraphError, type GraphErrorBody } from "./graph-error-map";
 
@@ -26,6 +32,8 @@ export interface FakePublishScenario {
 
 export interface FakePublishCall {
   readonly channelId: string;
+  /** "image" for a photo/album post, "video"/"reels" for the Phase 2 path. */
+  readonly kind: "image" | VideoTarget;
   readonly pageId: string;
   readonly caption: string;
   readonly mediaCount: number;
@@ -90,6 +98,7 @@ export function makeFakeChannelPublisher(options: {
 
       const record = (outcome: "published" | "error", errorCode?: string): void => {
         calls.push({
+          kind: "image",
           channelId: channel.channelId,
           pageId: channel.externalId,
           caption: input.caption,
@@ -124,6 +133,81 @@ export function makeFakeChannelPublisher(options: {
             tenant_id: input.tenantId,
             channel: channel.channelId,
             fake: true,
+            failure_number: failed + 1,
+            failure_budget: budget,
+          },
+        });
+        record("error", error.code);
+        throw error;
+      }
+
+      sequence += 1;
+      const postId = `${channel.externalId}_${1000 + sequence}`;
+      record("published");
+      return { postId, url: `https://www.facebook.com/${postId}` };
+    },
+
+    /** Same scripting as the image path: scenarios are per CHANNEL, not per kind. */
+    async publishVideoPost(input: PublishVideoPostInput): Promise<PublishResult> {
+      const channel = input?.channel;
+      if (!channel) {
+        throw new AppError("CHANNEL_NOT_CONFIGURED", {
+          message: "Fake publisher called without a channel",
+          context: { tenant_id: input?.tenantId ?? null },
+        });
+      }
+      const target: VideoTarget = input?.target === "reels" ? "reels" : "video";
+      const videoUrl = typeof input?.videoUrl === "string" ? input.videoUrl.trim() : "";
+      if (videoUrl.length === 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "Fake publisher needs a video URL",
+          userMessage: "Video chưa có liên kết công khai — Facebook không tải về được.",
+          context: { tenant_id: input.tenantId, channel: channel.channelId, target },
+        });
+      }
+
+      const scenario = scenarios.get(channel.channelId) ?? {};
+      if (scenario.delayMs && scenario.delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, scenario.delayMs));
+      }
+
+      const record = (outcome: "published" | "error", errorCode?: string): void => {
+        calls.push({
+          kind: target,
+          channelId: channel.channelId,
+          pageId: channel.externalId,
+          caption: input.caption,
+          mediaCount: 1,
+          mediaUrls: [videoUrl],
+          idempotencyKey: input.idempotencyKey,
+          at: new Date(),
+          outcome,
+          ...(errorCode ? { errorCode } : {}),
+        });
+      };
+
+      if (scenario.graphError) {
+        const error = mapGraphError({
+          error: scenario.graphError,
+          httpStatus: 400,
+          context: { tenant_id: input.tenantId, channel: channel.channelId, fake: true, target },
+        });
+        record("error", error.code);
+        throw error;
+      }
+
+      const budget = scenario.transientFailures ?? 0;
+      const failed = failuresSoFar.get(channel.channelId) ?? 0;
+      if (failed < budget) {
+        failuresSoFar.set(channel.channelId, failed + 1);
+        const error = mapGraphError({
+          error: { code: 2, message: "Fake transient Graph failure" },
+          httpStatus: 500,
+          context: {
+            tenant_id: input.tenantId,
+            channel: channel.channelId,
+            fake: true,
+            target,
             failure_number: failed + 1,
             failure_budget: budget,
           },

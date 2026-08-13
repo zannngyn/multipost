@@ -22,6 +22,12 @@ import {
   makeHealthcheckTenantHandler,
 } from "./jobs/healthcheck-tenant-job";
 import { PUBLISH_POST_JOB_NAME, makePublishPostHandler } from "./jobs/publish-post-job";
+import {
+  REAP_POST_JOBS_JOB_NAME,
+  REAP_POST_JOBS_SCHEDULER_ID,
+  makeReapPostJobsHandler,
+} from "./jobs/reap-post-jobs-job";
+import { loadReaperConfig } from "./reaper-schedule";
 
 let logger: Logger | null = null;
 let container: WorkerContainer | null = null;
@@ -142,8 +148,28 @@ async function main(): Promise<void> {
       logger,
       publishPost: deps.usecases.publishPost,
     }),
+    [REAP_POST_JOBS_JOB_NAME]: makeReapPostJobsHandler({
+      logger,
+      reapPostJobs: deps.usecases.reapPostJobs,
+    }),
   };
   consumer = deps.startConsumer(handlers);
+
+  // The periodic sweep is declared AFTER the consumer exists, so the first tick
+  // has somewhere to run. `upsertJobScheduler` is idempotent: N worker replicas
+  // (or N restarts) still mean ONE schedule.
+  const reaperConfig = loadReaperConfig();
+  await deps.queue.enqueueRepeatable({
+    schedulerId: REAP_POST_JOBS_SCHEDULER_ID,
+    jobName: REAP_POST_JOBS_JOB_NAME,
+    everyMs: reaperConfig.WORKER_REAPER_INTERVAL_MS,
+    payload: {
+      publishingStaleMs: reaperConfig.WORKER_PUBLISHING_STALE_MS,
+      overdueQueuedMs: reaperConfig.WORKER_OVERDUE_QUEUED_MS,
+      limit: reaperConfig.WORKER_REAPER_LIMIT,
+    },
+    attempts: 1,
+  });
 
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -151,6 +177,9 @@ async function main(): Promise<void> {
   logger.info("worker ready", {
     job_names: Object.keys(handlers),
     shutdown_deadline_ms: deps.config.WORKER_SHUTDOWN_DEADLINE_MS,
+    reaper_interval_ms: reaperConfig.WORKER_REAPER_INTERVAL_MS,
+    publishing_stale_ms: reaperConfig.WORKER_PUBLISHING_STALE_MS,
+    overdue_queued_ms: reaperConfig.WORKER_OVERDUE_QUEUED_MS,
   });
 }
 

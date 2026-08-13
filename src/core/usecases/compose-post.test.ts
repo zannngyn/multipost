@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { AppError } from "@/core/domain/errors";
 import type { MediaAsset, Product } from "@/core/domain/product";
+import type { VideoSpec } from "@/core/domain/video-spec";
 import type { Logger } from "@/core/ports/infra";
+import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { MediaRepo, ProductRepo } from "@/core/ports/product-repo";
 
-import { makeComposePost } from "./compose-post";
+import { makeComposePost, VIDEO_NOT_CHECKED_WARNING } from "./compose-post";
 
 const TENANT = "00000000-0000-0000-0000-000000000001";
 const CHANNEL = "fb-page-1";
@@ -330,5 +333,279 @@ describe("composePost — happy path", () => {
     expect(result.inventory).toMatchObject({ status: "low_stock", stock: 3 });
     expect(result.warnings[0]).toBe("Tồn thấp 3c — Không nhận sx 1c");
     expect(JSON.stringify(result.content)).not.toContain("Tồn thấp");
+  });
+});
+
+/**
+ * E3 Phase 2 — video spec gate (brief section 5, docs/02 section 5.1 step 4).
+ * The specs below mirror the clips ffprobe really measured in the smoke run
+ * (src/adapters/media/__fixtures__).
+ */
+
+const REELS_SPEC: VideoSpec = {
+  container: "mov,mp4,m4a,3gp,3g2,mj2",
+  videoCodec: "h264",
+  audioCodec: "aac",
+  width: 1080,
+  height: 1920,
+  durationSec: 10,
+  sizeBytes: 298_056,
+  fps: 30,
+  rotationDegrees: 0,
+};
+
+const clip = (sequence: number, extension = "mp4") =>
+  asset({
+    driveFileId: `video-${sequence}`,
+    fileName: `MG0AC6017-KEM (${sequence}).${extension}`,
+    kind: "video",
+    mimeType: `video/${extension}`,
+    sequence,
+    sizeBytes: 298_056,
+  });
+
+function videoHarness(options: {
+  media?: MediaAsset[];
+  spec?: VideoSpec;
+  probeError?: unknown;
+  probe?: VideoAssetProbe;
+}) {
+  const probeAsset = vi.fn(async () => {
+    if (options.probeError !== undefined) throw options.probeError;
+    return options.spec ?? REELS_SPEC;
+  });
+  const products: ProductRepo = {
+    findByCode: async () => product(),
+    upsertMany: async () => 0,
+    deleteStale: async () => 0,
+  };
+  const media: MediaRepo = {
+    listByProductCode: async () => options.media ?? [clip(1)],
+    upsertMany: async () => 0,
+    deleteStale: async () => 0,
+  };
+  const videoProbe = options.probe ?? { probeAsset };
+  return {
+    compose: makeComposePost({ products, media, logger: makeLogger(), videoProbe }),
+    probeAsset,
+  };
+}
+
+describe("composePost — video spec gate", () => {
+  it("throws INVALID_INPUT on an unknown video target", async () => {
+    await expect(
+      videoHarness({}).compose({
+        tenantId: TENANT,
+        productCode: "MG0AC6017",
+        channel: CHANNEL,
+        mediaKind: "video",
+        videoTarget: "instagram_reels" as never,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("never probes a sold-out code — the stock gate still comes first", async () => {
+    const products: ProductRepo = {
+      findByCode: async () => product({ operational: { stockRaw: "0", noteRaw: "", colorsRaw: "" } }),
+      upsertMany: async () => 0,
+      deleteStale: async () => 0,
+    };
+    const probeAsset = vi.fn(async () => REELS_SPEC);
+    const compose = makeComposePost({
+      products,
+      media: { listByProductCode: async () => [clip(1)], upsertMany: async () => 0, deleteStale: async () => 0 },
+      logger: makeLogger(),
+      videoProbe: { probeAsset },
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+    });
+
+    expect(result.blocked).toMatchObject({ code: "OUT_OF_STOCK" });
+    expect(probeAsset).not.toHaveBeenCalled();
+  });
+
+  it("passes a 9:16 clip for Reels and reports the probed spec", async () => {
+    const { compose, probeAsset } = videoHarness({});
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+      videoTarget: "facebook_reels",
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.media).toHaveLength(1);
+    expect(result.video).toEqual({ target: "facebook_reels", spec: REELS_SPEC });
+    expect(probeAsset).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a 2s clip for Reels with the violation spelled out in Vietnamese", async () => {
+    const { compose } = videoHarness({ spec: { ...REELS_SPEC, durationSec: 2 } });
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+      videoTarget: "facebook_reels",
+    });
+
+    expect(result.blocked).toMatchObject({ code: "INVALID_INPUT", reason: "VIDEO_SPEC_INVALID" });
+    expect(result.blocked?.userMessage).toContain("MG0AC6017-KEM (1).mp4");
+    expect(result.blocked?.userMessage).toContain("tối thiểu 3,0 giây");
+    expect(result.content).toBeNull();
+    expect(result.video?.spec).toMatchObject({ durationSec: 2 });
+  });
+
+  it("accepts the same 2s clip as a plain feed video (target decides)", async () => {
+    const { compose } = videoHarness({ spec: { ...REELS_SPEC, durationSec: 2 } });
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+      videoTarget: "facebook_video",
+    });
+    expect(result.blocked).toBeNull();
+  });
+
+  it("defaults to a feed video when no target is given", async () => {
+    const { compose } = videoHarness({});
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+    });
+    expect(result.video?.target).toBe("facebook_video");
+  });
+
+  it("keeps ONE clip when the code has several, and says which one went out", async () => {
+    const { compose, probeAsset } = videoHarness({ media: [clip(3, "mov"), clip(1), clip(2)] });
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+    });
+
+    expect(result.media.map((item) => item.fileName)).toEqual(["MG0AC6017-KEM (1).mp4"]);
+    expect(result.warnings.join(" ")).toContain("chỉ dùng \"MG0AC6017-KEM (1).mp4\"");
+    expect(probeAsset).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not warn about the 5-photo minimum on a video post", async () => {
+    const { compose } = videoHarness({});
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+    });
+    expect(result.warnings.join(" ")).not.toContain("ít hơn mức tối thiểu");
+  });
+
+  it("blocks when the file cannot be probed (corrupt / not a video)", async () => {
+    const { compose } = videoHarness({
+      probeError: new AppError("INVALID_INPUT", {
+        message: "ffprobe exited with code 1",
+        userMessage: "File này không phải video hợp lệ hoặc đã hỏng.",
+        context: { reason: "FFPROBE_EXIT_NONZERO", exit_code: 1 },
+      }),
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+    });
+
+    expect(result.blocked).toMatchObject({
+      code: "INVALID_INPUT",
+      reason: "FFPROBE_EXIT_NONZERO",
+    });
+    expect(result.blocked?.userMessage).toContain("Không kiểm tra được thông số video");
+  });
+
+  it("blocks — never silently passes — on an unexpected probe crash", async () => {
+    const { compose } = videoHarness({ probeError: new TypeError("boom") });
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+    });
+    expect(result.blocked).toMatchObject({ code: "INTERNAL", reason: "VIDEO_PROBE_FAILED" });
+  });
+
+  it("warns instead of blocking when ffprobe is absent from THIS process", async () => {
+    const { compose } = videoHarness({
+      probeError: new AppError("INTERNAL", {
+        message: "ffprobe binary not found",
+        context: { reason: "FFPROBE_NOT_AVAILABLE" },
+      }),
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.warnings).toContain(VIDEO_NOT_CHECKED_WARNING);
+    expect(result.video).toEqual({ target: "facebook_video", spec: null });
+  });
+
+  it("warns instead of blocking when no probe is wired at all", async () => {
+    const products: ProductRepo = {
+      findByCode: async () => product(),
+      upsertMany: async () => 0,
+      deleteStale: async () => 0,
+    };
+    const compose = makeComposePost({
+      products,
+      media: { listByProductCode: async () => [clip(1)], upsertMany: async () => 0, deleteStale: async () => 0 },
+      logger: makeLogger(),
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.warnings).toContain(VIDEO_NOT_CHECKED_WARNING);
+  });
+
+  it("carries the spec warnings (silent clip) without blocking", async () => {
+    const { compose } = videoHarness({ spec: { ...REELS_SPEC, audioCodec: null } });
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MG0AC6017",
+      channel: CHANNEL,
+      mediaKind: "video",
+      videoTarget: "facebook_reels",
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.warnings.join(" ")).toContain("không có tiếng");
+  });
+
+  it("never probes a photo post", async () => {
+    const { compose, probeAsset } = videoHarness({ media: numbered([1, 2, 3, 4, 5]) });
+    const result = await compose({ tenantId: TENANT, productCode: "MGKVX6310", channel: CHANNEL });
+    expect(result.blocked).toBeNull();
+    expect(result.video).toBeNull();
+    expect(probeAsset).not.toHaveBeenCalled();
   });
 });

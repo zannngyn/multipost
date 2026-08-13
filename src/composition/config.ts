@@ -150,6 +150,20 @@ export const MediaConfigSchema = z.object({
 
 export type MediaConfig = z.infer<typeof MediaConfigSchema>;
 
+/**
+ * Video spec check (E3, Phase 2). Its own group with working defaults: the
+ * binary normally comes from the worker image's PATH, so no deployment has to
+ * set anything — but a host with ffprobe somewhere unusual can point at it.
+ */
+export const VideoConfigSchema = z.object({
+  /** Binary path or bare name resolved through PATH. */
+  FFPROBE_PATH: z.string().trim().min(1).default("ffprobe"),
+  /** Hard stop for a hung ffprobe. */
+  VIDEO_PROBE_TIMEOUT_MS: z.coerce.number().int().positive().max(120_000).default(15_000),
+});
+
+export type VideoConfig = z.infer<typeof VideoConfigSchema>;
+
 export const SecretsConfigSchema = z.object({
   /** base64 of exactly 32 random bytes: `openssl rand -base64 32`. */
   TENANT_SECRETS_ENC_KEY: nonEmpty("TENANT_SECRETS_ENC_KEY").refine(
@@ -216,4 +230,8 @@ export function loadMediaConfig(env: EnvRecord = process.env): MediaConfig {
 
 export function loadSecretsConfig(env: EnvRecord = process.env): SecretsConfig {
   return parseEnv(SecretsConfigSchema, env, "secrets");
+}
+
+export function loadVideoConfig(env: EnvRecord = process.env): VideoConfig {
+  return parseEnv(VideoConfigSchema, env, "video");
 }

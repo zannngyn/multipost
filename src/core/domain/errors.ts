@@ -38,6 +38,9 @@ export const ERROR_CODES = [
   "DUPLICATE_POST_BLOCKED",
   "PUBLISH_FAILED",
   "INVALID_JOB_TRANSITION",
+  // Video (E2/E3 Phase 2)
+  "VIDEO_SPEC_INVALID",
+  "VIDEO_PROBE_FAILED",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -75,6 +78,8 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   DUPLICATE_POST_BLOCKED: "Bài này đã được đăng (hoặc đang đăng) lên kênh này — đã chặn đăng trùng.",
   PUBLISH_FAILED: "Đăng bài thất bại sau số lần thử cho phép. Xem nhật ký để biết nguyên nhân.",
   INVALID_JOB_TRANSITION: "Trạng thái công việc đăng bài không cho phép thao tác này.",
+  VIDEO_SPEC_INVALID: "Video chưa đạt thông số của kênh — bài đăng bị chặn.",
+  VIDEO_PROBE_FAILED: "Không kiểm tra được thông số video. Xem nhật ký để biết chi tiết.",
 };
 
 /** English developer message. Falls back to the code itself. */
@@ -107,6 +112,8 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   DUPLICATE_POST_BLOCKED: "Duplicate publish blocked by idempotency lock",
   PUBLISH_FAILED: "Publish failed after allowed retries",
   INVALID_JOB_TRANSITION: "Post job state transition not allowed",
+  VIDEO_SPEC_INVALID: "Video failed channel spec validation",
+  VIDEO_PROBE_FAILED: "Could not probe video metadata",
 };
 
 export interface AppErrorOptions {

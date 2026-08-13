@@ -36,6 +36,10 @@ export const NON_RETRYABLE_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   "CHANNEL_NOT_CONFIGURED",
   "TOKEN_EXPIRED",
   "INVALID_JOB_TRANSITION",
+  // A clip that breaks the target's limits, or a file ffprobe cannot read: the
+  // next attempt reads the same bytes and reaches the same verdict.
+  "VIDEO_SPEC_INVALID",
+  "VIDEO_PROBE_FAILED",
   // The usecase already spent every allowed attempt (or hit a non-retryable
   // platform error) and moved the job to `failed`.
   "PUBLISH_FAILED",

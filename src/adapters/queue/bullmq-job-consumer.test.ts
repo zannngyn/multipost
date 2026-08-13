@@ -7,7 +7,13 @@ import { NON_RETRYABLE_CODES } from "./bullmq-job-consumer";
  * Worker would need a Redis server and belongs to the compose-level check.
  */
 describe("NON_RETRYABLE_CODES", () => {
-  it.each(["JOB_PAYLOAD_INVALID", "INVALID_INPUT", "TENANT_NOT_FOUND"] as const)(
+  it.each([
+    "JOB_PAYLOAD_INVALID",
+    "INVALID_INPUT",
+    "TENANT_NOT_FOUND",
+    "VIDEO_SPEC_INVALID",
+    "VIDEO_PROBE_FAILED",
+  ] as const)(
     "fails %s immediately (business error: retrying cannot fix it)",
     (code) => {
       expect(NON_RETRYABLE_CODES.has(code)).toBe(true);

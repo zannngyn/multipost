@@ -143,6 +143,25 @@ export interface PublishResult {
   readonly url: string | null;
 }
 
+/** Where a video goes: the normal feed, or the Reels surface. */
+export const VIDEO_TARGETS = ["video", "reels"] as const;
+export type VideoTarget = (typeof VIDEO_TARGETS)[number];
+
+export interface PublishVideoPostInput {
+  readonly tenantId: string;
+  readonly channel: ChannelConfig;
+  readonly caption: string;
+  /**
+   * ONE publicly fetchable video URL — the platform downloads it itself, the
+   * same contract as photos. Videos are never uploaded byte-by-byte from here:
+   * the worker holds no file, only a signed URL (E3.6).
+   */
+  readonly videoUrl: string;
+  readonly target: VideoTarget;
+  /** Tracing only, like the image path. */
+  readonly idempotencyKey: string;
+}
+
 /**
  * Contract for every implementer:
  * - Throws AppError('TOKEN_EXPIRED') when the credential is dead — the caller
@@ -153,4 +172,6 @@ export interface PublishResult {
  */
 export interface ChannelPublisher {
   publishImagePost(input: PublishImagePostInput): Promise<PublishResult>;
+  /** Phase 2 (E5.3/E5.4). Same guarantees as publishImagePost. */
+  publishVideoPost(input: PublishVideoPostInput): Promise<PublishResult>;
 }

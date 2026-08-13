@@ -46,7 +46,21 @@ export type PostJobStatus = (typeof POST_JOB_STATUSES)[number];
 export const POST_FORMATS = ["image_post", "video_post", "reels"] as const;
 export type PostFormat = (typeof POST_FORMATS)[number];
 
-export const PHASE_1_FORMATS: readonly PostFormat[] = ["image_post"];
+/**
+ * Formats the composer may create. Phase 2 opened video + reels once the spec
+ * gate existed on both sides (compose-time check in E3, upload-time re-check in
+ * publish-post): a format is only "supported" when something can refuse a file
+ * that does not fit it.
+ */
+export const SUPPORTED_FORMATS: readonly PostFormat[] = ["image_post", "video_post", "reels"];
+
+/** @deprecated Kept as the old name of SUPPORTED_FORMATS; will be removed. */
+export const PHASE_1_FORMATS: readonly PostFormat[] = SUPPORTED_FORMATS;
+
+/** True for the two formats that carry exactly one video file. */
+export function isVideoFormat(format: PostFormat): format is "video_post" | "reels" {
+  return format === "video_post" || format === "reels";
+}
 
 /** Facebook allows at most 10 attachments on one feed post. */
 export const MAX_ALBUM_MEDIA = 10;

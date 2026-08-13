@@ -69,6 +69,9 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       AUTH_ALLOWED_DOMAINS: ${AUTH_ALLOWED_DOMAINS:-example.com}
+      # Never derive the browser-visible origin from Docker's 0.0.0.0 bind.
+      # Local default matches WEB_PORT; production must set its HTTPS origin.
+      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
       SESSION_SECRET: ${SESSION_SECRET:-}
       META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v23.0}
     expose:

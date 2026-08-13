@@ -118,6 +118,12 @@ function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {})
     async listScheduledJobs() {
       return { items: [], nextCursor: null };
     },
+    async findStalePublishing() {
+      return [];
+    },
+    async findOverdueQueued() {
+      return [];
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -154,6 +160,12 @@ function makeQueue(options: { fail?: boolean } = {}) {
     },
     async remove() {
       return true;
+    },
+    async has() {
+      return true;
+    },
+    async enqueueRepeatable() {
+      return { jobId: "repeatable" };
     },
     async close() {},
   };

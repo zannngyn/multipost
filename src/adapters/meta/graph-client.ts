@@ -54,8 +54,21 @@ export interface GraphPostInput {
   readonly context?: Record<string, unknown>;
 }
 
+/**
+ * A POST to an ABSOLUTE url that is not the Graph host — today only Meta's
+ * upload host (`rupload.facebook.com`) used by the Reels flow, which takes its
+ * parameters as HEADERS and carries no form body.
+ */
+export interface GraphAbsolutePostInput {
+  readonly url: string;
+  /** Includes `Authorization: OAuth <token>`; never logged. */
+  readonly headers: Readonly<Record<string, string>>;
+  readonly context?: Record<string, unknown>;
+}
+
 export interface GraphClient {
   post(input: GraphPostInput): Promise<Record<string, unknown>>;
+  postAbsolute(input: GraphAbsolutePostInput): Promise<Record<string, unknown>>;
 }
 
 export function makeGraphClient(deps: GraphClientDeps): GraphClient {
@@ -178,6 +191,84 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
 
       logger.debug("Graph request ok", { path, http_status: response.status, duration_ms: durationMs });
       return parsedBody as Record<string, unknown>;
+    },
+
+    /**
+     * Same failure vocabulary as `post`, different transport: absolute URL, no
+     * form body, credentials in a header. Kept in this file so ONE place owns
+     * timeouts, error mapping and "a non-JSON body is not a success".
+     */
+    async postAbsolute(input: GraphAbsolutePostInput): Promise<Record<string, unknown>> {
+      const url = typeof input?.url === "string" ? input.url.trim() : "";
+      if (!/^https:\/\/\S+$/i.test(url)) {
+        throw new AppError("INVALID_INPUT", {
+          message: "Graph upload requires an absolute https URL",
+          userMessage: "Thiếu địa chỉ tải video lên Facebook — không gửi được yêu cầu.",
+          context: { ...(input?.context ?? {}), url: url || null },
+        });
+      }
+
+      const startedAt = Date.now();
+      let response: Response;
+      try {
+        response = await doFetch(url, {
+          method: "POST",
+          headers: { ...(input.headers ?? {}) },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        const appError = mapGraphError({
+          cause: error,
+          context: { ...(input.context ?? {}), timeout_ms: timeoutMs },
+        });
+        logger.error("Graph upload failed before an answer", {
+          err: appError,
+          error_code: appError.code,
+          duration_ms: Date.now() - startedAt,
+        });
+        throw appError;
+      }
+
+      const durationMs = Date.now() - startedAt;
+      const rawText = await response.text();
+      let parsedBody: unknown = null;
+      try {
+        parsedBody = rawText.length > 0 ? JSON.parse(rawText) : {};
+      } catch (error) {
+        const appError = mapGraphError({
+          httpStatus: response.status,
+          cause: error,
+          context: { ...(input.context ?? {}), body_preview: rawText.slice(0, 200) },
+        });
+        logger.error("Graph upload answered with a non-JSON body", {
+          err: appError,
+          error_code: appError.code,
+          http_status: response.status,
+        });
+        throw appError;
+      }
+
+      const envelope = GraphErrorEnvelopeSchema.safeParse(parsedBody ?? {});
+      const graphError: GraphErrorBody | null = envelope.success ? (envelope.data.error ?? null) : null;
+      if (!response.ok || graphError) {
+        const appError = mapGraphError({
+          error: graphError,
+          httpStatus: response.status,
+          context: { ...(input.context ?? {}) },
+        });
+        logger.error("Graph upload returned an error", {
+          err: appError,
+          error_code: appError.code,
+          http_status: response.status,
+          duration_ms: durationMs,
+        });
+        throw appError;
+      }
+
+      logger.debug("Graph upload ok", { http_status: response.status, duration_ms: durationMs });
+      return typeof parsedBody === "object" && parsedBody !== null && !Array.isArray(parsedBody)
+        ? (parsedBody as Record<string, unknown>)
+        : {};
     },
   };
 }

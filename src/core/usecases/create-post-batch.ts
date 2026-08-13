@@ -3,9 +3,10 @@ import { evaluateProductInventory } from "@/core/domain/inventory";
 import { normalizeColorName } from "@/core/domain/media-file-name";
 import {
   MAX_ALBUM_MEDIA,
-  PHASE_1_FORMATS,
+  SUPPORTED_FORMATS,
   evaluateScheduledAt,
   isPostFormat,
+  isVideoFormat,
   scheduleRejectionMessage,
   postJobDuplicateKey,
   postJobQueueId,
@@ -151,12 +152,12 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
     }
 
     const format = input?.format ?? "image_post";
-    if (!isPostFormat(format) || !PHASE_1_FORMATS.includes(format)) {
-      throw invalid(`Format "${String(format)}" is not available in Phase 1`, {
+    if (!isPostFormat(format) || !SUPPORTED_FORMATS.includes(format)) {
+      throw invalid(`Format "${String(format)}" is not supported`, {
         tenant_id: tenantId,
         product_code: productCode,
         format,
-        supported: PHASE_1_FORMATS,
+        supported: SUPPORTED_FORMATS,
       });
     }
 
@@ -168,7 +169,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
       });
     }
 
-    const assets = normaliseMediaInput(input?.media);
+    const assets = normaliseMediaInput(input?.media, format);
     if (assets instanceof AppError) throw assets;
 
     const captions = new Map<string, string>();
@@ -521,14 +522,29 @@ interface NormalisedAsset {
   readonly fileName: string;
 }
 
-/** Validates the ASSET list. No URL is involved yet — signing comes after. */
+/**
+ * Validates the ASSET list. No URL is involved yet — signing comes after.
+ *
+ * The rules differ by format because the platforms differ: a feed post takes an
+ * album of up to 10 photos, a video post and a Reel take exactly ONE clip.
+ */
 function normaliseMediaInput(
   media: readonly PostMediaInput[] | undefined,
+  format: PostFormat,
 ): NormalisedAsset[] | AppError {
+  const video = isVideoFormat(format);
   if (!Array.isArray(media) || media.length === 0) {
-    return invalid("createPostBatch requires at least one media item", { media_count: 0 });
+    return invalid("createPostBatch requires at least one media item", { media_count: 0, format });
   }
-  if (media.length > MAX_ALBUM_MEDIA) {
+  if (video && media.length !== 1) {
+    // Not "we take the first one": an operator who picked three clips meant
+    // three posts, and silently dropping two is the surprise rule 5 forbids.
+    return invalid(`A ${format} post takes exactly one video, got ${media.length}`, {
+      media_count: media.length,
+      format,
+    });
+  }
+  if (!video && media.length > MAX_ALBUM_MEDIA) {
     return invalid(`An album takes at most ${MAX_ALBUM_MEDIA} items`, {
       media_count: media.length,
       max: MAX_ALBUM_MEDIA,
@@ -556,11 +572,14 @@ function normaliseMediaInput(
       });
     }
     const kind = str(item?.kind).toLowerCase();
-    if (kind.length > 0 && kind !== "image") {
-      return invalid(`Media #${index + 1} is a ${kind}; Phase 1 publishes images only`, {
+    const expectedKind = video ? "video" : "image";
+    if (kind.length > 0 && kind !== expectedKind) {
+      return invalid(`Media #${index + 1} is a ${kind}; a ${format} post needs a ${expectedKind}`, {
         media_index: index,
         drive_file_id: driveFileId,
         kind,
+        format,
+        expected_kind: expectedKind,
       });
     }
     seen.add(driveFileId);

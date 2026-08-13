@@ -3,9 +3,20 @@ import type { Redis } from "ioredis";
 
 import { AppError } from "@/core/domain/errors";
 import type { Logger } from "@/core/ports/infra";
-import type { EnqueueOptions, EnqueueResult, JobQueue } from "@/core/ports/job-queue";
+import type {
+  EnqueueOptions,
+  EnqueueResult,
+  JobQueue,
+  RepeatableJobInput,
+} from "@/core/ports/job-queue";
 
-import { DEFAULT_JOB_OPTIONS, QUEUE_NAME, toBullJobOptions } from "./queue-options";
+import {
+  DEFAULT_JOB_OPTIONS,
+  KEEP_COMPLETED_JOBS,
+  KEEP_FAILED_JOBS,
+  QUEUE_NAME,
+  toBullJobOptions,
+} from "./queue-options";
 
 /** BullMQ implementation of the JobQueue port (producer side). */
 
@@ -114,6 +125,88 @@ class BullMqJobQueue implements JobQueue {
         operation: "queue.remove",
       });
       this.logger.error("queue remove failed", { err: appError, job_id: id });
+      throw appError;
+    }
+  }
+
+  /**
+   * Existence check for the reaper (E11.x). `getJob` looks the job hash up by id
+   * whatever state it is in; `undefined` means the broker has nothing under that
+   * id — evicted by retention, removed, or never created.
+   */
+  async has(jobId: string): Promise<boolean> {
+    const id = typeof jobId === "string" ? jobId.trim() : "";
+    if (id.length === 0) return false;
+    try {
+      const job = await this.queue.getJob(id);
+      return job !== undefined && job !== null;
+    } catch (error) {
+      const appError = AppError.from(error, "QUEUE_ERROR", {
+        queue: this.queueName,
+        job_id: id,
+        operation: "queue.has",
+      });
+      this.logger.error("queue lookup failed", { err: appError, job_id: id });
+      throw appError;
+    }
+  }
+
+  /**
+   * BullMQ job scheduler (the successor of `repeat`): one row per schedulerId,
+   * upserted — so every worker boot re-declares the same schedule instead of
+   * adding one more. Changing `everyMs` in env takes effect on the next boot.
+   */
+  async enqueueRepeatable<TPayload>(input: RepeatableJobInput<TPayload>): Promise<EnqueueResult> {
+    const schedulerId = typeof input?.schedulerId === "string" ? input.schedulerId.trim() : "";
+    const jobName = typeof input?.jobName === "string" ? input.jobName.trim() : "";
+    const everyMs = input?.everyMs;
+    if (schedulerId.length === 0 || jobName.length === 0) {
+      throw new AppError("QUEUE_ERROR", {
+        message: "enqueueRepeatable requires a scheduler id and a job name",
+        userMessage: "Không tạo được công việc định kỳ: thiếu định danh.",
+        context: { queue: this.queueName, scheduler_id: schedulerId || null },
+      });
+    }
+    if (!Number.isInteger(everyMs) || everyMs <= 0) {
+      // A zero/negative period would spin the queue as fast as Redis answers.
+      throw new AppError("QUEUE_ERROR", {
+        message: "enqueueRepeatable requires a positive interval",
+        userMessage: "Chu kỳ chạy công việc định kỳ không hợp lệ.",
+        context: { queue: this.queueName, scheduler_id: schedulerId, every_ms: everyMs },
+      });
+    }
+
+    try {
+      const job = await this.queue.upsertJobScheduler(
+        schedulerId,
+        { every: everyMs },
+        {
+          name: jobName,
+          data: input.payload,
+          opts: {
+            // One attempt per tick: the next tick IS the retry, and a pile of
+            // backed-off reaper runs would all scan the same rows.
+            attempts: input.attempts ?? 1,
+            removeOnComplete: KEEP_COMPLETED_JOBS,
+            removeOnFail: KEEP_FAILED_JOBS,
+          },
+        },
+      );
+      this.logger.info("repeatable job scheduled", {
+        scheduler_id: schedulerId,
+        job_name: jobName,
+        every_ms: everyMs,
+        next_job_id: job?.id ?? null,
+      });
+      return { jobId: job?.id ?? schedulerId };
+    } catch (error) {
+      const appError = AppError.from(error, "QUEUE_ERROR", {
+        queue: this.queueName,
+        scheduler_id: schedulerId,
+        job_name: jobName,
+        operation: "queue.enqueueRepeatable",
+      });
+      this.logger.error("scheduling a repeatable job failed", { err: appError });
       throw appError;
     }
   }

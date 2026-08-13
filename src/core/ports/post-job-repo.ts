@@ -161,6 +161,24 @@ export interface PostJobPage {
   readonly nextCursor: PostJobCursor | null;
 }
 
+/**
+ * CROSS-TENANT scan input (reaper). Deliberately has NO tenantId: the reaper is
+ * a system job that must find stuck rows in EVERY tenant — see the note on the
+ * repo methods below.
+ */
+export interface StaleScanQuery {
+  /** Rows untouched since this instant are considered stuck. */
+  readonly olderThan: Date;
+  /** Hard cap per run, so one bad hour cannot produce an unbounded batch. */
+  readonly limit: number;
+}
+
+export interface OverdueScanQuery {
+  /** Scheduled time is before this instant (i.e. the hour has come and gone). */
+  readonly dueBefore: Date;
+  readonly limit: number;
+}
+
 export interface PostJobRepo {
   /** Batch + all its jobs in one transaction. See the duplicate note above. */
   createBatchWithJobs(input: {
@@ -191,6 +209,11 @@ export interface PostJobRepo {
     readonly tenantId: string;
     readonly postJobId: string;
     readonly queueJobId: string | null;
+    /** When given, an audit row is written in the SAME transaction. */
+    readonly auditAction?: string;
+    readonly auditPayload?: Readonly<Record<string, unknown>>;
+    readonly reason?: string;
+    readonly actorUserId?: string | null;
   }): Promise<boolean>;
 
   /**
@@ -203,6 +226,23 @@ export interface PostJobRepo {
 
   /** E8.4 — jobs waiting for their scheduled time, soonest first. */
   listScheduledJobs(query: ListScheduledJobsQuery): Promise<ScheduledJobPage>;
+
+  /**
+   * Jobs stuck in `publishing` since before `olderThan` — a worker died between
+   * the claim and the result, and nothing else will ever move them.
+   *
+   * CROSS-TENANT ON PURPOSE (the documented exception to business rule 7): the
+   * reaper is a system job with no tenant in its payload, and scanning tenant by
+   * tenant would need a tenant registry the queue does not have. Nothing here
+   * leaves the worker: the rows are only transitioned and logged.
+   */
+  findStalePublishing(query: StaleScanQuery): Promise<readonly PostJob[]>;
+
+  /**
+   * Jobs still `queued` whose scheduled time passed before `dueBefore`.
+   * CROSS-TENANT, same exception and same reasoning as above.
+   */
+  findOverdueQueued(query: OverdueScanQuery): Promise<readonly PostJob[]>;
 
   /**
    * `published_at` of the newest published job on that channel — the input of

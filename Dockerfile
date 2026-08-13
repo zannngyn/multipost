@@ -70,6 +70,10 @@ CMD ["pnpm", "db:migrate"]
 FROM base AS worker
 ENV NODE_ENV=production \
     WORKER_HEARTBEAT_FILE=/tmp/mysp-worker-heartbeat
+# ffmpeg carries ffprobe, which the media adapter shells out to for video specs
+# (E5.3 contract: the probe expects `ffprobe` in PATH). Only the worker needs it —
+# the web image stays small because it never touches a media file.
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package.json tsconfig.json ./

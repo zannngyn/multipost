@@ -14,10 +14,13 @@ import { DrizzleSyncRunRepo } from "@/adapters/db/sync-run-repo.drizzle";
 import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
+import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
+import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
 import { makeBullMqJobQueue } from "@/adapters/queue/bullmq-job-queue";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
+import { AppError } from "@/core/domain/errors";
 import {
   signMediaUrl,
   type SignatureFn,
@@ -26,6 +29,7 @@ import {
 import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
+import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { ChannelPublisher } from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
@@ -38,6 +42,7 @@ import {
   type ManageChannelGroups,
 } from "@/core/usecases/manage-channel-groups";
 import type { ManagePromptTemplates } from "@/core/usecases/manage-prompt-templates";
+import { makeReapPostJobs, type ReapPostJobs } from "@/core/usecases/reap-post-jobs";
 import { makeRetryPostJob, type RetryPostJob } from "@/core/usecases/retry-post-job";
 import {
   makeCancelScheduledJob,
@@ -67,6 +72,7 @@ import {
   loadMediaConfig,
   loadMetaConfig,
   loadSecretsConfig,
+  loadVideoConfig,
   type Config,
   type EnvRecord,
 } from "./config";
@@ -109,6 +115,8 @@ export interface Usecases {
   reschedulePostJob: ReschedulePostJob;
   /** E8.4 — cancel a scheduled post before it goes out. */
   cancelScheduledJob: CancelScheduledJob;
+  /** Periodic sweep for jobs stuck in `publishing` / overdue with no queue entry. */
+  reapPostJobs: ReapPostJobs;
   /** E3.6 — serve one media asset to Meta's fetcher (called by /api/media). */
   getMediaContent: GetMediaContent;
   /**
@@ -143,6 +151,8 @@ export interface UsecaseOverrides {
   /** Worker passes its own queue so one process holds ONE Redis connection. */
   queue?: JobQueue;
   publisher?: ChannelPublisher;
+  /** E3 Phase 2 — tests/scripts inject a probe instead of spawning ffprobe. */
+  videoProbe?: VideoAssetProbe;
 }
 
 export interface Container extends Infra {
@@ -189,6 +199,8 @@ function makeLazyJobQueue(config: Config, logger: Logger): JobQueue {
   return {
     enqueue: (jobName, payload, opts) => build().enqueue(jobName, payload, opts),
     remove: (jobId) => build().remove(jobId),
+    has: (jobId) => build().has(jobId),
+    enqueueRepeatable: (input) => build().enqueueRepeatable(input),
     close: async () => {
       if (closer) await closer();
       real = null;
@@ -213,7 +225,61 @@ function makeLazyPublisher(logger: Logger): ChannelPublisher {
     });
     return real;
   };
-  return { publishImagePost: (input) => build().publishImagePost(input) };
+  return {
+    publishImagePost: (input) => build().publishImagePost(input),
+    publishVideoPost: (input) => build().publishVideoPost(input),
+  };
+}
+
+/**
+ * Video spec probe (E3 Phase 2), built on first use like every other outward
+ * adapter: FFPROBE_PATH is read at the first probe, not at boot, and a process
+ * that never composes a video post never touches the binary.
+ *
+ * A missing binary is NOT fatal here: the error is logged ONCE with the path we
+ * tried (repeating it per photo-less compose would drown the log) and rethrown
+ * so composePost can turn it into "chưa kiểm — worker sẽ kiểm" rather than a
+ * block. The worker image carries ffmpeg/ffprobe, and that is where the check
+ * becomes binding (docs/02 section 5.4).
+ */
+function makeLazyVideoProbe(drive: DriveSource, logger: Logger): VideoAssetProbe {
+  let real: VideoAssetProbe | null = null;
+  let warnedMissing = false;
+
+  const build = (): VideoAssetProbe => {
+    if (!real) {
+      const config = loadVideoConfig();
+      real = makeDriveVideoProbe({
+        drive,
+        probe: makeFfprobeMediaProbe({
+          logger,
+          ffprobePath: config.FFPROBE_PATH,
+          timeoutMs: config.VIDEO_PROBE_TIMEOUT_MS,
+        }),
+        logger,
+      });
+    }
+    return real;
+  };
+
+  return {
+    probeAsset: async (input) => {
+      try {
+        return await build().probeAsset(input);
+      } catch (error) {
+        if (AppError.is(error) && error.context.reason === "FFPROBE_NOT_AVAILABLE") {
+          if (!warnedMissing) {
+            warnedMissing = true;
+            logger.warn("ffprobe is not installed in this process — video specs stay unchecked", {
+              ...error.toLogObject(),
+              hint: "FFPROBE_PATH",
+            });
+          }
+        }
+        throw error;
+      }
+    },
+  };
 }
 
 /**
@@ -287,7 +353,12 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       logger: deps.logger,
     }),
     getSyncStatus: makeGetSyncStatus({ syncRuns, logger: deps.logger }),
-    composePost: makeComposePost({ products, media, logger: deps.logger }),
+    composePost: makeComposePost({
+      products,
+      media,
+      logger: deps.logger,
+      videoProbe: overrides.videoProbe ?? makeLazyVideoProbe(drive, deps.logger),
+    }),
     generateCaptions: makeLazyGenerateCaptions({
       logger: deps.logger,
       clock: deps.clock,
@@ -321,6 +392,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // Re-signed per attempt: a queued job can outlive the URL it was born with.
       signMediaUrl: signMediaUrlFn,
       mediaBaseUrl,
+      // Same lazy probe composePost uses (E3): built on first use, so a process
+      // without ffprobe boots fine and only warns when a video is published.
+      videoProbe: overrides.videoProbe ?? makeLazyVideoProbe(drive, deps.logger),
+      mediaAssets: media,
     }),
     getBatchStatus: makeGetBatchStatus({ postJobs, logger: deps.logger }),
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
@@ -350,6 +425,13 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       queue,
       logger: deps.logger,
       users,
+    }),
+    reapPostJobs: makeReapPostJobs({
+      postJobs,
+      queue,
+      channels,
+      clock: deps.clock,
+      logger: deps.logger,
     }),
     channelGroups: makeManageChannelGroups({
       groups: channelGroups,

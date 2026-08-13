@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
 import { deriveBatchStatus, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
-import type { Product } from "@/core/domain/product";
+import type { MediaAsset, Product } from "@/core/domain/product";
+import type { VideoSpec } from "@/core/domain/video-spec";
+import type { MediaAssetLookup } from "@/core/ports/drive-source";
+import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
 import type {
@@ -123,6 +126,12 @@ function makeMemoryRepo(jobs: PostJob[]) {
     async listScheduledJobs() {
       return { items: [], nextCursor: null };
     },
+    async findStalePublishing() {
+      return [];
+    },
+    async findOverdueQueued() {
+      return [];
+    },
     async findLastPublishedAt(_tenantId: string, channelId: string) {
       const published = [...store.values()]
         .filter((job) => job.channelId === channelId && job.publishedAt)
@@ -206,6 +215,12 @@ function makeQueue() {
     async remove() {
       return true;
     },
+    async has() {
+      return true;
+    },
+    async enqueueRepeatable() {
+      return { jobId: "repeatable" };
+    },
     async close() {},
   };
   return queue;
@@ -215,7 +230,10 @@ interface Harness {
   publish: ReturnType<typeof makePublishPost>;
   repo: ReturnType<typeof makeMemoryRepo>;
   queue: ReturnType<typeof makeQueue>;
-  publisher: { publishImagePost: ReturnType<typeof vi.fn> };
+  publisher: {
+    publishImagePost: ReturnType<typeof vi.fn>;
+    publishVideoPost: ReturnType<typeof vi.fn>;
+  };
   clock: ReturnType<typeof fixedClock>;
   signer: ReturnType<typeof fakeSigner>;
 }
@@ -243,6 +261,9 @@ function harness(options: {
   channel?: ChannelConfig | null;
   settings?: Partial<PublishSettings>;
   publish?: () => Promise<{ postId: string; url: string | null }>;
+  publishVideo?: () => Promise<{ postId: string; url: string | null }>;
+  videoProbe?: VideoAssetProbe;
+  mediaAssets?: MediaAssetLookup;
   signMediaUrl?: SignMediaUrlFn;
   mediaBaseUrl?: () => string;
 } = {}): Harness {
@@ -252,6 +273,11 @@ function harness(options: {
   const publisher = {
     publishImagePost: vi.fn(
       options.publish ?? (async () => ({ postId: "555000111_1", url: "https://fb/555000111_1" })),
+    ),
+    publishVideoPost: vi.fn(
+      options.publishVideo ??
+        options.publish ??
+        (async () => ({ postId: "555000111_2", url: "https://fb/555000111_2" })),
     ),
   };
   const signer = fakeSigner(clock);
@@ -271,6 +297,8 @@ function harness(options: {
       logger: silentLogger(),
       signMediaUrl: options.signMediaUrl ?? signer.sign,
       mediaBaseUrl: options.mediaBaseUrl ?? (() => MEDIA_BASE_URL),
+      videoProbe: options.videoProbe,
+      mediaAssets: options.mediaAssets,
     }),
   };
 }
@@ -702,6 +730,10 @@ describe("publishPost — happy path", () => {
           order.push("publish");
           return { postId: "555000111_9", url: null };
         },
+        publishVideoPost: async () => {
+          order.push("publish-video");
+          return { postId: "555000111_9", url: null };
+        },
       },
       queue: makeQueue(),
       clock: fixedClock(),
@@ -867,5 +899,268 @@ describe("publishPost — the deferred entry is not stale (E8.4 regression)", ()
       queueJobId: newId,
     });
     expect(published.outcome).toBe("published");
+  });
+});
+
+describe("publishPost — video and reels (E5.3/E5.4)", () => {
+  it("sends an image_post to publishImagePost, never to the video path", async () => {
+    const h = harness();
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["video_post", "video"],
+    ["reels", "reels"],
+  ] as Array<[PostJob["format"], string]>)(
+    "sends a %s job to publishVideoPost with target %s",
+    async (format, target) => {
+      const h = harness({
+        jobs: [
+          makeJob({
+            format,
+            media: [{ driveFileId: "drive-1", fileName: "clip.mp4", url: "https://old/clip.mp4" }],
+          }),
+        ],
+      });
+
+      const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+      expect(result.outcome).toBe("published");
+      expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+      const input = h.publisher.publishVideoPost.mock.calls[0][0];
+      expect(input).toMatchObject({ target, caption: "Giannal – MỘT NGÀY DỊU DÀNG" });
+      // Freshly signed, like every other publish (E3.6).
+      expect(input.videoUrl).toBe(
+        `${MEDIA_BASE_URL}/api/media/drive-1?tenant=${TENANT}&expires=${h.signer.calls[0].expiresAtMs}&sig=deadbeef`,
+      );
+      // The anti-duplicate key carries the format, so a video and an album of
+      // the same product on the same channel are different rows.
+      expect(input.idempotencyKey.endsWith(`|${format}`)).toBe(true);
+    },
+  );
+
+  it("warns (with the new error code) when no probe is wired in this process", async () => {
+    const lines: Array<{ level: string; message: string; context?: LogContext }> = [];
+    const repo = makeMemoryRepo([makeJob({ format: "reels" })]);
+    const publish = makePublishPost({
+      postJobs: repo,
+      products: makeProducts(makeProduct("104")),
+      channels: makeChannels(CHANNEL),
+      publisher: {
+        publishImagePost: async () => ({ postId: "x", url: null }),
+        publishVideoPost: async () => ({ postId: "555000111_5", url: null }),
+      },
+      queue: makeQueue(),
+      clock: fixedClock(),
+      logger: {
+        child: () => ({
+          child: () => ({}) as never,
+          debug: () => {},
+          info: () => {},
+          warn: (message: string, context?: LogContext) =>
+            lines.push({ level: "warn", message, context }),
+          error: () => {},
+        }) as never,
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      } as never,
+      signMediaUrl: fakeSigner(fixedClock()).sign,
+      mediaBaseUrl: () => MEDIA_BASE_URL,
+    });
+
+    await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const warn = lines.find((line) => line.context?.reason === "VIDEO_PROBE_NOT_WIRED");
+    expect(warn?.context?.error_code).toBe("VIDEO_PROBE_FAILED");
+  });
+});
+
+// --- E5.3: the video spec is re-checked before the upload -------------------
+
+const VIDEO_ASSET: MediaAsset = {
+  driveFileId: "drive-video-1",
+  fileName: "MGKVX6310-Tím (1).mp4",
+  productCode: "MGKVX6310",
+  color: "TÍM",
+  colorRaw: "Tím",
+  sequence: 1,
+  kind: "video",
+  variants: { aiGenerated: false, realPhoto: true, backView: false },
+  mimeType: "video/mp4",
+  sizeBytes: 5_000_000,
+  modifiedTime: "2026-08-01T00:00:00.000Z",
+  warnings: [],
+  needsReview: false,
+};
+
+/** 9:16, 12s, 30fps — inside every Reels limit. */
+const GOOD_REEL_SPEC: VideoSpec = {
+  container: "mov,mp4,m4a,3gp,3g2,mj2",
+  videoCodec: "h264",
+  audioCodec: "aac",
+  width: 1080,
+  height: 1920,
+  durationSec: 12,
+  sizeBytes: 5_000_000,
+  fps: 30,
+};
+
+function videoJob(overrides: Partial<PostJob> = {}): PostJob {
+  return makeJob({
+    format: "reels",
+    media: [
+      { driveFileId: "drive-video-1", fileName: "clip.mp4", url: "https://old/clip.mp4" },
+    ],
+    ...overrides,
+  });
+}
+
+function makeAssets(asset: MediaAsset | null = VIDEO_ASSET): MediaAssetLookup {
+  return { findByDriveFileId: async () => asset };
+}
+
+function makeProbe(result: VideoSpec | AppError): VideoAssetProbe {
+  return {
+    probeAsset: async () => {
+      if (result instanceof AppError) throw result;
+      return result;
+    },
+  };
+}
+
+describe("publishPost — video spec gate (E5.3)", () => {
+  it("publishes a clip that fits the target", async () => {
+    const h = harness({
+      jobs: [videoJob()],
+      videoProbe: makeProbe(GOOD_REEL_SPEC),
+      mediaAssets: makeAssets(),
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(h.publisher.publishVideoPost).toHaveBeenCalledTimes(1);
+  });
+
+  it("BLOCKS a Reel that is too short — and uploads nothing", async () => {
+    const h = harness({
+      jobs: [videoJob()],
+      // 2 seconds: under the Reels minimum.
+      videoProbe: makeProbe({ ...GOOD_REEL_SPEC, durationSec: 2 }),
+      mediaAssets: makeAssets(),
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.errorCode).toBe("VIDEO_SPEC_INVALID");
+    expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
+    expect(h.repo.get("job-1")).toMatchObject({
+      status: "blocked",
+      lastErrorCode: "VIDEO_SPEC_INVALID",
+    });
+    expect(result.userMessage).toMatch(/giây/);
+  });
+
+  it("blocks with VIDEO_PROBE_FAILED when the file cannot be read", async () => {
+    const h = harness({
+      jobs: [videoJob()],
+      videoProbe: makeProbe(
+        new AppError("INVALID_INPUT", {
+          message: "not a video",
+          context: { reason: "NOT_A_VIDEO" },
+        }),
+      ),
+      mediaAssets: makeAssets(),
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "VIDEO_PROBE_FAILED" });
+    expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
+  });
+
+  it("blocks when the asset is not in the synced snapshot", async () => {
+    const h = harness({
+      jobs: [videoJob()],
+      videoProbe: makeProbe(GOOD_REEL_SPEC),
+      mediaAssets: makeAssets(null),
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "VIDEO_PROBE_FAILED" });
+    expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
+  });
+
+  it("publishes with a warning when ffprobe is missing in THIS process", async () => {
+    const h = harness({
+      jobs: [videoJob()],
+      videoProbe: makeProbe(
+        new AppError("INTERNAL", {
+          message: "ffprobe not found",
+          context: { reason: "FFPROBE_NOT_AVAILABLE" },
+        }),
+      ),
+      mediaAssets: makeAssets(),
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    // PENDING(video-gate-strictness): a missing binary must not stop the shop.
+    expect(result.outcome).toBe("published");
+    expect(h.publisher.publishVideoPost).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes with a warning when no probe is wired at all", async () => {
+    const h = harness({ jobs: [videoJob()] });
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.outcome).toBe("published");
+  });
+
+  it("never probes an image post", async () => {
+    let probed = 0;
+    const h = harness({
+      videoProbe: {
+        probeAsset: async () => {
+          probed += 1;
+          return GOOD_REEL_SPEC;
+        },
+      },
+      mediaAssets: makeAssets(),
+    });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(probed).toBe(0);
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("measures a feed video against the VIDEO limits, not the Reels ones", async () => {
+    // 16:9, 45s: fine for a feed video, wrong aspect for Reels.
+    const landscape: VideoSpec = {
+      ...GOOD_REEL_SPEC,
+      width: 1920,
+      height: 1080,
+      durationSec: 45,
+    };
+    const feed = harness({
+      jobs: [videoJob({ format: "video_post" })],
+      videoProbe: makeProbe(landscape),
+      mediaAssets: makeAssets(),
+    });
+    expect((await feed.publish({ tenantId: TENANT, postJobId: "job-1" })).outcome).toBe("published");
+
+    const reel = harness({
+      jobs: [videoJob({ format: "reels" })],
+      videoProbe: makeProbe(landscape),
+      mediaAssets: makeAssets(),
+    });
+    const blocked = await reel.publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(blocked).toMatchObject({ outcome: "blocked", errorCode: "VIDEO_SPEC_INVALID" });
   });
 });

@@ -3,17 +3,27 @@ import { evaluateProductInventory, type InventoryDecision } from "@/core/domain/
 import { isSameColor, normalizeColorName, type MediaKind } from "@/core/domain/media-file-name";
 import { toPromptInput, type MediaAsset, type ProductContent } from "@/core/domain/product";
 import { isTenantId } from "@/core/domain/tenant";
+import {
+  evaluateVideoSpec,
+  isVideoTarget,
+  summarizeViolations,
+  type VideoSpec,
+  type VideoTarget,
+} from "@/core/domain/video-spec";
 import type { Logger } from "@/core/ports/infra";
+import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { MediaRepo, ProductRepo } from "@/core/ports/product-repo";
 
 /**
  * E3 — the data half of composing a post: look the product up, run the stock
- * gate, then gather media. No AI here (that is E4): this usecase produces the
- * `ProductContent` whitelist + the album, and nothing else.
+ * gate, gather media, then (for a video post) check the file's specs. No AI here
+ * (that is E4): this usecase produces the `ProductContent` whitelist + the
+ * album, and nothing else.
  *
  * The order is the invariant of the whole system (CLAUDE.md business rule 1):
- * sheet -> stock -> media. The stock gate runs before any media work so a
- * sold-out code costs nothing.
+ * sheet -> stock -> media -> video specs -> AI. The stock gate runs before any
+ * media work so a sold-out code costs nothing, and the video gate runs before
+ * anything is uploaded (brief section 5, docs/02 section 5.1 step 4).
  *
  * Blocking is returned as a value, not thrown: a batch of 50 codes must keep
  * going when one is sold out (brief section 3). Only a malformed CALL throws.
@@ -23,6 +33,16 @@ import type { MediaRepo, ProductRepo } from "@/core/ports/product-repo";
 /** Brief section 4.2: 5..10 photos when the operator picks no numbers. */
 export const MIN_AUTO_MEDIA = 5;
 export const MAX_AUTO_MEDIA = 10;
+
+/** Default destination of a video post until the operator picks Reels. */
+export const DEFAULT_VIDEO_TARGET: VideoTarget = "facebook_video";
+
+/**
+ * Shown when no probe is wired (a web process without ffprobe). The post is NOT
+ * blocked: the worker owns the binary and re-checks before uploading a byte.
+ */
+export const VIDEO_NOT_CHECKED_WARNING =
+  "Chưa kiểm được thông số video ở bước soạn bài — hệ thống sẽ kiểm lại trước khi đăng";
 
 export interface ComposePostInput {
   readonly tenantId: string;
@@ -35,6 +55,11 @@ export interface ComposePostInput {
   readonly sequences?: readonly number[];
   /** Album kind. Video posts land in Phase 2 but the filter is already honest. */
   readonly mediaKind?: MediaKind;
+  /**
+   * Destination the video must satisfy (`facebook_video` / `facebook_reels`).
+   * Ignored for photo posts; defaults to DEFAULT_VIDEO_TARGET.
+   */
+  readonly videoTarget?: VideoTarget;
 }
 
 export interface ComposeBlock {
@@ -60,12 +85,22 @@ export interface ComposeResult {
   /** Internal operator notes: low stock, files needing review, missing numbers. */
   readonly warnings: readonly string[];
   readonly blocked: ComposeBlock | null;
+  /**
+   * Video posts only. `spec` is null when nothing was probed (photo post, or no
+   * probe available at compose time — see VIDEO_NOT_CHECKED_WARNING).
+   */
+  readonly video: { readonly target: VideoTarget; readonly spec: VideoSpec | null } | null;
 }
 
 export interface ComposePostDeps {
   products: ProductRepo;
   media: MediaRepo;
   logger: Logger;
+  /**
+   * Optional on purpose: a process without an ffprobe binary still composes,
+   * with a warning, and the worker performs the binding check before upload.
+   */
+  videoProbe?: VideoAssetProbe;
 }
 
 export function makeComposePost(deps: ComposePostDeps) {
@@ -98,8 +133,21 @@ export function makeComposePost(deps: ComposePostDeps) {
       });
     }
 
+    const videoTarget = input?.videoTarget ?? DEFAULT_VIDEO_TARGET;
+    if (!isVideoTarget(videoTarget)) {
+      throw new AppError("INVALID_INPUT", {
+        message: `Unknown video target '${String(input?.videoTarget)}'`,
+        userMessage: "Đích đăng video không hợp lệ.",
+        context: {
+          tenant_id: tenantId,
+          product_code: productCode,
+          video_target: String(input?.videoTarget),
+        },
+      });
+    }
+
     const log = deps.logger.child({ tenant_id: tenantId, product_code: productCode, channel });
-    const base = { tenantId, productCode, channel, media: [] as MediaAsset[] };
+    const base = { tenantId, productCode, channel, media: [] as MediaAsset[], video: null };
 
     const product = await deps.products.findByCode(tenantId, productCode);
     if (!product) {
@@ -243,38 +291,220 @@ export function makeComposePost(deps: ComposePostDeps) {
       };
     }
 
+    // --- Video spec gate (docs/02 section 5.1 step 4) -----------------------
+    // Runs AFTER the stock gate and the media gather, BEFORE the caller may call
+    // AI or upload anything: "không đạt thì báo lỗi trước, không đăng rồi mới
+    // lỗi" (brief section 5).
+    let selected = selection.selected;
+    let videoSpec: VideoSpec | null = null;
+
+    if (kind === "video") {
+      // PENDING(video-single-file): the brief never says what to do when one
+      // code has several clips, and a Facebook video post carries exactly one.
+      // Temporary rule: keep the first of the existing ordering (smallest
+      // sequence number, then name) and name the file in the warnings so the
+      // operator can see which clip went out.
+      if (selected.length > 1) {
+        warnings.push(
+          `Mã ${productCode} có ${selected.length} video; bài này chỉ dùng "${selected[0].fileName}"`,
+        );
+        selected = [selected[0]];
+      }
+
+      const gate = await checkVideoSpec({
+        probe: deps.videoProbe,
+        tenantId,
+        asset: selected[0],
+        target: videoTarget,
+        log,
+      });
+      warnings.push(...gate.warnings);
+      if (!gate.ok) {
+        return {
+          ...base,
+          content: null,
+          inventory,
+          availableColors,
+          warnings,
+          blocked: gate.block,
+          video: { target: videoTarget, spec: gate.spec },
+        };
+      }
+      videoSpec = gate.spec;
+    }
+
     // --- Happy path ---------------------------------------------------------
-    const needingReview = selection.selected.filter((asset) => asset.needsReview).length;
+    const needingReview = selected.filter((asset) => asset.needsReview).length;
     if (needingReview > 0) {
       warnings.push(`${needingReview} file trong bài có tên không đúng chuẩn — nên kiểm tra lại`);
     }
-    if (sequences.length === 0 && selection.selected.length < MIN_AUTO_MEDIA) {
+    if (kind === "image" && sequences.length === 0 && selected.length < MIN_AUTO_MEDIA) {
       warnings.push(
-        `Mã ${productCode} chỉ có ${selection.selected.length} ảnh (ít hơn mức tối thiểu ${MIN_AUTO_MEDIA})`,
+        `Mã ${productCode} chỉ có ${selected.length} ảnh (ít hơn mức tối thiểu ${MIN_AUTO_MEDIA})`,
       );
     }
 
     log.info("Compose ready", {
-      media_count: selection.selected.length,
-      cover_file: selection.selected[0]?.fileName,
+      media_kind: kind,
+      media_count: selected.length,
+      cover_file: selected[0]?.fileName,
       stock: inventory.stock,
       inventory_status: inventory.status,
       media_needing_review: needingReview,
+      video_target: kind === "video" ? videoTarget : null,
+      video_checked: videoSpec !== null,
     });
 
     return {
       ...base,
       content: toPromptInput(product),
       inventory,
-      media: selection.selected,
+      media: selected,
       availableColors,
       warnings,
       blocked: null,
+      video: kind === "video" ? { target: videoTarget, spec: videoSpec } : null,
     };
   };
 }
 
 export type ComposePost = ReturnType<typeof makeComposePost>;
+
+// --- video gate -------------------------------------------------------------
+
+interface VideoGateInput {
+  probe: VideoAssetProbe | undefined;
+  tenantId: string;
+  asset: MediaAsset;
+  target: VideoTarget;
+  log: Logger;
+}
+
+type VideoGateResult =
+  | { ok: true; spec: VideoSpec | null; warnings: string[] }
+  | { ok: false; block: ComposeBlock; spec: VideoSpec | null; warnings: string[] };
+
+/**
+ * Probes one clip and measures it against the target's limits.
+ *
+ * Two failures are deliberately NOT the same thing:
+ *   - the file breaks a rule  -> block, with every violation spelled out;
+ *   - the checker is missing  -> warn, because a web process without ffprobe
+ *     must not stop an operator; the worker owns the binary and re-checks
+ *     before the upload (same reasoning as the two stock checks).
+ * Anything else about the FILE (corrupt, not a video, too large to download)
+ * blocks: an unverifiable file must never reach Facebook unchecked.
+ */
+async function checkVideoSpec(input: VideoGateInput): Promise<VideoGateResult> {
+  const { probe, tenantId, asset, target, log } = input;
+  const warnings: string[] = [];
+
+  if (!probe) {
+    log.warn("Video spec check skipped: no probe wired in this process", {
+      error_code: "INTERNAL",
+      reason: "VIDEO_PROBE_UNAVAILABLE",
+      drive_file_id: asset.driveFileId,
+      video_target: target,
+    });
+    return { ok: true, spec: null, warnings: [VIDEO_NOT_CHECKED_WARNING] };
+  }
+
+  let spec: VideoSpec;
+  try {
+    spec = await probe.probeAsset({ tenantId, asset });
+  } catch (error) {
+    const appError = AppError.from(error, "INTERNAL", {
+      drive_file_id: asset.driveFileId,
+      file_name: asset.fileName,
+      video_target: target,
+    });
+    const reason =
+      typeof appError.context.reason === "string" ? appError.context.reason : "VIDEO_PROBE_FAILED";
+
+    // Port contract of MediaProbe (core/ports/media-probe): this one reason
+    // means "no ffprobe in THIS process", not "bad file".
+    if (reason === "FFPROBE_NOT_AVAILABLE") {
+      log.warn("Video spec check skipped: ffprobe binary not available", {
+        error_code: appError.code,
+        reason,
+        drive_file_id: asset.driveFileId,
+      });
+      return { ok: true, spec: null, warnings: [VIDEO_NOT_CHECKED_WARNING] };
+    }
+
+    log.error("Compose blocked: video probe failed", {
+      ...appError.toLogObject(),
+      reason,
+      drive_file_id: asset.driveFileId,
+    });
+    return {
+      ok: false,
+      spec: null,
+      warnings,
+      block: {
+        // PENDING(error-code): VIDEO_PROBE_FAILED does not exist in errors.ts
+        // yet; the probe's own code is kept and `reason` carries the detail.
+        code: appError.code,
+        reason,
+        userMessage: `Không kiểm tra được thông số video "${asset.fileName}": ${appError.userMessage}`,
+      },
+    };
+  }
+
+  const verdict = evaluateVideoSpec(spec, target);
+  warnings.push(...verdict.warnings);
+
+  if (verdict.ok) {
+    log.info("Video spec check passed", {
+      drive_file_id: asset.driveFileId,
+      video_target: target,
+      container: spec.container,
+      video_codec: spec.videoCodec,
+      width: spec.width,
+      height: spec.height,
+      duration_sec: spec.durationSec,
+      size_bytes: spec.sizeBytes,
+      fps: spec.fps,
+    });
+    return { ok: true, spec, warnings };
+  }
+
+  const summary = summarizeViolations(verdict.violations);
+  log.warn("Compose blocked by the video spec gate", {
+    error_code: "INVALID_INPUT",
+    reason: "VIDEO_SPEC_INVALID",
+    drive_file_id: asset.driveFileId,
+    file_name: asset.fileName,
+    video_target: target,
+    violated_rules: verdict.violations.map((violation) => violation.rule),
+    violations: verdict.violations.map((violation) => ({
+      rule: violation.rule,
+      actual: violation.actual,
+      limit: violation.limit,
+    })),
+    container: spec.container,
+    video_codec: spec.videoCodec,
+    width: spec.width,
+    height: spec.height,
+    duration_sec: spec.durationSec,
+    size_bytes: spec.sizeBytes,
+    fps: spec.fps,
+  });
+
+  return {
+    ok: false,
+    spec,
+    warnings,
+    block: {
+      // PENDING(error-code): VIDEO_SPEC_INVALID does not exist in errors.ts yet.
+      // INVALID_INPUT is the closest existing code — the file IS invalid input
+      // for this channel — and `reason` carries the precise meaning.
+      code: "INVALID_INPUT",
+      reason: "VIDEO_SPEC_INVALID",
+      userMessage: `Video "${asset.fileName}" chưa đạt thông số để đăng: ${summary}`,
+    },
+  };
+}
 
 // --- helpers ----------------------------------------------------------------
 

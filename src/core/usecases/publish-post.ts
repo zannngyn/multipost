@@ -1,6 +1,12 @@
 import { AppError } from "@/core/domain/errors";
 import { evaluateProductInventory } from "@/core/domain/inventory";
 import {
+  evaluateVideoSpec,
+  summarizeViolations,
+  type VideoSpecViolation,
+  type VideoTarget as SpecVideoTarget,
+} from "@/core/domain/video-spec";
+import {
   deferredPostJobQueueId,
   postJobDuplicateKey,
   transitionPostJob,
@@ -14,10 +20,13 @@ import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
+import type { MediaAssetLookup } from "@/core/ports/drive-source";
+import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type {
   ChannelConfigRepo,
   ChannelPublisher,
   SignMediaUrlFn,
+  VideoTarget as PublisherVideoTarget,
 } from "@/core/ports/publisher";
 
 /**
@@ -117,6 +126,15 @@ export interface PublishPostDeps {
   /** Lazy: a missing MEDIA_PUBLIC_BASE_URL blocks the job, it never crashes boot. */
   mediaBaseUrl: () => string;
   mediaUrlTtlMs?: number;
+  /**
+   * E5.3 — the LAST video spec check, right before the upload. Optional for the
+   * same reason the stock recheck is not: a process without ffprobe must still
+   * be able to run (it warns), while the worker image carries the binary and
+   * therefore makes the check binding.
+   */
+  videoProbe?: VideoAssetProbe;
+  /** Resolves a post_job media item back to the synced asset the probe needs. */
+  mediaAssets?: MediaAssetLookup;
 }
 
 export function makePublishPost(deps: PublishPostDeps) {
@@ -367,6 +385,36 @@ export function makePublishPost(deps: PublishPostDeps) {
       });
     }
 
+    // --- 6a0. Video spec, re-checked before the upload (E5.3) ---------------
+    // Same reasoning as the two stock checks: the compose-time verdict can be
+    // hours old, the file may have been replaced on Drive, and an over-long clip
+    // rejected AFTER a multi-megabyte upload wastes the operator's evening.
+    if (claimed.format !== "image_post") {
+      const gate = await checkVideoBeforeUpload(deps, claimed, log);
+      if (!gate.ok) {
+        const blocked = await block(
+          deps,
+          claimed,
+          gate.errorCode,
+          gate.userMessage,
+          gate.reason,
+        );
+        log.warn("Publish blocked by the video spec gate — nothing was uploaded", {
+          outcome: "blocked",
+          error_code: gate.errorCode,
+          reason: gate.reason,
+          violations: gate.violations,
+          format: claimed.format,
+          alert: "OPERATOR_ATTENTION",
+        });
+        return result(blocked ?? claimed, "blocked", {
+          deferredMs: null,
+          errorCode: gate.errorCode,
+          userMessage: gate.userMessage,
+        });
+      }
+    }
+
     // --- 6a. Fresh media URLs (E3.6) ----------------------------------------
     // Signed links are short-lived on purpose; the ones minted when the batch
     // was created may already be dead by the time this attempt runs.
@@ -418,13 +466,27 @@ export function makePublishPost(deps: PublishPostDeps) {
     const startedAt = deps.clock.nowMs();
     let published: { postId: string; url: string | null };
     try {
-      published = await deps.publisher.publishImagePost({
-        tenantId,
-        channel,
-        caption: claimed.captionText,
-        media,
-        idempotencyKey: postJobDuplicateKey(claimed),
-      });
+      published =
+        claimed.format === "image_post"
+          ? await deps.publisher.publishImagePost({
+              tenantId,
+              channel,
+              caption: claimed.captionText,
+              media,
+              idempotencyKey: postJobDuplicateKey(claimed),
+            })
+          : await deps.publisher.publishVideoPost({
+              tenantId,
+              channel,
+              caption: claimed.captionText,
+              // One video per post: media[0] is the file, the rest (if any) is
+              // a thumbnail choice we do not use yet.
+              videoUrl: media[0]?.url ?? "",
+              target:
+                VIDEO_FORMAT_TARGETS[claimed.format === "reels" ? "reels" : "video_post"]
+                  .publisher,
+              idempotencyKey: postJobDuplicateKey(claimed),
+            });
     } catch (error) {
       return await handlePublishError(deps, log, claimed, error, {
         attempt,
@@ -477,6 +539,132 @@ export function makePublishPost(deps: PublishPostDeps) {
 export type PublishPost = ReturnType<typeof makePublishPost>;
 
 // --- helpers ----------------------------------------------------------------
+
+/** post_job.format -> the two vocabularies that describe the same thing. */
+export const VIDEO_FORMAT_TARGETS: Readonly<
+  Record<"video_post" | "reels", { spec: SpecVideoTarget; publisher: PublisherVideoTarget }>
+> = {
+  video_post: { spec: "facebook_video", publisher: "video" },
+  reels: { spec: "facebook_reels", publisher: "reels" },
+};
+
+type VideoGateOutcome =
+  | { ok: true }
+  | {
+      ok: false;
+      errorCode: "VIDEO_SPEC_INVALID" | "VIDEO_PROBE_FAILED";
+      reason: string;
+      userMessage: string;
+      violations: readonly VideoSpecViolation[];
+    };
+
+/**
+ * Probes the clip and measures it against the target's limits.
+ *
+ * Three outcomes, deliberately not the same thing:
+ *   - a rule is broken            -> blocked VIDEO_SPEC_INVALID, every violation
+ *                                    listed (an operator re-exporting a clip
+ *                                    wants the whole list, not the first line);
+ *   - the file cannot be read     -> blocked VIDEO_PROBE_FAILED, no retry: a
+ *                                    corrupt file will not fix itself;
+ *   - ffprobe is missing HERE     -> warn and publish. PENDING(video-gate-
+ *                                    strictness): the PM decides whether an
+ *                                    unchecked video may go out at all; until
+ *                                    then a missing binary must not stop the
+ *                                    shop from posting.
+ */
+async function checkVideoBeforeUpload(
+  deps: PublishPostDeps,
+  job: PostJob,
+  log: Logger,
+): Promise<VideoGateOutcome> {
+  const targets = VIDEO_FORMAT_TARGETS[job.format === "reels" ? "reels" : "video_post"];
+  const unchecked = (reason: string, context: Record<string, unknown> = {}): VideoGateOutcome => {
+    log.warn("Publishing a video without a fresh specification check", {
+      error_code: "VIDEO_PROBE_FAILED",
+      reason,
+      format: job.format,
+      video_target: targets.spec,
+      ...context,
+    });
+    return { ok: true };
+  };
+
+  if (!deps.videoProbe || !deps.mediaAssets) {
+    return unchecked("VIDEO_PROBE_NOT_WIRED");
+  }
+
+  const item = job.media[0];
+  const driveFileId = typeof item?.driveFileId === "string" ? item.driveFileId.trim() : "";
+  if (driveFileId.length === 0) {
+    // A job created before signed URLs: nothing identifies the asset.
+    return unchecked("MEDIA_WITHOUT_ASSET_ID", { file_name: item?.fileName ?? null });
+  }
+
+  let asset;
+  try {
+    asset = await deps.mediaAssets.findByDriveFileId(job.tenantId, driveFileId);
+  } catch (error) {
+    // The snapshot is unreachable; that is an infrastructure problem, not a bad
+    // file. Let the queue retry rather than blocking a valid post.
+    throw AppError.from(error, "DB_ERROR", {
+      tenant_id: job.tenantId,
+      job_id: job.id,
+      drive_file_id: driveFileId,
+      operation: "publishPost.videoGate.findAsset",
+    });
+  }
+  if (!asset) {
+    return {
+      ok: false,
+      errorCode: "VIDEO_PROBE_FAILED",
+      reason: "ASSET_NOT_IN_SNAPSHOT",
+      userMessage: `Không tìm thấy video "${item?.fileName ?? driveFileId}" trong dữ liệu đã đồng bộ — không đăng.`,
+      violations: [],
+    };
+  }
+
+  let spec;
+  try {
+    spec = await deps.videoProbe.probeAsset({ tenantId: job.tenantId, asset });
+  } catch (error) {
+    const appError = AppError.from(error, "VIDEO_PROBE_FAILED", {
+      tenant_id: job.tenantId,
+      job_id: job.id,
+      drive_file_id: driveFileId,
+      video_target: targets.spec,
+    });
+    const reason = typeof appError.context.reason === "string" ? appError.context.reason : "PROBE_FAILED";
+    // Port contract (core/ports/media-probe): this ONE reason means "no ffprobe
+    // in this process", not "bad file".
+    if (reason === "FFPROBE_NOT_AVAILABLE") {
+      return unchecked(reason, { err: appError });
+    }
+    return {
+      ok: false,
+      errorCode: "VIDEO_PROBE_FAILED",
+      reason,
+      userMessage: `Không đọc được thông số video "${asset.fileName}" (${reason}) — không đăng.`,
+      violations: [],
+    };
+  }
+
+  const verdict = evaluateVideoSpec(spec, targets.spec);
+  if (!verdict.ok) {
+    return {
+      ok: false,
+      errorCode: "VIDEO_SPEC_INVALID",
+      reason: verdict.violations[0]?.rule ?? "VIDEO_SPEC_INVALID",
+      // First line for the row, the full list in the log/context.
+      userMessage: verdict.violations[0]?.userMessage ?? summarizeViolations(verdict.violations),
+      violations: verdict.violations,
+    };
+  }
+  for (const warning of verdict.warnings) {
+    log.info("Video spec warning (published anyway)", { warning, video_target: targets.spec });
+  }
+  return { ok: true };
+}
 
 /**
  * Re-mints every media URL of the job. The stored URL is kept on the row as the

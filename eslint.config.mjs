@@ -49,7 +49,7 @@ const SERVER_ONLY_LIBS = [
 ];
 
 /** Adapter folders — used to build the "no cross-adapter import" rules. */
-const ADAPTER_DIRS = ["ai", "clock", "crypto", "db", "google", "logging", "meta", "queue"];
+const ADAPTER_DIRS = ["ai", "clock", "crypto", "db", "google", "logging", "media", "meta", "queue"];
 
 const restrict = (patterns) => ({ "no-restricted-imports": ["error", { patterns }] });
 

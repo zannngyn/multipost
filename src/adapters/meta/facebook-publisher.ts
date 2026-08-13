@@ -3,7 +3,12 @@ import { z } from "zod";
 import { AppError } from "@/core/domain/errors";
 import { MAX_ALBUM_MEDIA } from "@/core/domain/post-job";
 import type { Logger } from "@/core/ports/infra";
-import type { ChannelPublisher, PublishImagePostInput, PublishResult } from "@/core/ports/publisher";
+import type {
+  ChannelPublisher,
+  PublishImagePostInput,
+  PublishResult,
+  PublishVideoPostInput,
+} from "@/core/ports/publisher";
 
 import type { GraphClient } from "./graph-client";
 
@@ -42,6 +47,24 @@ const PhotoResponseSchema = z.object({
 
 const FeedResponseSchema = z.object({
   id: z.string().min(1),
+});
+
+/** POST /{page-id}/videos answers with the video id (and sometimes post_id). */
+const VideoResponseSchema = z.object({
+  id: z.string().min(1),
+  post_id: z.string().min(1).optional(),
+});
+
+/** Reels start phase: the id to address in the following phases. */
+const ReelsStartSchema = z.object({
+  video_id: z.string().min(1),
+  upload_url: z.string().min(1).optional(),
+});
+
+const ReelsFinishSchema = z.object({
+  success: z.boolean().optional(),
+  post_id: z.string().min(1).optional(),
+  id: z.string().min(1).optional(),
 });
 
 export interface FacebookPublisherDeps {
@@ -147,8 +170,150 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       });
       return { postId: parsed.data.id, url: permalink(parsed.data.id) };
     },
+
+    /**
+     * E5.3/E5.4 — one video, either into the feed or as a Reel.
+     *
+     * FEED   POST /{page-id}/videos        file_url=<url> description=<caption>
+     *        -> { id }                     Meta downloads and encodes it.
+     *
+     * REELS  three phases (Meta's "Publish Reels" flow):
+     *        1. POST /{page-id}/video_reels  upload_phase=start
+     *           -> { video_id, upload_url }
+     *        2. transfer the bytes. We publish BY URL, so this adapter uses the
+     *           hosted-file variant of the upload phase (`file_url` on the
+     *           rupload host) instead of streaming bytes we do not have.
+     *        3. POST /{page-id}/video_reels  upload_phase=finish
+     *           video_id=<id> video_state=PUBLISHED description=<caption>
+     *
+     * PENDING(graph-video-verify): NOT run against a real Page from this
+     * machine. The field names follow Meta's Pages/Reels reference, but three
+     * things must be confirmed on the first live test: (a) that the reels
+     * upload phase accepts a hosted `file_url` for a Page (documented for the
+     * resumable protocol, and the alternative is downloading the file into the
+     * worker); (b) which id the finish phase returns as the permalink id;
+     * (c) whether `video_state=PUBLISHED` needs a separate publish call when the
+     * encoding is not finished yet. Until then this path stays behind the
+     * Phase 1 format guard in create-post-batch.
+     */
+    async publishVideoPost(input: PublishVideoPostInput): Promise<PublishResult> {
+      // --- Edge cases first --------------------------------------------------
+      const channel = input?.channel;
+      const caption = typeof input?.caption === "string" ? input.caption.trim() : "";
+      const videoUrl = typeof input?.videoUrl === "string" ? input.videoUrl.trim() : "";
+      const target = input?.target;
+
+      if (!channel || channel.platform !== "facebook" || !channel.externalId?.trim()) {
+        throw new AppError("CHANNEL_NOT_CONFIGURED", {
+          message: "Facebook publisher needs a facebook channel with a Page id",
+          context: {
+            tenant_id: input?.tenantId ?? null,
+            channel: channel?.channelId ?? null,
+            platform: channel?.platform ?? null,
+          },
+        });
+      }
+      if (!/^https?:\/\/\S+$/i.test(videoUrl)) {
+        throw new AppError("INVALID_INPUT", {
+          message: "publishVideoPost needs a public http(s) video URL",
+          userMessage: "Video chưa có liên kết công khai — Facebook không tải về được.",
+          context: { tenant_id: input.tenantId, channel: channel.channelId },
+        });
+      }
+      if (caption.length === 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "Refusing to publish a video without a caption",
+          userMessage: "Bài đăng chưa có nội dung — không đăng.",
+          context: { tenant_id: input.tenantId, channel: channel.channelId },
+        });
+      }
+      if (target !== "video" && target !== "reels") {
+        throw new AppError("INVALID_INPUT", {
+          message: `Unknown video target "${String(target)}"`,
+          userMessage: "Định dạng video không hợp lệ.",
+          context: { tenant_id: input.tenantId, channel: channel.channelId, target },
+        });
+      }
+
+      const pageId = channel.externalId.trim();
+      const logContext = {
+        tenant_id: input.tenantId,
+        channel: channel.channelId,
+        page_id: pageId,
+        idempotency_key: input.idempotencyKey,
+        target,
+      };
+      const log = logger.child(logContext);
+
+      // --- Feed video: one call ---------------------------------------------
+      if (target === "video") {
+        const raw = await deps.graph.post({
+          path: `${pageId}/videos`,
+          params: { file_url: videoUrl, description: caption },
+          accessToken: channel.accessToken,
+          context: { ...logContext, step: "videos" },
+        });
+        const parsed = VideoResponseSchema.safeParse(raw);
+        if (!parsed.success) throw unusableResponse(raw, parsed.error, logContext, "videos");
+
+        const postId = parsed.data.post_id ?? parsed.data.id;
+        log.info("Video post published", { post_id: postId, video_id: parsed.data.id });
+        return { postId, url: permalink(postId) };
+      }
+
+      // --- Reels: start -> upload -> finish ----------------------------------
+      const startRaw = await deps.graph.post({
+        path: `${pageId}/video_reels`,
+        params: { upload_phase: "start" },
+        accessToken: channel.accessToken,
+        context: { ...logContext, step: "reels.start" },
+      });
+      const start = ReelsStartSchema.safeParse(startRaw);
+      if (!start.success) throw unusableResponse(startRaw, start.error, logContext, "reels.start");
+      const videoId = start.data.video_id;
+
+      // Hosted-file transfer: the bytes never pass through this process.
+      await deps.graph.postAbsolute({
+        url: start.data.upload_url ?? `${REELS_UPLOAD_BASE_URL}/${videoId}`,
+        headers: {
+          Authorization: `OAuth ${channel.accessToken}`,
+          file_url: videoUrl,
+        },
+        context: { ...logContext, step: "reels.upload", video_id: videoId },
+      });
+
+      const finishRaw = await deps.graph.post({
+        path: `${pageId}/video_reels`,
+        params: {
+          upload_phase: "finish",
+          video_id: videoId,
+          video_state: "PUBLISHED",
+          description: caption,
+        },
+        accessToken: channel.accessToken,
+        context: { ...logContext, step: "reels.finish", video_id: videoId },
+      });
+      const finish = ReelsFinishSchema.safeParse(finishRaw);
+      if (!finish.success) throw unusableResponse(finishRaw, finish.error, logContext, "reels.finish");
+      if (finish.data.success === false) {
+        // An explicit "no" with a 200 body: never call that published.
+        throw new AppError("META_ERROR", {
+          message: "Reels finish phase reported success=false",
+          userMessage: "Facebook không đăng được Reel này — xem nhật ký để biết chi tiết.",
+          context: { ...logContext, step: "reels.finish", video_id: videoId, retryable: false },
+        });
+      }
+
+      // PENDING(graph-video-verify): which id is the permalink id.
+      const postId = finish.data.post_id ?? finish.data.id ?? videoId;
+      log.info("Reel published", { post_id: postId, video_id: videoId });
+      return { postId, url: permalink(postId) };
+    },
   };
 }
+
+/** Host Meta uses for hosted/resumable uploads (not the Graph host). */
+export const REELS_UPLOAD_BASE_URL = "https://rupload.facebook.com/video-upload";
 
 /** "<page-id>_<post-id>" is a valid permalink path on facebook.com. */
 function permalink(postId: string): string | null {
