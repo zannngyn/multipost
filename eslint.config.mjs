@@ -91,6 +91,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local git worktrees carry their own .next/ — linting them OOMs eslint.
+    ".claude/worktrees/**",
   ]),
 
   // Unused code is dead weight; `_` prefix is the explicit opt-out.
