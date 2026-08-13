@@ -18,6 +18,12 @@ export interface ProviderErrorContext {
   tenantId: string;
   task: string;
   status?: number;
+  /**
+   * Provider-specific facts worth keeping on the error (finish reason, output
+   * truncation, ...). Diagnostics only — the gateway still routes on
+   * `failure_kind` alone, so nothing here may change control flow.
+   */
+  details?: Record<string, unknown>;
 }
 
 /** HTTP status is the only reliable, message-independent classifier. */
@@ -58,6 +64,7 @@ export function toProviderError(
       task: context.task,
       status: context.status,
       failure_kind: kind,
+      ...context.details,
     },
     cause,
   });

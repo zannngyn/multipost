@@ -163,6 +163,38 @@ describe("OpenAI adapter — error mapping", () => {
     });
   });
 
+  it("names truncation at max_output_tokens instead of blaming the payload", async () => {
+    stubFetch(() =>
+      jsonResponse({
+        ...responseBody(""),
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
+        usage: {
+          input_tokens: 1500,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens: 900,
+          output_tokens_details: { reasoning_tokens: 900 },
+          total_tokens: 2400,
+        },
+      }),
+    );
+
+    try {
+      await makeAdapter().complete(request);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      const appError = error as AppError;
+      expect(appError.code).toBe("AI_RESPONSE_INVALID");
+      expect(appError.context).toMatchObject({
+        failure_kind: "malformed_output",
+        truncated: true,
+        max_output_tokens: 900,
+        reasoning_tokens: 900,
+      });
+      expect(appError.message).toContain("max_output_tokens");
+    }
+  });
+
   it("maps a non-JSON payload to AI_RESPONSE_INVALID without echoing it", async () => {
     stubFetch(() => jsonResponse(responseBody("đây không phải JSON")));
 

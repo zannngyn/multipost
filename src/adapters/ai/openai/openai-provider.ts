@@ -120,10 +120,44 @@ export function makeOpenAIProviderAdapter(options: OpenAIProviderOptions): AIPro
 
       const text = response.output_text;
       if (typeof text !== "string" || text.trim().length === 0) {
+        // Same trap as Gemini: reasoning models spend the output budget before
+        // the JSON starts, and the API reports it as status "incomplete" with
+        // reason "max_output_tokens". Naming it here saves an escalation ladder
+        // spent chasing a phantom quality problem.
+        const incompleteReason = response.incomplete_details?.reason;
+        const truncated = incompleteReason === "max_output_tokens";
+        if (truncated) {
+          options.logger.warn("OpenAI output truncated at max_output_tokens", {
+            provider: "openai",
+            model: request.model,
+            tenant_id: request.metadata.tenantId,
+            generation_id: request.metadata.generationId,
+            task: request.metadata.task,
+            failure_kind: "malformed_output",
+            max_output_tokens: request.maxOutputTokens,
+            output_tokens: response.usage?.output_tokens ?? 0,
+            reasoning_tokens: response.usage?.output_tokens_details?.reasoning_tokens ?? 0,
+          });
+        }
+
         throw toProviderError(
           "malformed_output",
-          `OpenAI returned no output text (status=${response.status ?? "unknown"})`,
-          errorContext,
+          truncated
+            ? `OpenAI hit max_output_tokens (${request.maxOutputTokens}) before emitting JSON`
+            : `OpenAI returned no output text (status=${response.status ?? "unknown"})`,
+          {
+            ...errorContext,
+            details: {
+              response_status: response.status ?? null,
+              truncated,
+              ...(truncated
+                ? {
+                    max_output_tokens: request.maxOutputTokens,
+                    reasoning_tokens: response.usage?.output_tokens_details?.reasoning_tokens ?? 0,
+                  }
+                : {}),
+            },
+          },
         );
       }
 

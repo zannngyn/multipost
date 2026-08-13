@@ -139,10 +139,45 @@ export function makeGoogleProviderAdapter(options: GoogleProviderOptions): AIPro
 
       const text = response.text;
       if (typeof text !== "string" || text.trim().length === 0) {
+        // Truncation is its own story: on thinking-capable models the reasoning
+        // tokens are billed against maxOutputTokens, so the budget can run out
+        // before a single character of JSON is emitted. Same failure kind (the
+        // gateway still treats it as a quality problem), but the message and the
+        // log say "raise maxOutputTokens", not "the provider sent junk".
+        const truncated = finishReason === "MAX_TOKENS";
+        const usage = response.usageMetadata;
+        if (truncated) {
+          options.logger.warn("Google AI output truncated at maxOutputTokens", {
+            provider: "google",
+            model: request.model,
+            tenant_id: request.metadata.tenantId,
+            generation_id: request.metadata.generationId,
+            task: request.metadata.task,
+            failure_kind: "malformed_output",
+            max_output_tokens: request.maxOutputTokens,
+            output_tokens: usage?.candidatesTokenCount ?? 0,
+            thoughts_tokens: usage?.thoughtsTokenCount ?? 0,
+          });
+        }
+
         throw toProviderError(
           "malformed_output",
-          `Google AI returned no text part (finishReason=${finishReason ?? "unknown"})`,
-          errorContext,
+          truncated
+            ? `Google AI hit maxOutputTokens (${request.maxOutputTokens}) before emitting JSON`
+            : `Google AI returned no text part (finishReason=${finishReason ?? "unknown"})`,
+          {
+            ...errorContext,
+            details: {
+              finish_reason: finishReason ?? null,
+              truncated,
+              ...(truncated
+                ? {
+                    max_output_tokens: request.maxOutputTokens,
+                    thoughts_tokens: usage?.thoughtsTokenCount ?? 0,
+                  }
+                : {}),
+            },
+          },
         );
       }
 

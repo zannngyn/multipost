@@ -162,6 +162,34 @@ describe("Google adapter — error mapping", () => {
     }
   });
 
+  it("names truncation at maxOutputTokens instead of blaming the payload", async () => {
+    // Thinking models bill reasoning against maxOutputTokens, so the budget can
+    // run out before any JSON is emitted: a real risk with a 900-token cap.
+    stubFetch(() =>
+      jsonResponse({
+        candidates: [{ content: { parts: [] }, finishReason: "MAX_TOKENS" }],
+        usageMetadata: { promptTokenCount: 1500, candidatesTokenCount: 900, thoughtsTokenCount: 880 },
+      }),
+    );
+
+    try {
+      await makeAdapter().complete(request);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      const appError = error as AppError;
+      expect(appError.code).toBe("AI_RESPONSE_INVALID");
+      // Same routing as any malformed output — only the diagnosis is richer.
+      expect(appError.context).toMatchObject({
+        failure_kind: "malformed_output",
+        truncated: true,
+        finish_reason: "MAX_TOKENS",
+        max_output_tokens: 900,
+        thoughts_tokens: 880,
+      });
+      expect(appError.message).toContain("maxOutputTokens");
+    }
+  });
+
   it("maps an empty candidate list to malformed_output", async () => {
     stubFetch(() => jsonResponse({ candidates: [], usageMetadata: {} }));
     await expect(makeAdapter().complete(request)).rejects.toMatchObject({

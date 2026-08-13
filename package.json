@@ -10,6 +10,7 @@
     "lint": "eslint",
     "depcruise": "depcruise src --validate",
     "test": "vitest run",
+    "test:integration": "vitest run src/adapters/db/db-errors.integration.test.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm depcruise && pnpm test && pnpm build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

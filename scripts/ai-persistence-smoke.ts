@@ -429,8 +429,8 @@ async function expectAppError(
 }
 
 main().catch((error) => {
-  logger.error("AI PERSISTENCE SMOKE FAILED", {
-    err: AppError.is(error) ? error.toLogObject() : error,
-  });
+  // The pino adapter already serialises AppError; handing it a pre-flattened
+  // toLogObject() loses every field and prints [object Object].
+  logger.error("AI PERSISTENCE SMOKE FAILED", { err: error });
   process.exitCode = 1;
 });

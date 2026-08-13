@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,14 +24,23 @@ import {
  *
  * It synthesises four inputs (three clips + one text file pretending to be a
  * video), probes each one for real, checks the verdicts against what the rule
- * table promises, and writes the raw ffprobe JSON into
- * src/adapters/media/__fixtures__/ so the unit tests run on output a real
+ * table promises, and captures the raw ffprobe JSON that backs the unit tests
+ * in src/adapters/media/__fixtures__/ — so those tests run on output a real
  * ffprobe produced instead of something hand-written.
+ *
+ * Fixtures are written to a TEMP directory by default and compared against the
+ * committed copies; a difference is printed as a diff and does not touch the
+ * repo. Pass `--write-fixtures` to actually refresh the committed files, which
+ * makes regenerating them a deliberate act with a reviewable diff instead of a
+ * side effect of running a smoke test.
  *
  * Exit code 1 on the first mismatch: a green run is the evidence, not the log.
  */
 
-const FIXTURE_DIR = join(process.cwd(), "src/adapters/media/__fixtures__");
+const REPO_FIXTURE_DIR = join(process.cwd(), "src/adapters/media/__fixtures__");
+/** `--write-fixtures` (or WRITE_FIXTURES=1) refreshes the committed files. */
+const WRITE_FIXTURES =
+  process.argv.includes("--write-fixtures") || process.env.WRITE_FIXTURES === "1";
 
 interface Case {
   readonly id: string;
@@ -116,14 +125,21 @@ async function main(): Promise<void> {
   const logger = makePinoLogger({ level: "info", pretty: true, base: { service: "video-smoke" } });
   const probe = makeFfprobeMediaProbe({ logger });
   const workDir = mkdtempSync(join(tmpdir(), "mysp-video-smoke-"));
-  mkdirSync(FIXTURE_DIR, { recursive: true });
+  const fixtureOutDir = WRITE_FIXTURES ? REPO_FIXTURE_DIR : join(workDir, "__fixtures__");
+  mkdirSync(fixtureOutDir, { recursive: true });
+  console.log(
+    WRITE_FIXTURES
+      ? `fixtures: refreshing the committed copies in ${REPO_FIXTURE_DIR}`
+      : `fixtures: writing to ${fixtureOutDir} (repo untouched; pass --write-fixtures to update)`,
+  );
 
   const failures: string[] = [];
+  let fixturesChanged = 0;
 
   for (const testCase of CASES) {
     const path = join(workDir, testCase.fileName);
     runFfmpeg(testCase.ffmpegArgs(path));
-    writeFixture(testCase.id, path);
+    if (writeFixture(testCase.id, path, fixtureOutDir)) fixturesChanged += 1;
 
     const spec = await probe.probeVideo({ kind: "path", path });
     console.log(`\n[${testCase.id}] ${describeSpec(spec)}`);
@@ -180,11 +196,22 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  console.log(`OK — ${CASES.length} clips probed, fixtures written to ${FIXTURE_DIR}`);
+  console.log(`OK — ${CASES.length} clips probed, fixtures written to ${fixtureOutDir}`);
+  if (fixturesChanged > 0 && !WRITE_FIXTURES) {
+    console.log(
+      `NOTE: ${fixturesChanged} fixture(s) differ from the committed copies (diff above). ` +
+        "Re-run with --write-fixtures if the new output is the one you want to keep.",
+    );
+  }
 }
 
-/** Runs the raw ffprobe command and stores stdout as a unit-test fixture. */
-function writeFixture(id: string, path: string): void {
+/**
+ * Runs the raw ffprobe command and stores stdout as a unit-test fixture in
+ * `outDir`. Returns true when the output differs from the committed copy — the
+ * diff is printed, because a silently rewritten fixture is a test that grades
+ * its own homework (ffprobe/ffmpeg versions change the JSON).
+ */
+function writeFixture(id: string, path: string, outDir: string): boolean {
   const result = spawnSync(
     "ffprobe",
     ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", path],
@@ -195,7 +222,57 @@ function writeFixture(id: string, path: string): void {
   }
   // The absolute temp path would change on every run — keep the diff stable.
   const stable = result.stdout.replaceAll(path, `/tmp/${id}`);
-  writeFileSync(join(FIXTURE_DIR, `${id}.ffprobe.json`), stable);
+  const fileName = `${id}.ffprobe.json`;
+  const outPath = join(outDir, fileName);
+  const committedPath = join(REPO_FIXTURE_DIR, fileName);
+
+  let committed: string | null = null;
+  if (existsSync(committedPath)) {
+    try {
+      committed = readFileSync(committedPath, "utf8");
+    } catch (error) {
+      // Unreadable committed fixture must not hide the comparison result.
+      console.warn(`[${id}] cannot read the committed fixture: ${String(error)}`);
+    }
+  }
+
+  writeFileSync(outPath, stable);
+
+  if (committed === null) {
+    console.log(`[${id}] no committed fixture yet -> ${outPath}`);
+    return true;
+  }
+  if (committed === stable) {
+    console.log(`[${id}] fixture matches the committed copy`);
+    return false;
+  }
+
+  console.log(`[${id}] fixture DIFFERS from the committed copy:`);
+  printDiff(committedPath, outPath, stable, committed);
+  return true;
+}
+
+/** `diff -u` when the tool is there; a byte/line summary when it is not. */
+function printDiff(
+  committedPath: string,
+  candidatePath: string,
+  candidate: string,
+  committed: string,
+): void {
+  const diff = spawnSync("diff", ["-u", committedPath, candidatePath], { encoding: "utf8" });
+  if (diff.error || typeof diff.stdout !== "string" || diff.stdout.length === 0) {
+    console.log(
+      `  (no diff tool) committed ${committed.length} bytes / ${committed.split("\n").length} lines vs ` +
+        `new ${candidate.length} bytes / ${candidate.split("\n").length} lines`,
+    );
+    return;
+  }
+  console.log(
+    diff.stdout
+      .split("\n")
+      .map((line) => `  ${line}`)
+      .join("\n"),
+  );
 }
 
 function runFfmpeg(args: string[]): void {
