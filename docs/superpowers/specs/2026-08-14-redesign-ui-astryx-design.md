@@ -20,7 +20,8 @@ có phải xanh nguyên sau mỗi bước — test đỏ là dấu hiệu đã �
 
 | Quyết định | Lựa chọn | Lý do |
 |---|---|---|
-| Chiến lược thay thế | Chuyển từng màn, shadcn và Astryx sống song song qua Tailwind bridge | Verify được sau mỗi màn, rollback rẻ; big-bang trên 8k dòng UI là rủi ro không cần thiết |
+| Chiến lược thay thế | Chuyển từng màn; **gỡ sạch shadcn** khi màn cuối ngừng dùng | Verify được sau mỗi màn, rollback rẻ; big-bang trên 8k dòng UI là rủi ro không cần thiết |
+| Đích cuối của shadcn | Xoá hoàn toàn: package `shadcn`, `src/ui/components/ui/*`, và khối `:root`/`@theme inline` trong globals.css | Không để lại hai hệ token |
 | Theme | `@astryxdesign/theme-neutral/built` | Không cần build step; đổi sang brand theme sau vẫn được vì cùng hệ token |
 | Cách trình bày dữ liệu dày | Rows + inspector panel | Đúng archetype "tracker / work tool" của Astryx; giữ ngữ cảnh danh sách khi soi chi tiết |
 | Thứ tự thi công | Shell → màn dày → wizard | Chốt pattern trên màn đơn giản trước, wizard là màn khó nhất nên làm sau |
@@ -47,22 +48,22 @@ container `max-w-*` riêng. Route group xoá sạch lặp lại đó.
 
 ### 3.2 Thứ tự CSS layer
 
-Theo `astryx docs styling`, ghi trong `src/app/globals.css`:
+Ghi trong `src/app/globals.css`, giữ nguyên toàn bộ `@theme inline`, `:root`,
+`.dark` và `@layer base` của shadcn đang có:
 
 ```css
 @layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
 
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
 @import "@astryxdesign/core/reset.css";
 @import "@astryxdesign/core/astryx.css";
 @import "@astryxdesign/theme-neutral/theme.css";
-@import "@astryxdesign/core/tailwind-theme.css";
-@import "tailwindcss/utilities.css" layer(utilities);
 ```
 
-Bridge `tailwind-theme.css` là thứ cho phép hai hệ token cùng chạy trong giai
-đoạn chuyển tiếp.
+**Không nạp `@astryxdesign/core/tailwind-theme.css` cho tới B9.** Xem mục 5.5.
 
 ### 3.3 SideNav
 
@@ -277,10 +278,56 @@ Barrel `@astryxdesign/core` có `'use client'` ở đầu file, nên import từ
 tạo client boundary. Các `page.tsx` giữ nguyên vai trò Server Component lo phần
 auth; Astryx chỉ xuất hiện trong component đã `"use client"`.
 
-### 5.5 Hai hệ token cùng tồn tại
+### 5.5 Vì sao bridge Tailwind phải hoãn tới B9
 
-Trong suốt giai đoạn chuyển, shadcn CSS vars và Astryx token cùng chạy. Chấp
-nhận. Gỡ `src/ui/components/ui/*` ở bước cuối.
+`@astryxdesign/core/tailwind-theme.css` map lại chính những tên biến mà shadcn
+đang dùng, nhưng sang nghĩa khác:
+
+| Biến | shadcn | Astryx bridge |
+|---|---|---|
+| `--color-primary` | `var(--primary)` — màu nền nút | `var(--color-text-primary)` — màu chữ |
+| `--color-card` | `var(--card)` | `var(--color-background-card)` |
+| `--color-muted` | `var(--muted)` | `var(--color-background-muted)` |
+| `--color-border` | `var(--border)` | `var(--color-border)` |
+| `--radius-lg` | `var(--radius)` | `var(--radius-container)` |
+
+Nạp bridge từ B0 sẽ đổi nghĩa `bg-primary`, `bg-muted`, `bg-card`… ở mọi màn
+chưa chuyển. Đã đếm: khoảng 470 lượt dùng class tiện ích gắn token shadcn trong
+`src/ui` và `src/app` (`text-muted-foreground` 144, `bg-muted` 89, `bg-card` 24,
+`text-warning-foreground` 22…). Vì vậy bridge chỉ được nạp ở B9, sau khi màn
+cuối cùng đã hết class shadcn.
+
+Ngược lại, `astryx.css` và `theme-neutral/theme.css` chỉ định nghĩa token có
+namespace (`--color-text-primary`, `--color-background-surface`…) — đã kiểm tra,
+không có biến trần nào trùng shadcn — nên nạp được ngay từ B0.
+
+### 5.6 Lộ trình gỡ shadcn
+
+shadcn nằm ở ba tầng, gỡ theo thứ tự ngược với thứ tự phụ thuộc:
+
+1. **Class tiện ích** (~470 lượt) — gỡ theo từng màn, cùng lúc với việc chuyển
+   màn đó sang Astryx. Đây là tầng chịu lực nên không thể gỡ trước.
+2. **Primitive** `src/ui/components/ui/{button,badge,input,textarea,select,dialog}.tsx`
+   — 37 file import. Xoá từng primitive ngay khi import cuối cùng của nó biến
+   mất (`select` và `dialog` chỉ có 2 chỗ nên chết sớm).
+3. **Package + token** — `shadcn` trong dependencies, `@import "shadcn/tailwind.css"`,
+   `tw-animate-css` nếu hết dùng, và khối `:root`/`.dark`/`@theme inline` trong
+   `globals.css`. Xoá ở B9 cùng lúc với việc nạp bridge.
+
+Điều kiện thoát B9: `grep -r "components/ui/" src/` không còn kết quả, và
+`grep -rE "(text|bg|border)-(muted|card|destructive|warning|success)" src/`
+không còn kết quả.
+
+### 5.7 Hạ tầng test
+
+`vitest.config.ts` đặt `environment: "node"`, không có jsdom cũng không có
+Testing Library. Mọi test hiện có là test logic thuần (schema, `present-api-error`),
+**không có test render component nào**.
+
+Vì vậy TDD chỉ áp dụng được cho phần logic thuần tách ra được (ví dụ hàm khớp
+route đang active của nav). Phần bố cục và giao diện kiểm chứng bằng `pnpm verify`
+cộng với chạy thật `pnpm dev`. Thêm jsdom + Testing Library là quyết định thêm
+dependency — phải hỏi trước, không tự làm.
 
 ## 6. Thứ tự thi công
 
@@ -295,7 +342,10 @@ nhận. Gỡ `src/ui/components/ui/*` ở bước cuối.
 | B6 | Nhóm kênh + Mẫu prompt |
 | B7 | Soạn bài |
 | B8 | Chạy hàng loạt + Chi tiết lô + Đăng nhập |
-| B9 | Gỡ `src/ui/components/ui/*`, dọn dependency thừa, audit `web-design-guidelines` |
+| B9 | Gỡ sạch shadcn tầng 3 (xem 5.6), nạp `tailwind-theme.css`, audit `web-design-guidelines` |
+
+Primitive shadcn được xoá dần trong B1–B8 ngay khi mất import cuối cùng, không
+dồn hết sang B9.
 
 Mỗi bước chạy `pnpm verify` (typecheck · lint · depcruise · test · build) và phải
 qua gate `reviewer-qa` theo luật repo trước khi được coi là xong.
