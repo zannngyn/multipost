@@ -1,8 +1,9 @@
 "use client";
 
+import { Link } from "@astryxdesign/core";
+
 import { ErrorState } from "@/ui/components/feedback/ErrorState";
 import { presentApiError, toApiError } from "@/ui/components/feedback/present-api-error";
-import { Button } from "@/ui/components/ui/button";
 
 /**
  * Renders any error coming out of the data layer, already classified by
@@ -28,7 +29,7 @@ export function ApiErrorNotice({
 
   return (
     <ErrorState
-      className={className ?? "mx-0 max-w-none"}
+      className={className}
       title={view.title}
       description={view.hint ? `${view.description} ${view.hint}` : view.description}
       details={view.details}
@@ -36,9 +37,11 @@ export function ApiErrorNotice({
       onRetry={view.canRetry && onRetry ? onRetry : undefined}
       secondaryAction={
         view.kind === "auth" ? (
-          <Button asChild variant="outline">
-            <a href="/signin">Đăng nhập lại</a>
-          </Button>
+          // A real anchor, not a button: signing in again is navigation, and
+          // Astryx Button has no `asChild` to wrap one.
+          <Link href="/signin" isStandalone>
+            Đăng nhập lại
+          </Link>
         ) : (
           extraAction
         )

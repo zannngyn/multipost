@@ -1,9 +1,7 @@
 "use client";
 
+import { Banner, Button, Stack, Text } from "@astryxdesign/core";
 import { useEffect, useRef } from "react";
-
-import { cn } from "@/shared/utils";
-import { Button } from "@/ui/components/ui/button";
 
 export interface ErrorStateProps {
   title: string;
@@ -24,6 +22,9 @@ export interface ErrorStateProps {
 /**
  * Shared error block for route/segment/widget boundaries.
  * Presentational only: no fetching, no business branching.
+ *
+ * The props are unchanged from the shadcn version on purpose — every screen
+ * still calls it the same way while the migration runs.
  */
 export function ErrorState({
   title,
@@ -36,6 +37,7 @@ export function ErrorState({
   className,
 }: ErrorStateProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const hasBody = (details && details.length > 0) || referenceCode !== undefined;
 
   // Move focus to the alert so keyboard/screen-reader users land on the message.
   useEffect(() => {
@@ -43,40 +45,42 @@ export function ErrorState({
   }, []);
 
   return (
-    <div
+    <Banner
       ref={containerRef}
       role="alert"
       tabIndex={-1}
-      className={cn(
-        "border-destructive/30 bg-destructive/5 mx-auto flex w-full max-w-xl flex-col items-start gap-3 rounded-xl border p-6 outline-none",
-        className,
-      )}
+      className={className}
+      status="error"
+      title={title}
+      description={description}
+      // Children sit in a collapsed area by default; the reference code and the
+      // per-reason lines are part of the message, not an optional detail.
+      defaultIsExpanded={hasBody}
+      endContent={
+        onRetry || secondaryAction ? (
+          <Stack direction="horizontal" gap={2}>
+            {onRetry ? (
+              <Button type="button" variant="primary" size="sm" label={retryLabel} onClick={onRetry} />
+            ) : null}
+            {secondaryAction}
+          </Stack>
+        ) : undefined
+      }
     >
-      <h2 className="text-lg font-semibold">{title}</h2>
-      <p className="text-muted-foreground text-sm">{description}</p>
-
-      {details && details.length > 0 ? (
-        <ul className="list-disc space-y-1 pl-5 text-sm">
-          {details.map((line) => (
-            <li key={line}>{line}</li>
+      {hasBody ? (
+        <Stack direction="vertical" gap={1}>
+          {details?.map((line) => (
+            <Text key={line} type="supporting" display="block">
+              {line}
+            </Text>
           ))}
-        </ul>
-      ) : null}
-
-      {referenceCode ? (
-        <p className="text-muted-foreground/80 font-mono text-xs">Mã tham chiếu: {referenceCode}</p>
-      ) : null}
-
-      {onRetry || secondaryAction ? (
-        <div className="flex flex-wrap gap-2 pt-1">
-          {onRetry ? (
-            <Button type="button" onClick={onRetry}>
-              {retryLabel}
-            </Button>
+          {referenceCode ? (
+            <Text type="code" color="secondary" display="block">
+              Mã tham chiếu: {referenceCode}
+            </Text>
           ) : null}
-          {secondaryAction}
-        </div>
+        </Stack>
       ) : null}
-    </div>
+    </Banner>
   );
 }

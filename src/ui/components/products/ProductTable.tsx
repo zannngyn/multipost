@@ -1,12 +1,10 @@
 "use client";
 
-import Link from "next/link";
+import { Button, HStack, Stack, StatusDot, Table, Text, pixel, proportional } from "@astryxdesign/core";
+import type { TableColumn } from "@astryxdesign/core";
 
-import { Badge } from "@/ui/components/ui/badge";
-import { Button } from "@/ui/components/ui/button";
 import {
   INVENTORY_STATUS_LABELS,
-  INVENTORY_STATUS_TONES,
   blockedReasonLabel,
   formatCount,
   formatMediaCounts,
@@ -17,137 +15,132 @@ import {
  * The catalog as the operator sees it: which codes can be posted, and for the
  * rest, WHY not (business rule 5 — nothing is silently skipped).
  *
+ * The "why" is deliberately NOT in the table. The shadcn version repeated the
+ * same domain sentence in both the stock and the publish column, which cost half
+ * the row width and made every row three lines tall. The reason now lives once,
+ * in the inspector panel, and the row carries only what an operator scans:
+ * status, code, name, category, stock, media count.
+ *
  * `composable` is decided by the SERVER. The UI never re-derives it from stock +
  * photo counts: the day the rule changes (a video-only code, a new block), a
- * client-side guess would offer a "Soạn bài" button that dies on the next
- * screen with the real reason.
+ * client-side guess would offer a "Soạn bài" button that dies on the next screen
+ * with the real reason.
  *
- * Business rule 2: stock and block reasons are INTERNAL. They live in this
- * table and in the compose screen's internal block — never inside a caption.
+ * Business rule 2: stock and block reasons are INTERNAL. They live in this table
+ * and in the inspector — never inside a caption.
  */
-export function ProductTable({ items }: { items: readonly CatalogProduct[] }) {
-  return (
-    <div
-      className="overflow-x-auto rounded-xl border"
-      tabIndex={0}
-      role="region"
-      aria-label="Bảng sản phẩm, cuộn ngang được"
-    >
-      <table className="w-full border-collapse text-sm">
-        <caption className="sr-only">
-          Danh sách sản phẩm: mã, tên, chủng loại, tồn kho, số ảnh/video và trạng thái đăng bài
-        </caption>
-        <colgroup>
-          <col className="w-[14%]" />
-          <col className="w-[24%]" />
-          <col className="w-[12%]" />
-          <col className="w-[18%]" />
-          <col className="w-[14%]" />
-          <col className="w-[18%]" />
-        </colgroup>
-        <thead className="bg-muted/50">
-          <tr className="text-left">
-            <th scope="col" className="px-3 py-2 font-medium">
-              Mã SP
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Tên sản phẩm
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Chủng loại
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Tồn kho
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Ảnh / video
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Đăng bài
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.code} className="border-t align-top">
-              <td className="px-3 py-2">
-                <span className="font-mono text-xs break-all">{item.code}</span>
-              </td>
-              <td className="px-3 py-2">
-                <span className={item.name.trim().length > 0 ? "" : "text-muted-foreground italic"}>
-                  {item.name.trim().length > 0 ? item.name : "(trống trên Sheet)"}
-                </span>
-                {item.season ? (
-                  <span className="text-muted-foreground block text-xs">Mùa vụ: {item.season}</span>
-                ) : null}
-              </td>
-              <td className="text-muted-foreground px-3 py-2">{item.category ?? "—"}</td>
-              <td className="px-3 py-2">
-                <StockCell product={item} />
-              </td>
-              <td className="px-3 py-2">
-                <span className="tabular-nums">
-                  {formatMediaCounts(item.mediaImageCount, item.mediaVideoCount)}
-                </span>
-              </td>
-              <td className="px-3 py-2">
-                <PublishCell product={item} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+
+/** Table's generic needs an index signature; the fields stay CatalogProduct's. */
+type ProductRow = CatalogProduct & Record<string, unknown>;
+
+interface StatusView {
+  variant: "success" | "warning" | "error";
+  label: string;
 }
 
-/** Badge + the domain's own Vietnamese sentence (never re-worded here). */
-function StockCell({ product }: { product: CatalogProduct }) {
-  const { inventory } = product;
-
-  return (
-    <div className="space-y-1">
-      <Badge tone={INVENTORY_STATUS_TONES[inventory.status]}>
-        {INVENTORY_STATUS_LABELS[inventory.status]}
-        {inventory.stock !== null ? ` x${formatCount(inventory.stock)}` : ""}
-      </Badge>
-      {inventory.stock === null ? (
-        <p className="text-muted-foreground text-xs">Ô tồn trống hoặc không phải số</p>
-      ) : null}
-      {inventory.operatorMessage ? (
-        <p className="text-muted-foreground text-xs">{inventory.operatorMessage}</p>
-      ) : null}
-    </div>
-  );
-}
-
-function PublishCell({ product }: { product: CatalogProduct }) {
-  if (product.composable) {
-    return (
-      <div className="space-y-1">
-        <Button asChild variant="outline">
-          {/* The code travels in the URL; the wizard looks it up again and
-              re-runs the stock gate — this is a shortcut, not a bypass. */}
-          <Link href={`/compose?code=${encodeURIComponent(product.code)}`}>Soạn bài</Link>
-        </Button>
-        {product.hasConflict ? (
-          <p className="text-warning-foreground text-xs">
-            Sheet có nhiều dòng cho mã này — kiểm tra lại trước khi đăng
-          </p>
-        ) : null}
-      </div>
-    );
+/** One dot answers "can I post this?" before any text is read. */
+export function productStatus(product: CatalogProduct): StatusView {
+  if (!product.composable) {
+    return {
+      variant: "error",
+      label: product.blockedReason
+        ? blockedReasonLabel(product.blockedReason.code)
+        : "Không đăng được",
+    };
   }
+  if (product.inventory.status === "low_stock") {
+    return { variant: "warning", label: INVENTORY_STATUS_LABELS.low_stock };
+  }
+  return { variant: "success", label: "Đăng được" };
+}
+
+export function ProductTable({
+  items,
+  selectedCode,
+  onSelect,
+}: {
+  items: readonly CatalogProduct[];
+  selectedCode: string | null;
+  onSelect: (code: string) => void;
+}) {
+  const columns: TableColumn<ProductRow>[] = [
+    {
+      key: "code",
+      header: "Mã SP",
+      width: pixel(210),
+      renderCell: (product) => {
+        const status = productStatus(product);
+        const isSelected = selectedCode === product.code;
+        return (
+          <HStack gap={2} align="center">
+            <StatusDot variant={status.variant} label={status.label} tooltip={status.label} />
+            {/* The code is the row's interactive element: one tab stop per row,
+                and a real button rather than a click handler on the <tr>.
+                The filled variant marks the row the inspector is showing —
+                aria-pressed alone would leave sighted users guessing. */}
+            <Button
+              variant={isSelected ? "secondary" : "ghost"}
+              size="sm"
+              label={product.code}
+              aria-pressed={isSelected}
+              onClick={() => onSelect(product.code)}
+            />
+          </HStack>
+        );
+      },
+    },
+    {
+      key: "name",
+      header: "Tên sản phẩm",
+      width: proportional(2),
+      renderCell: (product) =>
+        product.name.trim().length > 0 ? (
+          <Text>{product.name}</Text>
+        ) : (
+          <Text color="placeholder">(trống trên Sheet)</Text>
+        ),
+    },
+    {
+      key: "category",
+      header: "Chủng loại",
+      width: proportional(1),
+      renderCell: (product) => <Text color="secondary">{product.category ?? "—"}</Text>,
+    },
+    {
+      key: "stock",
+      header: "Tồn kho",
+      width: pixel(120),
+      align: "end",
+      renderCell: (product) =>
+        product.inventory.stock === null ? (
+          <Text color="placeholder">—</Text>
+        ) : (
+          <Text>{formatCount(product.inventory.stock)}</Text>
+        ),
+    },
+    {
+      key: "media",
+      header: "Ảnh / video",
+      width: pixel(140),
+      renderCell: (product) => (
+        <Text color="secondary">
+          {formatMediaCounts(product.mediaImageCount, product.mediaVideoCount)}
+        </Text>
+      ),
+    },
+  ];
 
   return (
-    <div className="space-y-1">
-      <Badge tone="danger">
-        {product.blockedReason ? blockedReasonLabel(product.blockedReason.code) : "Không đăng được"}
-      </Badge>
-      <p className="text-muted-foreground text-xs">
-        {product.blockedReason?.userMessage ??
-          "Mã này chưa đăng được. Mở màn Đồng bộ dữ liệu để xem chi tiết."}
-      </p>
-    </div>
+    <Stack direction="vertical" isScrollable height="100%">
+      <Table
+        data={items as ProductRow[]}
+        columns={columns}
+        idKey="code"
+        density="compact"
+        hasHover
+        textOverflow="truncate"
+        rowCount={items.length}
+      />
+    </Stack>
   );
 }

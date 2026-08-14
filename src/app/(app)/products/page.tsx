@@ -4,10 +4,13 @@ import { Suspense } from "react";
 
 import { getOperatorSession } from "@/app/_auth/session";
 import { ProductListScreen } from "@/ui/components/products/ProductListScreen";
-import { ProductTableSkeleton } from "@/ui/components/products/ProductTableSkeleton";
+import { ProductsFallback } from "@/ui/components/products/ProductsFallback";
 
 /**
  * "Sản phẩm" (E10). Server Component guard, client screen.
+ *
+ * The screen owns its own frame (Layout + inspector panel), so this page adds
+ * no container of its own — a max-width wrapper here would fight the panel.
  *
  * The screen reads its filter from the query string, so it must sit under a
  * <Suspense> boundary — `useSearchParams()` suspends until the request's search
@@ -30,32 +33,8 @@ export default async function ProductsPage() {
   if (!session) redirect("/signin?returnUrl=%2Fproducts");
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <Suspense fallback={<ProductsFallback />}>
-        <ProductListScreen />
-      </Suspense>
-    </div>
-  );
-}
-
-/** Same header + totals + search + table heights as the real screen (CLS = 0). */
-function ProductsFallback() {
-  return (
-    <div aria-hidden="true" className="space-y-6 motion-safe:animate-pulse">
-      <div className="space-y-2">
-        <div className="bg-muted h-8 w-40 rounded" />
-        <div className="bg-muted h-4 w-full max-w-xl rounded" />
-      </div>
-      <div className="grid gap-2 sm:grid-cols-3">
-        {[0, 1, 2].map((cell) => (
-          <div key={cell} className="bg-muted h-24 rounded-xl" />
-        ))}
-      </div>
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="bg-muted h-9 w-80 rounded-lg" />
-        <div className="bg-muted h-8 w-24 rounded-lg" />
-      </div>
-      <ProductTableSkeleton />
-    </div>
+    <Suspense fallback={<ProductsFallback />}>
+      <ProductListScreen />
+    </Suspense>
   );
 }
