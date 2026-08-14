@@ -1,6 +1,17 @@
+/* Layer order per `astryx docs styling`. The Astryx Tailwind bridge
+   (@astryxdesign/core/tailwind-theme.css) is deliberately NOT imported yet: it
+   remaps --color-primary / --color-card / --color-muted to different meanings
+   and would break every shadcn utility still in use. It lands in B9, once the
+   last screen stops using them. */
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
+
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
+@import "@astryxdesign/theme-neutral/theme.css";
 
 @custom-variant dark (&:is(.dark *));
 

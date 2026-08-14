@@ -213,8 +213,13 @@ Giữ nguyên toàn bộ phần còn lại của file (`@custom-variant`, `@them
 Run: `pnpm build`
 Expected: exit 0.
 
-Run: `grep -rl "color-background-surface" .next/static/css | head -1`
-Expected: in ra một đường dẫn file CSS — token Astryx đã thật sự vào bundle, không chỉ build xanh.
+Run: `grep -rl "color-background-surface" .next/static/chunks --include=*.css`
+Expected: in ra một đường dẫn — token Astryx đã thật sự vào bundle, không chỉ build xanh.
+
+Next 16 để CSS ở `.next/static/chunks/`, không phải `.next/static/css/`. Và
+`astryx.css` là StyleX tiền biên dịch với tên class băm (`.x-126w13d`), nên
+đừng grep theo tên component; grep `astryx-base` (tên layer) hoặc token của
+theme.
 
 - [ ] **Step 3: Commit**
 
