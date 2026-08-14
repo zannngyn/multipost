@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 
 import { getOperatorSession } from "@/app/_auth/session";
 import { BulkRunScreen } from "@/ui/components/bulk/BulkRunScreen";
-import { AppNav } from "@/ui/components/nav/AppNav";
 
 /**
  * "Chạy hàng loạt" (E10.5). Server Component guard, client screen.
@@ -25,11 +24,8 @@ export default async function BulkPage() {
   if (!session) redirect("/signin?returnUrl=%2Fbulk");
 
   return (
-    <>
-      <AppNav />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <BulkRunScreen />
-      </main>
-    </>
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <BulkRunScreen />
+    </div>
   );
 }

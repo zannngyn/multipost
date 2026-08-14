@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
 import { getOperatorSession } from "@/app/_auth/session";
-import { AppNav } from "@/ui/components/nav/AppNav";
 import { ProductListScreen } from "@/ui/components/products/ProductListScreen";
 import { ProductTableSkeleton } from "@/ui/components/products/ProductTableSkeleton";
 
@@ -31,14 +30,11 @@ export default async function ProductsPage() {
   if (!session) redirect("/signin?returnUrl=%2Fproducts");
 
   return (
-    <>
-      <AppNav />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <Suspense fallback={<ProductsFallback />}>
-          <ProductListScreen />
-        </Suspense>
-      </main>
-    </>
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <Suspense fallback={<ProductsFallback />}>
+        <ProductListScreen />
+      </Suspense>
+    </div>
   );
 }
 

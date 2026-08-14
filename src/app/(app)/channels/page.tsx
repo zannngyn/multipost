@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 
 import { getOperatorSession } from "@/app/_auth/session";
 import { ChannelGroupsScreen } from "@/ui/components/channels/ChannelGroupsScreen";
-import { AppNav } from "@/ui/components/nav/AppNav";
 
 /**
  * "Nhóm kênh" (E7.6 / E10.3). Server Component guard, client screen.
@@ -25,11 +24,8 @@ export default async function ChannelsPage() {
   if (!session) redirect("/signin?returnUrl=%2Fchannels");
 
   return (
-    <>
-      <AppNav />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <ChannelGroupsScreen />
-      </main>
-    </>
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <ChannelGroupsScreen />
+    </div>
   );
 }

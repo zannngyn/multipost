@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { getOperatorSession } from "@/app/_auth/session";
-import { AppNav } from "@/ui/components/nav/AppNav";
 import { SyncScreen } from "@/ui/components/sync/SyncScreen";
 
 /**
@@ -27,11 +26,8 @@ export default async function SyncPage() {
   if (!session) redirect("/signin?returnUrl=%2Fsync");
 
   return (
-    <>
-      <AppNav />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <SyncScreen />
-      </main>
-    </>
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <SyncScreen />
+    </div>
   );
 }

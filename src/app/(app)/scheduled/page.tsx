@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
 import { getOperatorSession } from "@/app/_auth/session";
-import { AppNav } from "@/ui/components/nav/AppNav";
 import { ScheduledScreen } from "@/ui/components/scheduled/ScheduledScreen";
 import { ScheduledSkeleton } from "@/ui/components/scheduled/ScheduledSkeleton";
 
@@ -31,14 +30,11 @@ export default async function ScheduledPage() {
   if (!session) redirect("/signin?returnUrl=%2Fscheduled");
 
   return (
-    <>
-      <AppNav />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <Suspense fallback={<ScheduledFallback />}>
-          <ScheduledScreen />
-        </Suspense>
-      </main>
-    </>
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <Suspense fallback={<ScheduledFallback />}>
+        <ScheduledScreen />
+      </Suspense>
+    </div>
   );
 }
 

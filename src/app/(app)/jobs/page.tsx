@@ -5,7 +5,6 @@ import { Suspense } from "react";
 import { getOperatorSession } from "@/app/_auth/session";
 import { JobLogScreen } from "@/ui/components/jobs/JobLogScreen";
 import { JobLogSkeleton } from "@/ui/components/jobs/JobLogSkeleton";
-import { AppNav } from "@/ui/components/nav/AppNav";
 
 /**
  * "Nhật ký đăng bài" (E11.1). Server Component guard, client screen.
@@ -31,14 +30,11 @@ export default async function JobsPage() {
   if (!session) redirect("/signin?returnUrl=%2Fjobs");
 
   return (
-    <>
-      <AppNav />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <Suspense fallback={<JobsFallback />}>
-          <JobLogScreen />
-        </Suspense>
-      </main>
-    </>
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <Suspense fallback={<JobsFallback />}>
+        <JobLogScreen />
+      </Suspense>
+    </div>
   );
 }
 

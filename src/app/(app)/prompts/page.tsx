@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { getOperatorSession } from "@/app/_auth/session";
-import { AppNav } from "@/ui/components/nav/AppNav";
 import { PromptTemplatesScreen } from "@/ui/components/prompts/PromptTemplatesScreen";
 
 /**
@@ -25,11 +24,8 @@ export default async function PromptsPage() {
   if (!session) redirect("/signin?returnUrl=%2Fprompts");
 
   return (
-    <>
-      <AppNav />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <PromptTemplatesScreen />
-      </main>
-    </>
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <PromptTemplatesScreen />
+    </div>
   );
 }

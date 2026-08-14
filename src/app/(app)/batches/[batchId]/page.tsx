@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 
 import { getOperatorSession } from "@/app/_auth/session";
 import { BatchStatusScreen } from "@/ui/components/batch/BatchStatusScreen";
-import { AppNav } from "@/ui/components/nav/AppNav";
 
 /**
  * "Theo dõi lô đăng" (E7.5). The batch is a server resource with its own URL
@@ -33,11 +32,8 @@ export default async function BatchPage({ params }: { params: Promise<{ batchId:
   }
 
   return (
-    <>
-      <AppNav />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <BatchStatusScreen batchId={batchId} />
-      </main>
-    </>
+    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+      <BatchStatusScreen batchId={batchId} />
+    </div>
   );
 }
