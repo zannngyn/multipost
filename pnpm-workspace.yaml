@@ -1,7 +1,13 @@
 allowBuilds:
+  '@astryxdesign/cli': true
+  '@astryxdesign/core': true
   '@google/genai': true
   esbuild: true
   msgpackr-extract: true
   protobufjs: true
   sharp: false
   unrs-resolver: false
+minimumReleaseAgeExclude:
+  - '@astryxdesign/core@0.4.0'
+  - '@astryxdesign/theme-neutral@0.4.0'
+  - '@astryxdesign/cli@0.4.0'
