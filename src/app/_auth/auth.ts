@@ -20,11 +20,16 @@ import { buildBaseAuthConfig, loadAuthEnv } from "./auth.config";
 /**
  * Sign-in with Facebook asks for the SAME scopes the channel import needs, so
  * one round trip both authenticates the operator and yields a User Access Token
- * we can turn into Page tokens. `email` is deliberately NOT requested: the gate
- * is an allow-list of user ids, and an e-mail we do not use is data we should
- * not collect.
+ * we can turn into Page tokens.
+ *
+ * `email` is in the list even though the ACCESS gate is the user-id allow-list:
+ * Auth.js builds `session.user` from the token's e-mail and drops the user
+ * entirely when there is none, which made every Facebook sign-in land back on
+ * /signin with a valid cookie. It needs no App Review (Meta grants
+ * public_profile and email automatically). Accounts that still return no
+ * address are handled by the fallback in auth.config's `jwt` callback.
  */
-const FACEBOOK_SIGNIN_SCOPES = ["public_profile", ...FACEBOOK_CONNECT_SCOPES].join(",");
+const FACEBOOK_SIGNIN_SCOPES = ["public_profile", "email", ...FACEBOOK_CONNECT_SCOPES].join(",");
 
 /**
  * The Facebook provider is optional: it needs the Meta app credentials, and a
