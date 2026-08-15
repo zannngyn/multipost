@@ -13,6 +13,15 @@ export interface QueuedFile {
   readonly file: File;
 }
 
+/**
+ * Position of an entry by id. dnd-kit identifies rows by id, not by index, so
+ * every drag has to translate one into the other — and doing it in one place
+ * keeps that translation testable.
+ */
+export function indexOfId(items: readonly { id: string }[], id: string): number {
+  return items.findIndex((item) => item.id === id);
+}
+
 /** Moves one entry, clamping rather than throwing: the caller is a button. */
 export function moveItem<T>(items: readonly T[], from: number, to: number): T[] {
   const list = [...items];

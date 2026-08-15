@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeMove,
   formatBytes,
+  indexOfId,
   makeCover,
   moveItem,
   removeAt,
@@ -53,6 +54,19 @@ describe("removeAt", () => {
   it("ignores an index outside the list", () => {
     expect(removeAt(items, 9)).toEqual(items);
     expect(removeAt(items, -1)).toEqual(items);
+  });
+});
+
+describe("indexOfId", () => {
+  const rows = [{ id: "a" }, { id: "b" }, { id: "c" }];
+
+  it("finds a row by its id", () => {
+    expect(indexOfId(rows, "b")).toBe(1);
+  });
+
+  it("answers -1 for an id that is not in the list", () => {
+    // A drag whose row vanished mid-gesture must be a no-op, not a splice at 0.
+    expect(indexOfId(rows, "gone")).toBe(-1);
   });
 });
 

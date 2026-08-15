@@ -1,10 +1,32 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type Active,
+  type Announcements,
+  type DragEndEvent,
+  type Over,
+  type ScreenReaderInstructions,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  hasSortableData,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useId, useState } from "react";
 
 import {
   describeMove,
   formatBytes,
+  indexOfId,
   makeCover,
   moveItem,
   removeAt,
@@ -28,14 +50,15 @@ import {
  * Accessibility, per web-file-upload and web-drag-drop-reorder:
  *   - the file input is visually hidden but reachable, driven by a real
  *     <label> — never `display:none` with a click handler;
- *   - dropping is an ADDITION, never the only way in: the picker and the
- *     reorder buttons work with a keyboard alone;
- *   - every move is announced in an aria-live region, because a reorder is
- *     invisible to anyone not watching the list.
+ *   - dragging is never the ONLY way to reorder. dnd-kit's KeyboardSensor
+ *     handles space-then-arrows on the handle, and the ↑ ↓ buttons stay for
+ *     everyone who never discovers that;
+ *   - every move is announced, in Vietnamese, through dnd-kit's own live
+ *     region for drags and a local one for the buttons.
  *
- * Reordering is buttons, not pointer-drag. Hand-rolled drag-to-reorder is the
- * single easiest thing to get wrong for a11y (the skill says so), and the
- * library that does it properly is a dependency this project has not approved.
+ * Reordering uses dnd-kit rather than hand-rolled pointer events: pointercancel,
+ * auto-scroll and the keyboard model are each easy to get subtly wrong, and the
+ * skill is explicit that this is not a thing to write from scratch.
  */
 
 export interface UploadPanelProps {
@@ -51,15 +74,26 @@ export interface UploadPanelProps {
   disabled?: boolean;
 }
 
+const SCREEN_READER_INSTRUCTIONS: ScreenReaderInstructions = {
+  draggable:
+    "Nhấn phím cách để bắt đầu di chuyển file. Dùng phím mũi tên lên xuống để đổi vị trí, " +
+    "nhấn phím cách để thả, nhấn Escape để huỷ. File ở vị trí 1 là ảnh bìa.",
+};
+
 export function UploadPanel(props: UploadPanelProps) {
   const inputId = useId();
-  const inputRef = useRef<HTMLInputElement | null>(null);
   const [isOver, setIsOver] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [localErrors, setLocalErrors] = useState<string[]>([]);
 
   const { queue, onQueueChange, disabled } = props;
   const full = queue.length >= MAX_UPLOAD_FILES;
+
+  const sensors = useSensors(
+    // A small distance so a click on a row's button is not read as a drag.
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   /**
    * Client-side triage is UX, not security: it saves a pointless round trip.
@@ -102,10 +136,9 @@ export function UploadPanel(props: UploadPanelProps) {
   function move(from: number, to: number) {
     const next = moveItem(queue, from, to);
     if (next === queue) return;
-    onQueueChange(next);
     const moved = queue[from];
-    const position = next.findIndex((item) => item.id === moved.id);
-    setAnnouncement(describeMove(moved.file.name, position, next.length));
+    onQueueChange(next);
+    setAnnouncement(describeMove(moved.file.name, indexOfId(next, moved.id), next.length));
   }
 
   function cover(index: number) {
@@ -120,6 +153,41 @@ export function UploadPanel(props: UploadPanelProps) {
     setAnnouncement(`Đã bỏ ${removed.file.name}.`);
   }
 
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const from = indexOfId(queue, String(active.id));
+    const to = indexOfId(queue, String(over.id));
+    if (from < 0 || to < 0) return;
+
+    // The same tested helper the buttons use — one definition of "move".
+    onQueueChange(moveItem(queue, from, to));
+  }
+
+  /**
+   * dnd-kit owns the live region during a drag; these are its words.
+   *
+   * Positions come from `sortable.index`, NOT from resolving `over.id` against
+   * the queue: collision detection can name a neighbour before the pointer has
+   * moved, which announced the wrong slot the moment a drag began.
+   */
+  const announcements: Announcements = {
+    onDragStart: ({ active }) =>
+      `Bắt đầu di chuyển ${nameOf(queue, active.id)}, đang ở vị trí ${sortableIndex(active) + 1} trên ${queue.length}.`,
+    onDragOver: ({ active, over }) => {
+      const to = sortableIndex(over);
+      if (to < 0) return undefined;
+      return `${nameOf(queue, active.id)} sẽ vào vị trí ${to + 1} trên ${queue.length}.`;
+    },
+    onDragEnd: ({ active, over }) => {
+      const to = sortableIndex(over);
+      if (to < 0) return `Đã thả ${nameOf(queue, active.id)} về chỗ cũ.`;
+      return describeMove(nameOf(queue, active.id), to, queue.length);
+    },
+    onDragCancel: ({ active }) => `Đã huỷ, ${nameOf(queue, active.id)} về chỗ cũ.`,
+  };
+
   return (
     <section className="space-y-4" aria-labelledby={`${inputId}-heading`}>
       <div className="space-y-1">
@@ -127,8 +195,8 @@ export function UploadPanel(props: UploadPanelProps) {
           File của bài này
         </h3>
         <p className="text-muted-foreground text-sm">
-          Kéo file vào ô bên dưới hoặc bấm để chọn. File đầu tiên là ảnh bìa. Tối đa{" "}
-          {MAX_UPLOAD_FILES} file, mỗi file {formatBytes(MAX_UPLOAD_FILE_BYTES)}.
+          Kéo file vào ô bên dưới hoặc bấm để chọn. Kéo từng dòng để đổi thứ tự — file đầu tiên là
+          ảnh bìa. Tối đa {MAX_UPLOAD_FILES} file, mỗi file {formatBytes(MAX_UPLOAD_FILE_BYTES)}.
         </p>
       </div>
 
@@ -150,7 +218,6 @@ export function UploadPanel(props: UploadPanelProps) {
         } ${disabled ? "opacity-60" : ""}`}
       >
         <input
-          ref={inputRef}
           id={inputId}
           type="file"
           multiple
@@ -165,7 +232,7 @@ export function UploadPanel(props: UploadPanelProps) {
         />
         <label
           htmlFor={inputId}
-          className="text-primary cursor-pointer text-sm font-medium underline underline-offset-4 focus-within:outline-none"
+          className="text-primary cursor-pointer text-sm font-medium underline underline-offset-4"
         >
           Chọn file từ máy
         </label>
@@ -194,82 +261,157 @@ export function UploadPanel(props: UploadPanelProps) {
       ) : null}
 
       {queue.length > 0 ? (
-        <ol className="divide-border divide-y rounded-lg border">
-          {queue.map((item, index) => (
-            <li key={item.id} className="flex items-center gap-3 p-3">
-              <span className="text-muted-foreground w-6 shrink-0 text-sm tabular-nums">
-                {index + 1}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm">{item.file.name}</span>
-                <span className="text-muted-foreground text-xs">
-                  {formatBytes(item.file.size)}
-                </span>
-              </span>
-              {index === 0 ? <Badge>Ảnh bìa</Badge> : null}
-              <span className="flex shrink-0 gap-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={disabled || index === 0}
-                  onClick={() => move(index, index - 1)}
-                  aria-label={`Đưa ${item.file.name} lên trên`}
-                >
-                  ↑
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={disabled || index === queue.length - 1}
-                  onClick={() => move(index, index + 1)}
-                  aria-label={`Đưa ${item.file.name} xuống dưới`}
-                >
-                  ↓
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={disabled || index === 0}
-                  onClick={() => cover(index)}
-                >
-                  Đặt làm bìa
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={disabled}
-                  onClick={() => remove(index)}
-                  aria-label={`Bỏ ${item.file.name}`}
-                >
-                  Bỏ
-                </Button>
-              </span>
-            </li>
-          ))}
-        </ol>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+          accessibility={{ announcements, screenReaderInstructions: SCREEN_READER_INSTRUCTIONS }}
+        >
+          <SortableContext
+            items={queue.map((item) => item.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <ol className="divide-border divide-y rounded-lg border">
+              {queue.map((item, index) => (
+                <SortableRow
+                  key={item.id}
+                  item={item}
+                  index={index}
+                  total={queue.length}
+                  disabled={disabled ?? false}
+                  onMoveUp={() => move(index, index - 1)}
+                  onMoveDown={() => move(index, index + 1)}
+                  onCover={() => cover(index)}
+                  onRemove={() => remove(index)}
+                />
+              ))}
+            </ol>
+          </SortableContext>
+        </DndContext>
       ) : null}
 
-      {queue.length > 0 ? (
-        <div className="flex items-center gap-3">
+      {/* The confirmation lives OUTSIDE the queue check on purpose: a successful
+          upload empties the queue, and hiding the receipt with it would leave
+          the operator with no sign anything happened. */}
+      <div className="flex items-center gap-3">
+        {queue.length > 0 ? (
           <Button type="button" onClick={props.onUpload} disabled={disabled || props.isUploading}>
             {props.isUploading ? "Đang tải lên…" : `Tải ${queue.length} file lên`}
           </Button>
-          {props.uploadedCount > 0 ? (
-            <p className="text-muted-foreground text-sm" role="status">
-              Đã lưu {props.uploadedCount} file cho bài này.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
+        ) : null}
+        {props.uploadedCount > 0 ? (
+          <p className="text-muted-foreground text-sm" role="status">
+            Đã lưu {props.uploadedCount} file cho bài này
+            {queue.length > 0 ? " — bấm tải lên sẽ thay bằng danh sách mới." : "."}
+          </p>
+        ) : null}
+      </div>
 
-      {/* Announces adds, moves and removals for anyone not watching the list. */}
+      {/* Adds, button-driven moves and removals. Drags are announced by dnd-kit
+          in its own region, so the two never talk over each other. */}
       <p aria-live="polite" className="sr-only">
         {announcement}
       </p>
     </section>
   );
+}
+
+interface SortableRowProps {
+  item: QueuedFile;
+  index: number;
+  total: number;
+  disabled: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onCover: () => void;
+  onRemove: () => void;
+}
+
+function SortableRow(props: SortableRowProps) {
+  const { item, index, total, disabled } = props;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.id,
+    disabled,
+  });
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`flex items-center gap-3 p-3 ${isDragging ? "bg-muted relative z-10" : ""}`}
+    >
+      {/* A dedicated handle, not the whole row: the row holds four buttons, and
+          a whole-row drag would swallow their clicks. */}
+      <button
+        type="button"
+        className="text-muted-foreground hover:text-foreground cursor-grab touch-none px-1 disabled:cursor-not-allowed"
+        disabled={disabled}
+        aria-label={`Kéo để đổi vị trí ${item.file.name}`}
+        {...attributes}
+        {...listeners}
+      >
+        ⠿
+      </button>
+
+      <span className="text-muted-foreground w-6 shrink-0 text-sm tabular-nums">{index + 1}</span>
+
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm">{item.file.name}</span>
+        <span className="text-muted-foreground text-xs">{formatBytes(item.file.size)}</span>
+      </span>
+
+      {index === 0 ? <Badge>Ảnh bìa</Badge> : null}
+
+      <span className="flex shrink-0 gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled || index === 0}
+          onClick={props.onMoveUp}
+          aria-label={`Đưa ${item.file.name} lên trên`}
+        >
+          ↑
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled || index === total - 1}
+          onClick={props.onMoveDown}
+          aria-label={`Đưa ${item.file.name} xuống dưới`}
+        >
+          ↓
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled || index === 0}
+          onClick={props.onCover}
+        >
+          Đặt làm bìa
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={disabled}
+          onClick={props.onRemove}
+          aria-label={`Bỏ ${item.file.name}`}
+        >
+          Bỏ
+        </Button>
+      </span>
+    </li>
+  );
+}
+
+function nameOf(queue: readonly QueuedFile[], id: string | number): string {
+  return queue.find((item) => item.id === String(id))?.file.name ?? "file";
+}
+
+/** Authoritative position inside the SortableContext, or -1 when absent. */
+function sortableIndex(entry: Active | Over | null | undefined): number {
+  return hasSortableData(entry) ? entry.data.current.sortable.index : -1;
 }
