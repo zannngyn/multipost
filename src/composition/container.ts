@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
@@ -17,6 +17,7 @@ import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
 import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
 import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
+import { makeFacebookOAuthClient } from "@/adapters/meta/facebook-oauth";
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
 import { makeTikTokClient } from "@/adapters/tiktok/tiktok-client";
@@ -34,9 +35,18 @@ import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
-import type { ChannelPlatform, ChannelPublisher } from "@/core/ports/publisher";
+import type {
+  ChannelConnectClient,
+  ChannelPlatform,
+  ChannelPublisher,
+} from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
+import {
+  makeConnectFacebookChannels,
+  type ConnectFacebookChannels,
+} from "@/core/usecases/connect-facebook-channels";
+import { makeManageChannels, type ManageChannels } from "@/core/usecases/manage-channels";
 import { makeCreatePostBatch, type CreatePostBatch } from "@/core/usecases/create-post-batch";
 import { makeGetBatchStatus, type GetBatchStatus } from "@/core/usecases/get-batch-status";
 import { makeGetMediaContent, type GetMediaContent } from "@/core/usecases/get-media-content";
@@ -87,6 +97,7 @@ import {
   loadMediaConfig,
   loadUploadConfig,
   loadMetaConfig,
+  loadMetaOAuthConfig,
   loadSecretsConfig,
   loadVideoConfig,
   type Config,
@@ -135,6 +146,10 @@ export interface Usecases {
   retryPostJob: RetryPostJob;
   /** E7.6 — preset channel groups (list/create/update/delete). */
   channelGroups: ManageChannelGroups;
+  /** E5.1 — the channel list itself (read / switch on-off / remove). */
+  channels: ManageChannels;
+  /** E5.1 — connect Fanpages: OAuth, or by pasting a User Access Token. */
+  connectChannels: ConnectFacebookChannels;
   /** E8.4 — "bài đã hẹn": what publishes next, soonest first. */
   listScheduledJobs: ListScheduledJobs;
   /** E8.4 — move a scheduled post to another time. */
@@ -183,6 +198,8 @@ export interface UsecaseOverrides {
   publishers?: Partial<Record<ChannelPlatform, ChannelPublisher>>;
   /** E3 Phase 2 — tests/scripts inject a probe instead of spawning ffprobe. */
   videoProbe?: VideoAssetProbe;
+  /** E5.1 — tests/scripts connect channels without a Meta app. */
+  channelConnect?: ChannelConnectClient;
 }
 
 export interface Container extends Infra {
@@ -276,6 +293,38 @@ function makeLazyTikTokPublisher(logger: Logger): ChannelPublisher {
   return {
     publishImagePost: (input) => build().publishImagePost(input),
     publishVideoPost: (input) => build().publishVideoPost(input),
+  };
+}
+
+/**
+ * Facebook CONNECT client (E5.1), built on first use — the same contract as the
+ * publisher: a process that never connects a Page reads no Meta app credential.
+ *
+ * The credentials are optional here (see MetaOAuthConfigSchema): pasting a User
+ * Access Token needs none, and the OAuth door refuses with a message naming the
+ * missing variables. So a missing META_APP_SECRET must NOT stop this from being
+ * built — it only changes what the adapter can do.
+ */
+function makeLazyFacebookConnect(logger: Logger): ChannelConnectClient {
+  let real: ChannelConnectClient | null = null;
+  const build = (): ChannelConnectClient => {
+    if (!real) {
+      const oauth = loadMetaOAuthConfig();
+      real = makeFacebookOAuthClient({
+        logger,
+        appId: oauth.META_APP_ID ?? null,
+        appSecret: oauth.META_APP_SECRET ?? null,
+        redirectUri: oauth.META_OAUTH_REDIRECT_URI ?? null,
+        version: loadMetaConfig().META_GRAPH_VERSION,
+      });
+    }
+    return real;
+  };
+  return {
+    buildAuthorizeUrl: (input) => build().buildAuthorizeUrl(input),
+    exchangeCodeForUserToken: (input) => build().exchangeCodeForUserToken(input),
+    extendUserToken: (input) => build().extendUserToken(input),
+    listAccounts: (input) => build().listAccounts(input),
   };
 }
 
@@ -515,6 +564,16 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       channels,
       logger: deps.logger,
       newId: () => randomUUID(),
+    }),
+    channels: makeManageChannels({ channels, logger: deps.logger, users }),
+    connectChannels: makeConnectFacebookChannels({
+      channels,
+      connect: overrides.channelConnect ?? makeLazyFacebookConnect(deps.logger),
+      logger: deps.logger,
+      // 32 random bytes, hex: the CSRF nonce of the OAuth round trip. Core has
+      // no crypto of its own (docs/07 §2), so it is injected here.
+      newState: () => randomBytes(32).toString("hex"),
+      users,
     }),
     getMediaContent: makeGetMediaContent({
       drive,

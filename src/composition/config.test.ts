@@ -8,6 +8,7 @@ import {
   loadConfig,
   loadGoogleConfig,
   loadMediaConfig,
+  loadMetaOAuthConfig,
   loadSecretsConfig,
   type EnvRecord,
 } from "./config";
@@ -304,6 +305,41 @@ describe("loadMediaConfig / loadSecretsConfig (E3 hardening)", () => {
   it("never echoes the value back in the error (only the variable name)", () => {
     const error = catchError(() => loadSecretsConfig({ TENANT_SECRETS_ENC_KEY: "super-secret!!" }));
     expect(JSON.stringify(error)).not.toContain("super-secret!!");
+  });
+});
+
+describe("loadMetaOAuthConfig — Facebook connect (E5.1)", () => {
+  it("accepts a deployment with NO Meta app at all (pasting a token still works)", () => {
+    expect(loadMetaOAuthConfig({})).toEqual({});
+  });
+
+  it("treats a BLANK variable as not set, not as an empty value", () => {
+    // `META_APP_SECRET=` in a .env means "not yet", and must not fail a process
+    // that never opens the OAuth door.
+    expect(
+      loadMetaOAuthConfig({ META_APP_ID: "1640548543911378", META_APP_SECRET: "  " }),
+    ).toEqual({ META_APP_ID: "1640548543911378" });
+  });
+
+  it("refuses a redirect URI that is not an http(s) URL", () => {
+    const error = catchError(() =>
+      loadMetaOAuthConfig({ META_OAUTH_REDIRECT_URI: "/api/channels/callback" }),
+    );
+    expect(issuePaths(error)).toEqual(["META_OAUTH_REDIRECT_URI"]);
+  });
+
+  it("reads a fully configured app", () => {
+    expect(
+      loadMetaOAuthConfig({
+        META_APP_ID: "1640548543911378",
+        META_APP_SECRET: "app-secret",
+        META_OAUTH_REDIRECT_URI: "https://mysp.example.com/api/channels/callback",
+      }),
+    ).toEqual({
+      META_APP_ID: "1640548543911378",
+      META_APP_SECRET: "app-secret",
+      META_OAUTH_REDIRECT_URI: "https://mysp.example.com/api/channels/callback",
+    });
   });
 });
 

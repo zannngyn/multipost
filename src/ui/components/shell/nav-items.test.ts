@@ -23,6 +23,13 @@ describe("isNavItemActive", () => {
   it("ignores a trailing slash", () => {
     expect(isNavItemActive("/products/", "/products")).toBe(true);
   });
+
+  it("stops matching sub-paths when the entry is exact", () => {
+    // "/channels" owns the connected Pages; "/channels/groups" is its own entry.
+    expect(isNavItemActive("/channels/groups", "/channels", { exact: true })).toBe(false);
+    expect(isNavItemActive("/channels", "/channels", { exact: true })).toBe(true);
+    expect(isNavItemActive("/channels/groups", "/channels/groups")).toBe(true);
+  });
 });
 
 describe("NAV_SECTIONS", () => {
@@ -37,8 +44,23 @@ describe("NAV_SECTIONS", () => {
       "/products",
       "/sync",
       "/channels",
+      "/channels/groups",
       "/prompts",
     ]);
     expect(new Set(hrefs).size).toBe(hrefs.length);
+  });
+
+  it("marks every entry that owns another entry's prefix as exact", () => {
+    const hrefs = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.href));
+
+    for (const section of NAV_SECTIONS) {
+      for (const item of section.items) {
+        if (item.href === "/") continue;
+        const ownsAnother = hrefs.some((href) => href.startsWith(`${item.href}/`));
+        // Without this flag two nav entries light up at once and the operator
+        // cannot tell which screen they are on.
+        expect(ownsAnother ? item.isExact === true : true).toBe(true);
+      }
+    }
   });
 });

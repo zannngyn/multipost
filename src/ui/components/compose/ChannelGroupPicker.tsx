@@ -62,7 +62,7 @@ export function ChannelGroupPicker({
         description="Bài đăng cần ít nhất một kênh. Hãy tạo nhóm kênh trước — chỉ mất một lần, sau đó màn này sẽ hiện danh sách để tick."
         action={
           <Button asChild variant="outline">
-            <Link href="/channels">Tạo nhóm kênh</Link>
+            <Link href="/channels/groups">Tạo nhóm kênh</Link>
           </Button>
         }
       />

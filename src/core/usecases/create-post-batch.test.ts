@@ -13,6 +13,7 @@ import type {
   SignMediaUrlFn,
 } from "@/core/ports/publisher";
 
+import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import { makeCreatePostBatch, type PostMediaInput } from "./create-post-batch";
 
 const TENANT = "00000000-0000-0000-0000-000000000001";
@@ -215,6 +216,7 @@ function harness(options: {
       known.find((entry) => entry.channelId === channelId) ?? null,
     listChannels: async () => known,
     getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 }),
+    ...channelWriteStubs(),
   };
   let counter = 0;
   const signer = fakeSigner();

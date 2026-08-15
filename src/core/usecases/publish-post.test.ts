@@ -22,6 +22,7 @@ import type {
   SignMediaUrlFn,
 } from "@/core/ports/publisher";
 
+import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import { makePublishPost, spacingWaitMs } from "./publish-post";
 
 /**
@@ -202,6 +203,7 @@ function makeChannels(
       maxAttempts: 3,
       ...settings,
     }),
+    ...channelWriteStubs(),
   };
 }
 
@@ -723,6 +725,7 @@ describe("publishPost — happy path", () => {
       },
       listChannels: async () => [CHANNEL],
       getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 }),
+      ...channelWriteStubs(),
     };
     const publish = makePublishPost({
       postJobs: repo,

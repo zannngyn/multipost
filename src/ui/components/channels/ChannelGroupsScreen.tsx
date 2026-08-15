@@ -14,8 +14,8 @@ import {
   useDeleteChannelGroup,
   useUpdateChannelGroup,
 } from "@/ui/hooks/useChannelGroups";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
-import { formatChannelIds } from "@/ui/schemas/channel-group.schema";
 import { formatDateTime } from "@/ui/schemas/post-batch.schema";
 import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
@@ -43,6 +43,7 @@ export function ChannelGroupsScreen() {
   const create = useCreateChannelGroup(tenantId);
   const update = useUpdateChannelGroup(tenantId);
   const remove = useDeleteChannelGroup(tenantId);
+  const channels = useChannels(tenantId);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -50,6 +51,18 @@ export function ChannelGroupsScreen() {
   const isFirstLoad = groups.isPending && groups.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
   const items = groups.data?.groups ?? [];
+
+  /**
+   * A group may only hold channels that are actually publishable: a disabled
+   * Page is skipped at publish time, so offering it here would promise a post
+   * that never goes out. The picker therefore sees ACTIVE channels only.
+   */
+  const pickableChannels = {
+    items: (channels.data?.channels ?? []).filter((channel) => channel.status === "active"),
+    isLoading: channels.isPending && channels.fetchStatus === "fetching",
+    error: channels.isError ? channels.error : undefined,
+    onRetry: () => void channels.refetch(),
+  };
 
   return (
     <section className="space-y-6" aria-labelledby="channels-heading">
@@ -72,6 +85,7 @@ export function ChannelGroupsScreen() {
         </h2>
         <ChannelGroupForm
           mode="create"
+          channels={pickableChannels}
           pending={create.isPending}
           error={create.isError ? create.error : undefined}
           onSubmit={(values) => {
@@ -151,8 +165,9 @@ export function ChannelGroupsScreen() {
                     mode="edit"
                     defaultValues={{
                       name: group.name,
-                      channelIdsText: formatChannelIds(group.channelIds),
+                      channelIds: [...group.channelIds],
                     }}
+                    channels={pickableChannels}
                     pending={update.isPending}
                     error={update.isError ? update.error : undefined}
                     onCancel={() => {

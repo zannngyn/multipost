@@ -170,6 +170,39 @@ export const MetaConfigSchema = z.object({
 export type MetaConfig = z.infer<typeof MetaConfigSchema>;
 
 /**
+ * Facebook Login app credentials (E5.1 — "Kết nối Fanpage"). Its own lazy group:
+ * publishing needs none of it, and `next build` must not require a Meta app.
+ *
+ * ALL THREE ARE OPTIONAL here, on purpose — a Meta app hands out a usable User
+ * Access Token long before its App Secret is available, and the "paste a token"
+ * door must work meanwhile:
+ *   - paste a token : needs nothing (the token IS the credential). Without an
+ *                     App Secret the token cannot be extended to 60 days, and
+ *                     the adapter warns instead of failing.
+ *   - OAuth         : needs all three. The adapter refuses with a message
+ *                     naming the missing variables (adapters/meta/facebook-oauth).
+ * Blank values are treated as absent: `META_APP_SECRET=` in a .env is "not set
+ * yet", not "set to the empty string".
+ */
+export const MetaOAuthConfigSchema = z.object({
+  META_APP_ID: blankAsUndefined(z.string().trim().min(1)),
+  META_APP_SECRET: blankAsUndefined(z.string().trim().min(1)),
+  /** Must match the redirect URI registered in the Meta app, exactly. */
+  META_OAUTH_REDIRECT_URI: blankAsUndefined(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .refine(
+        (value) => value.startsWith("https://") || value.startsWith("http://"),
+        "META_OAUTH_REDIRECT_URI must be an http(s) URL",
+      ),
+  ),
+});
+
+export type MetaOAuthConfig = z.infer<typeof MetaOAuthConfigSchema>;
+
+/**
  * Cryptographic material (E3/E5 hardening). Its own group, loaded on demand, so
  * a process that neither serves media nor reads a channel token still boots —
  * and a missing key fails at the call site naming the variable, not at startup.
@@ -240,6 +273,18 @@ export const SecretsConfigSchema = z.object({
 export type SecretsConfig = z.infer<typeof SecretsConfigSchema>;
 
 /**
+ * `KEY=` in a .env file is an EMPTY STRING, not an absent value. For an optional
+ * variable that difference is noise: both mean "not configured yet", and failing
+ * validation on the blank line would block a deployment that never uses it.
+ */
+function blankAsUndefined<T extends z.ZodType>(schema: T) {
+  return z.preprocess(
+    (value) => (typeof value === "string" && value.trim().length === 0 ? undefined : value),
+    schema.optional(),
+  );
+}
+
+/**
  * Length check without importing node:crypto: base64 of 32 bytes is 44 chars
  * ending in one '='. The box re-validates by decoding — this only turns an
  * obvious typo into a message naming the variable.
@@ -287,6 +332,10 @@ export function loadAiConfig(env: EnvRecord = process.env): AiConfig {
 
 export function loadMetaConfig(env: EnvRecord = process.env): MetaConfig {
   return parseEnv(MetaConfigSchema, env, "meta");
+}
+
+export function loadMetaOAuthConfig(env: EnvRecord = process.env): MetaOAuthConfig {
+  return parseEnv(MetaOAuthConfigSchema, env, "meta-oauth");
 }
 
 export function loadMediaConfig(env: EnvRecord = process.env): MediaConfig {
