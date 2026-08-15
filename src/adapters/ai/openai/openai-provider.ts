@@ -1,10 +1,14 @@
 /**
- * OpenAI adapter — INFRASTRUCTURE FALLBACK only (ADR-001 §8, provider-strategy.md §3).
- * It runs when Google times out, rate-limits or is down; it is never chosen for
- * quality reasons, and it never picks its own model.
+ * OpenAI adapter — currently the ONLY wired provider (owner decision 15/08/2026,
+ * provider-strategy.md §3.1). It was written as the infrastructure fallback
+ * behind Google; since no Google paid-tier key exists, every generation now goes
+ * through here. Nothing in this file changes with that: the adapter still never
+ * picks its own model and never retries — the registry chooses the model, the
+ * gateway owns retry/fallback (ADR-001 §8).
  *
- * `maxRetries: 0` is deliberate: the gateway owns retry/fallback, so SDK-level
- * retries would silently multiply cost and hide provider flakiness.
+ * `maxRetries: 0` is deliberate: SDK-level retries would silently multiply cost
+ * and hide provider flakiness. With one provider there is no fallback road left,
+ * so an outage here fails the generation outright — by design, see §3.1.
  */
 
 import OpenAI, { APIError } from "openai";
@@ -37,7 +41,7 @@ export function makeOpenAIProviderAdapter(options: OpenAIProviderOptions): AIPro
   if (!options.apiKey || options.apiKey.trim().length === 0) {
     throw new AppError("MODEL_NOT_CONFIGURED", {
       message: "OpenAI adapter requires an API key",
-      userMessage: "Chưa cấu hình khoá API OpenAI cho nhà cung cấp dự phòng.",
+      userMessage: "Chưa cấu hình khoá API OpenAI — hệ thống không viết được caption nào.",
       context: { provider: "openai" },
     });
   }
@@ -53,7 +57,11 @@ export function makeOpenAIProviderAdapter(options: OpenAIProviderOptions): AIPro
     provider: "openai",
 
     capabilities(_model: string): ModelCapabilities {
-      return { vision: true, structuredOutput: true, maxOutputTokens: 8192 };
+      // Conservative provider-wide floor, diagnostics only — the registry entry
+      // is what the engine actually reads. `temperature: false` is the safe
+      // floor: assuming a model accepts the parameter and being wrong is a hard
+      // 400, assuming it does not merely omits a knob.
+      return { vision: true, structuredOutput: true, maxOutputTokens: 8192, temperature: false };
     },
 
     async complete(request: NormalizedAIRequest): Promise<NormalizedAIResponse> {

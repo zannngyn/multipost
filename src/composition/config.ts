@@ -92,11 +92,33 @@ export type GoogleConfig = z.infer<typeof GoogleConfigSchema>;
  * AI gateway (E4, ADR-001). Loaded on demand like auth/google: processes that
  * never generate content must boot without provider keys. Path/TTL are
  * operational knobs with documented defaults, not secrets.
+ *
+ * Owner decision 15/08/2026: SINGLE PROVIDER — OpenAI only. Google stays in the
+ * codebase (adapter, registry entries) but is off until a key is provisioned, so
+ * its variable is optional and the tiers in `config/ai-models.yaml` list no
+ * Google model. Re-enabling = set GOOGLE_AI_API_KEY + put the keys back in the
+ * YAML tiers; no code change.
  */
 export const AiConfigSchema = z.object({
-  /** Google AI Studio key — MUST be paid tier before real data flows (ADR-001). */
-  GOOGLE_AI_API_KEY: nonEmpty("GOOGLE_AI_API_KEY"),
-  /** Infrastructure fallback provider. */
+  /**
+   * Google AI Studio key. Optional while the Google provider is disabled. When
+   * set it MUST be paid tier before real data flows (ADR-001) — the free tier
+   * grants Google training rights over shop data.
+   *
+   * `GOOGLE_AI_API_KEY=` (the normal way to leave a key out of a .env) means
+   * DISABLED, not "misconfigured": blank collapses to undefined so the caller
+   * has exactly one shape to branch on. This is the opposite of the required
+   * secrets above, where blank must fail — there, blank means someone deleted a
+   * value that the system cannot run without.
+   */
+  GOOGLE_AI_API_KEY: z
+    .string()
+    .optional()
+    .transform((value) => {
+      const trimmed = value?.trim();
+      return trimmed ? trimmed : undefined;
+    }),
+  /** The only wired provider today; a generation without it cannot run. */
   OPENAI_API_KEY: nonEmpty("OPENAI_API_KEY"),
   AI_MODELS_CONFIG_PATH: z.string().trim().min(1).default("./config/ai-models.yaml"),
   AI_REGISTRY_CACHE_TTL_MS: z.coerce.number().int().positive().default(60_000),

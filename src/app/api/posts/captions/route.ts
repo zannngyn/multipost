@@ -13,9 +13,11 @@ import { getContainer } from "@/composition/container";
  * `stock`, `price` or `note` is rejected with 400 instead of being quietly
  * stripped — a client trying to send them is a bug that must be visible.
  *
- * With no AI key configured, the composition root throws INVALID_INPUT naming
- * the missing variable; the wizard turns that into "chưa cấu hình AI" and falls
- * back to typing the caption by hand. That is the expected Phase 1 behaviour.
+ * With no AI key configured — today that means OPENAI_API_KEY, the only required
+ * one (single-provider decision 15/08/2026) — the composition root throws
+ * INVALID_INPUT naming the missing variable; the wizard turns that into "chưa
+ * cấu hình AI" and falls back to typing the caption by hand. That is the
+ * expected Phase 1 behaviour.
  */
 
 const ROUTE = "POST /api/posts/captions";

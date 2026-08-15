@@ -91,7 +91,7 @@ export function makeScriptedProvider(
   return {
     provider,
     calls,
-    capabilities: () => ({ vision: true, structuredOutput: true, maxOutputTokens: 8192 }),
+    capabilities: () => ({ vision: true, structuredOutput: true, maxOutputTokens: 8192, temperature: true }),
     async complete(request: NormalizedAIRequest): Promise<NormalizedAIResponse> {
       calls.push(request);
       const step = steps[Math.min(calls.length - 1, steps.length - 1)];
@@ -129,28 +129,28 @@ export const TEST_MODELS: Record<string, ModelEntry> = {
     provider: "google",
     model: "gemini-test-flash-lite",
     pricing: { inputPerMTokUsd: 0.3, outputPerMTokUsd: 2.5 },
-    capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 8192 },
+    capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 8192, temperature: true },
   },
   cheapOpenAI: {
     key: "openai:cheap",
     provider: "openai",
     model: "gpt-test-mini",
     pricing: { inputPerMTokUsd: 0.25, outputPerMTokUsd: 2 },
-    capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 8192 },
+    capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 8192, temperature: true },
   },
   midGoogle: {
     key: "google:mid",
     provider: "google",
     model: "gemini-test-flash",
     pricing: { inputPerMTokUsd: 1.5, outputPerMTokUsd: 7.5 },
-    capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 8192 },
+    capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 8192, temperature: true },
   },
   topGoogle: {
     key: "google:top",
     provider: "google",
     model: "gemini-test-pro",
     pricing: { inputPerMTokUsd: 2, outputPerMTokUsd: 12 },
-    capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 8192 },
+    capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 8192, temperature: true },
   },
 };
 

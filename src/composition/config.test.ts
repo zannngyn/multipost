@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { AppError } from "@/core/domain/errors";
 
 import {
+  loadAiConfig,
   loadAuthConfig,
   loadConfig,
   loadGoogleConfig,
@@ -175,6 +176,45 @@ describe("loadGoogleConfig — Service Account (E2)", () => {
 
   it("is not required by loadConfig — a worker boots without Google credentials", () => {
     expect(() => loadConfig(CORE_ENV)).not.toThrow();
+  });
+});
+
+describe("loadAiConfig — single provider (E4, owner decision 15/08/2026)", () => {
+  it("accepts an env with OPENAI_API_KEY and no Google key at all", () => {
+    const config = loadAiConfig({ OPENAI_API_KEY: "sk-openai" });
+
+    expect(config).toMatchObject({
+      OPENAI_API_KEY: "sk-openai",
+      AI_MODELS_CONFIG_PATH: "./config/ai-models.yaml",
+    });
+    expect(config.GOOGLE_AI_API_KEY).toBeUndefined();
+  });
+
+  // `GOOGLE_AI_API_KEY=` is how a .env leaves an optional key out; it must read
+  // as "provider disabled", not as a validation error — that exact line is what
+  // used to stop the whole system from starting.
+  it.each(["", "   "])("treats a blank Google key (%j) as disabled, not as an error", (blank) => {
+    const config = loadAiConfig({ OPENAI_API_KEY: "sk-openai", GOOGLE_AI_API_KEY: blank });
+
+    expect(config.GOOGLE_AI_API_KEY).toBeUndefined();
+    expect(config.OPENAI_API_KEY).toBe("sk-openai");
+  });
+
+  it("trims a real key rather than passing surrounding whitespace to the SDK", () => {
+    expect(
+      loadAiConfig({ OPENAI_API_KEY: "sk-openai", GOOGLE_AI_API_KEY: "  AIza-paid  " })
+        .GOOGLE_AI_API_KEY,
+    ).toBe("AIza-paid");
+  });
+
+  it("requires OPENAI_API_KEY — without it nothing can be generated", () => {
+    expect(issuePaths(catchError(() => loadAiConfig({})))).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("keeps the Google key when it IS set, so re-enabling needs no code change", () => {
+    expect(
+      loadAiConfig({ OPENAI_API_KEY: "sk-openai", GOOGLE_AI_API_KEY: "AIza-paid" }),
+    ).toMatchObject({ GOOGLE_AI_API_KEY: "AIza-paid" });
   });
 });
 

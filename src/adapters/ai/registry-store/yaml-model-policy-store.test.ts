@@ -184,7 +184,7 @@ budget:
 // ---------------------------------------------------------------------------
 
 describe("YAML model policy store — config/ai-models.yaml", () => {
-  it("resolves facebook_content: Google primary, OpenAI fallback in the same tier", async () => {
+  it("resolves facebook_content on the single-provider (OpenAI) registry", async () => {
     const policy = await makeStore(REAL_REGISTRY).getPolicy({
       tenantId: "tenant-1",
       task: "facebook_content",
@@ -196,11 +196,55 @@ describe("YAML model policy store — config/ai-models.yaml", () => {
       escalate: ["mid", "top"],
       maxEscalations: 2,
     });
-    expect(policy.tiers.cheap[0].provider).toBe("google");
-    expect(policy.tiers.cheap[1].provider).toBe("openai");
+    expect(policy.tiers.cheap[0].provider).toBe("openai");
     expect(policy.tiers.cheap[0].pricing.inputPerMTokUsd).toBeGreaterThan(0);
     expect(policy.budget.maxCostPerGenerationUsd).toBeGreaterThan(0);
     expect(policy.registryVersion).toBe(1);
+  });
+
+  /**
+   * Guards the owner decision of 15/08/2026 rather than a mechanism: putting a
+   * Google model back into a tier while GOOGLE_AI_API_KEY is unset would fail at
+   * generation time, not at load time. Delete this test in the same change that
+   * re-enables Google.
+   */
+  it("ships no tier pointing at a provider other than OpenAI", async () => {
+    const policy = await makeStore(REAL_REGISTRY).getPolicy({
+      tenantId: "tenant-1",
+      task: "facebook_content",
+    });
+
+    for (const tier of ["cheap", "mid", "top"] as const) {
+      expect(policy.tiers[tier].length).toBeGreaterThan(0);
+      expect(policy.tiers[tier].map((entry) => entry.provider)).toEqual(
+        policy.tiers[tier].map(() => "openai"),
+      );
+    }
+  });
+
+  /**
+   * Verified against the live API on 15/08/2026: sending `temperature` to a
+   * GPT-5 model is a hard 400 ("Unsupported parameter"), classified
+   * `bad_request` — terminal, no retry, no escalation, the whole post blocked.
+   * `capabilities.temperature` defaults to TRUE in the schema, so an OpenAI
+   * entry that simply forgets the line reintroduces that 400 in production while
+   * every scripted-provider test stays green. This is the only guard that
+   * catches it.
+   */
+  it("declares temperature: false on every OpenAI model the tiers can reach", async () => {
+    const policy = await makeStore(REAL_REGISTRY).getPolicy({
+      tenantId: "tenant-1",
+      task: "facebook_content",
+    });
+
+    const reachable = (["cheap", "mid", "top"] as const).flatMap((tier) => policy.tiers[tier]);
+    const offenders = reachable
+      .filter((entry) => entry.provider === "openai" && entry.capabilities.temperature)
+      .map((entry) => entry.key);
+
+    expect(offenders).toEqual([]);
+    // The task still states the temperature it WANTS — the engine is what drops it.
+    expect(policy.policy.temperature).toBe(0.8);
   });
 
   it("serves every declared task", async () => {

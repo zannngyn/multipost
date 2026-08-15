@@ -4,7 +4,6 @@ import { deflateSync } from "node:zlib";
 import { asc, eq } from "drizzle-orm";
 
 import { makeRedisAiCache } from "@/adapters/ai/cache/redis-cache";
-import { makeGoogleProviderAdapter } from "@/adapters/ai/google/google-provider";
 import { makeOpenAIProviderAdapter } from "@/adapters/ai/openai/openai-provider";
 import { makeDbPromptStore } from "@/adapters/ai/prompt-store/db-prompt-store";
 import { makeStaticPromptStore } from "@/adapters/ai/prompt-store/static-prompt-store";
@@ -34,30 +33,31 @@ import { makeGenerateCaptions } from "@/core/usecases/generate-captions";
  * vertical is covered by mocked unit tests; this script exists to check the
  * assumptions a mock cannot check:
  *
- *   A1 Gemini accepts our `responseJsonSchema` (structured output as sent);
- *   A2 OpenAI strict mode accepts the same schema after minItems/maxItems are
+ *   A2 OpenAI strict mode accepts our schema after minItems/maxItems are
  *      stripped;
- *   A3 the registry model strings actually exist at the providers;
+ *   A3 the registry model strings actually exist at the provider;
  *   A4 real error shapes map onto our failure kinds;
  *   A5 token counts / cost / latency are what the cost model assumes;
  *   A6 the 4 validation stages behave on REAL model output, not fixtures.
+ *
+ * SINGLE PROVIDER (owner decision 15/08/2026): the registry lists OpenAI models
+ * only, so this script drives OpenAI only. The Gemini steps (A1 — does Gemini
+ * accept `responseJsonSchema`) and the cross-provider fallback steps were
+ * removed with that decision; restore them from git history together with the
+ * "google:*" entries in config/ai-models.yaml when Google comes back.
  *
  * MONEY GUARD: every provider call goes through a ledger with a hard ceiling
  * (AI_LIVE_MAX_CALLS, default 12). The ceiling is checked BEFORE the request
  * leaves, so an unexpected retry loop cannot burn budget.
  *
- *   DATABASE_URL=... REDIS_URL=... GOOGLE_AI_API_KEY=... OPENAI_API_KEY=... \
+ *   DATABASE_URL=... REDIS_URL=... OPENAI_API_KEY=... \
  *     pnpm exec tsx scripts/ai-live-smoke.ts
  *
  * Optional:
- *   AI_LIVE_STEPS=google-synthetic,google-real   pick a subset (resume a run
+ *   AI_LIVE_STEPS=openai-synthetic,openai-real   pick a subset (resume a run
  *                                                without paying twice)
  *   AI_LIVE_MAX_CALLS=4                          lower the ceiling
  *   AI_LIVE_PRODUCT_CODE=MGKVX6310               real product to read from DB
- *
- * ⚠️ ADR-001: the Google key MUST be a PAID-tier project before real shop data
- * is sent — the free tier grants Google training rights. This script cannot
- * verify the tier of a key; steps that send real sheet data say so out loud.
  */
 
 const DEFAULT_MAX_CALLS = 12;
@@ -74,7 +74,7 @@ function redactApiKeys(text: string): string {
 }
 const PLATFORM = "facebook" as const;
 
-/** Fully invented product — safe to send even to a free-tier key (A1 probe). */
+/** Fully invented product — no real shop data leaves the machine for this one. */
 const SYNTHETIC_PRODUCT = {
   name: "Zeltavia",
   description:
@@ -386,20 +386,14 @@ async function main(): Promise<void> {
     });
     const generationLog = makeDrizzleGenerationLog({ db, logger, newId: () => randomUUID() });
 
-    const google = metered(
-      makeGoogleProviderAdapter({ apiKey: aiConfig.GOOGLE_AI_API_KEY, logger }),
-      ledger,
-      () => current.step,
-      () => current.purpose,
-    );
     const openai = metered(
       makeOpenAIProviderAdapter({ apiKey: aiConfig.OPENAI_API_KEY, logger }),
       ledger,
       () => current.step,
       () => current.purpose,
     );
-    /** Google permanently rate-limited: the only honest way to reach OpenAI. */
-    const brokenGoogle = makeScriptedProvider("google", [
+    /** Costs nothing: proves a provider outage now ends the generation. */
+    const brokenOpenai = makeScriptedProvider("openai", [
       { kind: "fail", code: "AI_RATE_LIMITED", failureKind: "rate_limited" },
     ]);
 
@@ -480,36 +474,33 @@ async function main(): Promise<void> {
       }
     };
 
-    // --- A1: does Gemini accept responseJsonSchema? (fake data, any tier) ---
+    // --- A2: does OpenAI strict mode accept our schema? (fake data) ---------
     await runStep(
-      "google-synthetic",
-      "Gemini structured output on INVENTED data (safe on a free-tier key)",
+      "openai-synthetic",
+      "OpenAI strict json_schema on INVENTED data (cheap tier)",
       () =>
         captionRun({
-          engine: engineWith({ google }),
+          engine: engineWith({ openai }),
           product: SYNTHETIC_PRODUCT,
           vision: { mode: "none" },
           productCode: "SYNTH-ABC123",
         }),
     );
 
-    // --- A6: real sheet data end to end (PAID TIER REQUIRED) ----------------
-    await runStep(
-      "google-real",
-      `real sheet product ${realProduct.code} — PAID TIER REQUIRED (ADR-001)`,
-      () =>
-        captionRun({
-          engine: engineWith({ google }),
-          product: realProduct.content,
-          vision: { mode: "none" },
-          productCode: realProduct.code,
-        }),
+    // --- A6: real sheet data end to end -------------------------------------
+    await runStep("openai-real", `real sheet product ${realProduct.code}`, () =>
+      captionRun({
+        engine: engineWith({ openai }),
+        product: realProduct.content,
+        vision: { mode: "none" },
+        productCode: realProduct.code,
+      }),
     );
 
     // --- vision transport with exactly one cover image -----------------------
-    await runStep("google-vision", "one cover image inline (synthetic PNG)", () =>
+    await runStep("openai-vision", "one cover image inline (synthetic PNG)", () =>
       captionRun({
-        engine: engineWith({ google }),
+        engine: engineWith({ openai }),
         product: SYNTHETIC_PRODUCT,
         vision: {
           mode: "single",
@@ -529,10 +520,10 @@ async function main(): Promise<void> {
     // and we get to watch the real ladder plus the failure feedback loop.
     await runStep(
       "escalation-ladder",
-      "forced stage-2 failure: cheap -> mid -> top on real Gemini models",
+      "forced stage-2 failure: cheap -> mid -> top on real OpenAI models",
       () =>
         captionRun({
-          engine: engineWith({ google }),
+          engine: engineWith({ openai }),
           product: SYNTHETIC_PRODUCT,
           vision: { mode: "none" },
           maxBodyChars: 40,
@@ -540,28 +531,37 @@ async function main(): Promise<void> {
         }),
     );
 
-    // --- A2: OpenAI strict schema, reached through the fallback road --------
+    // --- A4: single provider means NO infra fallback -------------------------
+    // Costs nothing (scripted adapter). It must end in AI_RATE_LIMITED, not in a
+    // silent swap: with one provider there is nothing left to swap to.
+    // The expected outcome here is a THROW, so the step states its own verdict:
+    // `runStep` swallows errors and would print the correct behaviour as FAILED.
     await runStep(
-      "openai-fallback-cheap",
-      "Google rate-limited -> OpenAI same tier, strict json_schema",
-      () =>
-        captionRun({
-          engine: engineWith({ google: brokenGoogle, openai }),
-          product: SYNTHETIC_PRODUCT,
-          vision: { mode: "none" },
-          productCode: "SYNTH-ABC123",
-        }),
+      "no-fallback-on-outage",
+      "OpenAI rate-limited on the mid tier -> generation fails, no provider swap",
+      async () => {
+        await setTierOverride(db, policies, tenantId, "mid");
+        try {
+          await captionRun({
+            engine: engineWith({ openai: brokenOpenai }),
+            product: SYNTHETIC_PRODUCT,
+            vision: { mode: "none" },
+            productCode: "SYNTH-ABC123",
+          });
+          console.log(
+            "### no-fallback-on-outage: UNEXPECTED PASS — a caption came back from a rate-limited provider",
+          );
+        } catch (error) {
+          const appError = AppError.from(error, "INTERNAL", { step: "no-fallback-on-outage" });
+          const ok = appError.code === "AI_RATE_LIMITED";
+          console.log(
+            ok
+              ? "### no-fallback-on-outage: OK — surfaced AI_RATE_LIMITED, no provider swap"
+              : `### no-fallback-on-outage: UNEXPECTED CODE ${appError.code} (wanted AI_RATE_LIMITED)`,
+          );
+        }
+      },
     );
-
-    await runStep("openai-fallback-mid", "same, on the mid tier model", async () => {
-      await setTierOverride(db, policies, tenantId, "mid");
-      await captionRun({
-        engine: engineWith({ google: brokenGoogle, openai }),
-        product: SYNTHETIC_PRODUCT,
-        vision: { mode: "none" },
-        productCode: "SYNTH-ABC123",
-      });
-    });
 
     // --- what actually landed in ai_generation ------------------------------
     const rows = await db

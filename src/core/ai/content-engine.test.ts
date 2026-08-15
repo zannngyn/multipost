@@ -10,6 +10,7 @@ import {
   makeStubPolicyStore,
   makeStubPromptStore,
   makeTestPolicy,
+  TEST_MODELS,
   TEST_PROMPT_TEMPLATE,
   type ScriptedProvider,
   type ScriptedStep,
@@ -111,6 +112,35 @@ async function expectAppError(promise: Promise<unknown>, code: string): Promise<
 // Edge cases first
 // ---------------------------------------------------------------------------
 
+describe("ContentEngine — temperature is a MODEL capability", () => {
+  /** Regression: OpenAI answered 400 "Unsupported parameter: 'temperature'". */
+  it("omits the temperature for a model that cannot accept one", async () => {
+    const entry = TEST_MODELS.cheapGoogle;
+    const policy = makeTestPolicy({
+      policy: { ...makeTestPolicy().policy, temperature: 0.8 },
+      tiers: {
+        cheap: [{ ...entry, capabilities: { ...entry.capabilities, temperature: false } }],
+        mid: [],
+        top: [],
+      },
+    });
+    const { deps, google } = makeHarness({ google: [{ kind: "ok", output: goodOutput }], policy });
+
+    await makeContentEngine(deps).generate(makeRequest());
+
+    expect(google.calls[0].temperature).toBeUndefined();
+  });
+
+  it("still sends it to a model that can", async () => {
+    const policy = makeTestPolicy({ policy: { ...makeTestPolicy().policy, temperature: 0.8 } });
+    const { deps, google } = makeHarness({ google: [{ kind: "ok", output: goodOutput }], policy });
+
+    await makeContentEngine(deps).generate(makeRequest());
+
+    expect(google.calls[0].temperature).toBe(0.8);
+  });
+});
+
 describe("ContentEngine — rejected before any provider call", () => {
   it("rejects a missing tenantId", async () => {
     const { deps, google } = makeHarness({ google: [{ kind: "ok", output: goodOutput }] });
@@ -150,7 +180,7 @@ describe("ContentEngine — rejected before any provider call", () => {
             provider: "anthropic",
             model: "claude-test",
             pricing: { inputPerMTokUsd: 1, outputPerMTokUsd: 5 },
-            capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 4096 },
+            capabilities: { vision: true, structuredOutput: true, maxOutputTokens: 4096, temperature: true },
           },
         ],
         mid: [],

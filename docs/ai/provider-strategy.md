@@ -53,7 +53,32 @@ Số liệu thu thập 12/08/2026. ⚠️ Giá OpenAI/Google lấy từ aggregat
 
 Nguồn: [CloudZero OpenAI pricing](https://www.cloudzero.com/blog/openai-pricing/), [Morph OpenAI pricing table](https://www.morphllm.com/openai-api-pricing), [pricepertoken GPT-5.4 mini](https://pricepertoken.com/pricing-page/model/openai-gpt-5.4-mini), [CloudZero Gemini pricing](https://www.cloudzero.com/blog/gemini-pricing/), [pricepertoken Gemini](https://pricepertoken.com/pricing-page/model/google-gemini-3.5-flash), giá Anthropic theo bảng giá chính thức hiện hành.
 
-## 3. Provider theo đợt — CẬP NHẬT theo quyết định owner 12/08/2026
+## 3. Provider theo đợt
+
+### 3.1 Hiện hành — quyết định owner 15/08/2026: MỘT PROVIDER, OpenAI
+
+Chưa cấp được key Google AI Studio paid tier, mà mục 3.2 cấm dùng free tier với
+dữ liệu thật. Thay vì để hệ thống không chạy được, **tạm rút xuống một provider
+duy nhất là OpenAI**.
+
+| Tier | Model | Ghi chú |
+|---|---|---|
+| cheap | `openai:gpt-5-mini` | Primary mọi generation |
+| mid | `openai:gpt-5.4-mini` | Bậc escalation 1 |
+| top | `openai:gpt-5.4-mini` | PENDING(price-verify) — `openai:gpt-5` mới là model đích, nhưng giá còn là placeholder cao nên trần $0.05/generation sẽ chặn mọi lần escalate lên top. Tạm dùng lại model mid: vẫn được thêm một lượt sinh có feedback validator, chỉ là không lên model to hơn |
+
+**Hệ quả phải chấp nhận:** đường **provider fallback ở mục 4 tạm thời không tồn
+tại**. `selectFallbackModel` chỉ đổi sang provider KHÁC; còn một provider thì
+`AI_TIMEOUT` / `AI_RATE_LIMITED` / `AI_PROVIDER_DOWN` làm generation fail luôn,
+không có retry. Đây là đánh đổi có chủ ý, không phải bug.
+
+**Bật lại Google** (không cần sửa code):
+1. Cấp `GOOGLE_AI_API_KEY` paid tier (điều kiện mục 3.2 vẫn nguyên giá trị).
+2. Thêm lại các key `google:*` vào vị trí 1 của từng tier trong `config/ai-models.yaml`
+   (comment hướng dẫn nằm ngay trong file).
+3. Khôi phục các bước Gemini + fallback trong `scripts/ai-live-smoke.ts` từ lịch sử git.
+
+### 3.2 Định hướng gốc — quyết định owner 12/08/2026 (đang tạm hoãn)
 
 **Quyết định: Google AI Studio (Gemini API) làm provider chính** — ưu tiên chi phí.
 
@@ -74,7 +99,7 @@ Nguồn: [CloudZero OpenAI pricing](https://www.cloudzero.com/blog/openai-pricin
 
 | | Trigger | Hành động | Model đích |
 |---|---|---|---|
-| **Provider fallback** | `AI_TIMEOUT`, `AI_RATE_LIMITED`, `AI_PROVIDER_DOWN` (lỗi HẠ TẦNG) | Đổi PROVIDER, giữ nguyên hạng model, giữ nguyên prompt | Cùng tier ở provider khác (theo registry `fallback:`) |
+| **Provider fallback** ⚠️ *bất hoạt từ 15/08/2026 — xem mục 3.1* | `AI_TIMEOUT`, `AI_RATE_LIMITED`, `AI_PROVIDER_DOWN` (lỗi HẠ TẦNG) | Đổi PROVIDER, giữ nguyên hạng model, giữ nguyên prompt | Cùng tier ở provider khác (theo registry `fallback:`) |
 | **Quality escalation** | Validation FAIL sau khi sinh thành công (lỗi CHẤT LƯỢNG) | Giữ hoặc đổi provider, NÂNG hạng model, kèm feedback lỗi validation vào prompt | Tier cao hơn (theo registry `escalate:`) |
 | Không bao giờ | `AI_BAD_REQUEST` (lỗi của mình) | Không fallback, không escalate — fail nhanh, log, sửa code | — |
 | `AI_CONTENT_REFUSED` | Provider từ chối nội dung | Thử 1 provider khác cùng tier; vẫn từ chối → cần người xử lý | Cùng tier |

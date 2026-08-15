@@ -10,6 +10,12 @@
 
 File `config/ai-models.yaml` trong repo (review qua PR như code) + bảng `ai_model_policy_override` theo tenant (đổi nóng không cần deploy):
 
+> ⚠️ **Snapshot dưới đây KHÔNG còn khớp registry đang chạy.** Quyết định owner
+> 15/08/2026 rút xuống một provider duy nhất (OpenAI) vì chưa có key Google paid
+> tier — xem `provider-strategy.md` §3.1. Ví dụ này giữ nguyên vì nó minh hoạ
+> *hình dạng* file và luật "fallback phải khác provider"; đọc
+> `config/ai-models.yaml` để biết tiers thật.
+
 ```yaml
 # config/ai-models.yaml — cập nhật theo quyết định 12/08: Google primary (paid tier),
 # OpenAI fallback hạ tầng. Model cụ thể trong tier vẫn chốt sau benchmark (evaluation.md).

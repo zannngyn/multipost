@@ -41,10 +41,10 @@ describe("isSystemConfigError", () => {
     const error = makeError({
       code: "INVALID_INPUT",
       status: 400,
-      issues: [{ path: "GOOGLE_AI_API_KEY", message: "GOOGLE_AI_API_KEY is required" }],
+      issues: [{ path: "OPENAI_API_KEY", message: "OPENAI_API_KEY is required" }],
     });
     expect(isSystemConfigError(error)).toBe(true);
-    expect(missingConfigKeys(error)).toEqual(["GOOGLE_AI_API_KEY"]);
+    expect(missingConfigKeys(error)).toEqual(["OPENAI_API_KEY"]);
   });
 
   it("does NOT treat a normal field error as a config problem", () => {

@@ -107,12 +107,25 @@ export interface ModelCapabilities {
   vision: boolean;
   structuredOutput: boolean;
   maxOutputTokens: number;
+  /**
+   * Whether the model accepts a `temperature` at all. The GPT-5 family rejects
+   * it outright (HTTP 400 "Unsupported parameter"), so this is a hard capability
+   * — not a preference. It lives here, per model, because ADR-001 keeps model
+   * knowledge in the registry: an adapter must never branch on a model name.
+   */
+  temperature: boolean;
 }
 
 export interface AIProviderAdapter {
   readonly provider: AIProviderName;
   /** Throws AppError with `context.failure_kind` set. Never retries (gateway owns retry). */
   complete(request: NormalizedAIRequest): Promise<NormalizedAIResponse>;
+  /**
+   * Diagnostics only — the ROUTING authority is the registry entry
+   * (`ModelEntry.capabilities`), which is what the engine reads. An adapter must
+   * never branch on a model name, so it can only state a conservative floor for
+   * the whole provider here. Nothing in `core/` consults this.
+   */
   capabilities(model: string): ModelCapabilities;
 }
 

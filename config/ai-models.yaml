@@ -6,6 +6,17 @@
 # shop data flows — the free tier grants Google training rights over the data
 # (docs/ai/provider-strategy.md §3).
 #
+# Owner decision 15/08/2026 — SUPERSEDES the tier layout above: SINGLE PROVIDER,
+# OpenAI only, because no Google AI Studio paid key is provisioned yet. The
+# Gemini entries stay defined below (an unreferenced model costs nothing) so
+# re-enabling is a two-line edit, not a rewrite. Consequence to accept
+# knowingly: `selectFallbackModel` only ever swaps to a DIFFERENT provider, so
+# with one provider there is NO infrastructure fallback — an OpenAI timeout or
+# rate-limit fails the generation instead of retrying elsewhere.
+#
+# TO RE-ENABLE GOOGLE: set GOOGLE_AI_API_KEY (paid tier) and put the
+# "google:*" keys back at position 1 of each tier below. No code change.
+#
 # Changing a model here requires benchmark numbers in the PR (model-routing.md §5).
 # Prices are USD per 1M tokens, taken from docs/ai/provider-strategy.md §2
 # (aggregator sourced — re-verify against the official pricing pages before go-live).
@@ -23,6 +34,7 @@ models:
       vision: true
       structuredOutput: true
       maxOutputTokens: 8192
+      temperature: true
 
   "google:gemini-3.6-flash":
     provider: google
@@ -34,6 +46,7 @@ models:
       vision: true
       structuredOutput: true
       maxOutputTokens: 8192
+      temperature: true
 
   "google:gemini-3.1-pro":
     provider: google
@@ -45,6 +58,7 @@ models:
       vision: true
       structuredOutput: true
       maxOutputTokens: 8192
+      temperature: true
 
   "openai:gpt-5-mini":
     provider: openai
@@ -56,6 +70,9 @@ models:
       vision: true
       structuredOutput: true
       maxOutputTokens: 8192
+      # Verified live 15/08/2026: responses.create returns
+      # 400 "Unsupported parameter: 'temperature' is not supported with this model".
+      temperature: false
 
   "openai:gpt-5.4-mini":
     provider: openai
@@ -68,6 +85,7 @@ models:
       vision: true
       structuredOutput: true
       maxOutputTokens: 8192
+      temperature: false
 
   "openai:gpt-5":
     provider: openai
@@ -82,19 +100,29 @@ models:
       vision: true
       structuredOutput: true
       maxOutputTokens: 8192
+      temperature: false
 
 # Position 1 = primary. Position 2+ = provider fallback for INFRA failures only,
-# and it must be a different provider (provider-strategy.md §4).
+# and it must be a different provider (provider-strategy.md §4) — which is why
+# single-provider mode lists exactly one model per tier: a second OpenAI entry
+# would never be selected.
+#
+# Google (disabled 15/08/2026) — restore by prepending to the matching tier:
+#   cheap: "google:gemini-3.5-flash-lite"
+#   mid:   "google:gemini-3.6-flash"
+#   top:   "google:gemini-3.1-pro"
 tiers:
   cheap:
-    - "google:gemini-3.5-flash-lite"
     - "openai:gpt-5-mini"
   mid:
-    - "google:gemini-3.6-flash"
     - "openai:gpt-5.4-mini"
+  # PENDING(price-verify): "openai:gpt-5" is the intended flagship but its price is
+  # still a deliberately high placeholder, which the $0.05 per-generation ceiling
+  # would block on every escalation. Until the official numbers are in, `top`
+  # reuses gpt-5.4-mini: the escalation still buys a fresh attempt carrying the
+  # validator feedback, it just does not buy a bigger model.
   top:
-    - "google:gemini-3.1-pro"
-    - "openai:gpt-5"
+    - "openai:gpt-5.4-mini"
 
 tasks:
   facebook_content:

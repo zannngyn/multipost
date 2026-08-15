@@ -17,7 +17,13 @@ import { DrizzleAiPromptTemplateRepo } from "@/adapters/db/ai-prompt-template-re
 import type { Database } from "@/adapters/db/client";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
 import { makeContentEngine } from "@/core/ai/content-engine";
-import type { GenerationLog, ModelPolicyStore, PromptStore } from "@/core/ports/ai";
+import type {
+  AIProviderAdapter,
+  AIProviderName,
+  GenerationLog,
+  ModelPolicyStore,
+  PromptStore,
+} from "@/core/ports/ai";
 import type { Clock, Logger } from "@/core/ports/infra";
 import {
   makeGenerateCaptions,
@@ -29,7 +35,7 @@ import {
   type ManagePromptTemplates,
 } from "@/core/usecases/manage-prompt-templates";
 
-import { loadAiConfig, type EnvRecord } from "./config";
+import { loadAiConfig, type AiConfig, type EnvRecord } from "./config";
 
 export type GenerateCaptions = (input: GenerateCaptionsInput) => Promise<GenerateCaptionsResult>;
 
@@ -147,6 +153,39 @@ export function makeLazyPromptTemplates(deps: AiWiringDeps): ManagePromptTemplat
 }
 
 /**
+ * Provider adapters actually wired for this process.
+ *
+ * OpenAI is the only provider guaranteed to be present (owner decision
+ * 15/08/2026, single-provider mode). Google is wired only when a key exists, so
+ * a deployment without GOOGLE_AI_API_KEY generates content instead of refusing
+ * to start. The registry decides which of them is ever REACHED — a tier naming
+ * an unwired provider still fails loudly in the engine, it is not silently
+ * skipped.
+ */
+export function buildProviders(
+  config: AiConfig,
+  logger: Logger,
+): Partial<Record<AIProviderName, AIProviderAdapter>> {
+  const providers: Partial<Record<AIProviderName, AIProviderAdapter>> = {
+    openai: makeOpenAIProviderAdapter({ apiKey: config.OPENAI_API_KEY, logger }),
+  };
+
+  if (config.GOOGLE_AI_API_KEY) {
+    providers.google = makeGoogleProviderAdapter({
+      apiKey: config.GOOGLE_AI_API_KEY,
+      logger,
+    });
+  } else {
+    logger.warn("Google AI provider not wired: GOOGLE_AI_API_KEY is unset", {
+      component: "ai-engine",
+      wired_providers: Object.keys(providers),
+    });
+  }
+
+  return providers;
+}
+
+/**
  * Lazy AI wiring, same contract as `google-sources.ts`: provider keys, the
  * registry file and the Redis connection are touched on the FIRST generation
  * call, not at container build, so web/worker boot and `next build` succeed
@@ -163,10 +202,7 @@ export function makeLazyGenerateCaptions(deps: AiWiringDeps): GenerateCaptions {
     aiStoreClosers.add(stores.close);
 
     const contentEngine = makeContentEngine({
-      providers: {
-        google: makeGoogleProviderAdapter({ apiKey: config.GOOGLE_AI_API_KEY, logger: deps.logger }),
-        openai: makeOpenAIProviderAdapter({ apiKey: config.OPENAI_API_KEY, logger: deps.logger }),
-      },
+      providers: buildProviders(config, deps.logger),
       policies: stores.policies,
       prompts: stores.prompts,
       generationLog: stores.generationLog,
