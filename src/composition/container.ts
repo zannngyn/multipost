@@ -623,6 +623,19 @@ export { MAX_UPLOADS_PER_POST, MAX_UPLOAD_BYTES } from "@/core/domain/uploaded-m
 export type { UploadedFile } from "@/core/usecases/upload-media";
 
 /**
+ * E5.2 — sign-in with Facebook asks for the same Page scopes the channel import
+ * needs, so the two must never drift apart. Re-exported rather than retyped in
+ * `app/_auth`: a second list is a second thing to forget when a scope changes.
+ */
+export { FACEBOOK_CONNECT_SCOPES } from "@/adapters/meta/facebook-oauth";
+
+/**
+ * The seeded tenant. Re-exported for the sign-in flow, which has no user ->
+ * tenant mapping yet (PENDING: multi-tenant sign-in is a product decision).
+ */
+export { DEMO_TENANT_ID } from "@/adapters/db/seed-constants";
+
+/**
  * Drains the DB pool, any lazily built producer queue and the AI registry cache
  * connection. For scripts and graceful shutdown, not per request. (The worker's
  * own queue/connection is owned and closed by worker-container.)

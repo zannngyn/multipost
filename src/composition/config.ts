@@ -73,6 +73,14 @@ export const AuthConfigSchema = z.object({
   GOOGLE_CLIENT_SECRET: nonEmpty("GOOGLE_CLIENT_SECRET"),
   /** Comma-separated e-mail domains allowed to sign in. */
   AUTH_ALLOWED_DOMAINS: csvList,
+  /**
+   * Comma-separated Facebook user ids allowed to sign in (E5.2). Optional, and
+   * an ABSENT list means nobody signs in with Facebook — the safe default, not
+   * an open door. Ids rather than e-mail addresses on purpose: Facebook does
+   * not guarantee an e-mail (accounts registered with a phone number have
+   * none), so the identity key is the pair (provider, provider user id).
+   */
+  AUTH_FACEBOOK_ALLOWED_USER_IDS: csvList.optional(),
   SESSION_SECRET: nonEmpty("SESSION_SECRET").min(32, "SESSION_SECRET must be at least 32 chars"),
 });
 
