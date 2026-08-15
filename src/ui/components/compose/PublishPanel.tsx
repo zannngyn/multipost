@@ -111,7 +111,10 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
     // Format follows what was COMPOSED, never the radio on step 1: the album on
     // screen is the one being approved (business rule 6 — no surprise content).
     const format = postFormatForVideo(composed.video);
-    if (composed.video && composed.media.length !== 1) {
+    // Measured on the album that will actually be sent, not on the compose
+    // response — those are the same length today, and this guard should keep
+    // holding if that ever stops being true.
+    if (composed.video && wizard.album.length !== 1) {
       setFormError("Bài video chỉ đăng được đúng một clip. Hãy quay lại bước 1 và soạn lại bài.");
       return;
     }
@@ -141,8 +144,9 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
         channelIds: selectedIds,
         captionByChannel,
         scheduledAt: resolved.scheduledAt,
-        // Cover first — `composePost` already ordered the album that way.
-        media: composed.media.map((asset) => ({
+        // Cover first. `composePost` proposes an order and the operator may
+        // rearrange it in step 1; `wizard.album` is whichever won.
+        media: wizard.album.map((asset) => ({
           driveFileId: asset.driveFileId,
           fileName: asset.fileName,
           kind: asset.kind,
@@ -180,7 +184,7 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
           <span className="text-foreground font-medium">
             {composed.video
               ? `${VIDEO_TARGET_LABELS[composed.video.target]} — 1 clip`
-              : `Bài ảnh — ${composed.media.length} ảnh`}
+              : `Bài ảnh — ${wizard.album.length} ảnh`}
           </span>
         </p>
       </div>

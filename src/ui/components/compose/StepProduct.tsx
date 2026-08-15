@@ -203,7 +203,13 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
       ) : compose.isError ? (
         <ApiErrorNotice error={compose.error} onRetry={() => compose.mutate()} />
       ) : composed ? (
-        <ComposeResult composed={composed} onContinue={() => wizard.goToStep("caption")} />
+        <ComposeResult
+          composed={composed}
+          album={wizard.album}
+          onReorder={wizard.setAlbum}
+          disabled={compose.isPending}
+          onContinue={() => wizard.goToStep("caption")}
+        />
       ) : (
         <EmptyState
           kind="idle"
@@ -221,9 +227,16 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
 
 function ComposeResult({
   composed,
+  album,
+  onReorder,
+  disabled,
   onContinue,
 }: {
   composed: ComposeResponse;
+  /** Publish order, which this step lets the operator rearrange. */
+  album: readonly ComposeResponse["media"][number][];
+  onReorder: (next: ComposeResponse["media"][number][]) => void;
+  disabled: boolean;
   onContinue: () => void;
 }) {
   return (
@@ -233,7 +246,7 @@ function ComposeResult({
       {composed.video ? (
         <VideoSpecCard video={composed.video} clip={composed.media[0]} />
       ) : null}
-      <MediaGrid media={composed.media} />
+      <MediaGrid media={album} onReorder={onReorder} disabled={disabled} />
 
       <div className="flex flex-wrap gap-2 border-t pt-4">
         <Button type="button" size="lg" onClick={onContinue}>

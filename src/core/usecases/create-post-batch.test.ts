@@ -406,6 +406,25 @@ describe("createPostBatch — fan-out (business rule 6)", () => {
     expect(jobs.every((job) => job.productCode === "MGKVX6310" && job.color === "TÍM")).toBe(true);
   });
 
+  it("publishes the album in the order the caller gave, cover first", async () => {
+    // The contract the wizard's drag-to-reorder rests on: the operator's
+    // arrangement lives in the POST, and nothing here re-sorts it. Sorting by
+    // file name or sequence would silently discard what they arranged.
+    const { createPostBatch, repo } = harness();
+
+    const arranged: PostMediaInput[] = [
+      { driveFileId: "d9", fileName: "MGKVX6310-Tím (9).jpg", kind: "image" },
+      { driveFileId: "d1", fileName: "MGKVX6310-Tím (1).jpg", kind: "image" },
+      { driveFileId: "d5", fileName: "MGKVX6310-Tím (5).jpg", kind: "image" },
+    ];
+
+    await createPostBatch({ ...BASE_INPUT, media: arranged });
+
+    for (const job of repo.store.values()) {
+      expect(job.media.map((item) => item.driveFileId)).toEqual(["d9", "d1", "d5"]);
+    }
+  });
+
   it("mints one signed URL per photo and stores it on every job (E3.6)", async () => {
     const { createPostBatch, repo, signer, lines } = harness();
 

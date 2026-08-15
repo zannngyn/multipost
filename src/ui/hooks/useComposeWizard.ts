@@ -93,6 +93,16 @@ export function useComposeWizard() {
   });
 
   const [composed, setComposed] = useState<ComposeResponse | null>(null);
+  /**
+   * The album in PUBLISH order, which the operator may rearrange (brief §8 —
+   * both file modes end with an ordered album whose first entry is the cover).
+   *
+   * Held here rather than written back into `composed`: the compose response is
+   * the server's answer and must stay comparable to what was returned, while
+   * the arrangement belongs to this post only. Nothing is written to
+   * `media_asset` — that table belongs to the Drive sync.
+   */
+  const [album, setAlbum] = useState<readonly ComposeResponse["media"][number][]>([]);
   const composedKeyRef = useRef<string | null>(null);
   /**
    * True when this mount started on a step past the first one — i.e. a reload
@@ -185,12 +195,16 @@ export function useComposeWizard() {
       }
       composedKeyRef.current = nextKey;
       setComposed(result);
+      // A new album means a new arrangement. Keeping the old ids would either
+      // drop photos the operator can now see or resurrect ones that are gone.
+      setAlbum(result.media);
       setRewound(false);
     },
     onError: () => {
       // Blocked/failed compose invalidates the current post: step 2 and 3 must
       // not stay reachable with stale data from the previous product.
       setComposed(null);
+      setAlbum([]);
       composedKeyRef.current = null;
     },
   });
@@ -279,6 +293,9 @@ export function useComposeWizard() {
     steps: COMPOSE_STEPS,
     goToStep,
     composed,
+    /** The album in publish order — use this, never `composed.media`. */
+    album,
+    setAlbum,
     compose,
     captions,
     submitProductStep,
