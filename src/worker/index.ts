@@ -21,6 +21,11 @@ import {
   HEALTHCHECK_TENANT_JOB_NAME,
   makeHealthcheckTenantHandler,
 } from "./jobs/healthcheck-tenant-job";
+import {
+  CLEANUP_UPLOADS_JOB_NAME,
+  CLEANUP_UPLOADS_SCHEDULER_ID,
+  makeCleanupUploadsHandler,
+} from "./jobs/cleanup-uploads-job";
 import { PUBLISH_POST_JOB_NAME, makePublishPostHandler } from "./jobs/publish-post-job";
 import {
   REAP_POST_JOBS_JOB_NAME,
@@ -152,6 +157,10 @@ async function main(): Promise<void> {
       logger,
       reapPostJobs: deps.usecases.reapPostJobs,
     }),
+    [CLEANUP_UPLOADS_JOB_NAME]: makeCleanupUploadsHandler({
+      logger,
+      cleanupUploads: deps.usecases.cleanupUploads,
+    }),
   };
   consumer = deps.startConsumer(handlers);
 
@@ -168,6 +177,16 @@ async function main(): Promise<void> {
       overdueQueuedMs: reaperConfig.WORKER_OVERDUE_QUEUED_MS,
       limit: reaperConfig.WORKER_REAPER_LIMIT,
     },
+    attempts: 1,
+  });
+
+  // E9.4 — hourly, not every 5 minutes: it only ever removes files older than a
+  // day, so a faster tick would just re-scan the same rows.
+  await deps.queue.enqueueRepeatable({
+    schedulerId: CLEANUP_UPLOADS_SCHEDULER_ID,
+    jobName: CLEANUP_UPLOADS_JOB_NAME,
+    everyMs: 60 * 60_000,
+    payload: {},
     attempts: 1,
   });
 

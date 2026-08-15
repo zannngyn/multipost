@@ -48,6 +48,7 @@ import {
 import type { ManagePromptTemplates } from "@/core/usecases/manage-prompt-templates";
 import { makeReapPostJobs, type ReapPostJobs } from "@/core/usecases/reap-post-jobs";
 import { makeRetryPostJob, type RetryPostJob } from "@/core/usecases/retry-post-job";
+import { makeCleanupUploads, type CleanupUploads } from "@/core/usecases/cleanup-uploads";
 import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
 import {
   makeCancelScheduledJob,
@@ -117,6 +118,8 @@ export interface Usecases {
   composePost: ComposePost;
   /** E9 — mode B: register operator-supplied files as media assets. */
   uploadMedia: UploadMedia;
+  /** E9.4 — periodic sweep of uploads nobody posted. */
+  cleanupUploads: CleanupUploads;
   generateCaptions: GenerateCaptions;
   /** E10.7 — versioned prompt catalog (list/create/activate). */
   promptTemplates: ManagePromptTemplates;
@@ -426,6 +429,12 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // Prefixed so an id is recognisable as mode B in a log line, and hex-only
       // so it is a safe path segment for the blob store.
       newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
+    }),
+    cleanupUploads: makeCleanupUploads({
+      media,
+      blobs,
+      clock: deps.clock,
+      logger: deps.logger,
     }),
     generateCaptions: makeLazyGenerateCaptions({
       logger: deps.logger,

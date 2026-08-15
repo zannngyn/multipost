@@ -4,7 +4,7 @@ import { AppError } from "@/core/domain/errors";
 import { MEDIA_KINDS, type MediaKind } from "@/core/domain/media-file-name";
 import { MEDIA_ORIGINS, type MediaAsset, type MediaOrigin } from "@/core/domain/product";
 import type { MediaAssetLookup } from "@/core/ports/drive-source";
-import type { MediaRepo } from "@/core/ports/product-repo";
+import type { MediaRepo, OrphanedUpload } from "@/core/ports/product-repo";
 
 import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
@@ -294,41 +294,57 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
    * "Orphan" means no post job carries the asset in its media array. The check
    * is a jsonb containment probe rather than a join: post_job.media is the only
    * place an asset id is referenced, and it is a document, not a foreign key.
+   *
+   * Not tenant-scoped, like `findStalePublishing`: a maintenance sweep runs as
+   * nobody. Each row carries its tenant so the delete can scope itself again.
+   *
+   * PERF: the containment probe cannot use an index on post_job.media until a
+   * GIN index exists there. Acceptable while this runs once an hour over rows
+   * older than a day; revisit if post_job grows large.
    */
-  async listOrphanedUploads(
-    tenantId: string,
-    olderThan: Date,
-    limit: number,
-  ): Promise<readonly MediaAsset[]> {
-    const scope = forTenant(this.db, tenantId);
+  async listOrphanedUploads(input: {
+    olderThan: Date;
+    limit: number;
+  }): Promise<readonly OrphanedUpload[]> {
+    const limit = input?.limit;
     const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 100;
 
     try {
-      const rows = await scope.db
-        .select()
+      const rows = await this.db
+        .select({
+          tenantId: mediaAssets.tenantId,
+          assetId: mediaAssets.driveFileId,
+          storageKey: mediaAssets.storageKey,
+          fileName: mediaAssets.fileName,
+          sizeBytes: mediaAssets.sizeBytes,
+        })
         .from(mediaAssets)
         .where(
-          scope.where(
-            mediaAssets,
-            and(
-              eq(mediaAssets.origin, "upload"),
-              lt(mediaAssets.createdAt, olderThan),
-              sql`NOT EXISTS (
-                SELECT 1 FROM post_job pj
-                WHERE pj.tenant_id = ${mediaAssets.tenantId}
-                  AND pj.media @> jsonb_build_array(
-                        jsonb_build_object('driveFileId', ${mediaAssets.driveFileId}::text))
-              )`,
-            ),
+          and(
+            eq(mediaAssets.origin, "upload"),
+            lt(mediaAssets.createdAt, input.olderThan),
+            sql`NOT EXISTS (
+              SELECT 1 FROM post_job pj
+              WHERE pj.tenant_id = ${mediaAssets.tenantId}
+                AND pj.media @> jsonb_build_array(
+                      jsonb_build_object('driveFileId', ${mediaAssets.driveFileId}::text))
+            )`,
           ),
         )
         .orderBy(asc(mediaAssets.createdAt))
         .limit(safeLimit);
 
-      return rows.map(toDomain);
+      // A row with no storage key has no bytes to remove; the usecase still
+      // deletes the row, so keep it in the list rather than hiding it.
+      return rows.map((row) => ({
+        tenantId: row.tenantId,
+        assetId: row.assetId,
+        storageKey: row.storageKey ?? "",
+        fileName: row.fileName,
+        sizeBytes: row.sizeBytes,
+      }));
     } catch (error) {
       throw wrapDbError(error, {
-        tenant_id: scope.tenantId,
         field: "olderThan",
         operation: "media.listOrphanedUploads",
       });

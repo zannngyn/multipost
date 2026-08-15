@@ -21,6 +21,15 @@ export interface ProductRepo {
   deleteStale(tenantId: string, syncRunId: string): Promise<number>;
 }
 
+/** One row the E9.4 sweep may remove. Carries its tenant: the sweep has none. */
+export interface OrphanedUpload {
+  readonly tenantId: string;
+  readonly assetId: string;
+  readonly storageKey: string;
+  readonly fileName: string;
+  readonly sizeBytes: number | null;
+}
+
 export interface MediaRepo {
   listByProductCode(tenantId: string, code: string): Promise<readonly MediaAsset[]>;
   /** Insert or update by (tenant, drive file id). Returns rows written. */
@@ -41,14 +50,18 @@ export interface MediaRepo {
   registerUpload(tenantId: string, asset: MediaAsset): Promise<void>;
 
   /**
-   * E9.4 — uploaded assets of this tenant created before `olderThan` that no
-   * post job references. The cleanup job deletes their bytes and their rows.
+   * E9.4 — uploaded assets created before `olderThan` that no post job
+   * references, so the cleanup sweep can delete their bytes and their rows.
+   *
+   * Cross-tenant like `PostJobRepo.findStalePublishing`, and for the same
+   * reason: a maintenance sweep has no tenant of its own to run as. Each row
+   * therefore carries its own `tenantId`, and the DELETE below is tenant-scoped
+   * again.
    */
-  listOrphanedUploads(
-    tenantId: string,
-    olderThan: Date,
-    limit: number,
-  ): Promise<readonly MediaAsset[]>;
+  listOrphanedUploads(input: {
+    olderThan: Date;
+    limit: number;
+  }): Promise<readonly OrphanedUpload[]>;
 
   /** Removes uploaded rows by asset id. Returns how many were removed. */
   deleteUploads(tenantId: string, assetIds: readonly string[]): Promise<number>;
