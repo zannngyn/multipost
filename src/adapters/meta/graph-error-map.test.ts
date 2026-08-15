@@ -136,6 +136,22 @@ describe("mapGraphError", () => {
       reason: "PERMISSION_DENIED",
     },
     {
+      // BY_CODE must keep winning over the flag: these go red if the
+      // is_transient branch is ever moved above the table lookup.
+      label: "100 flagged is_transient is still a rejected payload",
+      input: { error: { code: 100, is_transient: true }, httpStatus: 400 },
+      code: "META_ERROR",
+      retryable: false,
+      reason: "INVALID_PARAMETER",
+    },
+    {
+      label: "368 flagged is_transient is still a page-level block",
+      input: { error: { code: 368, is_transient: true }, httpStatus: 400 },
+      code: "META_ERROR",
+      retryable: false,
+      reason: "TEMPORARILY_BLOCKED",
+    },
+    {
       label: "unknown code flagged is_transient on a 401 is still an auth failure",
       input: { error: { code: 999999, is_transient: true }, httpStatus: 401 },
       code: "TOKEN_EXPIRED",

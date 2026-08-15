@@ -268,6 +268,49 @@ describe("is_transient survives the envelope schema", () => {
     expect(error.context).toMatchObject({ graph_is_transient: true, retryable: true });
   });
 
+  it("keeps the error object when the flag itself arrives with a wrong type", async () => {
+    // A hint of the wrong type must cost the hint, not `code`: without this the
+    // whole envelope fails and the job dies on a generic HTTP_CLIENT_ERROR.
+    const { client } = harness({
+      status: 400,
+      body: { error: { ...GRAPH_324.error, is_transient: "yes" } },
+    });
+
+    const error = await expectAppError(
+      client.post({ path: "555000111/photos", params: {}, accessToken: PAGE_TOKEN }),
+    );
+
+    expect(error.context).toMatchObject({
+      graph_code: 324,
+      graph_subcode: 2069019,
+      reason: "MEDIA_FETCH_FAILED",
+      retryable: true,
+      graph_is_transient: null,
+    });
+  });
+
+  it("warns instead of staying silent when the envelope cannot be read", async () => {
+    const { client, lines } = harness({
+      status: 400,
+      body: { error: { code: "not-a-number", message: "x", access_token: PAGE_TOKEN } },
+    });
+
+    const error = await expectAppError(
+      client.post({ path: "555000111/photos", params: {}, accessToken: PAGE_TOKEN }),
+    );
+
+    // The answer is unreadable, so the HTTP fallback is correct here...
+    expect(error.context).toMatchObject({ reason: "HTTP_CLIENT_ERROR", graph_code: null });
+    // ...but it must be traceable: keys named, values never quoted.
+    const warning = lines.find((line) => line.level === "warn");
+    expect(warning?.context).toMatchObject({
+      http_status: 400,
+      body_keys: expect.arrayContaining(["error", "error.code"]),
+      schema_issue_paths: expect.arrayContaining(["error.code"]),
+    });
+    expect(JSON.stringify(lines)).not.toContain(PAGE_TOKEN);
+  });
+
   it("does not invent a flag on a body with no error object at all", async () => {
     const { client } = harness({ body: { id: "1_2" } });
 

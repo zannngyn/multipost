@@ -45,11 +45,24 @@ const GraphErrorEnvelopeSchema = z.object({
       fbtrace_id: z.string().optional(),
       error_user_title: z.string().optional(),
       error_user_msg: z.string().optional(),
-      // Meta's retry hint; dropping it here would make every flagged error permanent.
-      is_transient: z.boolean().optional(),
+      // Meta's retry hint; dropping it here would make every flagged error
+      // permanent. `.catch` because a hint is worth less than the error itself:
+      // a value of an unexpected type loses THIS field, not `code`/`message`.
+      is_transient: z.boolean().optional().catch(undefined),
     })
     .optional(),
 });
+
+/** Top-level keys of an answer, for a log line that names a shape without quoting it. */
+function shapeOf(value: unknown): string[] {
+  if (typeof value !== "object" || value === null) return [];
+  if (Array.isArray(value)) return ["<array>"];
+  return Object.entries(value).flatMap(([key, nested]) =>
+    key === "error" && typeof nested === "object" && nested !== null && !Array.isArray(nested)
+      ? [key, ...Object.keys(nested).map((inner) => `error.${inner}`)]
+      : [key],
+  );
+}
 
 export interface GraphClientDeps {
   logger: Logger;
@@ -175,6 +188,17 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
     }
 
     const envelope = GraphErrorEnvelopeSchema.safeParse(parsedBody ?? {});
+    if (!envelope.success) {
+      // Never silent: an unparsable envelope drops Meta's `code` and the answer
+      // falls back to a generic HTTP mapping, which is exactly the case an
+      // operator cannot diagnose. Keys only — values may hold anything.
+      logger.warn(`${options.label} returned an error envelope this schema cannot read`, {
+        ...options.context,
+        http_status: response.status,
+        body_keys: shapeOf(parsedBody),
+        schema_issue_paths: envelope.error.issues.map((issue) => issue.path.join(".")),
+      });
+    }
     const graphError: GraphErrorBody | null = envelope.success ? (envelope.data.error ?? null) : null;
 
     if (!response.ok || graphError) {
