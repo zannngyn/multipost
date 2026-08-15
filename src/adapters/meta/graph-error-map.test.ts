@@ -68,11 +68,79 @@ describe("mapGraphError", () => {
       reason: "INVALID_PARAMETER",
     },
     {
+      // A failed download is intermittent, not permanent: it must be retried.
       label: "1609005 image could not be fetched",
       input: { error: { code: 1609005 } },
       code: "META_ERROR",
-      retryable: false,
+      retryable: true,
       reason: "MEDIA_FETCH_FAILED",
+    },
+    {
+      label: "324 missing or invalid image file",
+      input: {
+        error: {
+          code: 324,
+          error_subcode: 2069019,
+          type: "OAuthException",
+          message: "Missing or invalid image file",
+          is_transient: true,
+        },
+        httpStatus: 400,
+      },
+      code: "META_ERROR",
+      retryable: true,
+      reason: "MEDIA_FETCH_FAILED",
+    },
+    {
+      label: "324 without the transient flag is still a media fetch failure",
+      input: { error: { code: 324 }, httpStatus: 400 },
+      code: "META_ERROR",
+      retryable: true,
+      reason: "MEDIA_FETCH_FAILED",
+    },
+    {
+      label: "unknown code flagged is_transient",
+      input: { error: { code: 999999, is_transient: true }, httpStatus: 400 },
+      code: "META_ERROR",
+      retryable: true,
+      reason: "TRANSIENT_FLAGGED",
+    },
+    {
+      label: "unknown code without the flag stays permanent",
+      input: { error: { code: 999999 }, httpStatus: 400 },
+      code: "META_ERROR",
+      retryable: false,
+      reason: "HTTP_CLIENT_ERROR",
+    },
+    {
+      label: "unknown code flagged is_transient with no HTTP status at all",
+      input: { error: { code: 999999, is_transient: true } },
+      code: "META_ERROR",
+      retryable: true,
+      reason: "TRANSIENT_FLAGGED",
+    },
+    {
+      // Regression: Meta flags dead tokens as transient too. Retrying a dead
+      // token burns attempts and delays the alert to the operator.
+      label: "190 flagged is_transient is still a dead token",
+      input: { error: { code: 190, is_transient: true }, httpStatus: 401 },
+      code: "TOKEN_EXPIRED",
+      retryable: false,
+      reason: "TOKEN_INVALID",
+    },
+    {
+      label: "200 flagged is_transient is still a permission problem",
+      input: { error: { code: 200, is_transient: true }, httpStatus: 403 },
+      code: "META_ERROR",
+      retryable: false,
+      reason: "PERMISSION_DENIED",
+    },
+    {
+      label: "unknown code flagged is_transient on a 401 is still an auth failure",
+      input: { error: { code: 999999, is_transient: true }, httpStatus: 401 },
+      code: "TOKEN_EXPIRED",
+      retryable: false,
+      reason: "HTTP_UNAUTHORIZED",
     },
     {
       label: "368 temporarily blocked",
@@ -158,6 +226,26 @@ describe("mapGraphError", () => {
       http_status: 401,
     });
     expect(error.message).toContain("code=190");
+  });
+
+  it("keeps the transient flag in the context so the log explains the retry", () => {
+    const error = mapGraphError({
+      error: { code: 324, error_subcode: 2069019, is_transient: true, fbtrace_id: "B2" },
+      httpStatus: 400,
+      context: { job_id: "j1" },
+    });
+    expect(error.context).toMatchObject({
+      job_id: "j1",
+      graph_code: 324,
+      graph_subcode: 2069019,
+      graph_is_transient: true,
+      retryable: true,
+    });
+  });
+
+  it("reports no transient flag as null instead of a guessed false", () => {
+    const error = mapGraphError({ error: { code: 100 }, httpStatus: 400 });
+    expect(error.context).toMatchObject({ graph_is_transient: null });
   });
 
   it("never leaks a token: only the fields we pass in reach the context", () => {

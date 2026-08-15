@@ -45,6 +45,8 @@ const GraphErrorEnvelopeSchema = z.object({
       fbtrace_id: z.string().optional(),
       error_user_title: z.string().optional(),
       error_user_msg: z.string().optional(),
+      // Meta's retry hint; dropping it here would make every flagged error permanent.
+      is_transient: z.boolean().optional(),
     })
     .optional(),
 });
