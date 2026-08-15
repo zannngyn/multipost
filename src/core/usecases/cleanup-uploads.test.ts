@@ -46,6 +46,7 @@ function harness(
     deleteStale: async () => 0,
     registerUpload: async () => {},
     listOrphanedUploads,
+    listUnreferencedUploadsForCode: async () => [],
     deleteUploads,
   } satisfies MediaRepo;
 

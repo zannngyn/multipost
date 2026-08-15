@@ -46,7 +46,14 @@ function file(patch: Partial<UploadedFile> = {}): UploadedFile {
   };
 }
 
-function harness(options: { putError?: unknown; registerError?: unknown } = {}) {
+function harness(
+  options: {
+    putError?: unknown;
+    registerError?: unknown;
+    previous?: Array<{ tenantId: string; assetId: string; storageKey: string; fileName: string; sizeBytes: number | null }>;
+    listPreviousError?: unknown;
+  } = {},
+) {
   const registered: MediaAsset[] = [];
   const put = vi.fn(async (input: PutBlobInput) => {
     if (options.putError) throw options.putError;
@@ -62,13 +69,20 @@ function harness(options: { putError?: unknown; registerError?: unknown } = {}) 
     if (options.registerError) throw options.registerError;
     registered.push(asset);
   });
+  const listUnreferencedUploadsForCode = vi.fn(async () => {
+    if (options.listPreviousError) throw options.listPreviousError;
+    return options.previous ?? [];
+  });
+  const deleteUploads = vi.fn(async (_tenantId: string, ids: readonly string[]) => ids.length);
+
   const media: MediaRepo = {
     listByProductCode: async () => [],
     upsertMany: async () => 0,
     deleteStale: async () => 0,
     registerUpload,
     listOrphanedUploads: async () => [],
-    deleteUploads: async () => 0,
+    listUnreferencedUploadsForCode,
+    deleteUploads,
   };
 
   let counter = 0;
@@ -77,6 +91,8 @@ function harness(options: { putError?: unknown; registerError?: unknown } = {}) 
     remove,
     registered,
     registerUpload,
+    deleteUploads,
+    listUnreferencedUploadsForCode,
     uploadMedia: makeUploadMedia({
       blobs,
       media,
@@ -257,6 +273,62 @@ describe("uploadMedia — album shape", () => {
         ],
       }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+});
+
+describe("uploadMedia — a second upload replaces the first", () => {
+  const previous = [
+    {
+      tenantId: TENANT,
+      assetId: "upload_old1",
+      storageKey: `${TENANT}/upload_old1`,
+      fileName: "cu-1.jpg",
+      sizeBytes: 10,
+    },
+  ];
+
+  it("removes the abandoned attempt before storing the new album", async () => {
+    // Without this, both attempts sit under the same product code with
+    // overlapping sequence numbers and compose returns one jumbled album.
+    const { uploadMedia, remove, deleteUploads } = harness({ previous });
+
+    const result = await uploadMedia({
+      tenantId: TENANT,
+      productCode: "MG1",
+      files: [file({ fileName: "moi.jpg" })],
+    });
+
+    expect(remove).toHaveBeenCalledWith({ tenantId: TENANT, storageKey: `${TENANT}/upload_old1` });
+    expect(deleteUploads).toHaveBeenCalledWith(TENANT, ["upload_old1"]);
+    expect(result.accepted.map((asset) => asset.sequence)).toEqual([1]);
+  });
+
+  it("still uploads when the previous attempt cannot be listed", async () => {
+    // The operator asked to upload; stale bytes are the sweep's problem.
+    const { uploadMedia } = harness({ listPreviousError: new Error("db down") });
+
+    const result = await uploadMedia({
+      tenantId: TENANT,
+      productCode: "MG1",
+      files: [file()],
+    });
+
+    expect(result.accepted).toHaveLength(1);
+  });
+
+  it("does not look for a previous attempt when every file was refused", async () => {
+    const { uploadMedia, listUnreferencedUploadsForCode } = harness({ previous });
+
+    await expect(
+      uploadMedia({
+        tenantId: TENANT,
+        productCode: "MG1",
+        files: [file({ fileName: "a.pdf", mimeType: "application/pdf" })],
+      }),
+    ).rejects.toBeInstanceOf(AppError);
+
+    // Nothing is replacing anything: the old album is still the good one.
+    expect(listUnreferencedUploadsForCode).not.toHaveBeenCalled();
   });
 });
 

@@ -1,6 +1,6 @@
 # Tiến độ dự án
 
-> Cập nhật lần cuối: **15/08/2026** · Nhánh đối chiếu: `dev` @ `94da4ed`
+> Cập nhật lần cuối: **15/08/2026** · Nhánh đối chiếu: `dev` @ `94da4ed`, cộng nhánh `worktree-e9-upload` (E9)
 >
 > File này ghi **hiện trạng đã kiểm chứng được từ repo**, đối chiếu với WBS ở
 > `03-WBS-va-estimate.md`. Mọi dòng đều phải kèm bằng chứng (đường dẫn file,
@@ -60,11 +60,36 @@ Số liệu lấy lúc cập nhật, chạy trên `dev` @ `94da4ed`:
 
 | Epic | Trạng thái | Bằng chứng |
 |---|---|---|
-| E9 Chế độ B: tự tải file lên | ⬜ **Chưa bắt đầu** | Không có handler `multipart`/`formData()` nào trong `src/app/api`; không có khái niệm chế độ nguồn ảnh trong `compose`. `/api/media/[driveFileId]` là cầu media ký HMAC phục vụ Meta (E3.6), **không phải** upload của người dùng |
+| E9 Chế độ B: tự tải file lên | 🟡 **Code xong, chưa UAT** | Xem mục 3.1 bên dưới |
 | E11 Vận hành & giám sát | 🟡 | E11.1 có màn `/jobs` + `/api/posts/jobs/[postJobId]/retry`; E11.3 có `worker/reaper-schedule.ts`. **E11.2 kênh cảnh báo và E11.4 sao lưu + thử khôi phục: chưa có** |
 | E10 phần còn lại | 🟡 | Đang có track redesign Astryx riêng (mục 5) |
 | E12 đầy đủ | ⬜ | Xem dòng E12 ở Phase 1 |
 | E13 Bàn giao | ⬜ | Có `Dockerfile` + `docker-compose.yml`; chưa có tài liệu vận hành, chưa triển khai production, chưa đào tạo |
+
+### 3.1 E9 — chi tiết
+
+Nhánh `worktree-e9-upload`. `pnpm verify` exit 0 (typecheck · lint · depcruise · test · build).
+
+| Mục | Trạng thái | Bằng chứng |
+|---|---|---|
+| E9.1 Kéo-thả tải lên, lưu tạm, kiểm kiểu + dung lượng | ✅ | usecase `upload-media.ts`, route `POST /api/posts/uploads`, parse ở `app/api/_lib/read-upload-form.ts`, port `core/ports/media-blob-store.ts`, adapter `adapters/media/local-blob-store.ts` |
+| E9.2 Sắp xếp lại thứ tự, chỉ định ảnh bìa | 🟡 | `ui/components/compose/UploadPanel.tsx` + `upload-queue.ts`. **Thả file từ máy vào vùng drop: có.** **Kéo-thả để đổi thứ tự: chưa** — làm bằng nút (↑ ↓ / Đặt làm bìa), có a11y đầy đủ. Xem B-4 |
+| E9.3 Dùng chung tồn kho / AI / đăng bài | ✅ | `compose-post.ts` thêm bộ lọc `source`; `get-media-content.ts` định tuyến theo `origin` nên file tải lên đi qua đúng cầu media ký HMAC mà Facebook dùng |
+| E9.4 Dọn file tạm | ✅ | usecase `cleanup-uploads.ts`, job `worker/jobs/cleanup-uploads-job.ts`, chạy mỗi giờ, xoá byte trước rồi mới xoá row |
+
+**Đã chạy thật đầu-cuối** (dev server + Postgres thật + file thật trên đĩa), 12/12 kiểm tra qua:
+
+- upload 3 ảnh → 3 row `origin='upload'`, `sequence` 1/2/3 đúng thứ tự đã sắp, byte có thật trên đĩa quyền `0600`
+- PDF đổi tên `.jpg` khai `image/jpeg` → **bị từ chối theo tên file**, ảnh thật cùng lô vẫn được giữ
+- lô toàn file hỏng → 400, không phải 200 im lặng · trộn ảnh + video → 400 · thứ tự gửi lên hỏng → 400 · không có file → 400
+- compose chế độ B trên mã hết hàng → chặn `OUT_OF_STOCK` **trước khi** đụng tới media (rule nghiệp vụ 1 vẫn đúng ở chế độ B)
+- cầu media phục vụ đúng byte đã tải lên, `content-type: image/jpeg`; chữ ký giả → 401, link hết hạn → 401, tenant khác → 404
+
+**Quyết định kiến trúc đã chốt trong lúc làm** (đều nằm sau port, đổi lại rẻ):
+
+1. Lưu ở đĩa local qua volume Docker (`uploaddata`), sau port `MediaBlobStore`. Chuyển S3/R2 chỉ cần viết adapter mới.
+2. Giữ tên cột `drive_file_id` làm định danh asset, thêm `origin` + `storage_key`. Đổi tên cột sẽ đụng 66 chỗ ở 20 file, nằm ngoài phạm vi E9.
+3. Upload lần hai cho cùng một mã **thay thế** lần trước (chỉ những file chưa có post nào tham chiếu), vì `sequence` đánh lại từ 1 mỗi lần gọi.
 
 ## 4. Đang bị chặn
 
@@ -73,6 +98,7 @@ Số liệu lấy lúc cập nhật, chạy trên `dev` @ `94da4ed`:
 | B-1 | **Google Sheets API chưa bật** ở project `54146412168` (`mysp-multipost-505408`). Lỗi `SHEET_ERROR` khi đồng bộ | Chặn E0.5, và chặn cứng E12.3/E12.4 — không chạy được đầu-cuối trên dữ liệu thật | Bật Sheets API **và** Drive API trong Google Cloud Console, chờ vài phút, đồng bộ lại. Sau đó kiểm service account đã được share folder Drive + sheet "Hàng thiết kế 2026" |
 | B-2 | Container `mysp-postgres` chạy ở host port **5433** (tạo tay bằng `docker run`), nhưng service `postgres` trong `docker-compose.yml` **không publish port nào ra host** | `docker compose up` sạch sẽ không dựng lại được môi trường dev đang chạy; `.env` phải sửa tay | Thêm `ports: ["5433:5432"]` vào service `postgres`, cập nhật `.env.example` cho khớp |
 | B-3 | 9 câu quyết định nghiệp vụ còn treo (C1, C2, C5, C3, C4, D1, D2, E1, E3 — xem `CLAUDE.md`) | Code đang dùng giá trị tạm, đánh dấu `// PENDING(<mã câu>)` | PM chốt với shop |
+| B-4 | E9.2 chưa có **kéo-thả để đổi thứ tự** (thả file vào vùng drop thì có). Skill `web-drag-drop-reorder` cấm tự viết vì rất dễ sót a11y, thư viện làm đúng là `dnd-kit`, mà `CLAUDE.md` cấm tự thêm dependency | Brief mục 8 ghi "kéo-thả để sắp xếp lại thứ tự". Hiện đáp ứng bằng nút ↑ ↓ + "Đặt làm bìa", dùng được bằng bàn phím | PM quyết: cho thêm `dnd-kit` (~10 KB gz) hay chấp nhận sắp xếp bằng nút |
 
 ## 5. Track song song: redesign UI trên Astryx
 
@@ -94,10 +120,7 @@ Xếp theo thứ tự gỡ được nhiều rủi ro nhất:
 2. **E12.3 + E12.4** — chạy thật đầu-cuối gồm cả ca lỗi, rồi UAT theo 15 tiêu chí
    ở brief mục 10. Đây là việc còn thiếu lớn nhất của Phase 1, và cả Phase 2 cũng
    chưa được chạy thật lần nào.
-3. **E9** — epic tính năng duy nhất còn nguyên vẹn chưa động, và không phụ thuộc
-   Google Cloud nên làm được ngay cả khi B-1 chưa gỡ. Cần chốt trước: **file tải
-   lên lưu ở đâu** (volume Docker trên VPS hay object storage) — `02-dinh-huong-cong-nghe.md`
-   chưa nói, mà quyết định này ảnh hưởng cả E9.1, E9.4 lẫn E13.1.
+3. **Chốt B-4** (kéo-thả đổi thứ tự) để đóng nốt E9.2.
 4. **E11.2 + E11.4** — kênh cảnh báo và sao lưu + thử khôi phục. E11.4 ghi rõ
    trong WBS là "thử khôi phục không được bỏ".
 

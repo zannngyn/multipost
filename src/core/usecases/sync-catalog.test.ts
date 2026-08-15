@@ -133,6 +133,7 @@ function makeHarness(options: {
     // E9 additions; syncing never calls them.
     registerUpload: async () => {},
     listOrphanedUploads: async () => [],
+    listUnreferencedUploadsForCode: async () => [],
     deleteUploads: async () => 0,
   };
   const syncRuns: SyncRunRepo = {

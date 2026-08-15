@@ -351,6 +351,58 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
     }
   }
 
+  async listUnreferencedUploadsForCode(
+    tenantId: string,
+    productCode: string,
+  ): Promise<readonly OrphanedUpload[]> {
+    const scope = forTenant(this.db, tenantId);
+    const code = typeof productCode === "string" ? productCode.trim().toUpperCase() : "";
+    if (code.length === 0) return [];
+
+    try {
+      const rows = await scope.db
+        .select({
+          tenantId: mediaAssets.tenantId,
+          assetId: mediaAssets.driveFileId,
+          storageKey: mediaAssets.storageKey,
+          fileName: mediaAssets.fileName,
+          sizeBytes: mediaAssets.sizeBytes,
+        })
+        .from(mediaAssets)
+        .where(
+          scope.where(
+            mediaAssets,
+            and(
+              eq(mediaAssets.origin, "upload"),
+              eq(mediaAssets.productCode, code),
+              // Same "nobody posted it" predicate as the sweep.
+              sql`NOT EXISTS (
+                SELECT 1 FROM post_job pj
+                WHERE pj.tenant_id = ${mediaAssets.tenantId}
+                  AND pj.media @> jsonb_build_array(
+                        jsonb_build_object('driveFileId', ${mediaAssets.driveFileId}::text))
+              )`,
+            ),
+          ),
+        );
+
+      return rows.map((row) => ({
+        tenantId: row.tenantId,
+        assetId: row.assetId,
+        storageKey: row.storageKey ?? "",
+        fileName: row.fileName,
+        sizeBytes: row.sizeBytes,
+      }));
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "productCode",
+        operation: "media.listUnreferencedUploadsForCode",
+        product_code: code,
+      });
+    }
+  }
+
   async deleteUploads(tenantId: string, assetIds: readonly string[]): Promise<number> {
     const scope = forTenant(this.db, tenantId);
     const ids = [...new Set(assetIds ?? [])].filter(

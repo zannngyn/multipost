@@ -63,6 +63,20 @@ export interface MediaRepo {
     limit: number;
   }): Promise<readonly OrphanedUpload[]>;
 
+  /**
+   * Uploads of ONE product code that no post job references yet — regardless of
+   * age. `uploadMedia` clears these before storing a new album, so a second
+   * upload for the same code replaces the abandoned one instead of merging
+   * with it and producing duplicate sequence numbers.
+   *
+   * Referenced uploads are deliberately excluded: a scheduled post still needs
+   * its rows to resolve a signed media URL.
+   */
+  listUnreferencedUploadsForCode(
+    tenantId: string,
+    productCode: string,
+  ): Promise<readonly OrphanedUpload[]>;
+
   /** Removes uploaded rows by asset id. Returns how many were removed. */
   deleteUploads(tenantId: string, assetIds: readonly string[]): Promise<number>;
 }

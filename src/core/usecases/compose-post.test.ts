@@ -16,8 +16,12 @@ const CHANNEL = "fb-page-1";
 const UPLOAD_STUBS = {
   registerUpload: async () => {},
   listOrphanedUploads: async () => [],
+  listUnreferencedUploadsForCode: async () => [],
   deleteUploads: async () => 0,
-} satisfies Pick<MediaRepo, "registerUpload" | "listOrphanedUploads" | "deleteUploads">;
+} satisfies Pick<
+  MediaRepo,
+  "registerUpload" | "listOrphanedUploads" | "listUnreferencedUploadsForCode" | "deleteUploads"
+>;
 
 function makeLogger(): Logger {
   const logger: Logger = {

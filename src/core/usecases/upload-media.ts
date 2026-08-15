@@ -150,6 +150,16 @@ export function makeUploadMedia(deps: UploadMediaDeps) {
 
     assertOneAlbumKind(usable, { tenantId, productCode });
 
+    // --- Replace, don't merge ----------------------------------------------
+    // `sequence` numbers the album from 1 on every call, so a second upload for
+    // the same code would collide with the first and compose would return one
+    // jumbled album containing an abandoned attempt. The panel means "the files
+    // of this post", so uploading again replaces what was there.
+    //
+    // Only UNREFERENCED uploads go: once a post job carries an asset, its row
+    // must survive or the scheduled post cannot resolve its media URL.
+    await discardPreviousUploads(deps, { tenantId, productCode, log });
+
     // --- Store, then register ----------------------------------------------
     const accepted: MediaAsset[] = [];
 
@@ -244,6 +254,56 @@ export function makeUploadMedia(deps: UploadMediaDeps) {
 export type UploadMedia = ReturnType<typeof makeUploadMedia>;
 
 // --- helpers ----------------------------------------------------------------
+
+/**
+ * Clears the previous, still-unposted upload attempt for this code.
+ *
+ * Failures here are logged and swallowed on purpose: the operator asked to
+ * upload files, and refusing that because some old bytes could not be deleted
+ * would be the wrong trade. The hourly sweep (E9.4) picks up whatever is left.
+ */
+async function discardPreviousUploads(
+  deps: UploadMediaDeps,
+  input: { tenantId: string; productCode: string; log: Logger },
+): Promise<void> {
+  const { tenantId, productCode, log } = input;
+
+  let previous: readonly { assetId: string; storageKey: string }[];
+  try {
+    previous = await deps.media.listUnreferencedUploadsForCode(tenantId, productCode);
+  } catch (error) {
+    log.error("Could not list the previous uploads to replace", {
+      ...AppError.from(error, "DB_ERROR", { reason: "LIST_PREVIOUS_UPLOADS_FAILED" }).toLogObject(),
+    });
+    return;
+  }
+
+  if (previous.length === 0) return;
+
+  for (const item of previous) {
+    if (!item.storageKey) continue;
+    try {
+      await deps.blobs.delete({ tenantId, storageKey: item.storageKey });
+    } catch (error) {
+      log.warn("Could not remove the bytes of a replaced upload", {
+        ...AppError.from(error, "INTERNAL", { reason: "REPLACED_BLOB_DELETE_FAILED" }).toLogObject(),
+        drive_file_id: item.assetId,
+      });
+    }
+  }
+
+  try {
+    const removed = await deps.media.deleteUploads(
+      tenantId,
+      previous.map((item) => item.assetId),
+    );
+    log.info("Replaced the previous upload attempt for this code", { removed });
+  } catch (error) {
+    log.error("Could not remove the rows of a replaced upload", {
+      ...AppError.from(error, "DB_ERROR", { reason: "REPLACED_ROW_DELETE_FAILED" }).toLogObject(),
+    });
+  }
+}
 
 /**
  * One post is either an album of photos or a single clip — they are different
