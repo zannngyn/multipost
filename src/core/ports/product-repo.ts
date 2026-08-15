@@ -25,7 +25,33 @@ export interface MediaRepo {
   listByProductCode(tenantId: string, code: string): Promise<readonly MediaAsset[]>;
   /** Insert or update by (tenant, drive file id). Returns rows written. */
   upsertMany(tenantId: string, assets: readonly MediaAsset[], syncRunId: string): Promise<number>;
+  /**
+   * Removes Drive rows the given sync did not see. MUST leave uploaded rows
+   * alone — they belong to no sync run (E9).
+   */
   deleteStale(tenantId: string, syncRunId: string): Promise<number>;
+
+  // --- E9 (mode B) ---------------------------------------------------------
+
+  /**
+   * Records one operator-uploaded asset. Separate from `upsertMany` on purpose:
+   * that one is the sync writer and stamps a run id, which an upload must never
+   * carry, or the next sync would sweep it away.
+   */
+  registerUpload(tenantId: string, asset: MediaAsset): Promise<void>;
+
+  /**
+   * E9.4 — uploaded assets of this tenant created before `olderThan` that no
+   * post job references. The cleanup job deletes their bytes and their rows.
+   */
+  listOrphanedUploads(
+    tenantId: string,
+    olderThan: Date,
+    limit: number,
+  ): Promise<readonly MediaAsset[]>;
+
+  /** Removes uploaded rows by asset id. Returns how many were removed. */
+  deleteUploads(tenantId: string, assetIds: readonly string[]): Promise<number>;
 }
 
 // --- Sync run ---------------------------------------------------------------
