@@ -2,7 +2,7 @@ import NextAuth from "next-auth";
 import {
   NextResponse,
   type NextFetchEvent,
-  type NextMiddleware,
+  type NextProxy,
   type NextRequest,
 } from "next/server";
 
@@ -10,17 +10,6 @@ import { buildBaseAuthConfig } from "@/app/_auth/auth.config";
 import { isDevFakeSessionEnabled, warnDevFakeSession } from "@/app/_auth/dev-session";
 import { safeReturnUrl } from "@/app/_auth/return-url";
 import { AppError } from "@/core/domain/errors";
-
-/**
- * Route guard. Blocks *before* anything renders (web-auth-session rule 2) —
- * never in a `useEffect`, which would ship private markup first.
- *
- * Runs on the Node.js runtime: `loadAuthConfig()` reads `process.env` through a
- * zod schema (dynamic property access), and the Edge bundler only inlines env
- * vars it can see statically. On Edge the secret would silently be `undefined`
- * in a production build. Node runtime = real `process.env`, no surprises.
- */
-export const runtime = "nodejs";
 
 /** Everything else requires a session. Prefix match, plus their sub-paths. */
 const PUBLIC_PREFIXES = [
@@ -42,9 +31,9 @@ const PUBLIC_PREFIXES = [
  * purpose: with a factory, `auth(handler)` returns a Promise of a middleware
  * instead of a middleware (see next-auth/lib/index.js `initAuth`).
  */
-let cachedGuard: NextMiddleware | null = null;
+let cachedGuard: NextProxy | null = null;
 
-function getGuard(): NextMiddleware {
+function getGuard(): NextProxy {
   if (cachedGuard) return cachedGuard;
 
   const { auth: withSession } = NextAuth(buildBaseAuthConfig());
@@ -111,7 +100,7 @@ function deny(request: NextRequest): NextResponse {
   return NextResponse.redirect(target);
 }
 
-export default async function middleware(
+export default async function proxy(
   request: NextRequest,
   event: NextFetchEvent,
 ): Promise<NextResponse | Response> {
