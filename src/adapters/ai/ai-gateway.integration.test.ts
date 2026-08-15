@@ -95,13 +95,15 @@ describe("AI gateway — real registry + real prompt", () => {
 
     expect(result.metadata.provider).toBe("openai");
     expect(result.metadata.tier).toBe("cheap");
-    expect(result.metadata.model).toBe("gpt-5-mini");
+    expect(result.metadata.model).toBe("gpt-4.1-mini");
     expect(result.metadata.promptTemplateId).toBe("facebook-product-content");
 
     const prompt = openai.calls[0].messages[0].parts[0];
     expect(prompt.type === "text" && prompt.text).toContain("Penny");
-    expect(openai.calls[0].maxOutputTokens).toBe(900);
-    expect(openai.calls[0].timeoutMs).toBe(30_000);
+    expect(openai.calls[0].maxOutputTokens).toBe(3_000);
+    expect(openai.calls[0].timeoutMs).toBe(60_000);
+    // gpt-4.1-mini accepts a temperature, so the task's 0.8 must reach it.
+    expect(openai.calls[0].temperature).toBe(0.8);
   });
 
   it("fails the generation on an infra error instead of swapping to an unlisted provider", async () => {
@@ -128,6 +130,8 @@ describe("AI gateway — real registry + real prompt", () => {
     expect(result.metadata.tier).toBe("mid");
     expect(result.metadata.model).toBe("gpt-5.4-mini");
     expect(openai.calls).toHaveLength(2);
+    // ...and gpt-5.4-mini rejects it, so the same task must send none.
+    expect(openai.calls[1].temperature).toBeUndefined();
   });
 
   it("accepts a second channel whose caption differs from the first // PENDING(D1)", async () => {
@@ -161,14 +165,15 @@ describe("AI gateway — real registry + real prompt", () => {
     await expect(engine.generate(baseRequest)).rejects.toMatchObject({
       code: "CAPTION_VALIDATION_FAILED",
     });
-    // cheap -> mid -> top, exactly maxEscalations = 2 from the YAML. `top` reuses
-    // the mid model while openai:gpt-5 waits for verified pricing — the third
-    // attempt is a fresh try carrying the validator feedback, not a bigger model.
+    // cheap -> mid -> top, exactly maxEscalations = 2 from the YAML.
     expect(openai.calls.map((call) => call.model)).toEqual([
-      "gpt-5-mini",
+      "gpt-4.1-mini",
       "gpt-5.4-mini",
-      "gpt-5.4-mini",
+      "gpt-4.1",
     ]);
+    // The ladder alternates families, so the temperature knob comes back at the
+    // top rung — proof the engine decides per MODEL, not once per generation.
+    expect(openai.calls.map((call) => call.temperature)).toEqual([0.8, undefined, 0.8]);
   });
 
   it("stops with AI_BUDGET_EXCEEDED instead of escalating past the ceiling", async () => {

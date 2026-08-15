@@ -1,6 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { parse as parseYaml } from "yaml";
 
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -21,12 +23,16 @@ function writeTemp(name: string, content: string): string {
   return path;
 }
 
-function makeStore(filePath: string) {
+function makeStore(
+  filePath: string,
+  tierModels?: Partial<Record<"cheap" | "mid" | "top", string>>,
+) {
   return makeYamlModelPolicyStore({
     filePath,
     clock: makeFixedClock(),
     logger: makeFakeLogger(),
     ttlMs: 60_000,
+    tierModels,
   });
 }
 
@@ -226,25 +232,62 @@ describe("YAML model policy store — config/ai-models.yaml", () => {
    * Verified against the live API on 15/08/2026: sending `temperature` to a
    * GPT-5 model is a hard 400 ("Unsupported parameter"), classified
    * `bad_request` — terminal, no retry, no escalation, the whole post blocked.
-   * `capabilities.temperature` defaults to TRUE in the schema, so an OpenAI
-   * entry that simply forgets the line reintroduces that 400 in production while
-   * every scripted-provider test stays green. This is the only guard that
-   * catches it.
+   * `capabilities.temperature` defaults to TRUE in the schema, so a gpt-5 entry
+   * that simply forgets the line reintroduces that 400 in production while every
+   * scripted-provider test stays green. Checked over the WHOLE catalog, not just
+   * the current tiers, because AI_MODEL_* can promote any declared model.
+   *
+   * The model-name check belongs in a test, not in adapter code: it pins a
+   * vendor fact, it does not route anything.
    */
-  it("declares temperature: false on every OpenAI model the tiers can reach", async () => {
+  it("declares temperature: false on every GPT-5 family model in the catalog", () => {
+    const registry = parseYaml(readFileSync(REAL_REGISTRY, "utf8")) as {
+      models: Record<string, { model: string; capabilities: { temperature?: boolean } }>;
+    };
+
+    const offenders = Object.entries(registry.models)
+      .filter(([, entry]) => /^gpt-5/u.test(entry.model))
+      .filter(([, entry]) => entry.capabilities.temperature !== false)
+      .map(([key]) => key);
+
+    expect(offenders).toEqual([]);
+  });
+
+  /** The other half of the same fact: a non-reasoning model must NOT be muted. */
+  it("keeps temperature enabled on the non-reasoning models", () => {
+    const registry = parseYaml(readFileSync(REAL_REGISTRY, "utf8")) as {
+      models: Record<string, { model: string; capabilities: { temperature?: boolean } }>;
+    };
+
+    const muted = Object.entries(registry.models)
+      .filter(([, entry]) => /^gpt-4/u.test(entry.model))
+      .filter(([, entry]) => entry.capabilities.temperature === false)
+      .map(([key]) => key);
+
+    expect(muted).toEqual([]);
+  });
+
+  it("still asks for the temperature it wants — dropping it is the engine's job", async () => {
     const policy = await makeStore(REAL_REGISTRY).getPolicy({
       tenantId: "tenant-1",
       task: "facebook_content",
     });
 
-    const reachable = (["cheap", "mid", "top"] as const).flatMap((tier) => policy.tiers[tier]);
-    const offenders = reachable
-      .filter((entry) => entry.provider === "openai" && entry.capabilities.temperature)
-      .map((entry) => entry.key);
-
-    expect(offenders).toEqual([]);
-    // The task still states the temperature it WANTS — the engine is what drops it.
     expect(policy.policy.temperature).toBe(0.8);
+  });
+
+  /**
+   * The output budget is shared by reasoning tokens and the answer. 900 left
+   * gpt-5-mini emitting nothing at all on 4 of 4 real runs (15/08/2026), so the
+   * floor is pinned here rather than left to drift back down.
+   */
+  it("gives the caption task enough output budget for a reasoning model", async () => {
+    const policy = await makeStore(REAL_REGISTRY).getPolicy({
+      tenantId: "tenant-1",
+      task: "facebook_content",
+    });
+
+    expect(policy.policy.maxOutputTokens).toBeGreaterThanOrEqual(2_000);
   });
 
   it("serves every declared task", async () => {
@@ -317,5 +360,86 @@ budget:
     writeFileSync(path, "not: [valid", "utf8");
     const second = await store.getPolicy({ tenantId: "t1", task: "facebook_content" });
     expect(second.registryVersion).toBe(7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AI_MODEL_CHEAP / _MID / _TOP — swap a tier without editing the file
+// ---------------------------------------------------------------------------
+
+describe("YAML model policy store — env tier override", () => {
+  it("replaces the named tier with the chosen model", async () => {
+    const policy = await makeStore(REAL_REGISTRY, { cheap: "openai:gpt-4o-mini" }).getPolicy({
+      tenantId: "t1",
+      task: "facebook_content",
+    });
+
+    expect(policy.tiers.cheap.map((entry) => entry.key)).toEqual(["openai:gpt-4o-mini"]);
+    expect(policy.tiers.cheap[0].model).toBe("gpt-4o-mini");
+    // Untouched tiers keep whatever the file says.
+    expect(policy.tiers.mid.length).toBeGreaterThan(0);
+  });
+
+  it("carries the overridden model's own capabilities, not the replaced one's", async () => {
+    const muted = await makeStore(REAL_REGISTRY, { cheap: "openai:gpt-5-mini" }).getPolicy({
+      tenantId: "t1",
+      task: "facebook_content",
+    });
+    const free = await makeStore(REAL_REGISTRY, { cheap: "openai:gpt-4.1-mini" }).getPolicy({
+      tenantId: "t1",
+      task: "facebook_content",
+    });
+
+    expect(muted.tiers.cheap[0].capabilities.temperature).toBe(false);
+    expect(free.tiers.cheap[0].capabilities.temperature).toBe(true);
+  });
+
+  it("can point every tier at one model", async () => {
+    const policy = await makeStore(REAL_REGISTRY, {
+      cheap: "openai:gpt-4.1-mini",
+      mid: "openai:gpt-4.1-mini",
+      top: "openai:gpt-4.1-mini",
+    }).getPolicy({ tenantId: "t1", task: "facebook_content" });
+
+    expect((["cheap", "mid", "top"] as const).map((tier) => policy.tiers[tier][0]?.model)).toEqual([
+      "gpt-4.1-mini",
+      "gpt-4.1-mini",
+      "gpt-4.1-mini",
+    ]);
+  });
+
+  // A typo must stop the process and say what it could have said, rather than
+  // surface later as a puzzling MODEL_NOT_CONFIGURED mid-generation.
+  it("refuses a model key that is not declared, and lists the ones that are", async () => {
+    const error = await expectModelNotConfigured(
+      makeStore(REAL_REGISTRY, { mid: "openai:gpt-6-turbo" }).getPolicy({
+        tenantId: "t1",
+        task: "facebook_content",
+      }),
+    );
+
+    expect(error.message).toContain("AI_MODEL_MID");
+    expect(error.message).toContain("openai:gpt-6-turbo");
+    expect(error.message).toContain("openai:gpt-4.1-mini");
+    expect(error.context.tier).toBe("mid");
+  });
+
+  it("ignores blank and absent values instead of emptying a tier", async () => {
+    const policy = await makeStore(REAL_REGISTRY, { cheap: "   ", top: undefined }).getPolicy({
+      tenantId: "t1",
+      task: "facebook_content",
+    });
+
+    expect(policy.tiers.cheap[0].model).toBe("gpt-4.1-mini");
+    expect(policy.tiers.top.length).toBeGreaterThan(0);
+  });
+
+  it("can promote a model the shipped ladder deliberately leaves out", async () => {
+    const policy = await makeStore(REAL_REGISTRY, { top: "openai:gpt-5" }).getPolicy({
+      tenantId: "t1",
+      task: "facebook_content",
+    });
+
+    expect(policy.tiers.top[0].model).toBe("gpt-5");
   });
 });

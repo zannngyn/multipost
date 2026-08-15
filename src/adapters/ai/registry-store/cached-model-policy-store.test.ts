@@ -9,6 +9,10 @@ import type { ModelPolicyOverrideRepo, ModelPolicyStore } from "@/core/ports/ai"
 const TENANT = "33333333-3333-3333-3333-333333333333";
 const TASK = "facebook_content" as const;
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
 function countingBase(): ModelPolicyStore & { calls: number } {
   const state = {
     calls: 0,
@@ -36,9 +40,14 @@ function memoryCache(): AiCache & { store: Map<string, string>; reads: number; w
     async invalidate({ key, pattern }: { key?: string; pattern?: string }) {
       if (key) state.store.delete(key);
       if (pattern) {
-        const prefix = pattern.replace(/\*$/, "");
+        // Redis KEYS globs anywhere in the string, not just at the end — the
+        // real store now relies on that (`ai:policy:v1:*:tenant:*`).
+        const matcher = new RegExp(
+          `^${pattern.split("*").map(escapeRegExp).join(".*")}$`,
+          "u",
+        );
         for (const existing of [...state.store.keys()]) {
-          if (existing.startsWith(prefix)) state.store.delete(existing);
+          if (matcher.test(existing)) state.store.delete(existing);
         }
       }
     },
@@ -78,7 +87,7 @@ describe("cached model policy store — edge cases", () => {
     const cache = memoryCache();
     const store = makeCachedModelPolicyStore({ base, cache, logger: makeFakeLogger() });
 
-    cache.store.set(`ai:policy:v1:${TENANT}:${TASK}`, "{not json");
+    cache.store.set(`ai:policy:v1:default:${TENANT}:${TASK}`, "{not json");
     const policy = await store.getPolicy({ tenantId: TENANT, task: TASK });
 
     expect(policy.task).toBe(TASK);
@@ -180,6 +189,76 @@ describe("cached model policy store — caching", () => {
 
     expect(cache.store.size).toBe(2);
     expect(base.calls).toBe(2);
+  });
+
+  /**
+   * Measured on 15/08/2026 before `variant` existed: a dev server started with
+   * a deliberately INVALID AI_MODEL_MID served captions happily, because it read
+   * the resolved policy another process had cached — so neither the swap nor its
+   * load-time validation ever ran. Web and worker share one Redis, so this is a
+   * production shape, not a test-only curiosity.
+   */
+  it("does not let one process's tier swap leak into another's cache", async () => {
+    const cache = memoryCache();
+    const shared = { cache, logger: makeFakeLogger() };
+    const withSwap = countingBase();
+    const withoutSwap = countingBase();
+
+    const swapped = makeCachedModelPolicyStore({
+      ...shared,
+      base: withSwap,
+      variant: "cheap=openai:gpt-4.1",
+    });
+    const plain = makeCachedModelPolicyStore({ ...shared, base: withoutSwap });
+
+    await swapped.getPolicy({ tenantId: TENANT, task: TASK });
+    await plain.getPolicy({ tenantId: TENANT, task: TASK });
+
+    // Two entries, and each store consulted its OWN base rather than reusing
+    // the other's answer.
+    expect(cache.store.size).toBe(2);
+    expect(withSwap.calls).toBe(1);
+    expect(withoutSwap.calls).toBe(1);
+    expect([...cache.store.keys()].sort()).toEqual([
+      `ai:policy:v1:cheap=openai:gpt-4.1:${TENANT}:${TASK}`,
+      `ai:policy:v1:default:${TENANT}:${TASK}`,
+    ]);
+  });
+
+  it("invalidating a tenant clears EVERY variant, not just the caller's", async () => {
+    const cache = memoryCache();
+    const shared = { cache, logger: makeFakeLogger() };
+    const swapped = makeCachedModelPolicyStore({
+      ...shared,
+      base: countingBase(),
+      variant: "top=openai:gpt-5",
+    });
+    const plain = makeCachedModelPolicyStore({ ...shared, base: countingBase() });
+
+    await swapped.getPolicy({ tenantId: TENANT, task: TASK });
+    await plain.getPolicy({ tenantId: TENANT, task: TASK });
+    expect(cache.store.size).toBe(2);
+
+    await plain.invalidate({ tenantId: TENANT });
+
+    expect(cache.store.size).toBe(0);
+  });
+
+  it("invalidating one task leaves the other tasks of that tenant alone", async () => {
+    const cache = memoryCache();
+    const store = makeCachedModelPolicyStore({
+      base: countingBase(),
+      cache,
+      logger: makeFakeLogger(),
+    });
+
+    await store.getPolicy({ tenantId: TENANT, task: TASK });
+    await store.getPolicy({ tenantId: TENANT, task: "difficult_content" });
+    await store.invalidate({ tenantId: TENANT, task: TASK });
+
+    expect([...cache.store.keys()]).toEqual([
+      `ai:policy:v1:default:${TENANT}:difficult_content`,
+    ]);
   });
 
   it("an AppError from the base store is not cached", async () => {

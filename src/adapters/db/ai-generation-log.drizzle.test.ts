@@ -195,3 +195,56 @@ describe("drizzle ai_generation log", () => {
     expect(Number.isNaN((rows[0].createdAt as Date).getTime())).toBe(false);
   });
 });
+
+/**
+ * Measured live on 15/08/2026: gpt-4.1-mini returned mojibake containing U+0000.
+ * Postgres refuses that byte in text and jsonb ("unsupported Unicode escape
+ * sequence"), so the whole INSERT failed and the row explaining why the post was
+ * blocked was lost — the opposite of business rule 5.
+ */
+describe("drizzle ai_generation log — NUL in model output", () => {
+  const NUL = "\u0000";
+
+  it("still writes the row when the output carries a NUL", async () => {
+    const captured: Array<Record<string, unknown>> = [];
+    const log = makeDrizzleGenerationLog({
+      db: stubDb(captured),
+      logger: recordingLogger([]),
+      newId: () => "row-1",
+    });
+
+    await log.record(
+      entry({
+        success: true,
+        validationPassed: false,
+        output: { title: `MÙA${NUL} HÈ`, claims: [{ sourceText: `lụa${NUL} mềm` }] },
+        validationFailures: [
+          { stage: 3, rule: "claim.source_not_found", message: `nguồn "${NUL}lụa" không có` },
+        ],
+      }),
+    );
+
+    const row = captured[0];
+    const serialised = JSON.stringify([row?.output, row?.validationFailures]);
+    expect(captured).toHaveLength(1);
+    expect(serialised).not.toContain("\\u0000");
+    // The text either side of the stripped byte is kept — this is a repair, not
+    // a redaction: the operator still gets a readable reason.
+    expect(serialised).toContain("MÙA HÈ");
+    expect(serialised).toContain("claim.source_not_found");
+  });
+
+  it("leaves ordinary output untouched", async () => {
+    const captured: Array<Record<string, unknown>> = [];
+    const log = makeDrizzleGenerationLog({
+      db: stubDb(captured),
+      logger: recordingLogger([]),
+      newId: () => "row-1",
+    });
+    const output = { title: "MÙA HÈ", body: "Dòng 1\nDòng 2\tcó tab", hashtags: ["#a"] };
+
+    await log.record(entry({ output }));
+
+    expect(captured[0]?.output).toEqual(output);
+  });
+});

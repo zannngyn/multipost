@@ -4,7 +4,7 @@
 # Owner decision 12/08/2026: Google AI Studio (Gemini) primary on every tier,
 # OpenAI as INFRASTRUCTURE fallback only. PAID TIER IS MANDATORY wherever real
 # shop data flows — the free tier grants Google training rights over the data
-# (docs/ai/provider-strategy.md §3).
+# (docs/ai/provider-strategy.md §3.2).
 #
 # Owner decision 15/08/2026 — SUPERSEDES the tier layout above: SINGLE PROVIDER,
 # OpenAI only, because no Google AI Studio paid key is provisioned yet. The
@@ -17,13 +17,20 @@
 # TO RE-ENABLE GOOGLE: set GOOGLE_AI_API_KEY (paid tier) and put the
 # "google:*" keys back at position 1 of each tier below. No code change.
 #
+# TO TRY ANOTHER MODEL WITHOUT EDITING THIS FILE: set AI_MODEL_CHEAP /
+# AI_MODEL_MID / AI_MODEL_TOP to one of the KEYS declared under `models:`
+# (e.g. AI_MODEL_CHEAP=openai:gpt-4o-mini). The env value replaces that tier.
+# An unknown key stops the process at load and lists the valid ones.
+#
 # Changing a model here requires benchmark numbers in the PR (model-routing.md §5).
-# Prices are USD per 1M tokens, taken from docs/ai/provider-strategy.md §2
-# (aggregator sourced — re-verify against the official pricing pages before go-live).
+# OpenAI prices below were read from the official pricing page on 15/08/2026
+# (developers.openai.com/api/docs/pricing, Standard tier). Google prices are
+# still aggregator-sourced — re-verify before Google is switched back on.
 
 version: 1
 
 models:
+  # --- Google (declared but NOT in any tier — see the header) ----------------
   "google:gemini-3.5-flash-lite":
     provider: google
     model: gemini-3.5-flash-lite
@@ -60,18 +67,69 @@ models:
       maxOutputTokens: 8192
       temperature: true
 
+  # --- OpenAI, non-reasoning (GPT-4.1 / 4o families) -------------------------
+  # These accept `temperature` and spend NO tokens on hidden reasoning, so the
+  # whole output budget goes to the caption. That is why the cheap tier sits
+  # here: gpt-5-mini burned all 900 tokens reasoning and emitted no JSON on
+  # 4 of 4 real runs (15/08/2026).
+  "openai:gpt-4.1-mini":
+    provider: openai
+    model: gpt-4.1-mini
+    pricing:
+      inputPerMTokUsd: 0.40
+      outputPerMTokUsd: 1.60
+      cachedInputPerMTokUsd: 0.10
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+      temperature: true
+
+  "openai:gpt-4.1":
+    provider: openai
+    model: gpt-4.1
+    pricing:
+      inputPerMTokUsd: 2.00
+      outputPerMTokUsd: 8.00
+      cachedInputPerMTokUsd: 0.50
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+      temperature: true
+
+  "openai:gpt-4o-mini":
+    provider: openai
+    model: gpt-4o-mini
+    pricing:
+      inputPerMTokUsd: 0.15
+      outputPerMTokUsd: 0.60
+      cachedInputPerMTokUsd: 0.075
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+      temperature: true
+
+  # --- OpenAI, reasoning (GPT-5 family) --------------------------------------
+  # `temperature: false` is not a preference: responses.create answers
+  # 400 "Unsupported parameter: 'temperature' is not supported with this model"
+  # (verified live 15/08/2026). Reasoning tokens are billed as output and count
+  # against maxOutputTokens, which is why the task budget has headroom.
+  # MEASURED 15/08/2026 — do NOT put back in the ladder without new numbers:
+  # on this prompt it spent 2944 of a 3000-token budget on reasoning and emitted
+  # no JSON at all (and 900/900 before that). It over-thinks a copywriting task.
   "openai:gpt-5-mini":
     provider: openai
     model: gpt-5-mini
     pricing:
       inputPerMTokUsd: 0.25
       outputPerMTokUsd: 2.00
+      cachedInputPerMTokUsd: 0.025
     capabilities:
       vision: true
       structuredOutput: true
       maxOutputTokens: 8192
-      # Verified live 15/08/2026: responses.create returns
-      # 400 "Unsupported parameter: 'temperature' is not supported with this model".
       temperature: false
 
   "openai:gpt-5.4-mini":
@@ -87,15 +145,30 @@ models:
       maxOutputTokens: 8192
       temperature: false
 
+  # Registered, deliberately OUT of the ladder: at $10/M output one escalation
+  # onto it eats most of the $0.05 per-generation ceiling. Reachable through
+  # AI_MODEL_TOP once the ceiling is raised on purpose.
   "openai:gpt-5":
     provider: openai
     model: gpt-5
-    # PENDING(price-verify): provider-strategy.md §2 only says "cao hơn đáng kể".
-    # Placeholder kept deliberately HIGH so the per-generation budget ceiling blocks
-    # this model until the real numbers are filled in from the official price page.
     pricing:
-      inputPerMTokUsd: 10.00
-      outputPerMTokUsd: 30.00
+      inputPerMTokUsd: 1.25
+      outputPerMTokUsd: 10.00
+      cachedInputPerMTokUsd: 0.125
+    capabilities:
+      vision: true
+      structuredOutput: true
+      maxOutputTokens: 8192
+      temperature: false
+
+  # Same reasoning as gpt-5, more so: $15/M output.
+  "openai:gpt-5.4":
+    provider: openai
+    model: gpt-5.4
+    pricing:
+      inputPerMTokUsd: 2.50
+      outputPerMTokUsd: 15.00
+      cachedInputPerMTokUsd: 0.25
     capabilities:
       vision: true
       structuredOutput: true
@@ -107,22 +180,26 @@ models:
 # single-provider mode lists exactly one model per tier: a second OpenAI entry
 # would never be selected.
 #
+# The ladder climbs in KIND, not just in size, and every rung is measured:
+#   cheap  gpt-4.1-mini  fast non-reasoning writer — passed 3/4 first attempts
+#   mid    gpt-5.4-mini  reasoning; follows validator feedback, and reasons
+#                        modestly (~360 output tokens) instead of drowning
+#   top    gpt-4.1       non-reasoning heavyweight — a DIFFERENT failure mode
+#                        from the rung above, and it cannot truncate on thinking
+# Escalation only happens after a validation failure, so paying more there is
+# exactly what the later attempts are for.
+#
 # Google (disabled 15/08/2026) — restore by prepending to the matching tier:
 #   cheap: "google:gemini-3.5-flash-lite"
 #   mid:   "google:gemini-3.6-flash"
 #   top:   "google:gemini-3.1-pro"
 tiers:
   cheap:
-    - "openai:gpt-5-mini"
+    - "openai:gpt-4.1-mini"
   mid:
     - "openai:gpt-5.4-mini"
-  # PENDING(price-verify): "openai:gpt-5" is the intended flagship but its price is
-  # still a deliberately high placeholder, which the $0.05 per-generation ceiling
-  # would block on every escalation. Until the official numbers are in, `top`
-  # reuses gpt-5.4-mini: the escalation still buys a fresh attempt carrying the
-  # validator feedback, it just does not buy a bigger model.
   top:
-    - "openai:gpt-5.4-mini"
+    - "openai:gpt-4.1"
 
 tasks:
   facebook_content:
@@ -130,8 +207,21 @@ tasks:
     primary: cheap
     escalate: [mid, top]
     maxEscalations: 2
-    maxOutputTokens: 900
-    timeoutMs: 30000
+    # 900 was too small: it is the ceiling for reasoning + answer together, and
+    # gpt-5-mini spent all of it thinking (0 output tokens, 4/4 runs). A caption
+    # needs ~500; the rest is headroom for reasoning models.
+    #
+    # Raising it also raises the PRE-FLIGHT cost projection, and the margin is
+    # thin. Worst case measured with projectAttemptCostUsd (~2.2k-char prompt,
+    # one cover image, 3000 output tokens):
+    #   cheap 0.0055 + mid 0.0148 + top 0.0275 = 0.0478 against a 0.05 ceiling.
+    # ~$0.002 to spare, and the 3rd attempt's prompt grows further with
+    # {{otherCaptions}} and {{previousFailures}} — a multi-channel post with a
+    # long description can hit AI_BUDGET_EXCEEDED on the last rung instead of
+    # running it. Re-do this sum before raising the token budget or picking a
+    # pricier model; see docs/ai/cost-model.md §3.
+    maxOutputTokens: 3000
+    timeoutMs: 60000
     temperature: 0.8
 
   product_understanding:
@@ -139,24 +229,24 @@ tasks:
     primary: cheap
     escalate: [mid]
     maxEscalations: 1
-    maxOutputTokens: 700
-    timeoutMs: 30000
+    maxOutputTokens: 2000
+    timeoutMs: 45000
 
   caption_dedupe_check:
     vision: none
     primary: cheap
     escalate: []
     maxEscalations: 0
-    maxOutputTokens: 300
-    timeoutMs: 20000
+    maxOutputTokens: 1000
+    timeoutMs: 30000
 
   difficult_content:
     vision: single
     primary: mid
     escalate: [top]
     maxEscalations: 1
-    maxOutputTokens: 900
-    timeoutMs: 45000
+    maxOutputTokens: 3000
+    timeoutMs: 60000
 
 # docs/ai/cost-model.md §3. The per-generation ceiling covers escalations too.
 budget:

@@ -16,6 +16,22 @@ export type EnvRecord = Record<string, string | undefined>;
 
 const nonEmpty = (label: string) => z.string().trim().min(1, `${label} must not be empty`);
 
+/**
+ * Optional variable where `NAME=` (the usual way to leave a line in a .env
+ * without setting it) must read as "not configured" rather than as an error.
+ * Required values keep using {@link nonEmpty}, where blank IS a mistake.
+ *
+ * Not secret-specific on purpose: it is used for API keys and for plain model
+ * names alike, and nothing here redacts anything.
+ */
+const optionalTrimmed = z
+  .string()
+  .optional()
+  .transform((value) => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : undefined;
+  });
+
 const csvList = z
   .string()
   .trim()
@@ -111,17 +127,25 @@ export const AiConfigSchema = z.object({
    * secrets above, where blank must fail — there, blank means someone deleted a
    * value that the system cannot run without.
    */
-  GOOGLE_AI_API_KEY: z
-    .string()
-    .optional()
-    .transform((value) => {
-      const trimmed = value?.trim();
-      return trimmed ? trimmed : undefined;
-    }),
+  GOOGLE_AI_API_KEY: optionalTrimmed,
   /** The only wired provider today; a generation without it cannot run. */
   OPENAI_API_KEY: nonEmpty("OPENAI_API_KEY"),
   AI_MODELS_CONFIG_PATH: z.string().trim().min(1).default("./config/ai-models.yaml"),
   AI_REGISTRY_CACHE_TTL_MS: z.coerce.number().int().positive().default(60_000),
+
+  /**
+   * Swap the model of one tier without editing the registry file — the knob for
+   * "try another model in staging" and for an emergency swap in production.
+   *
+   * The value is a registry KEY ("openai:gpt-4.1-mini"), never a raw model
+   * string: ADR-001 keeps every model string reviewable in
+   * `config/ai-models.yaml`, and an unknown key fails at load naming the ones
+   * that exist. To use a model that is not registered yet, add it to the YAML
+   * first — that is the review step, not red tape.
+   */
+  AI_MODEL_CHEAP: optionalTrimmed,
+  AI_MODEL_MID: optionalTrimmed,
+  AI_MODEL_TOP: optionalTrimmed,
 });
 
 export type AiConfig = z.infer<typeof AiConfigSchema>;

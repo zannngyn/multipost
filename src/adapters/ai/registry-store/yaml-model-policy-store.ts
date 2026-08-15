@@ -32,6 +32,16 @@ export interface YamlModelPolicyStoreOptions {
   logger: Logger;
   /** Short TTL: the file is re-read on change without restarting the worker. */
   ttlMs?: number;
+  /**
+   * Deployment-level tier swap from env (AI_MODEL_CHEAP/MID/TOP). Each value is
+   * a registry KEY and REPLACES that tier's model list, so the chosen model is
+   * both the primary and the only candidate for the tier.
+   *
+   * Deliberately narrower than the per-tenant DB override: this is one setting
+   * for the whole process, applied before any tenant overlay, and it can only
+   * name models the YAML already declares.
+   */
+  tierModels?: Partial<Record<AITier, string>>;
 }
 
 const DEFAULT_TTL_MS = 60_000;
@@ -39,17 +49,27 @@ const DEFAULT_TTL_MS = 60_000;
 export function makeYamlModelPolicyStore(options: YamlModelPolicyStoreOptions): ModelPolicyStore {
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
   let cached: { registry: RegistryFile; loadedAtMs: number } | null = null;
+  // The swap is a stable deployment setting, so it is announced once. The TTL
+  // reload happens every minute forever; warning there would bury the log.
+  let overrideAnnounced = false;
 
   function load(): RegistryFile {
     const now = options.clock.nowMs();
     if (cached && now - cached.loadedAtMs < ttlMs) return cached.registry;
 
-    const registry = readRegistry(options.filePath, options.logger);
+    const registry = applyTierModels(
+      readRegistry(options.filePath, options.logger),
+      options.tierModels,
+      options.logger,
+      { announce: !overrideAnnounced },
+    );
+    overrideAnnounced = true;
     cached = { registry, loadedAtMs: now };
     options.logger.info("AI model registry loaded", {
       file: options.filePath,
       registry_version: registry.version,
       models: Object.keys(registry.models).length,
+      tiers: registry.tiers,
     });
     return registry;
   }
@@ -91,6 +111,63 @@ export function makeYamlModelPolicyStore(options: YamlModelPolicyStoreOptions): 
       };
     },
   };
+}
+
+/**
+ * Overlay the env tier swap on the parsed registry.
+ *
+ * Runs AFTER schema + consistency checks so it can only ever narrow a valid
+ * registry, and validates its own input: an unknown key raises
+ * MODEL_NOT_CONFIGURED listing every key it could have said.
+ *
+ * NOTE on when that happens: the registry is read lazily, on the first
+ * `getPolicy` of the process — not at boot. A bad AI_MODEL_* therefore lets the
+ * web and worker start, then fails every generation with the message above. That
+ * is the same lifecycle as a missing provider key (composition/ai-engine.ts), so
+ * a container does not crash-loop over a config value it may never need.
+ */
+function applyTierModels(
+  registry: RegistryFile,
+  tierModels: Partial<Record<AITier, string>> | undefined,
+  logger: Logger,
+  options: { announce: boolean },
+): RegistryFile {
+  if (!tierModels) return registry;
+
+  const entries = (["cheap", "mid", "top"] as const)
+    .map((tier) => [tier, tierModels[tier]?.trim()] as const)
+    .filter((entry): entry is readonly [AITier, string] => Boolean(entry[1]));
+  if (entries.length === 0) return registry;
+
+  const tiers = { ...registry.tiers };
+
+  for (const [tier, key] of entries) {
+    if (!registry.models[key]) {
+      const known = Object.keys(registry.models).sort();
+      logger.error("Env tier override names a model that is not in the registry", {
+        error_code: "MODEL_NOT_CONFIGURED",
+        tier,
+        model_key: key,
+        known_models: known,
+      });
+      throw new AppError("MODEL_NOT_CONFIGURED", {
+        message: `AI_MODEL_${tier.toUpperCase()} names "${key}", which is not declared in the registry. Known models: ${known.join(", ")}`,
+        userMessage:
+          "Cấu hình model AI trỏ tới model không có trong registry — cần quản trị viên sửa.",
+        context: { tier, model_key: key, known_models: known },
+      });
+    }
+    tiers[tier] = [key];
+    if (options.announce) {
+      logger.warn("AI tier model overridden by environment", {
+        component: "ai-registry",
+        tier,
+        model_key: key,
+      });
+    }
+  }
+
+  return { ...registry, tiers };
 }
 
 function resolveTiers(

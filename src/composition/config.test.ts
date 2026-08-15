@@ -179,6 +179,8 @@ describe("loadGoogleConfig — Service Account (E2)", () => {
   });
 });
 
+const OPENAI_ONLY_ENV = { OPENAI_API_KEY: "sk-openai" } satisfies EnvRecord;
+
 describe("loadAiConfig — single provider (E4, owner decision 15/08/2026)", () => {
   it("accepts an env with OPENAI_API_KEY and no Google key at all", () => {
     const config = loadAiConfig({ OPENAI_API_KEY: "sk-openai" });
@@ -209,6 +211,25 @@ describe("loadAiConfig — single provider (E4, owner decision 15/08/2026)", () 
 
   it("requires OPENAI_API_KEY — without it nothing can be generated", () => {
     expect(issuePaths(catchError(() => loadAiConfig({})))).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("leaves the tier model knobs undefined when nothing is set", () => {
+    const config = loadAiConfig(OPENAI_ONLY_ENV);
+
+    expect(config.AI_MODEL_CHEAP).toBeUndefined();
+    expect(config.AI_MODEL_MID).toBeUndefined();
+    expect(config.AI_MODEL_TOP).toBeUndefined();
+  });
+
+  it("passes a tier model through verbatim — the registry validates the key, not zod", () => {
+    const config = loadAiConfig({
+      ...OPENAI_ONLY_ENV,
+      AI_MODEL_CHEAP: " openai:gpt-4o-mini ",
+      AI_MODEL_TOP: "",
+    });
+
+    expect(config.AI_MODEL_CHEAP).toBe("openai:gpt-4o-mini");
+    expect(config.AI_MODEL_TOP).toBeUndefined();
   });
 
   it("keeps the Google key when it IS set, so re-enabling needs no code change", () => {

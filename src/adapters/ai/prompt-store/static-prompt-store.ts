@@ -9,9 +9,16 @@
 import { AppError } from "@/core/domain/errors";
 import { assertTemplateValid } from "@/core/ai/prompt-render";
 import type { AITask, PromptStore, PromptTemplate } from "@/core/ports/ai";
-import { FACEBOOK_CONTENT_TEMPLATE_V1 } from "@/adapters/ai/prompt-store/templates/facebook-content";
+import {
+  FACEBOOK_CONTENT_TEMPLATE_V1,
+  FACEBOOK_CONTENT_TEMPLATE_V2,
+} from "@/adapters/ai/prompt-store/templates/facebook-content";
 
-export const BUILT_IN_TEMPLATES: readonly PromptTemplate[] = [FACEBOOK_CONTENT_TEMPLATE_V1];
+/** Retired versions stay listed: the catalog is also the audit trail. */
+export const BUILT_IN_TEMPLATES: readonly PromptTemplate[] = [
+  FACEBOOK_CONTENT_TEMPLATE_V1,
+  FACEBOOK_CONTENT_TEMPLATE_V2,
+];
 
 function keyOf(task: AITask, platform: string, tenantId: string | null): string {
   return `${tenantId ?? "*"}|${task}|${platform}`;

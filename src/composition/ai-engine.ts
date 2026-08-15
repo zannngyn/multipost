@@ -9,7 +9,10 @@ import {
   BUILT_IN_TEMPLATES,
   makeStaticPromptStore,
 } from "@/adapters/ai/prompt-store/static-prompt-store";
-import { makeCachedModelPolicyStore } from "@/adapters/ai/registry-store/cached-model-policy-store";
+import {
+  makeCachedModelPolicyStore,
+  type CachedModelPolicyStore,
+} from "@/adapters/ai/registry-store/cached-model-policy-store";
 import { makeYamlModelPolicyStore } from "@/adapters/ai/registry-store/yaml-model-policy-store";
 import { DrizzleAiModelPolicyOverrideRepo } from "@/adapters/db/ai-model-policy-override-repo.drizzle";
 import { makeDrizzleGenerationLog } from "@/adapters/db/ai-generation-log.drizzle";
@@ -20,7 +23,9 @@ import { makeContentEngine } from "@/core/ai/content-engine";
 import type {
   AIProviderAdapter,
   AIProviderName,
+  AITier,
   GenerationLog,
+  ModelPolicyOverrideRepo,
   ModelPolicyStore,
   PromptStore,
 } from "@/core/ports/ai";
@@ -76,6 +81,62 @@ function makeAiCache(deps: AiWiringDeps): { cache: AiCache | undefined; close: (
   };
 }
 
+/**
+ * Short, stable label for the env tier swap, used as the Redis cache variant.
+ * "default" when nothing is overridden, so the common deployment keeps a
+ * readable key. Order is fixed, not insertion order, so the same settings always
+ * produce the same label.
+ */
+export function tierModelsVariant(tierModels: Partial<Record<AITier, string>>): string {
+  const parts = (["cheap", "mid", "top"] as const)
+    .map((tier) => [tier, tierModels[tier]?.trim()] as const)
+    .filter((entry): entry is readonly [AITier, string] => Boolean(entry[1]))
+    // ":" is the cache key separator; a model key like "openai:gpt-4.1" would
+    // otherwise add segments and make the tenant-wide invalidation pattern
+    // depend on tenant ids never containing a variant-shaped substring.
+    .map(([tier, key]) => `${tier}=${key.replaceAll(":", "_")}`);
+
+  return parts.length > 0 ? parts.join(",") : "default";
+}
+
+/**
+ * YAML store + tenant overlay + Redis cache, built together.
+ *
+ * One function rather than two call sites on purpose: the tier swap has to reach
+ * BOTH — the YAML store (which model each tier resolves to) and the cache key
+ * (so another process's routing is never served back). Passing it to one and
+ * forgetting the other is precisely the bug that shipped on 15/08/2026, and
+ * splitting them again would let it return.
+ */
+export function makeAiPolicyStore(input: {
+  config: AiConfig;
+  clock: Clock;
+  logger: Logger;
+  cache?: AiCache;
+  overrides?: ModelPolicyOverrideRepo;
+}): CachedModelPolicyStore {
+  const tierModels: Partial<Record<AITier, string>> = {
+    cheap: input.config.AI_MODEL_CHEAP,
+    mid: input.config.AI_MODEL_MID,
+    top: input.config.AI_MODEL_TOP,
+  };
+
+  return makeCachedModelPolicyStore({
+    base: makeYamlModelPolicyStore({
+      filePath: input.config.AI_MODELS_CONFIG_PATH,
+      clock: input.clock,
+      logger: input.logger,
+      ttlMs: input.config.AI_REGISTRY_CACHE_TTL_MS,
+      tierModels,
+    }),
+    overrides: input.overrides,
+    cache: input.cache,
+    variant: tierModelsVariant(tierModels),
+    logger: input.logger,
+    ttlMs: input.config.AI_REGISTRY_CACHE_TTL_MS,
+  });
+}
+
 export interface AiStores {
   policies: ModelPolicyStore;
   prompts: PromptStore;
@@ -95,17 +156,12 @@ export function makeAiStores(deps: AiWiringDeps): AiStores {
   const promptRepo = new DrizzleAiPromptTemplateRepo(deps.db, deps.logger);
 
   return {
-    policies: makeCachedModelPolicyStore({
-      base: makeYamlModelPolicyStore({
-        filePath: config.AI_MODELS_CONFIG_PATH,
-        clock: deps.clock,
-        logger: deps.logger,
-        ttlMs: config.AI_REGISTRY_CACHE_TTL_MS,
-      }),
-      overrides: new DrizzleAiModelPolicyOverrideRepo(deps.db, deps.logger),
-      cache,
+    policies: makeAiPolicyStore({
+      config,
+      clock: deps.clock,
       logger: deps.logger,
-      ttlMs: config.AI_REGISTRY_CACHE_TTL_MS,
+      cache,
+      overrides: new DrizzleAiModelPolicyOverrideRepo(deps.db, deps.logger),
     }),
     prompts: makeDbPromptStore({
       repo: promptRepo,
