@@ -6,9 +6,10 @@ import type { Logger } from "@/core/ports/infra";
 import { mapGraphError, type GraphErrorBody } from "./graph-error-map";
 
 /**
- * Minimal Graph API transport: one POST, form-encoded, JSON back.
- * It owns every HTTP concern (timeout, status, error shape) so the publisher
- * above it reads like the business steps of E5.2.
+ * Minimal Graph API transport: a form-encoded POST (publishing) and a query
+ * GET (the connect flow of E5.1), JSON back. It owns every HTTP concern
+ * (timeout, status, error shape) so the publisher above it reads like the
+ * business steps of E5.2.
  *
  * VERSION — Graph API is versioned in the path (`/v23.0/{page-id}/photos`) and
  * a version is supported for ~2 years. It is configurable (META_GRAPH_VERSION)
@@ -66,7 +67,27 @@ export interface GraphAbsolutePostInput {
   readonly context?: Record<string, unknown>;
 }
 
+/**
+ * A GET on the Graph host. Used by the connect flow (E5.1): the OAuth token
+ * exchange and `/me/accounts` are both GET-only endpoints.
+ *
+ * A GET has no body, so every parameter — including credentials — travels in
+ * the query string. That is Meta's documented contract for these endpoints; the
+ * URL is therefore NEVER logged (only `path`), and callers must not put a token
+ * into `context` either.
+ */
+export interface GraphGetInput {
+  /** Path without version, e.g. "me/accounts" or "oauth/access_token". */
+  readonly path: string;
+  readonly params?: Readonly<Record<string, string>>;
+  /** Optional: the OAuth exchange authenticates with client_id + client_secret. */
+  readonly accessToken?: string;
+  /** Log-only context (tenant, step). NEVER a token. */
+  readonly context?: Record<string, unknown>;
+}
+
 export interface GraphClient {
+  get(input: GraphGetInput): Promise<Record<string, unknown>>;
   post(input: GraphPostInput): Promise<Record<string, unknown>>;
   postAbsolute(input: GraphAbsolutePostInput): Promise<Record<string, unknown>>;
 }
@@ -85,7 +106,155 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
     });
   }
 
+  /**
+   * Everything that happens AFTER an HTTP answer arrives: status, JSON, Meta's
+   * error envelope. One copy for every verb, so "a non-JSON body is not a
+   * success" cannot drift between the publish path and the connect path.
+   */
+  async function readAnswer(
+    response: Response,
+    options: {
+      readonly startedAt: number;
+      readonly context: Record<string, unknown>;
+      /** What the log lines call this request, e.g. "Graph request". */
+      readonly label: string;
+      /** The upload host answers an empty body on success; nothing else does. */
+      readonly lenientBody?: boolean;
+      /**
+       * Whether the first 200 bytes of a NON-JSON answer may be logged. False
+       * for every GET: a GET carries its credentials in the query string, and a
+       * proxy/WAF error page that echoes the request line would put an app
+       * secret or a token into the log forever.
+       */
+      readonly bodyPreview: boolean;
+    },
+  ): Promise<Record<string, unknown>> {
+    const durationMs = Date.now() - options.startedAt;
+    const rawText = await response.text();
+
+    let parsedBody: unknown = null;
+    try {
+      parsedBody = rawText.length > 0 ? JSON.parse(rawText) : options.lenientBody ? {} : null;
+    } catch (error) {
+      // HTML error page / truncated answer — never guess success from it.
+      const appError = mapGraphError({
+        httpStatus: response.status,
+        cause: error,
+        context: {
+          ...options.context,
+          ...(options.bodyPreview
+            ? { body_preview: rawText.slice(0, 200) }
+            : { body_preview_omitted: "credentials travel in this URL", body_bytes: rawText.length }),
+        },
+      });
+      logger.error(`${options.label} answered with a non-JSON body`, {
+        err: appError,
+        error_code: appError.code,
+        http_status: response.status,
+        duration_ms: durationMs,
+      });
+      throw appError;
+    }
+
+    const envelope = GraphErrorEnvelopeSchema.safeParse(parsedBody ?? {});
+    const graphError: GraphErrorBody | null = envelope.success ? (envelope.data.error ?? null) : null;
+
+    if (!response.ok || graphError) {
+      const appError = mapGraphError({
+        error: graphError,
+        httpStatus: response.status,
+        context: {
+          ...options.context,
+          // Meta's throttling header — the reason behind a rate-limit error.
+          business_use_case_usage: response.headers.get("x-business-use-case-usage"),
+        },
+      });
+      logger.error(`${options.label} returned an error`, {
+        err: appError,
+        error_code: appError.code,
+        http_status: response.status,
+        duration_ms: durationMs,
+      });
+      throw appError;
+    }
+
+    if (typeof parsedBody !== "object" || parsedBody === null || Array.isArray(parsedBody)) {
+      if (options.lenientBody) return {};
+      const appError = new AppError("META_ERROR", {
+        message: "Graph returned a body that is not a JSON object",
+        userMessage: "Facebook trả về dữ liệu không hợp lệ — không xác nhận được kết quả đăng.",
+        context: { ...options.context, http_status: response.status, retryable: false },
+      });
+      logger.error(`${options.label} returned an unusable body`, {
+        err: appError,
+        error_code: "META_ERROR",
+      });
+      throw appError;
+    }
+
+    logger.debug(`${options.label} ok`, {
+      ...options.context,
+      http_status: response.status,
+      duration_ms: durationMs,
+    });
+    return parsedBody as Record<string, unknown>;
+  }
+
   return {
+    async get(input: GraphGetInput): Promise<Record<string, unknown>> {
+      // --- Edge cases first ------------------------------------------------
+      const path = typeof input?.path === "string" ? input.path.replace(/^\/+/, "").trim() : "";
+      if (path.length === 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "Graph GET requires a path",
+          userMessage: "Thiếu thông tin kết nối tới Facebook — không gửi được yêu cầu.",
+          context: { ...(input?.context ?? {}), path: null },
+        });
+      }
+
+      const url = new URL(`${baseUrl}/${version}/${path}`);
+      for (const [key, value] of Object.entries(input.params ?? {})) {
+        if (value === undefined || value === null) continue;
+        url.searchParams.set(key, String(value));
+      }
+      const token = typeof input?.accessToken === "string" ? input.accessToken.trim() : "";
+      // A GET has no body: Meta's own contract puts the credential here. The
+      // full URL is never logged — only `path` reaches a log line.
+      if (token.length > 0) url.searchParams.set("access_token", token);
+
+      const startedAt = Date.now();
+      let response: Response;
+      try {
+        response = await doFetch(url.toString(), {
+          method: "GET",
+          headers: { accept: "application/json" },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        // Transport failure: no HTTP answer at all -> retryable META_ERROR.
+        const appError = mapGraphError({
+          cause: error,
+          context: { ...(input.context ?? {}), path, timeout_ms: timeoutMs },
+        });
+        logger.error("Graph request failed before an answer", {
+          err: appError,
+          error_code: appError.code,
+          path,
+          duration_ms: Date.now() - startedAt,
+        });
+        throw appError;
+      }
+
+      return readAnswer(response, {
+        startedAt,
+        label: "Graph request",
+        context: { ...(input.context ?? {}), path },
+        // GET puts the token (and, on the OAuth exchange, the app secret) in the
+        // URL: an echoed error page must never reach the log.
+        bodyPreview: false,
+      });
+    },
+
     async post(input: GraphPostInput): Promise<Record<string, unknown>> {
       // --- Edge cases first ------------------------------------------------
       const path = typeof input?.path === "string" ? input.path.replace(/^\/+/, "").trim() : "";
@@ -131,66 +300,14 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
         throw appError;
       }
 
-      const durationMs = Date.now() - startedAt;
-      const rawText = await response.text();
-      let parsedBody: unknown = null;
-      try {
-        parsedBody = rawText.length > 0 ? JSON.parse(rawText) : null;
-      } catch (error) {
-        // HTML error page / truncated answer — never guess success from it.
-        const appError = mapGraphError({
-          httpStatus: response.status,
-          cause: error,
-          context: {
-            ...(input.context ?? {}),
-            path,
-            body_preview: rawText.slice(0, 200),
-          },
-        });
-        logger.error("Graph answered with a non-JSON body", {
-          err: appError,
-          error_code: appError.code,
-          http_status: response.status,
-          duration_ms: durationMs,
-        });
-        throw appError;
-      }
-
-      const envelope = GraphErrorEnvelopeSchema.safeParse(parsedBody ?? {});
-      const graphError: GraphErrorBody | null = envelope.success ? (envelope.data.error ?? null) : null;
-
-      if (!response.ok || graphError) {
-        const appError = mapGraphError({
-          error: graphError,
-          httpStatus: response.status,
-          context: {
-            ...(input.context ?? {}),
-            path,
-            // Meta's throttling header — the reason behind a rate-limit error.
-            business_use_case_usage: response.headers.get("x-business-use-case-usage"),
-          },
-        });
-        logger.error("Graph returned an error", {
-          err: appError,
-          error_code: appError.code,
-          http_status: response.status,
-          duration_ms: durationMs,
-        });
-        throw appError;
-      }
-
-      if (typeof parsedBody !== "object" || parsedBody === null || Array.isArray(parsedBody)) {
-        const appError = new AppError("META_ERROR", {
-          message: "Graph returned a body that is not a JSON object",
-          userMessage: "Facebook trả về dữ liệu không hợp lệ — không xác nhận được kết quả đăng.",
-          context: { ...(input.context ?? {}), path, http_status: response.status, retryable: false },
-        });
-        logger.error("Graph returned an unusable body", { err: appError, error_code: "META_ERROR" });
-        throw appError;
-      }
-
-      logger.debug("Graph request ok", { path, http_status: response.status, duration_ms: durationMs });
-      return parsedBody as Record<string, unknown>;
+      return readAnswer(response, {
+        startedAt,
+        label: "Graph request",
+        context: { ...(input.context ?? {}), path },
+        // POST keeps its credentials in the form body, so an echoed error page
+        // is diagnostic rather than dangerous.
+        bodyPreview: true,
+      });
     },
 
     /**
@@ -229,46 +346,14 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
         throw appError;
       }
 
-      const durationMs = Date.now() - startedAt;
-      const rawText = await response.text();
-      let parsedBody: unknown = null;
-      try {
-        parsedBody = rawText.length > 0 ? JSON.parse(rawText) : {};
-      } catch (error) {
-        const appError = mapGraphError({
-          httpStatus: response.status,
-          cause: error,
-          context: { ...(input.context ?? {}), body_preview: rawText.slice(0, 200) },
-        });
-        logger.error("Graph upload answered with a non-JSON body", {
-          err: appError,
-          error_code: appError.code,
-          http_status: response.status,
-        });
-        throw appError;
-      }
-
-      const envelope = GraphErrorEnvelopeSchema.safeParse(parsedBody ?? {});
-      const graphError: GraphErrorBody | null = envelope.success ? (envelope.data.error ?? null) : null;
-      if (!response.ok || graphError) {
-        const appError = mapGraphError({
-          error: graphError,
-          httpStatus: response.status,
-          context: { ...(input.context ?? {}) },
-        });
-        logger.error("Graph upload returned an error", {
-          err: appError,
-          error_code: appError.code,
-          http_status: response.status,
-          duration_ms: durationMs,
-        });
-        throw appError;
-      }
-
-      logger.debug("Graph upload ok", { http_status: response.status, duration_ms: durationMs });
-      return typeof parsedBody === "object" && parsedBody !== null && !Array.isArray(parsedBody)
-        ? (parsedBody as Record<string, unknown>)
-        : {};
+      return readAnswer(response, {
+        startedAt,
+        label: "Graph upload",
+        context: { ...(input.context ?? {}) },
+        lenientBody: true,
+        // Credentials are in the Authorization header, not in the URL.
+        bodyPreview: true,
+      });
     },
   };
 }

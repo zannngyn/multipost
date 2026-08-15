@@ -12,6 +12,8 @@ import type {
 } from "@/core/ports/post-job-repo";
 import type { ChannelConfigRepo } from "@/core/ports/publisher";
 
+import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
+
 import {
   DEFAULT_OVERDUE_QUEUED_MS,
   DEFAULT_PUBLISHING_STALE_MS,
@@ -184,6 +186,7 @@ const CHANNELS: ChannelConfigRepo = {
   findChannel: async () => null,
   listChannels: async () => [],
   getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 }),
+  ...channelWriteStubs(),
 };
 
 function harness(repoOptions: RepoOptions = {}, queueOptions: { present?: boolean; enqueueFails?: boolean } = {}) {
@@ -365,6 +368,7 @@ describe("reapPostJobs — overdue scheduled jobs", () => {
         reads += 1;
         return { spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 };
       },
+      ...channelWriteStubs(),
     };
     const repo = makeRepo({
       overdue: [

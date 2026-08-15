@@ -7,6 +7,8 @@ import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo, RescheduleJobInput } from "@/core/ports/post-job-repo";
 import type { ChannelConfigRepo } from "@/core/ports/publisher";
 
+import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
+
 import { makeReschedulePostJob } from "./reschedule-post-job";
 
 /** E8.4 "đổi giờ": what may move, in which order, and what happens on failure. */
@@ -143,6 +145,7 @@ const CHANNELS: ChannelConfigRepo = {
   findChannel: async () => null,
   listChannels: async () => [],
   getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 }),
+  ...channelWriteStubs(),
 };
 
 function harness(

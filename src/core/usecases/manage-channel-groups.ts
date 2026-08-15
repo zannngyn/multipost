@@ -70,7 +70,14 @@ export interface ManageChannelGroups {
 }
 
 export function makeManageChannelGroups(deps: ManageChannelGroupsDeps): ManageChannelGroups {
-  /** Rejects any channel id the tenant does not own — the whole point of E7.6. */
+  /**
+   * Rejects any channel id the tenant cannot actually publish to — the whole
+   * point of E7.6. Two different answers on purpose:
+   *   - the tenant never had this channel  -> "không tồn tại"
+   *   - the tenant HAS it but switched off -> "đang tắt"
+   * Telling an operator their Page "does not exist" when they only turned it off
+   * sends them looking for a data problem that is not there.
+   */
   async function assertChannelsExist(
     tenantId: string,
     channelIds: readonly string[],
@@ -81,17 +88,33 @@ export function makeManageChannelGroups(deps: ManageChannelGroupsDeps): ManageCh
       channelIds,
       known.map((channel) => channel.channelId),
     );
-    if (unknown.length === 0) return;
+
+    if (unknown.length > 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: `Channel group references channels the tenant does not have: ${unknown.join(", ")}`,
+        userMessage: `Nhóm kênh chứa kênh không tồn tại trong đơn vị: ${unknown.join(", ")}.`,
+        context: {
+          ...context,
+          tenant_id: tenantId,
+          reason: "UNKNOWN_CHANNEL_ID",
+          unknown_channels: unknown,
+          known_channels: known.map((channel) => channel.channelId),
+        },
+      });
+    }
+
+    const byId = new Map(known.map((channel) => [channel.channelId, channel]));
+    const disabled = channelIds.filter((channelId) => byId.get(channelId)?.status !== "active");
+    if (disabled.length === 0) return;
 
     throw new AppError("INVALID_INPUT", {
-      message: `Channel group references channels the tenant does not have: ${unknown.join(", ")}`,
-      userMessage: `Nhóm kênh chứa kênh không tồn tại trong đơn vị: ${unknown.join(", ")}.`,
+      message: `Channel group references disabled channels: ${disabled.join(", ")}`,
+      userMessage: `Nhóm kênh chứa kênh đang tắt: ${disabled.join(", ")}. Hãy bật kênh hoặc bỏ khỏi nhóm.`,
       context: {
         ...context,
         tenant_id: tenantId,
-        reason: "UNKNOWN_CHANNEL_ID",
-        unknown_channels: unknown,
-        known_channels: known.map((channel) => channel.channelId),
+        reason: "CHANNEL_DISABLED",
+        disabled_channels: disabled,
       },
     });
   }

@@ -203,12 +203,32 @@ describe("config helpers — the contract every repo follows", () => {
     ["apiKey", true],
     ["api_key", true],
     ["password", true],
+    ["userAccessToken", true],
     ["pageId", false],
     ["driveFolderId", false],
     ["spreadsheetId", false],
     ["sheetName", false],
+    // Metadata ABOUT a credential is not a credential: encrypting an ISO date
+    // buys nothing, and reporting it as a plaintext secret is a false alarm
+    // that trains the operator to ignore the real ones.
+    ["tokenExpiresAt", false],
+    ["token_expires_at", false],
+    ["refreshTokenExpiresAt", false],
   ])("classifies %s as secret=%s by NAME", (name, expected) => {
     expect(isSecretFieldName(name)).toBe(expected);
+  });
+
+  it("leaves an expiry date readable while still sealing the token beside it", () => {
+    const b = box();
+    const config = { accessToken: TOKEN, tokenExpiresAt: "2026-10-01T00:00:00.000Z" };
+
+    const sealed = sealConfigSecrets(config, b);
+
+    expect(isSealedSecret(sealed.accessToken)).toBe(true);
+    expect(sealed.tokenExpiresAt).toBe("2026-10-01T00:00:00.000Z");
+    // ...and the date must not be reported as a leaked credential.
+    expect(findPlaintextSecretFields(sealed)).toEqual([]);
+    expect(openConfigSecrets(sealed, b)).toEqual(config);
   });
 
   it("seals only the secret-looking fields and leaves the rest readable", () => {

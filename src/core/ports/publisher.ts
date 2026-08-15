@@ -107,12 +107,136 @@ export const DEFAULT_PUBLISH_SETTINGS: PublishSettings = {
   maxAttempts: 3,
 };
 
+/**
+ * One channel as the connect flow found it on the platform (E5.1).
+ * `accessToken` is a SECRET: the repo seals it before it reaches the database,
+ * and no layer above ever logs it.
+ */
+export interface ChannelUpsert {
+  readonly channelId: string;
+  readonly platform: ChannelPlatform;
+  readonly name: string;
+  readonly externalId: string;
+  readonly accessToken: string;
+  /** Null when the platform gives no expiry (a Page token from a long-lived user token). */
+  readonly tokenExpiresAt: Date | null;
+}
+
+export interface UpsertChannelsInput {
+  readonly tenantId: string;
+  readonly channels: readonly ChannelUpsert[];
+  /**
+   * The USER token that listed these channels, kept (sealed) so "làm mới danh
+   * sách" works without pasting it again. Omit to leave the stored one alone.
+   */
+  readonly userAccessToken?: string | null;
+  readonly actorEmail?: string | null;
+  readonly actorUserId?: string | null;
+}
+
+export interface UpsertChannelsResult {
+  /** channelIds that did not exist before. */
+  readonly added: readonly string[];
+  /** channelIds whose name/token were refreshed. */
+  readonly updated: readonly string[];
+}
+
+export interface SetChannelStatusInput {
+  readonly tenantId: string;
+  readonly channelId: string;
+  readonly status: ChannelStatus;
+  readonly actorEmail?: string | null;
+  readonly actorUserId?: string | null;
+}
+
+export interface RemoveChannelInput {
+  readonly tenantId: string;
+  readonly channelId: string;
+  readonly actorEmail?: string | null;
+  readonly actorUserId?: string | null;
+}
+
 export interface ChannelConfigRepo {
   /** Null when the tenant has no such channel (-> CHANNEL_NOT_CONFIGURED). */
   findChannel(tenantId: string, channelId: string): Promise<ChannelConfig | null>;
   listChannels(tenantId: string): Promise<readonly ChannelConfig[]>;
   /** Falls back to DEFAULT_PUBLISH_SETTINGS when the tenant set nothing. */
   getPublishSettings(tenantId: string): Promise<PublishSettings>;
+
+  /**
+   * Writes what the connect flow found (E5.1). Contract for every implementer:
+   * - one transaction, read-modify-write of the provider row + an audit row;
+   * - a channel that already exists keeps its `status` (never re-enable a
+   *   channel an operator switched off) and gets a fresh name/token;
+   * - a channel that is new is stored ACTIVE (the operator picks channels per
+   *   post, so a manual "bật" step would only be a dead click);
+   * - a channel the tenant has but the platform did not list is left untouched
+   *   — a partial listing must not delete channels;
+   * - `accessToken`/`userAccessToken` are sealed before they are written, and
+   *   never appear in a log, an AppError context or a return value;
+   * - an empty `channels` list is AppError('INVALID_INPUT'), not a silent no-op.
+   */
+  upsertChannels(input: UpsertChannelsInput): Promise<UpsertChannelsResult>;
+
+  /**
+   * The stored USER token of the tenant, or null when nothing was ever saved.
+   * Only the connect flow calls it; the value must never leave the server.
+   */
+  findUserAccessToken(tenantId: string): Promise<string | null>;
+
+  /** Null when the tenant has no such channel (the caller reports "not found"). */
+  setChannelStatus(input: SetChannelStatusInput): Promise<ChannelConfig | null>;
+
+  /** False when nothing was removed — the caller reports "not found". */
+  removeChannel(input: RemoveChannelInput): Promise<boolean>;
+}
+
+/** One account (Facebook Page) as the platform reports it during a connect. */
+export interface RemoteChannelAccount {
+  /** Platform-side account id (Facebook Page id). */
+  readonly externalId: string;
+  readonly name: string;
+  readonly accessToken: string;
+  readonly tokenExpiresAt: Date | null;
+}
+
+export interface ListRemoteChannelsResult {
+  readonly accounts: readonly RemoteChannelAccount[];
+  /** Accounts listed WITHOUT a usable token — ids only, so the log can name them. */
+  readonly skipped: readonly string[];
+}
+
+export interface UserAccessToken {
+  readonly userAccessToken: string;
+  readonly expiresAt: Date | null;
+  /**
+   * False when the token was used as handed over (no app secret configured, so
+   * no long-lived exchange). The caller warns: Page tokens then live as long as
+   * the user token does.
+   */
+  readonly extended: boolean;
+}
+
+/**
+ * The connect side of a platform (E5.1): the OAuth dance, and "which accounts
+ * does this token manage". Separate from ChannelPublisher on purpose —
+ * publishing happens in the worker, connecting happens in a browser round trip.
+ *
+ * Contract for every implementer:
+ * - every platform response is parsed through a schema before it is trusted;
+ * - paging is followed to the END (an account with 30 Pages must not lose 5);
+ * - failures are AppError('TOKEN_EXPIRED'|'META_ERROR'|'CHANNEL_NOT_CONFIGURED')
+ *   with a Vietnamese `userMessage` naming what the operator must do;
+ * - tokens never enter a log or an AppError context.
+ */
+export interface ChannelConnectClient {
+  /** Where the browser is sent to grant access. `state` is the CSRF nonce. */
+  buildAuthorizeUrl(input: { readonly state: string }): string;
+  /** OAuth `code` -> user token (long-lived when the app secret is configured). */
+  exchangeCodeForUserToken(input: { readonly code: string }): Promise<UserAccessToken>;
+  /** Extends a token the operator pasted; returns it unchanged without a secret. */
+  extendUserToken(input: { readonly userAccessToken: string }): Promise<UserAccessToken>;
+  listAccounts(input: { readonly userAccessToken: string }): Promise<ListRemoteChannelsResult>;
 }
 
 /**

@@ -156,8 +156,22 @@ export function isSealedSecret(value: unknown): boolean {
  */
 const SECRET_FIELD_PATTERN = /(token|secret|password|passwd|credential|api[_-]?key|private[_-]?key)/i;
 
+/**
+ * ...except a field that only DESCRIBES a credential. `tokenExpiresAt` is an
+ * ISO date: encrypting it costs a round trip for nothing, and — worse — an old
+ * unsealed row made `findPlaintextSecretFields` shout "unencrypted secret:
+ * channels[0].tokenExpiresAt" about a date. A warning that cries wolf teaches
+ * the operator to skip the one that matters.
+ *
+ * Suffix-anchored on purpose: `accessToken`, `refreshToken`, `userAccessToken`
+ * are untouched — only `*ExpiresAt` / `*_expires_at` names are excluded.
+ */
+const CREDENTIAL_METADATA_PATTERN = /expires_?at$/i;
+
 export function isSecretFieldName(name: unknown): boolean {
-  return typeof name === "string" && SECRET_FIELD_PATTERN.test(name);
+  if (typeof name !== "string") return false;
+  if (CREDENTIAL_METADATA_PATTERN.test(name)) return false;
+  return SECRET_FIELD_PATTERN.test(name);
 }
 
 /** Depth cap: config blobs are shallow; a cycle must not hang a request. */

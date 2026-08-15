@@ -200,7 +200,7 @@ export function PublishPanel({ wizard }: { wizard: ComposeWizard }) {
         {groupItems.length > 0 ? (
           <p className="text-muted-foreground text-xs">
             Đã chọn {selectedIds.length} kênh.{" "}
-            <Link href="/channels" className="underline underline-offset-4">
+            <Link href="/channels/groups" className="underline underline-offset-4">
               Quản lý nhóm kênh
             </Link>
           </p>

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   ChannelGroupFormSchema,
-  formatChannelIds,
-  parseChannelIds,
+  MAX_CHANNELS_PER_GROUP,
+  uniqueChannelIds,
 } from "./channel-group.schema";
 
 /**
@@ -12,50 +12,78 @@ import {
  * post batch with zero channels, i.e. a click that does nothing silently.
  */
 
-describe("parseChannelIds", () => {
-  it("returns nothing for blank input", () => {
-    expect(parseChannelIds("")).toEqual([]);
-    expect(parseChannelIds("   \n , \n ")).toEqual([]);
-    expect(parseChannelIds(undefined as never)).toEqual([]);
+describe("uniqueChannelIds", () => {
+  it("keeps the first occurrence and the ticking order", () => {
+    expect(uniqueChannelIds(["b", "a", "b", "c", "a"])).toEqual(["b", "a", "c"]);
   });
 
-  it("splits on newlines and commas, trims and drops duplicates", () => {
-    expect(parseChannelIds(" facebook , page-2\nfacebook\n\npage-3 ")).toEqual([
-      "facebook",
-      "page-2",
-      "page-3",
-    ]);
-  });
-
-  it("round-trips with the formatter used to prefill the edit form", () => {
-    const ids = ["facebook", "page-2"];
-    expect(parseChannelIds(formatChannelIds(ids))).toEqual(ids);
+  it("survives an empty list", () => {
+    expect(uniqueChannelIds([])).toEqual([]);
   });
 });
 
 describe("ChannelGroupFormSchema", () => {
   it("refuses a group without a name", () => {
-    const parsed = ChannelGroupFormSchema.safeParse({ name: "  ", channelIdsText: "facebook" });
+    const parsed = ChannelGroupFormSchema.safeParse({ name: "  ", channelIds: ["ch-1"] });
     expect(parsed.success).toBe(false);
   });
 
-  it("refuses a group whose channel list is only separators", () => {
-    const parsed = ChannelGroupFormSchema.safeParse({ name: "Nhóm A", channelIdsText: " , , " });
+  it("refuses a group with no channel ticked", () => {
+    const parsed = ChannelGroupFormSchema.safeParse({ name: "Nhóm A", channelIds: [] });
+    expect(parsed.success).toBe(false);
+    expect(parsed.success === false && parsed.error.issues[0]?.message).toBe(
+      "Nhóm kênh phải có ít nhất một kênh.",
+    );
+  });
+
+  it("refuses a channel id that is an empty string", () => {
+    // A blank value can only come from a broken option, never from a real tick.
+    const parsed = ChannelGroupFormSchema.safeParse({ name: "Nhóm A", channelIds: [""] });
     expect(parsed.success).toBe(false);
   });
 
   it("refuses more channels than the domain allows", () => {
-    const tooMany = Array.from({ length: 51 }, (_, index) => `page-${index}`).join("\n");
-    const parsed = ChannelGroupFormSchema.safeParse({ name: "Nhóm A", channelIdsText: tooMany });
+    const tooMany = Array.from({ length: MAX_CHANNELS_PER_GROUP + 1 }, (_, i) => `page-${i}`);
+    const parsed = ChannelGroupFormSchema.safeParse({ name: "Nhóm A", channelIds: tooMany });
     expect(parsed.success).toBe(false);
+    expect(parsed.success === false && parsed.error.issues[0]?.message).toBe(
+      `Một nhóm kênh chỉ chứa tối đa ${MAX_CHANNELS_PER_GROUP} kênh.`,
+    );
   });
 
-  it("accepts a normal group", () => {
+  it("drops a repeated channel instead of fanning out to it twice", () => {
+    const parsed = ChannelGroupFormSchema.safeParse({
+      name: "Nhóm A",
+      channelIds: ["ch-1", "ch-2", "ch-1"],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.channelIds).toEqual(["ch-1", "ch-2"]);
+  });
+
+  it("counts duplicates once against the maximum", () => {
+    // 50 distinct + one repeat is still 50 channels, not 51.
+    const atLimit = Array.from({ length: MAX_CHANNELS_PER_GROUP }, (_, i) => `page-${i}`);
+    const parsed = ChannelGroupFormSchema.safeParse({
+      name: "Nhóm A",
+      channelIds: [...atLimit, "page-0"],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.channelIds).toHaveLength(MAX_CHANNELS_PER_GROUP);
+  });
+
+  it("accepts exactly the maximum", () => {
+    const atLimit = Array.from({ length: MAX_CHANNELS_PER_GROUP }, (_, i) => `page-${i}`);
+    const parsed = ChannelGroupFormSchema.safeParse({ name: "Nhóm A", channelIds: atLimit });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts a normal group and trims the name", () => {
     const parsed = ChannelGroupFormSchema.safeParse({
       name: "  Fanpage chính ",
-      channelIdsText: "facebook\npage-2",
+      channelIds: ["ch-1", "ch-2"],
     });
     expect(parsed.success).toBe(true);
     expect(parsed.success && parsed.data.name).toBe("Fanpage chính");
+    expect(parsed.success && parsed.data.channelIds).toEqual(["ch-1", "ch-2"]);
   });
 });

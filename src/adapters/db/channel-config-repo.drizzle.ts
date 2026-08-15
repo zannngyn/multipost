@@ -1,4 +1,4 @@
-import { inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
@@ -7,19 +7,24 @@ import {
   DEFAULT_PUBLISH_SETTINGS,
   type ChannelConfig,
   type ChannelConfigRepo,
+  type ChannelUpsert,
   type PublishSettings,
+  type RemoveChannelInput,
+  type SetChannelStatusInput,
+  type UpsertChannelsInput,
+  type UpsertChannelsResult,
 } from "@/core/ports/publisher";
 
-import type { Database } from "./client";
+import type { Database, DbExecutor } from "./client";
 import { wrapDbError } from "./db-errors";
-import { tenantIntegrations } from "./schema";
+import { auditLogs, tenantIntegrations } from "./schema";
 import {
   findPlaintextSecretFields,
   openConfigSecrets,
   sealConfigSecrets,
   type SecretBox,
 } from "./secret-box";
-import { forTenant } from "./tenant-scope";
+import { forTenant, type TenantScopedDb } from "./tenant-scope";
 
 /**
  * Reads the tenant's publishing channels from `tenant_integration`
@@ -81,6 +86,12 @@ const ChannelProviderConfigSchema = z.object({
   retryBackoffMs: z.coerce.number().int().min(0).max(60 * 60_000).default(DEFAULT_PUBLISH_SETTINGS.retryBackoffMs),
   maxAttempts: z.coerce.number().int().min(1).max(5).default(DEFAULT_PUBLISH_SETTINGS.maxAttempts),
   channels: z.array(ChannelSchema).default([]),
+  /**
+   * E5.1 — the Facebook USER token that listed these Pages, kept so "làm mới
+   * danh sách" needs no second paste. Sealed like every other credential (the
+   * secret box keys off the field NAME), and it never leaves the server.
+   */
+  userAccessToken: z.string().trim().min(1).nullish(),
 });
 
 type ChannelProviderConfig = z.infer<typeof ChannelProviderConfigSchema>;
@@ -92,6 +103,15 @@ type ChannelProviderConfig = z.infer<typeof ChannelProviderConfigSchema>;
  */
 export function sealMetaConfig<T>(config: T, box: SecretBox): T {
   return sealConfigSecrets(config, box);
+}
+
+/**
+ * The advisory-lock key every writer of the meta row takes (see readForUpdate).
+ * Exported so a test can hold the SAME lock and prove the serialisation, rather
+ * than hoping two parallel calls interleave the wrong way.
+ */
+export function channelConfigLockKey(tenantId: string): string {
+  return `tenant_integration:${tenantId}:${META_PROVIDER}`;
 }
 
 export interface ChannelConfigRepoDeps {
@@ -196,6 +216,325 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
     };
   }
 
+  /**
+   * The stored USER token (E5.1). Opened like any other credential, returned to
+   * the connect usecase only — it must never reach a log or a response.
+   */
+  async findUserAccessToken(tenantId: string): Promise<string | null> {
+    const rows = await this.readRows(tenantId);
+    const meta = rows.find((row) => row.provider === META_PROVIDER);
+    if (!meta) return null;
+    const config = this.parse(tenantId, META_PROVIDER, meta.config);
+    return config.userAccessToken ?? null;
+  }
+
+  /**
+   * Writes what the connect flow found, in ONE transaction with its audit row.
+   *
+   * Concurrency: `readForUpdate` takes a per-(tenant, provider) advisory lock
+   * FIRST, so two operators connecting at the same moment queue instead of both
+   * merging into the same empty snapshot — including on the very first import,
+   * when there is no row for `FOR UPDATE` to lock. Channels the platform did not
+   * list are kept untouched: a partial listing is not a delete.
+   *
+   * A channel that already exists keeps its `status`: re-importing must not
+   * silently switch a Page an operator turned off back on. A NEW channel is
+   * stored active, because channels are picked per post anyway.
+   */
+  async upsertChannels(input: UpsertChannelsInput): Promise<UpsertChannelsResult> {
+    // --- Edge cases first ----------------------------------------------------
+    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const incoming = Array.isArray(input?.channels) ? input.channels : [];
+    if (incoming.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "upsertChannels requires at least one channel",
+        userMessage: "Không có kênh nào để lưu.",
+        context: { tenant_id: scope.tenantId, field: "channels", reason: "EMPTY" },
+      });
+    }
+
+    const seen = new Set<string>();
+    const normalised = incoming.map((channel) => {
+      const entry = normaliseUpsert(channel, scope.tenantId);
+      if (seen.has(entry.channelId)) {
+        throw new AppError("INVALID_INPUT", {
+          message: `upsertChannels received channel ${entry.channelId} twice`,
+          userMessage: `Danh sách kênh gửi lên bị trùng mã "${entry.channelId}".`,
+          context: {
+            tenant_id: scope.tenantId,
+            channel: entry.channelId,
+            reason: "DUPLICATE_CHANNEL_ID",
+          },
+        });
+      }
+      seen.add(entry.channelId);
+      return entry;
+    });
+
+    const userAccessToken =
+      typeof input?.userAccessToken === "string" ? input.userAccessToken.trim() : "";
+
+    try {
+      return await scope.db.transaction(async (tx) => {
+        const txScope = forTenant(tx, scope.tenantId);
+        const current = await this.readForUpdate(txScope);
+
+        const added: string[] = [];
+        const updated: string[] = [];
+        const channels = [...current.config.channels];
+
+        for (const entry of normalised) {
+          const index = channels.findIndex((channel) => channel.channelId === entry.channelId);
+          if (index < 0) {
+            channels.push({
+              ...entry,
+              // New Page: usable immediately (channels are picked per post).
+              status: "active",
+            });
+            added.push(entry.channelId);
+            continue;
+          }
+          channels[index] = {
+            ...channels[index],
+            platform: entry.platform,
+            name: entry.name,
+            externalId: entry.externalId,
+            accessToken: entry.accessToken,
+            tokenExpiresAt: entry.tokenExpiresAt,
+            // status deliberately preserved.
+          };
+          updated.push(entry.channelId);
+        }
+
+        const nextConfig = {
+          ...current.config,
+          channels,
+          userAccessToken: userAccessToken.length > 0
+            ? userAccessToken
+            : (current.config.userAccessToken ?? null),
+        };
+
+        /**
+         * ONLY a successful import clears an integration parked in `error`: we
+         * have just proved the new credentials work. `disabled` is a deliberate
+         * operator switch and stays. Every other write path (enable/disable one
+         * channel, remove one) keeps the row status untouched — turning off an
+         * unrelated Page must not erase a "token is dead" marker.
+         */
+        const nextStatus = current.status === "error" ? "active" : current.status;
+        if (nextStatus !== current.status) {
+          this.deps.logger.info("Meta integration re-activated by a successful import", {
+            tenant_id: scope.tenantId,
+            provider: META_PROVIDER,
+            previous_status: current.status,
+          });
+        }
+
+        await this.writeConfig(txScope, nextConfig, nextStatus);
+        await txScope.db.insert(auditLogs).values(
+          txScope.row({
+            actorUserId: input?.actorUserId ?? null,
+            action: "channel.imported",
+            entityType: "tenant_integration",
+            entityId: META_PROVIDER,
+            // Ids and counts only — never a token, never a name of a credential.
+            payload: { added, updated, actor_email: input?.actorEmail ?? null },
+          }),
+        );
+
+        return { added, updated };
+      });
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "channelConfig.upsertChannels",
+        tenant_id: scope.tenantId,
+        provider: META_PROVIDER,
+        field: "tenantId",
+      });
+    }
+  }
+
+  /** Null when the tenant has no such channel — the caller says "not found". */
+  async setChannelStatus(input: SetChannelStatusInput): Promise<ChannelConfig | null> {
+    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const channelId = typeof input?.channelId === "string" ? input.channelId.trim() : "";
+    const status = input?.status;
+    if (channelId.length === 0 || (status !== "active" && status !== "disabled")) {
+      throw new AppError("INVALID_INPUT", {
+        message: "setChannelStatus requires a channel id and a valid status",
+        userMessage: "Thiếu mã kênh hoặc trạng thái không hợp lệ.",
+        context: { tenant_id: scope.tenantId, channel: channelId || null, status: status ?? null },
+      });
+    }
+
+    let changed = false;
+    try {
+      changed = await scope.db.transaction(async (tx) => {
+        const txScope = forTenant(tx, scope.tenantId);
+        const current = await this.readForUpdate(txScope);
+        const index = current.config.channels.findIndex(
+          (channel) => channel.channelId === channelId,
+        );
+        if (index < 0) return false;
+
+        const previous = current.config.channels[index].status;
+        const channels = [...current.config.channels];
+        channels[index] = { ...channels[index], status };
+
+        await this.writeConfig(txScope, { ...current.config, channels }, current.status);
+        await txScope.db.insert(auditLogs).values(
+          txScope.row({
+            actorUserId: input?.actorUserId ?? null,
+            action: "channel.status_changed",
+            entityType: "tenant_integration",
+            entityId: META_PROVIDER,
+            payload: {
+              channel_id: channelId,
+              old: previous,
+              new: status,
+              actor_email: input?.actorEmail ?? null,
+            },
+          }),
+        );
+        return true;
+      });
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "channelConfig.setChannelStatus",
+        tenant_id: scope.tenantId,
+        channel: channelId,
+        provider: META_PROVIDER,
+        field: "tenantId",
+      });
+    }
+
+    if (!changed) return null;
+    // Read back through the normal path so the caller gets exactly what the
+    // publisher would get (opened token, integration status applied).
+    return this.findChannel(scope.tenantId, channelId);
+  }
+
+  /**
+   * Removes one channel from the provider row. Post jobs already created keep
+   * their own copy of the channel id: this is "stop offering this Page", not a
+   * retroactive delete.
+   */
+  async removeChannel(input: RemoveChannelInput): Promise<boolean> {
+    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const channelId = typeof input?.channelId === "string" ? input.channelId.trim() : "";
+    if (channelId.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "removeChannel requires a channel id",
+        userMessage: "Thiếu mã kênh.",
+        context: { tenant_id: scope.tenantId, field: "channelId" },
+      });
+    }
+
+    try {
+      return await scope.db.transaction(async (tx) => {
+        const txScope = forTenant(tx, scope.tenantId);
+        const current = await this.readForUpdate(txScope);
+        const channels = current.config.channels.filter(
+          (channel) => channel.channelId !== channelId,
+        );
+        if (channels.length === current.config.channels.length) return false;
+
+        await this.writeConfig(txScope, { ...current.config, channels }, current.status);
+        await txScope.db.insert(auditLogs).values(
+          txScope.row({
+            actorUserId: input?.actorUserId ?? null,
+            action: "channel.removed",
+            entityType: "tenant_integration",
+            entityId: META_PROVIDER,
+            payload: { channel_id: channelId, actor_email: input?.actorEmail ?? null },
+          }),
+        );
+        return true;
+      });
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "channelConfig.removeChannel",
+        tenant_id: scope.tenantId,
+        channel: channelId,
+        provider: META_PROVIDER,
+        field: "tenantId",
+      });
+    }
+  }
+
+  /**
+   * Serialises writers, then returns the config OPENED — the same
+   * interpretation the read path uses.
+   *
+   * WHY AN ADVISORY LOCK AND NOT ONLY `FOR UPDATE`: on the FIRST import the meta
+   * row does not exist yet, and `SELECT ... FOR UPDATE` matching zero rows locks
+   * NOTHING. Two operators connecting at the same moment would then both read an
+   * empty config, and the second `ON CONFLICT DO UPDATE` would overwrite the
+   * first one's Pages — both requests reporting success. `pg_advisory_xact_lock`
+   * takes the lock on the (tenant, provider) PAIR, existing row or not, and is
+   * released when the transaction ends. `FOR UPDATE` stays as the row-level
+   * guard against any writer that does not take the advisory lock.
+   *
+   * Opening is not optional here: a sealed row only validates after it is
+   * opened. Refusing to rewrite a blob we cannot read is deliberate — merging
+   * into a half-read config is how a Page token gets dropped on the floor.
+   * `writeConfig` seals everything again.
+   */
+  private async readForUpdate(
+    txScope: TenantScopedDb<DbExecutor>,
+  ): Promise<{ config: ChannelProviderConfig; status: string }> {
+    // hashtext -> int4, widened to the bigint pg_advisory_xact_lock takes. A
+    // hash collision between two tenants costs one waiting write, nothing more.
+    await txScope.db.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${channelConfigLockKey(txScope.tenantId)}))`,
+    );
+
+    const rows = await txScope.db
+      .select({ config: tenantIntegrations.config, status: tenantIntegrations.status })
+      .from(tenantIntegrations)
+      .where(txScope.where(tenantIntegrations, eq(tenantIntegrations.provider, META_PROVIDER)))
+      .limit(1)
+      .for("update");
+
+    const row = rows[0];
+    if (!row) {
+      // No row yet: schema defaults ARE DEFAULT_PUBLISH_SETTINGS.
+      return { config: ChannelProviderConfigSchema.parse({}), status: "active" };
+    }
+
+    // The status is returned AS IT IS. Only a successful import may revive an
+    // integration parked in `error` (see upsertChannels): switching one channel
+    // off must not quietly clear a "token is dead" marker on the whole row.
+    const config = this.parse(txScope.tenantId, META_PROVIDER, row.config ?? {});
+    return { config, status: row.status };
+  }
+
+  /** Seals every credential, then upserts. The ONLY write of this blob. */
+  private async writeConfig(
+    txScope: TenantScopedDb<DbExecutor>,
+    config: ChannelProviderConfig,
+    status: string,
+  ): Promise<void> {
+    const sealed = sealMetaConfig(config, this.deps.box);
+    await txScope.db
+      .insert(tenantIntegrations)
+      .values(
+        txScope.row({
+          provider: META_PROVIDER,
+          config: sealed as unknown as Record<string, unknown>,
+          status: status as "active" | "disabled" | "error",
+        }),
+      )
+      .onConflictDoUpdate({
+        target: [tenantIntegrations.tenantId, tenantIntegrations.provider],
+        set: {
+          config: sealed as unknown as Record<string, unknown>,
+          status: status as "active" | "disabled" | "error",
+          updatedAt: new Date(),
+        },
+      });
+  }
+
   private async readRows(
     tenantId: string,
   ): Promise<Array<{ provider: string; config: Record<string, unknown>; status: string }>> {
@@ -273,4 +612,53 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
       },
     });
   }
+}
+
+// --- helpers ----------------------------------------------------------------
+
+type StoredChannel = z.infer<typeof ChannelSchema>;
+
+/**
+ * Validates one channel coming from the connect flow BEFORE it can touch the
+ * blob, and converts it to the stored shape (dates as ISO strings). A missing
+ * token here would be written as a channel that cannot publish, discovered only
+ * at the first post.
+ */
+function normaliseUpsert(
+  raw: ChannelUpsert,
+  tenantId: string,
+): Omit<StoredChannel, "status" | "tokenExpiresAt"> & { tokenExpiresAt: string | null } {
+  const channelId = str(raw?.channelId);
+  const name = str(raw?.name);
+  const externalId = str(raw?.externalId);
+  const accessToken = typeof raw?.accessToken === "string" ? raw.accessToken.trim() : "";
+  const platform = raw?.platform === "tiktok" ? "tiktok" : "facebook";
+
+  const missing = [
+    channelId.length === 0 ? "channelId" : null,
+    name.length === 0 ? "name" : null,
+    externalId.length === 0 ? "externalId" : null,
+    accessToken.length === 0 ? "accessToken" : null,
+  ].filter((field): field is string => field !== null);
+
+  if (missing.length > 0) {
+    throw new AppError("INVALID_INPUT", {
+      message: `A channel to upsert is missing ${missing.join(", ")}`,
+      userMessage: "Dữ liệu kênh nhận từ Facebook không đầy đủ — không lưu kênh này.",
+      // Field NAMES only: one of them is a token.
+      context: { tenant_id: tenantId, channel: channelId || null, missing },
+    });
+  }
+
+  const expiresAt = raw?.tokenExpiresAt ?? null;
+  const tokenExpiresAt =
+    expiresAt instanceof Date && Number.isFinite(expiresAt.getTime())
+      ? expiresAt.toISOString()
+      : null;
+
+  return { channelId, platform, name, externalId, accessToken, tokenExpiresAt };
+}
+
+function str(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }

@@ -10,6 +10,8 @@ import type {
   PostJobRepo,
 } from "@/core/ports/post-job-repo";
 import type { ChannelConfigRepo } from "@/core/ports/publisher";
+
+import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
@@ -176,6 +178,7 @@ const CHANNELS: ChannelConfigRepo = {
   findChannel: async () => null,
   listChannels: async () => [],
   getPublishSettings: async () => ({ spacingMs: 60_000, retryBackoffMs: 1_000, maxAttempts: 3 }),
+  ...channelWriteStubs(),
 };
 
 /** app_user lookup: the audit trail's "who pressed chạy lại?". */

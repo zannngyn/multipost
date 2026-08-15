@@ -10,6 +10,7 @@ import {
   PenLine,
   Radio,
   ScrollText,
+  Share2,
   Sparkles,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -35,6 +36,7 @@ const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "/products": ListChecks,
   "/sync": FolderSync,
   "/channels": Radio,
+  "/channels/groups": Share2,
   "/prompts": Sparkles,
 };
 
@@ -59,7 +61,7 @@ export function AppSideNav({ footer }: { footer: ReactNode }) {
               // section lit while one is open, so the operator does not lose
               // track of where they came from.
               isSelected={
-                isNavItemActive(pathname, item.href) ||
+                isNavItemActive(pathname, item.href, { exact: item.isExact }) ||
                 (item.href === "/jobs" && isNavItemActive(pathname, "/batches"))
               }
             />
