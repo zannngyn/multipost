@@ -404,14 +404,27 @@ export function makeTenantSecretBox(logger: Logger, env?: EnvRecord): SecretBox 
   });
 }
 
-/** Drive byte cache (E3.6). TTL is configured in hours; the store thinks in ms. */
-function makeMediaCache(logger: Logger, env?: EnvRecord): MediaByteCache {
+/**
+ * Drive byte cache (E3.6). TTL is configured in hours; the store thinks in ms.
+ *
+ * Returns the hours ALONGSIDE the store because the sweep needs the very same
+ * number: two readings of the config are two chances to drift, and a sweep on a
+ * different TTL either deletes entries the store still serves or keeps files
+ * long past what was configured. One parse, one number, both callers.
+ */
+function makeMediaCache(
+  logger: Logger,
+  env?: EnvRecord,
+): { cache: MediaByteCache; ttlHours: number } {
   const config = loadMediaCacheConfig(env);
-  return makeLocalMediaCache({
-    root: config.MEDIA_CACHE_ROOT,
-    ttlMs: config.MEDIA_CACHE_TTL_HOURS * 60 * 60 * 1000,
-    logger,
-  });
+  return {
+    cache: makeLocalMediaCache({
+      root: config.MEDIA_CACHE_ROOT,
+      ttlMs: config.MEDIA_CACHE_TTL_HOURS * 60 * 60 * 1000,
+      logger,
+    }),
+    ttlHours: config.MEDIA_CACHE_TTL_HOURS,
+  };
 }
 
 /** HMAC for signed media URLs; MEDIA_SIGNING_SECRET is read on first signature. */
@@ -448,7 +461,12 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   // E3.6 — read-through cache in front of Drive. Cheap to build (a path and a
   // TTL, no connection), so like the blob store it needs no lazy wrapper; both
   // of its variables have working defaults, so no deployment must set them.
-  const mediaCache = overrides.mediaCache ?? makeMediaCache(deps.logger);
+  // The sweep below reuses `mediaCacheTtlHours` from this ONE parse. A test that
+  // overrides the store keeps these hours: the port exposes no TTL to read back,
+  // and a wrong number in a test is louder than a silently divergent sweep.
+  const builtMediaCache = makeMediaCache(deps.logger);
+  const mediaCache = overrides.mediaCache ?? builtMediaCache.cache;
+  const mediaCacheTtlHours = builtMediaCache.ttlHours;
   const mediaSign = makeLazyMediaSigner();
   /**
    * Read on FIRST USE, not here: a web/worker process must boot without
@@ -512,9 +530,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     }),
     cleanupMediaCache: makeCleanupMediaCache({
       cache: mediaCache,
-      // The SAME hours the adapter serves by: a sweep on its own constant would
-      // delete entries the cache still considers fresh, or keep ones it does not.
-      ttlHours: loadMediaCacheConfig().MEDIA_CACHE_TTL_HOURS,
+      // The SAME hours the adapter serves by — same parse, not a second read.
+      ttlHours: mediaCacheTtlHours,
       clock: deps.clock,
       logger: deps.logger,
     }),
