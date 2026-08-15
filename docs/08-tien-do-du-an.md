@@ -60,7 +60,7 @@ Số liệu lấy lúc cập nhật, chạy trên `dev` @ `94da4ed`:
 
 | Epic | Trạng thái | Bằng chứng |
 |---|---|---|
-| E9 Chế độ B: tự tải file lên | 🟡 **Code xong, chưa UAT** | Xem mục 3.1 bên dưới |
+| E9 Chế độ B: tự tải file lên | ✅ **Code xong, chưa UAT** | Xem mục 3.1 bên dưới |
 | E11 Vận hành & giám sát | 🟡 | E11.1 có màn `/jobs` + `/api/posts/jobs/[postJobId]/retry`; E11.3 có `worker/reaper-schedule.ts`. **E11.2 kênh cảnh báo và E11.4 sao lưu + thử khôi phục: chưa có** |
 | E10 phần còn lại | 🟡 | Đang có track redesign Astryx riêng (mục 5) |
 | E12 đầy đủ | ⬜ | Xem dòng E12 ở Phase 1 |
@@ -73,7 +73,7 @@ Nhánh `worktree-e9-upload`. `pnpm verify` exit 0 (typecheck · lint · depcruis
 | Mục | Trạng thái | Bằng chứng |
 |---|---|---|
 | E9.1 Kéo-thả tải lên, lưu tạm, kiểm kiểu + dung lượng | ✅ | usecase `upload-media.ts`, route `POST /api/posts/uploads`, parse ở `app/api/_lib/read-upload-form.ts`, port `core/ports/media-blob-store.ts`, adapter `adapters/media/local-blob-store.ts` |
-| E9.2 Sắp xếp lại thứ tự, chỉ định ảnh bìa | 🟡 | `ui/components/compose/UploadPanel.tsx` + `upload-queue.ts`. **Thả file từ máy vào vùng drop: có.** **Kéo-thả để đổi thứ tự: chưa** — làm bằng nút (↑ ↓ / Đặt làm bìa), có a11y đầy đủ. Xem B-4 |
+| E9.2 Sắp xếp lại thứ tự, chỉ định ảnh bìa | ✅ | `ui/components/compose/UploadPanel.tsx` + `upload-queue.ts`. Thả file từ máy vào vùng drop; kéo từng dòng để đổi thứ tự bằng `dnd-kit`; kèm đường bàn phím (`KeyboardSensor` + nút ↑ ↓ / Đặt làm bìa) |
 | E9.3 Dùng chung tồn kho / AI / đăng bài | ✅ | `compose-post.ts` thêm bộ lọc `source`; `get-media-content.ts` định tuyến theo `origin` nên file tải lên đi qua đúng cầu media ký HMAC mà Facebook dùng |
 | E9.4 Dọn file tạm | ✅ | usecase `cleanup-uploads.ts`, job `worker/jobs/cleanup-uploads-job.ts`, chạy mỗi giờ, xoá byte trước rồi mới xoá row |
 
@@ -98,7 +98,7 @@ Nhánh `worktree-e9-upload`. `pnpm verify` exit 0 (typecheck · lint · depcruis
 | B-1 | **Google Sheets API chưa bật** ở project `54146412168` (`mysp-multipost-505408`). Lỗi `SHEET_ERROR` khi đồng bộ | Chặn E0.5, và chặn cứng E12.3/E12.4 — không chạy được đầu-cuối trên dữ liệu thật | Bật Sheets API **và** Drive API trong Google Cloud Console, chờ vài phút, đồng bộ lại. Sau đó kiểm service account đã được share folder Drive + sheet "Hàng thiết kế 2026" |
 | B-2 | Container `mysp-postgres` chạy ở host port **5433** (tạo tay bằng `docker run`), nhưng service `postgres` trong `docker-compose.yml` **không publish port nào ra host** | `docker compose up` sạch sẽ không dựng lại được môi trường dev đang chạy; `.env` phải sửa tay | Thêm `ports: ["5433:5432"]` vào service `postgres`, cập nhật `.env.example` cho khớp |
 | B-3 | 9 câu quyết định nghiệp vụ còn treo (C1, C2, C5, C3, C4, D1, D2, E1, E3 — xem `CLAUDE.md`) | Code đang dùng giá trị tạm, đánh dấu `// PENDING(<mã câu>)` | PM chốt với shop |
-| B-4 | E9.2 chưa có **kéo-thả để đổi thứ tự** (thả file vào vùng drop thì có). Skill `web-drag-drop-reorder` cấm tự viết vì rất dễ sót a11y, thư viện làm đúng là `dnd-kit`, mà `CLAUDE.md` cấm tự thêm dependency | Brief mục 8 ghi "kéo-thả để sắp xếp lại thứ tự". Hiện đáp ứng bằng nút ↑ ↓ + "Đặt làm bìa", dùng được bằng bàn phím | PM quyết: cho thêm `dnd-kit` (~10 KB gz) hay chấp nhận sắp xếp bằng nút |
+| ~~B-4~~ | ~~E9.2 chưa có kéo-thả đổi thứ tự~~ | **Đã gỡ 15/08/2026**: PM duyệt thêm `dnd-kit`, E9.2 xong | — |
 
 ## 5. Track song song: redesign UI trên Astryx
 
@@ -120,9 +120,9 @@ Xếp theo thứ tự gỡ được nhiều rủi ro nhất:
 2. **E12.3 + E12.4** — chạy thật đầu-cuối gồm cả ca lỗi, rồi UAT theo 15 tiêu chí
    ở brief mục 10. Đây là việc còn thiếu lớn nhất của Phase 1, và cả Phase 2 cũng
    chưa được chạy thật lần nào.
-3. **Chốt B-4** (kéo-thả đổi thứ tự) để đóng nốt E9.2.
-4. **E11.2 + E11.4** — kênh cảnh báo và sao lưu + thử khôi phục. E11.4 ghi rõ
+3. **E11.2 + E11.4** — kênh cảnh báo và sao lưu + thử khôi phục. E11.4 ghi rõ
    trong WBS là "thử khôi phục không được bỏ".
+4. **E13** — triển khai production, tài liệu vận hành, đào tạo.
 
 ## 7. Quy ước cập nhật file này
 
