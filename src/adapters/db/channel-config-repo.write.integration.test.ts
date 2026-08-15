@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AppError } from "@/core/domain/errors";
 import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 
-import { channelConfigLockKey, DrizzleChannelConfigRepo } from "./channel-config-repo.drizzle";
+import { DrizzleChannelConfigRepo, META_PROVIDER } from "./channel-config-repo.drizzle";
+import { integrationLockKey } from "./integration-lock";
 import { makeDbHandle } from "./client";
 import { auditLogs, tenantIntegrations, tenants } from "./schema";
 import { makeSecretBox } from "./secret-box";
@@ -414,7 +415,9 @@ describe.skipIf(!url)("DrizzleChannelConfigRepo — two first imports at once", 
 
     // Writer B: holds the same lock the repo takes, writes its Page, waits.
     const writerB = handle.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${channelConfigLockKey(tenantId)}))`);
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${integrationLockKey(tenantId, META_PROVIDER)}))`,
+      );
       await tx.insert(tenantIntegrations).values({
         tenantId,
         provider: "meta",

@@ -53,6 +53,17 @@ export type Channel = z.infer<typeof ChannelSchema>;
 export const ChannelListResponseSchema = z.object({
   tenantId: z.string().min(1),
   channels: z.array(ChannelSchema),
+  /**
+   * Whether the server holds the key it needs to SEAL a channel's credentials.
+   * Listing works without it, so this is the only way the screen can warn
+   * before someone pastes a token into a write that is going to fail.
+   *
+   * Optional, defaulting to TRUE on purpose: a server that predates the flag
+   * is not a broken server, and the screen must not lock itself out over a
+   * field that simply is not there yet. A field that IS present but not a
+   * boolean is still a contract break and fails like any other.
+   */
+  secretsConfigured: z.boolean().default(true),
 });
 export type ChannelListResponse = z.infer<typeof ChannelListResponseSchema>;
 

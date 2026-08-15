@@ -218,6 +218,32 @@ describe("config helpers — the contract every repo follows", () => {
     expect(isSecretFieldName(name)).toBe(expected);
   });
 
+  it("opens a sealed value under ANY field name (the envelope decides, not the name)", () => {
+    const b = box();
+    // Written by an older build whose naming rule sealed this field; today's
+    // rule would not. It must still open — an envelope that survives into the
+    // schema takes the whole provider row down with it.
+    const stored = {
+      tokenExpiresAt: b.sealSecret("2026-10-01T00:00:00.000Z"),
+      note: b.sealSecret("nothing secret about this name"),
+      nested: { legacyTokenUtc: b.sealSecret("2026-10-01T00:00:00.000Z") },
+    };
+
+    expect(openConfigSecrets(stored, b)).toEqual({
+      tokenExpiresAt: "2026-10-01T00:00:00.000Z",
+      note: "nothing secret about this name",
+      nested: { legacyTokenUtc: "2026-10-01T00:00:00.000Z" },
+    });
+  });
+
+  it("does not re-seal a value it just opened under a non-secret name", () => {
+    const b = box();
+    const opened = openConfigSecrets({ note: b.sealSecret("plain") }, b);
+    // Sealing still follows the NAME, so the round trip is not symmetric — and
+    // that is fine: the value is readable either way.
+    expect(sealConfigSecrets(opened, b)).toEqual({ note: "plain" });
+  });
+
   it("leaves an expiry date readable while still sealing the token beside it", () => {
     const b = box();
     const config = { accessToken: TOKEN, tokenExpiresAt: "2026-10-01T00:00:00.000Z" };

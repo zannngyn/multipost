@@ -10,7 +10,9 @@ import { AppError } from "@/core/domain/errors";
  *
  * This route never answers JSON: whatever happens, the browser must land on the
  * channels screen with a message it can show. Three exits:
- *   ?connected=<n>            — n Pages saved
+ *   ?connected=<n>&new=<n>&skipped=<n>
+ *                             — n Pages saved, of which `new` are new, and
+ *                               `skipped` were listed without a usable token
  *   ?connect=cancelled        — the operator pressed "Huỷ" (a normal outcome,
  *                               Facebook says error=access_denied; NOT a 500)
  *   ?connect=error&reason=... — anything else, with the AppError code as reason
@@ -72,9 +74,13 @@ export async function GET(request: Request): Promise<Response> {
       actorEmail: session?.email ?? null,
     });
 
+    // `skipped` travels too: a Page Facebook listed without a token was NOT
+    // saved, and "vì sao Page X không có trong danh sách" must be answerable on
+    // this door as well, not only on the paste-a-token one (business rule 5).
     return redirect(
       url,
-      `${SCREEN}?connected=${result.imported + result.updated}&new=${result.imported}`,
+      `${SCREEN}?connected=${result.imported + result.updated}&new=${result.imported}` +
+        `&skipped=${result.skipped}`,
       secure,
     );
   } catch (error) {

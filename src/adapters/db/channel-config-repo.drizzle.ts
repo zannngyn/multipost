@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
@@ -17,6 +17,7 @@ import {
 
 import type { Database, DbExecutor } from "./client";
 import { wrapDbError } from "./db-errors";
+import { lockIntegrationRow } from "./integration-lock";
 import { auditLogs, tenantIntegrations } from "./schema";
 import {
   findPlaintextSecretFields,
@@ -105,14 +106,6 @@ export function sealMetaConfig<T>(config: T, box: SecretBox): T {
   return sealConfigSecrets(config, box);
 }
 
-/**
- * The advisory-lock key every writer of the meta row takes (see readForUpdate).
- * Exported so a test can hold the SAME lock and prove the serialisation, rather
- * than hoping two parallel calls interleave the wrong way.
- */
-export function channelConfigLockKey(tenantId: string): string {
-  return `tenant_integration:${tenantId}:${META_PROVIDER}`;
-}
 
 export interface ChannelConfigRepoDeps {
   /** Same box (same key + envelope) as every other repo touching this blob. */
@@ -468,12 +461,8 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
    *
    * WHY AN ADVISORY LOCK AND NOT ONLY `FOR UPDATE`: on the FIRST import the meta
    * row does not exist yet, and `SELECT ... FOR UPDATE` matching zero rows locks
-   * NOTHING. Two operators connecting at the same moment would then both read an
-   * empty config, and the second `ON CONFLICT DO UPDATE` would overwrite the
-   * first one's Pages — both requests reporting success. `pg_advisory_xact_lock`
-   * takes the lock on the (tenant, provider) PAIR, existing row or not, and is
-   * released when the transaction ends. `FOR UPDATE` stays as the row-level
-   * guard against any writer that does not take the advisory lock.
+   * NOTHING (see adapters/db/integration-lock for the full story). `FOR UPDATE`
+   * stays as the row-level guard against any writer that skips the advisory one.
    *
    * Opening is not optional here: a sealed row only validates after it is
    * opened. Refusing to rewrite a blob we cannot read is deliberate — merging
@@ -483,11 +472,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
   private async readForUpdate(
     txScope: TenantScopedDb<DbExecutor>,
   ): Promise<{ config: ChannelProviderConfig; status: string }> {
-    // hashtext -> int4, widened to the bigint pg_advisory_xact_lock takes. A
-    // hash collision between two tenants costs one waiting write, nothing more.
-    await txScope.db.execute(
-      sql`select pg_advisory_xact_lock(hashtext(${channelConfigLockKey(txScope.tenantId)}))`,
-    );
+    await lockIntegrationRow(txScope, META_PROVIDER);
 
     const rows = await txScope.db
       .select({ config: tenantIntegrations.config, status: tenantIntegrations.status })

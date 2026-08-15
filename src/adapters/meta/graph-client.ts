@@ -21,6 +21,19 @@ export const DEFAULT_GRAPH_VERSION = "v23.0";
 const DEFAULT_BASE_URL = "https://graph.facebook.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Hosts `postAbsolute` may send a Page token to.
+ *
+ * The URL it posts to comes from Graph's OWN ANSWER (`upload_url` of the Reels
+ * start phase), and the request carries `Authorization: OAuth <page token>`.
+ * Without this list, whoever can shape that answer picks where our token goes.
+ *
+ * Exactly one entry, on purpose: `rupload.facebook.com` is the only upload host
+ * this code has ever used (see REELS_UPLOAD_BASE_URL in facebook-publisher).
+ * Do NOT add hosts from memory — check Meta's docs, then add with a comment.
+ */
+export const ALLOWED_UPLOAD_HOSTS: readonly string[] = ["rupload.facebook.com"];
+
 /** Graph answers errors as { error: {...} } with an HTTP 4xx/5xx. */
 const GraphErrorEnvelopeSchema = z.object({
   error: z
@@ -59,6 +72,9 @@ export interface GraphPostInput {
  * A POST to an ABSOLUTE url that is not the Graph host — today only Meta's
  * upload host (`rupload.facebook.com`) used by the Reels flow, which takes its
  * parameters as HEADERS and carries no form body.
+ *
+ * The URL comes from Graph's answer, so it is checked against
+ * ALLOWED_UPLOAD_HOSTS before the Page token in `headers` is sent anywhere.
  */
 export interface GraphAbsolutePostInput {
   readonly url: string;
@@ -325,6 +341,33 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
         });
       }
 
+      // --- The token only ever leaves for a host we named ourselves ----------
+      const host = uploadHostOf(url);
+      if (!host || !ALLOWED_UPLOAD_HOSTS.includes(host)) {
+        const appError = new AppError("UPLOAD_HOST_NOT_ALLOWED", {
+          message: `Refused to send a Page token to ${host ?? "an unparsable host"}`,
+          userMessage:
+            "Facebook trả về địa chỉ tải lên lạ — đã dừng để không gửi token của Trang đi nơi khác.",
+          context: {
+            ...(input?.context ?? {}),
+            // The HOST, never the full URL: the path may carry an upload id.
+            host: host ?? null,
+            allowed_hosts: ALLOWED_UPLOAD_HOSTS,
+            reason: "UPLOAD_HOST_NOT_ALLOWED",
+            retryable: false,
+          },
+        });
+        // Logged here because this is where the error stops being about Graph
+        // and starts being about us refusing: it must be visible even if a
+        // caller decides to swallow it.
+        logger.error("Refused an upload URL outside the allowlist", {
+          err: appError,
+          error_code: appError.code,
+          host: host ?? null,
+        });
+        throw appError;
+      }
+
       const startedAt = Date.now();
       let response: Response;
       try {
@@ -351,9 +394,26 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
         label: "Graph upload",
         context: { ...(input.context ?? {}) },
         lenientBody: true,
-        // Credentials are in the Authorization header, not in the URL.
-        bodyPreview: true,
+        // The credential is in a header, and a proxy error page that echoes the
+        // request headers would put the Page token in the log with it.
+        bodyPreview: false,
       });
     },
   };
+}
+
+/**
+ * Lowercased hostname of an upload URL, or null when it does not parse.
+ * `new URL()` and not a regex: userinfo tricks like
+ * `https://rupload.facebook.com@evil.example/x` must resolve to `evil.example`,
+ * which a naive "contains rupload.facebook.com" check would happily accept.
+ */
+function uploadHostOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    // Unparsable is refused by the caller with the same error; there is nothing
+    // to log here that the refusal does not already say.
+    return null;
+  }
 }

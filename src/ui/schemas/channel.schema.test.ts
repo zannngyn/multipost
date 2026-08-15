@@ -82,6 +82,32 @@ describe("ChannelListResponseSchema", () => {
     ).toBe(false);
   });
 
+  it("assumes secrets ARE configured when the server does not say", () => {
+    // An older server that never learned the flag must not lock the screen.
+    const parsed = ChannelListResponseSchema.safeParse({ tenantId: "t-1", channels: [] });
+    expect(parsed.success && parsed.data.secretsConfigured).toBe(true);
+  });
+
+  it("carries `secretsConfigured: false` through untouched", () => {
+    const parsed = ChannelListResponseSchema.safeParse({
+      ...LIVE_LIST_PAYLOAD,
+      secretsConfigured: false,
+    });
+    expect(parsed.success && parsed.data.secretsConfigured).toBe(false);
+  });
+
+  it("refuses a non-boolean flag rather than guessing what it meant", () => {
+    expect(
+      ChannelListResponseSchema.safeParse({ tenantId: "t-1", channels: [], secretsConfigured: "no" })
+        .success,
+    ).toBe(false);
+    // "no" is truthy in JS — a lenient parse here would hide a broken server.
+    expect(
+      ChannelListResponseSchema.safeParse({ tenantId: "t-1", channels: [], secretsConfigured: null })
+        .success,
+    ).toBe(false);
+  });
+
   it("refuses a channel that leaks an access token field name", () => {
     // Not a security control — a canary. Unknown keys are stripped, so this
     // asserts the CONTRACT stays token-free rather than the transport.

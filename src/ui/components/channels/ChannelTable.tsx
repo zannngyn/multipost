@@ -4,6 +4,7 @@ import { Button, HStack, Stack, StatusDot, Table, Text, pixel, proportional } fr
 import type { TableColumn } from "@astryxdesign/core";
 import { useState } from "react";
 
+import { secretsNotConfiguredReason } from "@/ui/components/channels/channel-secrets";
 import {
   CHANNEL_PLATFORM_LABELS,
   CHANNEL_STATUS_LABELS,
@@ -37,17 +38,27 @@ function displayName(channel: Channel): string {
 export function ChannelTable({
   channels,
   busyChannelId,
+  areWritesBlocked,
   onSetStatus,
   onRemove,
 }: {
   channels: readonly Channel[];
   /** The row with a write in flight — its buttons show progress, not the page. */
   busyChannelId: string | null;
+  /** Server cannot seal credentials, so every write here would 400. */
+  areWritesBlocked: boolean;
   onSetStatus: (channelId: string, status: ChannelStatus) => void;
   onRemove: (channelId: string) => void;
 }) {
   // Which row is asking "gỡ thật chứ?". Pure view state, so it lives here.
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
+  /**
+   * Never a bare disabled button: Astryx keeps a control with a tooltip
+   * focusable (aria-disabled), so the reason is reachable by keyboard too. A
+   * dead control with no explanation is the thing this fix exists to avoid.
+   */
+  const blockedReason = areWritesBlocked ? secretsNotConfiguredReason() : undefined;
 
   const columns: TableColumn<ChannelRow>[] = [
     {
@@ -120,7 +131,8 @@ export function ChannelTable({
                 variant="destructive"
                 label={`Gỡ hẳn ${name}`}
                 isLoading={isBusy}
-                isDisabled={isBusy}
+                isDisabled={isBusy || areWritesBlocked}
+                tooltip={blockedReason}
                 onClick={() => onRemove(channel.channelId)}
               >
                 Gỡ hẳn
@@ -148,7 +160,8 @@ export function ChannelTable({
               variant="secondary"
               label={`${toggleLabel} kênh ${name}`}
               isLoading={isBusy}
-              isDisabled={isBusy}
+              isDisabled={isBusy || areWritesBlocked}
+              tooltip={blockedReason}
               onClick={() => onSetStatus(channel.channelId, nextStatus)}
             >
               {toggleLabel}
@@ -157,7 +170,8 @@ export function ChannelTable({
               size="sm"
               variant="ghost"
               label={`Gỡ kênh ${name}`}
-              isDisabled={isBusy}
+              isDisabled={isBusy || areWritesBlocked}
+              tooltip={blockedReason}
               onClick={() => setConfirmingId(channel.channelId)}
             >
               Gỡ

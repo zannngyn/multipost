@@ -20,6 +20,10 @@ import { useEffect, useRef, useState } from "react";
 import { ChannelConnectPanel } from "@/ui/components/channels/ChannelConnectPanel";
 import { ChannelTable } from "@/ui/components/channels/ChannelTable";
 import { ChannelTableSkeleton } from "@/ui/components/channels/ChannelTableSkeleton";
+import {
+  secretsNotConfiguredReason,
+  secretsNotConfiguredView,
+} from "@/ui/components/channels/channel-secrets";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { presentApiError, toApiError } from "@/ui/components/feedback/present-api-error";
 import { useChannels, useRemoveChannel, useSetChannelStatus } from "@/ui/hooks/useChannels";
@@ -100,6 +104,14 @@ export function ConnectedChannelsScreen() {
   const isFirstLoad = channels.isPending && channels.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
 
+  /**
+   * Reading channels never touches the encryption key, so a server missing it
+   * looks completely healthy here while every write returns 400. Until the
+   * answer says otherwise, assume it is fine — an older server that does not
+   * send the flag must not be treated as broken.
+   */
+  const areWritesBlocked = channels.data ? !channels.data.secretsConfigured : false;
+
   const busyChannelId = setStatus.isPending
     ? (setStatus.variables?.channelId ?? null)
     : remove.isPending
@@ -144,8 +156,20 @@ export function ConnectedChannelsScreen() {
               </Stack>
             ) : null}
 
+            {/* Before anything is typed, not after it fails: the whole point of
+                the flag is that this gap is invisible on the read path. */}
+            {areWritesBlocked ? (
+              <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+                <SecretsNotConfiguredBanner />
+              </Stack>
+            ) : null}
+
             <Stack direction="vertical" padding={4}>
-              <ChannelConnectPanel tenantId={tenantId} tokenInputRef={tokenInputRef} />
+              <ChannelConnectPanel
+                tenantId={tenantId}
+                tokenInputRef={tokenInputRef}
+                areWritesBlocked={areWritesBlocked}
+              />
             </Stack>
 
             <Divider />
@@ -183,6 +207,7 @@ export function ConnectedChannelsScreen() {
                     onRetry={() => void channels.refetch()}
                     items={items}
                     busyChannelId={busyChannelId}
+                    areWritesBlocked={areWritesBlocked}
                     onFocusTokenInput={() => tokenInputRef.current?.focus()}
                     onSetStatus={(channelId, status) => {
                       setStatus.reset();
@@ -200,6 +225,27 @@ export function ConnectedChannelsScreen() {
             </StackItem>
           </Stack>
         </LayoutContent>
+      }
+    />
+  );
+}
+
+/**
+ * Not dismissable: nothing on this screen can be saved until an admin acts, so
+ * hiding the reason would leave a row of dead buttons with no explanation
+ * (core-feedback-states: a serious message must not disappear on its own).
+ */
+function SecretsNotConfiguredBanner() {
+  const view = secretsNotConfiguredView();
+
+  return (
+    <Banner
+      status="warning"
+      title={view.title}
+      description={
+        view.hint
+          ? `Chưa lưu được kênh nào cho đơn vị này. ${view.description} ${view.hint}`
+          : `Chưa lưu được kênh nào cho đơn vị này. ${view.description}`
       }
     />
   );
@@ -264,6 +310,7 @@ function ChannelListBody({
   onRetry,
   items,
   busyChannelId,
+  areWritesBlocked,
   onFocusTokenInput,
   onSetStatus,
   onRemove,
@@ -275,6 +322,7 @@ function ChannelListBody({
   onRetry: () => void;
   items: readonly Channel[];
   busyChannelId: string | null;
+  areWritesBlocked: boolean;
   onFocusTokenInput: () => void;
   onSetStatus: (channelId: string, status: ChannelStatus) => void;
   onRemove: (channelId: string) => void;
@@ -293,6 +341,20 @@ function ChannelListBody({
 
   // --- Empty: the whole point of this screen for a new tenant ---------------
   if (items.length === 0) {
+    // Telling someone to paste a token while the box that receives it is dead
+    // would contradict the banner above. Same empty list, different next step.
+    if (areWritesBlocked) {
+      return (
+        <Stack direction="vertical" padding={4}>
+          <EmptyState
+            headingLevel={3}
+            title="Chưa kết nối Fanpage nào"
+            description={`Chưa thể kết nối Page cho tới khi máy chủ được cấu hình xong. ${secretsNotConfiguredReason()}`}
+          />
+        </Stack>
+      );
+    }
+
     return (
       <Stack direction="vertical" padding={4}>
         <EmptyState
@@ -333,6 +395,7 @@ function ChannelListBody({
         <ChannelTable
           channels={items}
           busyChannelId={busyChannelId}
+          areWritesBlocked={areWritesBlocked}
           onSetStatus={onSetStatus}
           onRemove={onRemove}
         />

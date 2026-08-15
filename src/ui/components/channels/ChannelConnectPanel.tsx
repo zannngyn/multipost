@@ -7,6 +7,7 @@ import type { RefObject } from "react";
 import { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
+import { secretsNotConfiguredReason } from "@/ui/components/channels/channel-secrets";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { useImportChannels, useRefreshChannels } from "@/ui/hooks/useChannels";
 import {
@@ -55,10 +56,17 @@ const TOKEN_HINT = `Token phải có đủ quyền: ${REQUIRED_TOKEN_SCOPES.join
 export function ChannelConnectPanel({
   tenantId,
   tokenInputRef,
+  areWritesBlocked,
 }: {
   tenantId: string;
   /** Lets the empty state send the operator straight into the token field. */
   tokenInputRef: RefObject<HTMLInputElement | null>;
+  /**
+   * Server has no encryption key, so the import cannot store anything. Better
+   * to stop the operator before they paste a secret than after 30 seconds of
+   * waiting — the read path gives no hint at all that this is broken.
+   */
+  areWritesBlocked: boolean;
 }) {
   const importChannels = useImportChannels(tenantId);
   const refresh = useRefreshChannels(tenantId);
@@ -83,6 +91,14 @@ export function ChannelConnectPanel({
 
   const fieldError = form.formState.errors.userAccessToken?.message;
   const isBusy = importChannels.isPending || refresh.isPending;
+
+  /**
+   * Every disabled control below carries this sentence. Astryx keeps a control
+   * with `disabledMessage`/`tooltip` focusable via aria-disabled, so a keyboard
+   * user reaches the reason too — a dead control that explains nothing is worse
+   * than one that fails loudly.
+   */
+  const blockedReason = areWritesBlocked ? secretsNotConfiguredReason() : undefined;
 
   function submitToken(values: ChannelImportFormValues) {
     importChannels.reset();
@@ -140,7 +156,8 @@ export function ChannelConnectPanel({
                 placeholder="EAAG…"
                 description={TOKEN_HINT}
                 isRequired
-                isDisabled={isBusy}
+                isDisabled={isBusy || areWritesBlocked}
+                disabledMessage={blockedReason}
                 status={fieldError ? { type: "error", message: fieldError } : undefined}
                 statusVariant="detached"
                 width="100%"
@@ -154,7 +171,8 @@ export function ChannelConnectPanel({
               variant="primary"
               label={importChannels.isPending ? "Đang lấy danh sách Page…" : "Lấy danh sách Page"}
               isLoading={importChannels.isPending}
-              isDisabled={refresh.isPending}
+              isDisabled={refresh.isPending || areWritesBlocked}
+              tooltip={blockedReason}
             />
 
             {/* Always offered, never gated on the number of channels: the real
@@ -168,7 +186,8 @@ export function ChannelConnectPanel({
               variant="secondary"
               label={refresh.isPending ? "Đang làm mới…" : "Làm mới danh sách Page"}
               isLoading={refresh.isPending}
-              isDisabled={importChannels.isPending}
+              isDisabled={importChannels.isPending || areWritesBlocked}
+              tooltip={blockedReason}
               onClick={() => {
                 importChannels.reset();
                 refresh.reset();
@@ -202,8 +221,15 @@ export function ChannelConnectPanel({
 
       <Stack direction="vertical" gap={1}>
         {/* A real anchor: /api/channels/connect answers 302 to Facebook, so this
-            must leave the app. Astryx Button cannot wrap an <a>. */}
-        <Link href={channelConnectHref(tenantId)} isStandalone>
+            must leave the app. Astryx Button cannot wrap an <a>.
+            Blocked too: the round trip ends in the same import, so letting it
+            run would send the operator to Facebook and back for nothing. */}
+        <Link
+          href={channelConnectHref(tenantId)}
+          isStandalone
+          isDisabled={areWritesBlocked}
+          tooltip={blockedReason}
+        >
           Đăng nhập bằng Facebook
         </Link>
         <Text type="supporting" color="secondary">

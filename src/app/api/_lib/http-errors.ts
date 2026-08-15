@@ -38,6 +38,8 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   PROMPT_NOT_FOUND: 500,
   META_ERROR: 502,
   TOKEN_EXPIRED: 401,
+  // The platform's answer was unusable, not the caller's request.
+  UPLOAD_HOST_NOT_ALLOWED: 502,
   CHANNEL_NOT_CONFIGURED: 409,
   DUPLICATE_POST_BLOCKED: 409,
   PUBLISH_FAILED: 502,
