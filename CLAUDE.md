@@ -12,6 +12,7 @@ Dự án nội bộ, SaaS-ready. Phase hiện tại: **Phase 1 — MVP Facebook*
 | `docs/05-data-profile.md` | Hiện trạng dữ liệu thật (Drive/Sheet) — đọc trước khi viết parser |
 | `docs/06-doi-chieu-brief-vs-plan.md` | Ma trận truy vết brief ↔ plan |
 | `docs/07-kien-truc-clean-architecture.md` | **Kiến trúc bắt buộc**: cấu trúc thư mục, luật phụ thuộc một chiều, khuôn port/usecase, FE 4 lớp |
+| `docs/08-tien-do-du-an.md` | **Tiến độ đã kiểm chứng** theo epic + việc đang bị chặn. Đọc trước khi hỏi "làm gì tiếp", cập nhật sau mỗi lần merge vào `dev` |
 | `docs/ai/` | **AI architecture ĐÃ DUYỆT** (ADR-001): gateway, registry, routing, validation, evaluation, cost |
 | `sample-data/` | Dữ liệu test thật: listing 5.500 file, snapshot Sheet, 5 mã mẫu |
 
