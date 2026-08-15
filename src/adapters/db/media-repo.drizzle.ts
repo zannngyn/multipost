@@ -1,8 +1,8 @@
-import { asc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, eq, ne, sql } from "drizzle-orm";
 
 import { AppError } from "@/core/domain/errors";
 import { MEDIA_KINDS, type MediaKind } from "@/core/domain/media-file-name";
-import type { MediaAsset } from "@/core/domain/product";
+import { MEDIA_ORIGINS, type MediaAsset, type MediaOrigin } from "@/core/domain/product";
 import type { MediaAssetLookup } from "@/core/ports/drive-source";
 import type { MediaRepo } from "@/core/ports/product-repo";
 
@@ -24,8 +24,18 @@ function toDomain(row: MediaAssetRow): MediaAsset {
     });
   }
 
+  if (!(MEDIA_ORIGINS as readonly string[]).includes(row.origin)) {
+    throw new AppError("DB_ERROR", {
+      message: `Unknown media origin '${row.origin}' returned by the database`,
+      userMessage: "Dữ liệu ảnh/video không hợp lệ. Vui lòng chạy lại đồng bộ.",
+      context: { drive_file_id: row.driveFileId, origin: row.origin },
+    });
+  }
+
   return {
     driveFileId: row.driveFileId,
+    origin: row.origin as MediaOrigin,
+    storageKey: row.storageKey,
     fileName: row.fileName,
     productCode: row.productCode,
     color: row.color,
@@ -147,6 +157,10 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
           modifiedTime: toModifiedDate(asset.modifiedTime),
           warnings: [...asset.warnings],
           needsReview: asset.needsReview,
+          // upsertMany is the SYNC writer; an uploaded asset is registered by
+          // registerUpload instead and must never be stamped with a run id.
+          origin: "drive" as const,
+          storageKey: null,
           lastSyncRunId: syncRunId,
         }),
       );
@@ -192,12 +206,25 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
     return written;
   }
 
+  /**
+   * Removes the Drive rows the latest sync did not see.
+   *
+   * Scoped to `origin = 'drive'` on purpose: an uploaded row (E9) belongs to no
+   * sync run at all, so an unscoped "everything not from this run" would delete
+   * every file the operator uploaded the moment the next Drive sync ran, and
+   * strand its bytes in the blob store.
+   */
   async deleteStale(tenantId: string, syncRunId: string): Promise<number> {
     const scope = forTenant(this.db, tenantId);
     try {
       const deleted = await scope.db
         .delete(mediaAssets)
-        .where(scope.where(mediaAssets, ne(mediaAssets.lastSyncRunId, syncRunId)))
+        .where(
+          scope.where(
+            mediaAssets,
+            and(eq(mediaAssets.origin, "drive"), ne(mediaAssets.lastSyncRunId, syncRunId)),
+          ),
+        )
         .returning({ id: mediaAssets.id });
       return deleted.length;
     } catch (error) {

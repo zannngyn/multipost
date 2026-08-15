@@ -33,6 +33,8 @@ const sign: SignatureFn = (payload) => createHmac("sha256", SECRET).update(paylo
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
   return {
     driveFileId: ASSET,
+    origin: "drive",
+    storageKey: null,
     fileName: "MGKVX6310-KEM (1).jpg",
     productCode: "MGKVX6310",
     color: "KEM",

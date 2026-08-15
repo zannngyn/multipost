@@ -42,6 +42,8 @@ function product(overrides: Partial<Product> = {}): Product {
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
   return {
     driveFileId: `id-${overrides.sequence ?? 0}-${overrides.color ?? "KEM"}`,
+    origin: "drive",
+    storageKey: null,
     fileName: `MGKVX6310-KEM (${overrides.sequence ?? 0}).jpg`,
     productCode: "MGKVX6310",
     color: "KEM",
