@@ -1,5 +1,6 @@
 import { AppError } from "@/core/domain/errors";
 import type { MediaKind } from "@/core/domain/media-file-name";
+import { sniffMediaMimeType } from "@/core/domain/media-sniff";
 import type { MediaAsset } from "@/core/domain/product";
 import { isTenantId } from "@/core/domain/tenant";
 import {
@@ -116,7 +117,27 @@ export function makeUploadMedia(deps: UploadMediaDeps) {
         continue;
       }
 
-      usable.push({ file: candidate, kind: verdict.kind, mimeType: verdict.mimeType });
+      // The declared type got the file this far; the CONTENT decides whether it
+      // is stored. `File.type` and the extension are both attacker-controlled,
+      // and these bytes end up behind a public URL (CLAUDE.md rule 2).
+      const actual = sniffMediaMimeType(candidate.bytes);
+      if (!actual || actual !== verdict.mimeType) {
+        log.warn("Upload rejected a file whose content does not match its declared type", {
+          error_code: "INVALID_INPUT",
+          reason: "CONTENT_TYPE_MISMATCH",
+          file_name: candidate.fileName,
+          declared_mime: verdict.mimeType,
+          sniffed_mime: actual,
+        });
+        rejected.push({
+          fileName: candidate.fileName,
+          reason: "UNSUPPORTED_TYPE",
+          userMessage: `Nội dung file "${candidate.fileName}" không khớp định dạng khai báo — file bị từ chối.`,
+        });
+        continue;
+      }
+
+      usable.push({ file: candidate, kind: verdict.kind, mimeType: actual });
     }
 
     if (usable.length === 0) {

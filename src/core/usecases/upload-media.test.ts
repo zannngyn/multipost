@@ -22,11 +22,26 @@ function makeLogger(): Logger {
   return logger;
 }
 
+/** Real signature bytes: the usecase sniffs content, not the declared type. */
+function jpegBytes(): Uint8Array {
+  const buffer = new Uint8Array(16);
+  buffer.set([0xff, 0xd8, 0xff, 0xe0], 0);
+  return buffer;
+}
+
+function mp4Bytes(): Uint8Array {
+  const buffer = new Uint8Array(16);
+  buffer.set([0x66, 0x74, 0x79, 0x70], 4); // "ftyp"
+  buffer.set(new TextEncoder().encode("isom"), 8);
+  return buffer;
+}
+
 function file(patch: Partial<UploadedFile> = {}): UploadedFile {
+  const mimeType = patch.mimeType ?? "image/jpeg";
   return {
     fileName: "anh.jpg",
-    mimeType: "image/jpeg",
-    bytes: new Uint8Array([1, 2, 3]),
+    mimeType,
+    bytes: mimeType.startsWith("video/") ? mp4Bytes() : jpegBytes(),
     ...patch,
   };
 }
@@ -102,7 +117,7 @@ describe("uploadMedia — per-file rejection", () => {
       files: [
         file({ fileName: "ok.jpg" }),
         file({ fileName: "tai-lieu.pdf", mimeType: "application/pdf" }),
-        file({ fileName: "to.jpg", bytes: new Uint8Array(1), mimeType: "image/jpeg" }),
+        file({ fileName: "ok-2.jpg" }),
       ],
     });
 
@@ -132,6 +147,41 @@ describe("uploadMedia — per-file rejection", () => {
     expect(result.rejected[0]).toMatchObject({ fileName: "huge.jpg", reason: "TOO_LARGE" });
     // Only the good file reached the store.
     expect(put).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a file whose content does not match its declared type", async () => {
+    // The whole point of sniffing: a browser's File.type and the extension are
+    // both attacker-controlled, and these bytes end up behind a public URL.
+    const { uploadMedia, put } = harness();
+
+    const result = await uploadMedia({
+      tenantId: TENANT,
+      productCode: "MG1",
+      files: [
+        file({ fileName: "ok.jpg" }),
+        // Claims to be a photo; the bytes are an ELF binary.
+        file({
+          fileName: "malware.jpg",
+          mimeType: "image/jpeg",
+          bytes: new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3, 4, 5, 6, 7, 8]),
+        }),
+      ],
+    });
+
+    expect(result.accepted.map((asset) => asset.fileName)).toEqual(["ok.jpg"]);
+    expect(result.rejected[0]).toMatchObject({ fileName: "malware.jpg" });
+    expect(put).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an mp4 renamed to .jpg and declared as a photo", async () => {
+    const { uploadMedia } = harness();
+    await expect(
+      uploadMedia({
+        tenantId: TENANT,
+        productCode: "MG1",
+        files: [file({ fileName: "clip.jpg", mimeType: "image/jpeg", bytes: mp4Bytes() })],
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
   it("throws when every file was refused — there is no post to compose", async () => {
