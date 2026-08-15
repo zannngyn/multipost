@@ -99,6 +99,31 @@ export function buildBaseAuthConfig(): NextAuthConfig {
     providers: [],
     callbacks: {
       /**
+       * Auth.js derives `session.user` from the token's e-mail and returns NO
+       * user at all when it is missing — the middleware then treats a perfectly
+       * valid cookie as "not signed in" and bounces the operator back to
+       * /signin. Facebook does not guarantee an address (accounts registered
+       * with a phone number have none), so one is synthesised from the identity
+       * key that IS guaranteed: the provider user id.
+       *
+       * It is deliberately unroutable (.local) and unmistakably internal — this
+       * is a name for the audit trail, never something to send mail to. Access
+       * is still decided by the allow-list in `signIn`, never by this address.
+       */
+      jwt({ token, account, profile }) {
+        if (account?.provider !== "facebook") return token;
+
+        if (!token.email) {
+          const email = typeof profile?.email === "string" ? profile.email.trim() : "";
+          token.email = email.length > 0 ? email : `fb-${account.providerAccountId}@facebook.local`;
+        }
+        if (!token.name && typeof profile?.name === "string") {
+          token.name = profile.name;
+        }
+        return token;
+      },
+
+      /**
        * The only authorisation gate in E1: verified Google e-mail + allow-listed
        * domain. Returning `false` makes Auth.js redirect to `pages.error`.
        */
