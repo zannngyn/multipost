@@ -16,13 +16,15 @@ import type { MediaByteCache } from "@/core/ports/media-byte-cache";
  * stricter rules of the more dangerous half.
  */
 
-/** Matches MEDIA_CACHE_TTL_HOURS; the caller normally passes the configured one. */
-export const DEFAULT_MEDIA_CACHE_TTL_HOURS = 72;
 /** Removals per pass. A backlog drains across the hourly ticks. */
 export const DEFAULT_MEDIA_CACHE_EVICT_LIMIT = 5_000;
 
 export interface CleanupMediaCacheInput {
-  /** How long an entry may live after it was written. */
+  /**
+   * Per-tick override, for an operator draining the volume by hand. Absent on
+   * every scheduled tick, which is the case that matters: those use the SAME
+   * configured TTL the store serves with.
+   */
   readonly ttlHours?: number;
   readonly limit?: number;
 }
@@ -38,14 +40,31 @@ export interface CleanupMediaCacheDeps {
   cache: MediaByteCache;
   clock: Clock;
   logger: Logger;
+  /**
+   * MEDIA_CACHE_TTL_HOURS, the SAME value the store serves reads with. Required,
+   * not defaulted: a default here silently becomes a second TTL, and the two
+   * disagreeing means either the sweep deletes entries the store would still
+   * serve, or the volume keeps files long past what was configured.
+   */
+  ttlHours: number;
 }
 
 export function makeCleanupMediaCache(deps: CleanupMediaCacheDeps) {
+  // Wiring error, at wiring time: a sweep with no usable TTL would compute its
+  // cutoff from NaN.
+  const configuredTtlHours = positive(deps?.ttlHours);
+  if (configuredTtlHours === null) {
+    throw new AppError("INVALID_INPUT", {
+      message: "cleanupMediaCache needs a positive ttlHours (MEDIA_CACHE_TTL_HOURS)",
+      context: { reason: "INVALID_CACHE_TTL" },
+    });
+  }
+
   return async function cleanupMediaCache(
     input: CleanupMediaCacheInput = {},
   ): Promise<CleanupMediaCacheResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const ttlHours = positive(input?.ttlHours) ?? DEFAULT_MEDIA_CACHE_TTL_HOURS;
+    const ttlHours = positive(input?.ttlHours) ?? configuredTtlHours;
     const limit = positiveInt(input?.limit) ?? DEFAULT_MEDIA_CACHE_EVICT_LIMIT;
 
     const log = deps.logger.child({ component: "media-cache-cleanup" });

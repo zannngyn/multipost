@@ -512,6 +512,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     }),
     cleanupMediaCache: makeCleanupMediaCache({
       cache: mediaCache,
+      // The SAME hours the adapter serves by: a sweep on its own constant would
+      // delete entries the cache still considers fresh, or keep ones it does not.
+      ttlHours: loadMediaCacheConfig().MEDIA_CACHE_TTL_HOURS,
       clock: deps.clock,
       logger: deps.logger,
     }),

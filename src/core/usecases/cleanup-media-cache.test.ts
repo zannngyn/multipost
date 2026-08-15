@@ -8,13 +8,12 @@ import type {
   MediaByteCache,
 } from "@/core/ports/media-byte-cache";
 
-import {
-  DEFAULT_MEDIA_CACHE_TTL_HOURS,
-  makeCleanupMediaCache,
-} from "./cleanup-media-cache";
+import { makeCleanupMediaCache } from "./cleanup-media-cache";
 
 const NOW = Date.UTC(2026, 7, 15, 9, 0, 0);
 const HOUR = 60 * 60 * 1000;
+/** Deliberately not 72: a sweep falling back to the old constant must show up. */
+const CONFIGURED_TTL_HOURS = 168;
 
 function makeLogger(): Logger & { lines: Array<{ message: string; context?: unknown }> } {
   const lines: Array<{ message: string; context?: unknown }> = [];
@@ -32,7 +31,13 @@ function makeLogger(): Logger & { lines: Array<{ message: string; context?: unkn
   return logger;
 }
 
-function harness(options: { result?: EvictCachedMediaResult; evictError?: unknown } = {}) {
+function harness(
+  options: {
+    result?: EvictCachedMediaResult;
+    evictError?: unknown;
+    ttlHours?: number;
+  } = {},
+) {
   const logger = makeLogger();
   const clock: Clock = { now: () => new Date(NOW), nowMs: () => NOW };
   const evictOlderThan = vi.fn(
@@ -49,22 +54,58 @@ function harness(options: { result?: EvictCachedMediaResult; evictError?: unknow
   return {
     logger,
     evictOlderThan,
-    cleanupMediaCache: makeCleanupMediaCache({ cache, clock, logger }),
+    cleanupMediaCache: makeCleanupMediaCache({
+      cache,
+      clock,
+      logger,
+      ttlHours: options.ttlHours ?? CONFIGURED_TTL_HOURS,
+    }),
   };
 }
 
 describe("cleanupMediaCache — edge cases first", () => {
-  it("falls back to the default TTL for a missing or nonsensical one", async () => {
+  it("refuses to be built without a usable TTL instead of inventing one", () => {
+    const cache: MediaByteCache = {
+      get: async () => null,
+      put: async () => undefined,
+      evictOlderThan: async () => ({ scanned: 0, removed: 0, failed: 0 }),
+    };
+    const deps = {
+      cache,
+      clock: { now: () => new Date(NOW), nowMs: () => NOW } as Clock,
+      logger: makeLogger(),
+    };
+
+    for (const ttlHours of [0, -5, Number.NaN, undefined, "72"]) {
+      try {
+        makeCleanupMediaCache({ ...deps, ttlHours: ttlHours as number });
+        throw new Error(`expected makeCleanupMediaCache to reject ttlHours=${String(ttlHours)}`);
+      } catch (error) {
+        expect(AppError.is(error)).toBe(true);
+        expect((error as AppError).code).toBe("INVALID_INPUT");
+      }
+    }
+  });
+
+  it("sweeps with the CONFIGURED TTL, never with a constant of its own", async () => {
+    // The M1 regression: the store served MEDIA_CACHE_TTL_HOURS while the sweep
+    // deleted on a hardcoded 72h, so one of the two was always wrong.
     const { cleanupMediaCache, evictOlderThan } = harness();
 
     for (const input of [undefined, {}, { ttlHours: 0 }, { ttlHours: -5 }, { ttlHours: NaN }]) {
       await cleanupMediaCache(input);
     }
 
-    const expected = new Date(NOW - DEFAULT_MEDIA_CACHE_TTL_HOURS * HOUR);
+    const expected = new Date(NOW - CONFIGURED_TTL_HOURS * HOUR);
     for (const call of evictOlderThan.mock.calls) {
       expect(call[0].olderThan).toEqual(expected);
     }
+  });
+
+  it("follows a re-configured TTL rather than the previous default", async () => {
+    const { cleanupMediaCache, evictOlderThan } = harness({ ttlHours: 24 });
+    await cleanupMediaCache();
+    expect(evictOlderThan.mock.calls[0][0].olderThan).toEqual(new Date(NOW - 24 * HOUR));
   });
 
   it("ignores a limit that is not a positive integer", async () => {

@@ -1,4 +1,16 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  lutimes,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -176,12 +188,33 @@ describe("localMediaCache — tenant isolation and traversal", () => {
     expect(await readFile(join(root, "elsewhere", "loot.txt"), "utf8")).toBe("loot");
   });
 
-  it("refuses to WRITE under an unsafe id instead of sanitising it", async () => {
-    for (const assetId of ["../escape", "a/b", "", "..", "with space"]) {
+  it("writes NOTHING for an id it cannot hold, and does not sanitise it", async () => {
+    // N1: a signed URL accepts ids this store will not (dots, up to 255 chars),
+    // so an uncacheable id is a measurable no-op, not an error on every fetch —
+    // it used to make the caller log a full AppError per request. The whitelist
+    // is unchanged: nothing is written, so traversal stays impossible.
+    for (const assetId of [
+      "../escape",
+      "a/b",
+      "..",
+      "with space",
+      "fixture.image.jpg", // valid per media-url, still not stored here
+      "x".repeat(200),
+    ]) {
+      await expect(
+        cache.put({ tenantId: TENANT_A, assetId, bytes: bytes("x"), mimeType: null }),
+      ).resolves.toBeUndefined();
+      expect(await cache.get({ tenantId: TENANT_A, assetId, maxBytes: 1024 })).toBeNull();
+    }
+    expect(await readdir(root)).toEqual([]); // not even a tenant directory
+
+    // An empty id and a non-string one are programming errors, and stay loud.
+    for (const assetId of ["", null as unknown as string, 7 as unknown as string]) {
       await expect(
         cache.put({ tenantId: TENANT_A, assetId, bytes: bytes("x"), mimeType: null }),
       ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     }
+    // So is an unsafe tenant id: it arrives from a verified signature as a UUID.
     await expect(
       cache.put({ tenantId: "../escape", assetId: ASSET, bytes: bytes("x"), mimeType: null }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
@@ -231,6 +264,137 @@ describe("localMediaCache — round trip", () => {
 
     const hit = await cache.get({ tenantId: TENANT_A, assetId: ASSET, maxBytes: 1024 });
     expect(hit!.bytes).toEqual(payload);
+  });
+});
+
+describe("localMediaCache — concurrent writers", () => {
+  /**
+   * The S1 regression, with real bytes through the real adapter.
+   *
+   * Meta fetches an album's photos in parallel and every retry refetches them, so
+   * two `put` calls for the SAME asset in the same millisecond is a normal event.
+   * With a clock-derived temp name both writers shared one path, interleaved
+   * their bytes and renamed the result into place — `get` then served the
+   * concatenation of two payloads (2000 bytes where each writer wrote 1000).
+   *
+   * The assertion is not "some payload came back": it is that the payload is
+   * EXACTLY one of the ones written, byte for byte.
+   */
+  it("never publishes a blend of two payloads written at the same instant", async () => {
+    const ROUNDS = 40;
+    const WRITERS = 4;
+    const SIZE = 1_000;
+
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const assetId = `race_${round}`;
+      // One distinct fill byte per writer, and a distinct length, so a blend is
+      // detectable both by size and by content.
+      const payloads = Array.from({ length: WRITERS }, (_unused, index) =>
+        new Uint8Array(SIZE + index).fill(65 + index),
+      );
+
+      const settled = await Promise.allSettled(
+        payloads.map((bytes) =>
+          cache.put({ tenantId: TENANT_A, assetId, bytes, mimeType: "image/jpeg" }),
+        ),
+      );
+      // A writer may not fail: every one of them owns its own temp file.
+      expect(settled.every((outcome) => outcome.status === "fulfilled")).toBe(true);
+
+      const hit = await cache.get({ tenantId: TENANT_A, assetId, maxBytes: 64 * 1024 });
+      expect(hit).not.toBeNull();
+      expect(payloads.some((payload) => Buffer.from(hit!.bytes).equals(Buffer.from(payload)))).toBe(
+        true,
+      );
+      // Nothing half-written survives the round either.
+      expect((await readdir(join(root, TENANT_A))).filter((name) => name.endsWith(".part"))).toEqual(
+        [],
+      );
+    }
+  });
+
+  it("reads a truncated entry as a miss instead of serving a short body", async () => {
+    // Power loss between the write and the rename, or an older format's leftover:
+    // the header promises n bytes and fewer are there.
+    await cache.put({
+      tenantId: TENANT_A,
+      assetId: ASSET,
+      bytes: bytes("0123456789"),
+      mimeType: "image/jpeg",
+    });
+
+    const path = join(root, TENANT_A, ASSET);
+    const whole = await readFile(path);
+    const cut = whole.subarray(0, whole.length - 4);
+    await writeFile(path, cut);
+    const fresh = new Date(nowMs);
+    await utimes(path, fresh, fresh);
+
+    expect(await cache.get({ tenantId: TENANT_A, assetId: ASSET, maxBytes: 1024 })).toBeNull();
+    expect(
+      logger.lines.some((line) => line.message.includes("Dropping an unreadable media cache entry")),
+    ).toBe(true);
+    // The bad entry is gone, so the next fetch is one clean miss, not a repeat.
+    await expect(stat(path)).rejects.toThrow();
+  });
+
+  it("reads a body LONGER than its header claims as a miss too", async () => {
+    // The exact shape the interleaving produced: a valid header, twice the bytes.
+    await cache.put({
+      tenantId: TENANT_A,
+      assetId: ASSET,
+      bytes: bytes("0123456789"),
+      mimeType: "image/jpeg",
+    });
+
+    const path = join(root, TENANT_A, ASSET);
+    await writeFile(path, Buffer.concat([await readFile(path), Buffer.from("0123456789")]));
+    const fresh = new Date(nowMs);
+    await utimes(path, fresh, fresh);
+
+    expect(await cache.get({ tenantId: TENANT_A, assetId: ASSET, maxBytes: 1024 })).toBeNull();
+  });
+});
+
+describe("localMediaCache — symlinks", () => {
+  it("does not read through a symlink planted where an entry belongs", async () => {
+    const secret = join(root, "outside-secret");
+    await writeFile(secret, "SECRETBYTES");
+    await mkdir(join(root, TENANT_A), { recursive: true });
+    await symlink(secret, join(root, TENANT_A, ASSET));
+
+    expect(await cache.get({ tenantId: TENANT_A, assetId: ASSET, maxBytes: 1024 })).toBeNull();
+    // The target is untouched: refused, not deleted.
+    expect(await readFile(secret, "utf8")).toBe("SECRETBYTES");
+  });
+
+  it("ages out a symlinked entry by its own mtime and unlinks only the link", async () => {
+    const secret = join(root, "outside-secret");
+    await writeFile(secret, "SECRETBYTES");
+    await mkdir(join(root, TENANT_A), { recursive: true });
+    const link = join(root, TENANT_A, ASSET);
+    await symlink(secret, link);
+    const old = new Date(nowMs - 100 * HOUR);
+    await lutimes(link, old, old);
+
+    const result = await cache.evictOlderThan({ olderThan: new Date(nowMs - TTL_MS) });
+
+    expect(result.removed).toBe(1);
+    await expect(lstat(link)).rejects.toThrow();
+    expect(await readFile(secret, "utf8")).toBe("SECRETBYTES");
+  });
+
+  it("refuses a symlinked tenant directory loudly instead of skipping it", async () => {
+    const elsewhere = join(root, "elsewhere");
+    await mkdir(elsewhere, { recursive: true });
+    await symlink(elsewhere, join(root, TENANT_B));
+
+    const result = await cache.evictOlderThan({ olderThan: new Date(nowMs - TTL_MS) });
+
+    expect(result.failed).toBe(1);
+    expect(
+      logger.lines.some((line) => line.message.includes("symlinked tenant directory")),
+    ).toBe(true);
   });
 });
 
