@@ -233,8 +233,8 @@ export function ChannelConnectPanel({
           Đăng nhập bằng Facebook
         </Link>
         <Text type="supporting" color="secondary">
-          Cách này cần App Secret của ứng dụng Facebook — hiện chưa cấu hình xong, nên hãy dùng ô
-          dán token ở trên. Khi quản trị viên nhập App Secret, đường này sẽ chạy được ngay.
+          Bạn sẽ được chuyển sang Facebook để cấp quyền, xong quay lại đây với danh sách Trang đã
+          lấy về. Không cần dán token bằng tay.
         </Text>
       </Stack>
     </Stack>
