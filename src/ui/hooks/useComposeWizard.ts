@@ -13,10 +13,13 @@ import {
   type CaptionsResponse,
   type ComposeResponse,
   type ComposeWizardValues,
+  type UploadRejection,
+  type UploadResponse,
 } from "@/ui/schemas/compose.schema";
+import type { QueuedFile } from "@/ui/components/compose/upload-queue";
 import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 import { ApiError } from "@/ui/services/api-error";
-import { composePost, generateCaptions } from "@/ui/services/post.api";
+import { composePost, generateCaptions, uploadMedia } from "@/ui/services/post.api";
 
 /**
  * Logic layer of the compose wizard (docs/07 §4.1 + core-wizard).
@@ -83,6 +86,8 @@ export function useComposeWizard() {
       // Ảnh is the default: Phase 1 is an album tool, video is opt-in.
       mediaKind: "image",
       videoTarget: "facebook_video",
+      // Drive is the default mode; mode B is the exception (brief §8).
+      source: "drive",
       captions: emptyCaptions(),
     },
   });
@@ -124,6 +129,35 @@ export function useComposeWizard() {
     [pathname, router, searchParams],
   );
 
+  // --- E9 mode B ------------------------------------------------------------
+  // The queue holds files chosen but not yet sent. It is NOT form state: a File
+  // is not serialisable, and react-hook-form would try to clone it.
+  const [uploadQueue, setUploadQueue] = useState<QueuedFile[]>([]);
+  const [uploadedCount, setUploadedCount] = useState(0);
+  const [uploadRejections, setUploadRejections] = useState<UploadRejection[]>([]);
+
+  const upload = useMutation<UploadResponse, ApiError, void>({
+    mutationFn: () => {
+      const values = form.getValues();
+      return uploadMedia({
+        tenantId: values.tenantId,
+        productCode: values.productCode,
+        files: uploadQueue.map((item) => item.file),
+        // The queue order IS the album order; index 0 is the cover.
+        order: uploadQueue.map((_item, index) => index),
+      });
+    },
+    retry: false,
+    onSuccess: (result) => {
+      setUploadedCount(result.accepted.length);
+      setUploadRejections(result.rejected);
+      // Accepted files are stored server-side now; keeping them queued would
+      // let a second click upload the same album twice.
+      setUploadQueue([]);
+    },
+    onError: () => setUploadRejections([]),
+  });
+
   const compose = useMutation<ComposeResponse, ApiError, void>({
     mutationFn: () => {
       const values = form.getValues();
@@ -133,6 +167,7 @@ export function useComposeWizard() {
         color: values.color,
         mediaKind: values.mediaKind,
         videoTarget: values.videoTarget,
+        source: values.source,
       });
     },
     retry: false,
@@ -249,6 +284,11 @@ export function useComposeWizard() {
     submitProductStep,
     rewound,
     captionsCleared,
+    upload,
+    uploadQueue,
+    setUploadQueue,
+    uploadedCount,
+    uploadRejections,
     /** True once every channel has a non-empty caption (step 3 gate). */
     hasEveryCaption: COMPOSE_CHANNELS.every(
       (channel) => (captionValues?.[channel.id] ?? "").trim().length > 0,

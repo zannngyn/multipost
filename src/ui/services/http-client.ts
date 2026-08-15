@@ -26,7 +26,13 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 export interface ApiRequestOptions<T> {
   method?: "GET" | "POST" | "PUT" | "DELETE";
-  /** Serialised as JSON. Omitted when absent (GET, DELETE with query params). */
+  /**
+   * Serialised as JSON. Omitted when absent (GET, DELETE with query params).
+   *
+   * A `FormData` body is passed through untouched instead (E9 upload): the
+   * browser must set `content-type` itself, because only it knows the multipart
+   * boundary — setting the header by hand produces a body no server can parse.
+   */
   body?: unknown;
   /** Contract of the success payload — parsed before it reaches React. */
   schema: z.ZodType<T>;
@@ -34,6 +40,11 @@ export interface ApiRequestOptions<T> {
   timeoutMs?: number;
   /** Vietnamese message when the payload does not match `schema`. */
   malformedMessage: string;
+}
+
+function encodeBody(body: unknown, isForm: boolean): BodyInit | undefined {
+  if (body === undefined) return undefined;
+  return isForm ? (body as FormData) : JSON.stringify(body);
 }
 
 /** Combines the caller's signal with the timeout — cancel must work either way. */
@@ -87,13 +98,14 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions<T>)
 
   let response: Response;
   try {
+    const isForm = options.body instanceof FormData;
     response = await fetch(path, {
       method,
       headers:
-        options.body === undefined
+        options.body === undefined || isForm
           ? { accept: "application/json" }
           : { accept: "application/json", "content-type": "application/json" },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: encodeBody(options.body, isForm),
       // Session-scoped operator data: never served from an HTTP cache.
       cache: "no-store",
       signal: withTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, options.signal),

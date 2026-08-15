@@ -89,7 +89,10 @@ export function makeLocalBlobStore(options: LocalBlobStoreOptions): MediaBlobSto
 
       let sizeBytes: number;
       try {
-        const info = await stat(path);
+        // turbopackIgnore: the root is a runtime-configured mount point (a
+        // Docker volume), so it cannot be statically scoped. Without this the
+        // bundler traces the whole project into every route's file list.
+        const info = await stat(/* turbopackIgnore: true */ path);
         if (!info.isFile()) return null;
         sizeBytes = info.size;
       } catch (error) {
@@ -108,7 +111,8 @@ export function makeLocalBlobStore(options: LocalBlobStoreOptions): MediaBlobSto
       }
 
       try {
-        const buffer = await readFile(path);
+        // Same reasoning as the stat() above.
+        const buffer = await readFile(/* turbopackIgnore: true */ path);
         return { bytes: new Uint8Array(buffer), mimeType: null };
       } catch (error) {
         if (isMissing(error)) return null;

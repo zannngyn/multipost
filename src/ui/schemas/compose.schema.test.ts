@@ -71,8 +71,17 @@ describe("ComposeWizardSchema", () => {
     productCode: "MGKVX6310",
     mediaKind: "image",
     videoTarget: "facebook_video",
+    source: "drive",
     captions: {},
   };
+
+  it("rejects a file source the server does not know", () => {
+    expect(ComposeWizardSchema.safeParse({ ...base, source: "dropbox" }).success).toBe(false);
+  });
+
+  it("accepts the upload mode", () => {
+    expect(ComposeWizardSchema.safeParse({ ...base, source: "upload" }).success).toBe(true);
+  });
 
   it("rejects a media kind the server does not know", () => {
     expect(ComposeWizardSchema.safeParse({ ...base, mediaKind: "gif" }).success).toBe(false);
