@@ -1,18 +1,41 @@
+"use client";
+
+import { AlbumArranger } from "@/ui/components/compose/AlbumArranger";
 import { Badge } from "@/ui/components/ui/badge";
 import type { MediaAsset } from "@/ui/schemas/compose.schema";
 
 /**
  * The album that will be posted, in publish order. Index 0 is the cover.
  *
+ * Arrangeable when the caller passes `onReorder` (step 1, where the operator
+ * decides), read-only otherwise (step 3, which confirms rather than edits).
+ * Both modes share `AlbumArranger`: a Drive album and an uploaded one are the
+ * same list once gathered, so they get the same gesture and the same wording.
+ *
+ * The order lives in the POST, not in `media_asset`: that table belongs to the
+ * Drive sync, which rewrites it on every run. `createPostBatch` already takes
+ * the album in caller order, so nothing downstream needs to change.
+ *
  * There is no <img> on purpose: the browser has no access to Drive and there is
- * no thumbnail endpoint yet, so the grid shows the file identity instead of
+ * no thumbnail endpoint yet, so the list shows file identity instead of
  * pretending to show a picture. A fake placeholder would let an operator
  * "approve" photos they never saw.
  */
-export function MediaGrid({ media }: { media: readonly MediaAsset[] }) {
+export function MediaGrid({
+  media,
+  onReorder,
+  disabled,
+}: {
+  media: readonly MediaAsset[];
+  /** Absent = read-only. */
+  onReorder?: (next: MediaAsset[]) => void;
+  disabled?: boolean;
+}) {
   // A video post carries exactly one clip, so "ảnh bìa"/"thứ tự đăng" would be
   // nonsense there — the words follow the kind that was actually composed.
   const isVideo = media[0]?.kind === "video";
+  // Nothing to arrange with one item, and a lone drag handle only adds noise.
+  const arrangeable = Boolean(onReorder) && !isVideo && media.length > 1;
 
   return (
     <section aria-labelledby="media-heading" className="space-y-2">
@@ -23,35 +46,21 @@ export function MediaGrid({ media }: { media: readonly MediaAsset[] }) {
         <p className="text-muted-foreground text-xs">
           {isVideo
             ? "Một bài video chỉ dùng đúng một clip."
-            : "Thứ tự bên dưới là thứ tự đăng. Ảnh đầu tiên là ảnh bìa."}
+            : arrangeable
+              ? "Kéo từng dòng để đổi thứ tự đăng. Ảnh đầu tiên là ảnh bìa."
+              : "Thứ tự bên dưới là thứ tự đăng. Ảnh đầu tiên là ảnh bìa."}
         </p>
       </div>
 
-      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {media.map((asset, index) => (
-          <li
-            key={asset.driveFileId}
-            className="bg-card flex flex-col gap-1.5 rounded-lg border p-3"
-          >
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-muted-foreground text-xs tabular-nums">#{index + 1}</span>
-              {index === 0 && !isVideo ? <Badge tone="success">Ảnh bìa</Badge> : null}
-              {asset.color ? <Badge tone="info">{asset.color}</Badge> : null}
-              {asset.needsReview ? <Badge tone="warning">Cần rà soát</Badge> : null}
-            </div>
-
-            <p className="font-mono text-xs break-all">{asset.fileName}</p>
-
-            {asset.warnings.length > 0 ? (
-              <ul className="text-warning-foreground list-disc space-y-0.5 pl-4 text-xs">
-                {asset.warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
-                ))}
-              </ul>
-            ) : null}
-          </li>
-        ))}
-      </ul>
+      <AlbumArranger
+        items={media.map(toEntry)}
+        onChange={(next) => onReorder?.(next.map((entry) => entry.asset))}
+        disabled={disabled}
+        readOnly={!arrangeable}
+        coverLabel={isVideo ? "Clip" : "Ảnh bìa"}
+        itemName={(entry) => entry.asset.fileName}
+        renderContent={(entry) => <AssetLine asset={entry.asset} />}
+      />
 
       <p className="text-muted-foreground text-xs">
         {isVideo
@@ -59,5 +68,37 @@ export function MediaGrid({ media }: { media: readonly MediaAsset[] }) {
           : "Chưa xem được ảnh trực tiếp trên màn hình này — Phase 1 chưa có đường tải ảnh từ Drive về trình duyệt. Kiểm tra bằng tên file, hoặc mở thư mục Drive tương ứng."}
       </p>
     </section>
+  );
+}
+
+/**
+ * `AlbumArranger` keys rows by `id`; the asset's identity is its file id, which
+ * is unique per tenant and stable across a reorder.
+ */
+interface AssetEntry {
+  readonly id: string;
+  readonly asset: MediaAsset;
+}
+
+function toEntry(asset: MediaAsset): AssetEntry {
+  return { id: asset.driveFileId, asset };
+}
+
+function AssetLine({ asset }: { asset: MediaAsset }) {
+  return (
+    <>
+      <span className="block font-mono text-xs break-all">{asset.fileName}</span>
+      <span className="mt-1 flex flex-wrap items-center gap-1.5">
+        {asset.color ? <Badge tone="info">{asset.color}</Badge> : null}
+        {asset.needsReview ? <Badge tone="warning">Cần rà soát</Badge> : null}
+      </span>
+      {asset.warnings.length > 0 ? (
+        <ul className="text-warning-foreground mt-1 list-disc space-y-0.5 pl-4 text-xs">
+          {asset.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+    </>
   );
 }

@@ -15,6 +15,7 @@ import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
+import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
 import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
@@ -31,6 +32,7 @@ import {
 import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
+import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { ChannelPlatform, ChannelPublisher } from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
@@ -46,6 +48,8 @@ import {
 import type { ManagePromptTemplates } from "@/core/usecases/manage-prompt-templates";
 import { makeReapPostJobs, type ReapPostJobs } from "@/core/usecases/reap-post-jobs";
 import { makeRetryPostJob, type RetryPostJob } from "@/core/usecases/retry-post-job";
+import { makeCleanupUploads, type CleanupUploads } from "@/core/usecases/cleanup-uploads";
+import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
 import {
   makeCancelScheduledJob,
   type CancelScheduledJob,
@@ -81,6 +85,7 @@ import {
 import {
   loadConfig,
   loadMediaConfig,
+  loadUploadConfig,
   loadMetaConfig,
   loadSecretsConfig,
   loadVideoConfig,
@@ -111,6 +116,10 @@ export interface Usecases {
   /** E2/E3 — catalog screen: products with their composable/blocked verdict. */
   listCatalogProducts: ListCatalogProducts;
   composePost: ComposePost;
+  /** E9 — mode B: register operator-supplied files as media assets. */
+  uploadMedia: UploadMedia;
+  /** E9.4 — periodic sweep of uploads nobody posted. */
+  cleanupUploads: CleanupUploads;
   generateCaptions: GenerateCaptions;
   /** E10.7 — versioned prompt catalog (list/create/activate). */
   promptTemplates: ManagePromptTemplates;
@@ -164,6 +173,8 @@ export type SignMediaUrl = (input: SignMediaUrlRequest) => SignedMediaUrl;
  */
 export interface UsecaseOverrides {
   drive?: DriveSource;
+  /** E9 — swap the upload store (tests use a temp dir, prod a Docker volume). */
+  blobs?: MediaBlobStore;
   sheet?: SheetSource;
   /** Worker passes its own queue so one process holds ONE Redis connection. */
   queue?: JobQueue;
@@ -361,6 +372,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     tiktok: overrides.publishers?.tiktok ?? makeLazyTikTokPublisher(deps.logger),
   };
   const drive = overrides.drive ?? google.drive;
+  // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
+  // Google sources it needs no lazy wrapper.
+  const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
   const mediaSign = makeLazyMediaSigner();
   /**
    * Read on FIRST USE, not here: a web/worker process must boot without
@@ -407,6 +421,20 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       media,
       logger: deps.logger,
       videoProbe: overrides.videoProbe ?? makeLazyVideoProbe(drive, deps.logger),
+    }),
+    uploadMedia: makeUploadMedia({
+      blobs,
+      media,
+      logger: deps.logger,
+      // Prefixed so an id is recognisable as mode B in a log line, and hex-only
+      // so it is a safe path segment for the blob store.
+      newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
+    }),
+    cleanupUploads: makeCleanupUploads({
+      media,
+      blobs,
+      clock: deps.clock,
+      logger: deps.logger,
     }),
     generateCaptions: makeLazyGenerateCaptions({
       logger: deps.logger,
@@ -490,6 +518,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     }),
     getMediaContent: makeGetMediaContent({
       drive,
+      blobs,
       mediaAssets: media,
       sign: mediaSign,
       clock: deps.clock,
@@ -525,6 +554,14 @@ export function getContainer(): Container {
  * of truth with the signer.
  */
 export { MEDIA_QUERY_PARAMS, MEDIA_ROUTE_PREFIX } from "@/core/domain/media-url";
+
+/**
+ * E9 upload caps, re-exported for the same reason: the intake route must know
+ * them to refuse a file before buffering it, and a second copy of the numbers
+ * in the route would give one business rule two homes.
+ */
+export { MAX_UPLOADS_PER_POST, MAX_UPLOAD_BYTES } from "@/core/domain/uploaded-media";
+export type { UploadedFile } from "@/core/usecases/upload-media";
 
 /**
  * Drains the DB pool, any lazily built producer queue and the AI registry cache

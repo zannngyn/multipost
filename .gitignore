@@ -46,3 +46,7 @@ next-env.d.ts
 
 # local git worktrees created by tooling
 /.claude/worktrees/
+
+# E9 — operator-uploaded media on a dev box (UPLOAD_STORAGE_ROOT default).
+# In Docker this lives in a volume, never in the repo.
+/var/

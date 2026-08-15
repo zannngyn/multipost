@@ -99,9 +99,20 @@ export function toPromptInput(product: Product): ProductContent {
 
 // --- MediaAsset -------------------------------------------------------------
 
+/** Where an asset's bytes come from. Mirrors the `media_origin` DB enum. */
+export const MEDIA_ORIGINS = ["drive", "upload"] as const;
+export type MediaOrigin = (typeof MEDIA_ORIGINS)[number];
+
 export interface MediaAsset {
-  /** Drive file id — the identity of the asset (names repeat, ids do not). */
+  /**
+   * Asset identity. A Drive file id for a synced asset (names repeat, ids do
+   * not); a generated `upload_<hex>` for one the operator supplied (E9).
+   */
   readonly driveFileId: string;
+  /** Which of the two modes produced this asset. */
+  readonly origin: MediaOrigin;
+  /** Handle into MediaBlobStore. Null unless `origin` is "upload". */
+  readonly storageKey: string | null;
   readonly fileName: string;
   readonly productCode: string;
   readonly color: string | null;

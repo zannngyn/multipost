@@ -12,6 +12,7 @@ import type {
   MediaAssetLookup,
 } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
+import type { BlobContent, GetBlobInput, MediaBlobStore } from "@/core/ports/media-blob-store";
 
 import { makeGetMediaContent } from "./get-media-content";
 
@@ -33,6 +34,8 @@ const sign: SignatureFn = (payload) => createHmac("sha256", SECRET).update(paylo
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
   return {
     driveFileId: ASSET,
+    origin: "drive",
+    storageKey: null,
     fileName: "MGKVX6310-KEM (1).jpg",
     productCode: "MGKVX6310",
     color: "KEM",
@@ -70,6 +73,9 @@ interface HarnessOptions {
   content?: DriveFileContent;
   downloadError?: unknown;
   maxBytes?: number;
+  /** Bytes the blob store returns; null makes it answer "not there". */
+  blobContent?: BlobContent | null;
+  blobError?: unknown;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -96,12 +102,27 @@ function harness(options: HarnessOptions = {}) {
   );
   const mediaAssets: MediaAssetLookup = { findByDriveFileId };
 
+  const getBlob = vi.fn(async (_input: GetBlobInput): Promise<BlobContent | null> => {
+    if (options.blobError) throw options.blobError;
+    if (options.blobContent === null) return null;
+    return options.blobContent ?? { bytes: BYTES, mimeType: null };
+  });
+  const blobs: MediaBlobStore = {
+    put: async () => {
+      throw new Error("not used");
+    },
+    get: getBlob,
+    delete: async () => false,
+  };
+
   return {
     logger,
     download,
+    getBlob,
     findByDriveFileId,
     getMediaContent: makeGetMediaContent({
       drive,
+      blobs,
       mediaAssets,
       sign,
       clock,
@@ -312,5 +333,77 @@ describe("getMediaContent — happy path", () => {
       content: { fileId: ASSET, bytes: BYTES, mimeType: "  ", sizeBytes: BYTES.length },
     });
     expect((await unknown.getMediaContent(link())).mimeType).toBe("application/octet-stream");
+  });
+});
+
+// --- E9: uploaded assets are served from the blob store, not Drive ----------
+
+describe("getMediaContent — mode B (uploaded assets)", () => {
+  const UPLOAD_ID = "upload_ab12cd34";
+  const UPLOAD_KEY = `${TENANT}/${UPLOAD_ID}`;
+
+  function uploaded(overrides: Partial<MediaAsset> = {}): MediaAsset {
+    return asset({
+      driveFileId: UPLOAD_ID,
+      origin: "upload",
+      storageKey: UPLOAD_KEY,
+      fileName: "anh-tu-tai-len.jpg",
+      ...overrides,
+    });
+  }
+
+  function uploadHarness(options: HarnessOptions = {}) {
+    return harness({ assets: { [`${TENANT}:${UPLOAD_ID}`]: uploaded() }, ...options });
+  }
+
+  it("reads an uploaded asset from the blob store and never touches Drive", async () => {
+    const { getMediaContent, getBlob, download } = uploadHarness();
+
+    const result = await getMediaContent(link({ assetId: UPLOAD_ID }));
+
+    expect(result.driveFileId).toBe(UPLOAD_ID);
+    expect(result.sizeBytes).toBe(BYTES.length);
+    expect(getBlob).toHaveBeenCalledTimes(1);
+    expect(getBlob.mock.calls[0][0]).toMatchObject({ tenantId: TENANT, storageKey: UPLOAD_KEY });
+    // The whole point: a mode B post must not depend on Drive being reachable.
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("still serves a Drive asset from Drive", async () => {
+    const { getMediaContent, getBlob, download } = harness();
+    await getMediaContent(link());
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(getBlob).not.toHaveBeenCalled();
+  });
+
+  it("takes the mime type from the asset row, which the blob store does not keep", async () => {
+    const { getMediaContent } = uploadHarness();
+    expect((await getMediaContent(link({ assetId: UPLOAD_ID }))).mimeType).toBe("image/jpeg");
+  });
+
+  it("reports a missing blob as MEDIA_NOT_FOUND rather than an empty body", async () => {
+    // The row survived but the bytes are gone (cleanup raced, volume lost).
+    // Facebook would otherwise receive a 0-byte body and fail opaquely.
+    const { getMediaContent } = uploadHarness({ blobContent: null });
+    await expect(getMediaContent(link({ assetId: UPLOAD_ID }))).rejects.toMatchObject({
+      code: "MEDIA_NOT_FOUND",
+    });
+  });
+
+  it("rejects an upload row whose storage key was never written", async () => {
+    const { getMediaContent, getBlob } = harness({
+      assets: { [`${TENANT}:${UPLOAD_ID}`]: uploaded({ storageKey: null }) },
+    });
+    await expect(getMediaContent(link({ assetId: UPLOAD_ID }))).rejects.toMatchObject({
+      code: "MEDIA_NOT_FOUND",
+    });
+    expect(getBlob).not.toHaveBeenCalled();
+  });
+
+  it("treats an empty blob as a failure, like an empty Drive download", async () => {
+    const { getMediaContent } = uploadHarness({
+      blobContent: { bytes: new Uint8Array(0), mimeType: null },
+    });
+    await expect(getMediaContent(link({ assetId: UPLOAD_ID }))).rejects.toBeInstanceOf(AppError);
   });
 });

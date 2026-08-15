@@ -368,6 +368,8 @@ function toMediaAsset(file: DriveFile): MediaAssetResult {
         : undefined,
     value: {
       driveFileId: file.id,
+      origin: "drive",
+      storageKey: null,
       fileName: name.normalized,
       productCode: name.productCode,
       color: name.color,

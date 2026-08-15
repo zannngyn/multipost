@@ -74,6 +74,11 @@ services:
       AUTH_URL: ${AUTH_URL:-http://localhost:${WEB_PORT:-3000}}
       SESSION_SECRET: ${SESSION_SECRET:-}
       META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v23.0}
+      # E9 mode B. A named volume, not a bind: the bytes must outlive a
+      # container rebuild, because a post referencing them can be scheduled for
+      # tomorrow. Same path in web and worker — one writes, the other sweeps.
+      UPLOAD_STORAGE_ROOT: /var/lib/mysp/uploads
+      UPLOAD_ORPHAN_TTL_HOURS: ${UPLOAD_ORPHAN_TTL_HOURS:-24}
     expose:
       - "3000"
     ports:
@@ -109,6 +114,7 @@ services:
     volumes:
       - ./:/app
       - webdemo_node_modules:/app/node_modules
+      - uploaddata:/var/lib/mysp/uploads
     ports:
       - "${DEMO_WEB_PORT:-3001}:3000"
     depends_on:
@@ -137,6 +143,12 @@ services:
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
       WORKER_HEARTBEAT_FILE: /tmp/mysp-worker-heartbeat
       WORKER_SHUTDOWN_DEADLINE_MS: ${WORKER_SHUTDOWN_DEADLINE_MS:-30000}
+      # E9.4 — the cleanup sweep deletes the bytes, so it needs the same volume
+      # mounted at the same path as the web process.
+      UPLOAD_STORAGE_ROOT: /var/lib/mysp/uploads
+      UPLOAD_ORPHAN_TTL_HOURS: ${UPLOAD_ORPHAN_TTL_HOURS:-24}
+    volumes:
+      - uploaddata:/var/lib/mysp/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -206,3 +218,7 @@ volumes:
   caddydata:
   caddyconfig:
   webdemo_node_modules:
+  # E9 — operator-uploaded media. Shared by web (writes) and worker (sweeps).
+  # Its own volume so `docker compose down -v` of the app data is a deliberate
+  # decision about the operator's files, not a side effect.
+  uploaddata:

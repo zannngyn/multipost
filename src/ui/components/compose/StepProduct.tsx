@@ -6,6 +6,7 @@ import { useWatch, type UseFormRegisterReturn } from "react-hook-form";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { MediaGrid } from "@/ui/components/compose/MediaGrid";
+import { UploadPanel } from "@/ui/components/compose/UploadPanel";
 import { VideoSpecCard } from "@/ui/components/compose/VideoSpecCard";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
@@ -17,6 +18,9 @@ import {
   MEDIA_KINDS,
   MEDIA_KIND_HINTS,
   MEDIA_KIND_LABELS,
+  MEDIA_SOURCES,
+  MEDIA_SOURCE_HINTS,
+  MEDIA_SOURCE_LABELS,
   VIDEO_TARGETS,
   VIDEO_TARGET_HINTS,
   VIDEO_TARGET_LABELS,
@@ -40,6 +44,7 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
   // `useWatch` (not `form.watch()`): the destination block must appear the
   // instant "Video" is picked, and the value re-renders nothing else.
   const mediaKind = useWatch({ control: form.control, name: "mediaKind" }) ?? "image";
+  const source = useWatch({ control: form.control, name: "source" }) ?? "drive";
 
   const hasTypedCaption = Object.values(wizard.captionValues ?? {}).some(
     (text) => text.trim().length > 0,
@@ -103,6 +108,21 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
           </Field>
         </div>
 
+        {/* Brief §8: two file modes, sharing everything downstream. */}
+        <RadioField
+          legend="Nguồn file"
+          hint="Chế độ B dùng khi file chưa có trên Drive. Mã sản phẩm vẫn bắt buộc — Sheet và AI không đổi."
+          name="source"
+          options={MEDIA_SOURCES.map((value) => ({
+            value,
+            label: MEDIA_SOURCE_LABELS[value],
+            hint: MEDIA_SOURCE_HINTS[value],
+          }))}
+          register={form.register("source")}
+          disabled={compose.isPending || wizard.upload.isPending}
+          error={errors.source?.message}
+        />
+
         {/* Two fixed options -> radio (core-form-inputs: native first). */}
         <RadioField
           legend="Loại bài"
@@ -132,6 +152,22 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
             disabled={compose.isPending}
             error={errors.videoTarget?.message}
           />
+        ) : null}
+
+        {source === "upload" ? (
+          <UploadPanel
+            queue={wizard.uploadQueue}
+            onQueueChange={wizard.setUploadQueue}
+            onUpload={() => wizard.upload.mutate()}
+            isUploading={wizard.upload.isPending}
+            rejected={wizard.uploadRejections}
+            uploadedCount={wizard.uploadedCount}
+            disabled={compose.isPending}
+          />
+        ) : null}
+
+        {source === "upload" && wizard.upload.isError ? (
+          <ApiErrorNotice error={wizard.upload.error} onRetry={() => wizard.upload.mutate()} />
         ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
@@ -167,7 +203,13 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
       ) : compose.isError ? (
         <ApiErrorNotice error={compose.error} onRetry={() => compose.mutate()} />
       ) : composed ? (
-        <ComposeResult composed={composed} onContinue={() => wizard.goToStep("caption")} />
+        <ComposeResult
+          composed={composed}
+          album={wizard.album}
+          onReorder={wizard.setAlbum}
+          disabled={compose.isPending}
+          onContinue={() => wizard.goToStep("caption")}
+        />
       ) : (
         <EmptyState
           kind="idle"
@@ -185,9 +227,16 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
 
 function ComposeResult({
   composed,
+  album,
+  onReorder,
+  disabled,
   onContinue,
 }: {
   composed: ComposeResponse;
+  /** Publish order, which this step lets the operator rearrange. */
+  album: readonly ComposeResponse["media"][number][];
+  onReorder: (next: ComposeResponse["media"][number][]) => void;
+  disabled: boolean;
   onContinue: () => void;
 }) {
   return (
@@ -197,7 +246,7 @@ function ComposeResult({
       {composed.video ? (
         <VideoSpecCard video={composed.video} clip={composed.media[0]} />
       ) : null}
-      <MediaGrid media={composed.media} />
+      <MediaGrid media={album} onReorder={onReorder} disabled={disabled} />
 
       <div className="flex flex-wrap gap-2 border-t pt-4">
         <Button type="button" size="lg" onClick={onContinue}>

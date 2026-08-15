@@ -32,6 +32,53 @@ export type ComposeChannelId = (typeof COMPOSE_CHANNELS)[number]["id"];
  * (core/domain/video-spec). The spellings MUST match the server exactly — the
  * API route forwards them straight into `composePost`.
  */
+/** Brief §8 — where a post's files come from. */
+export const MEDIA_SOURCES = ["drive", "upload"] as const;
+export const MediaSourceSchema = z.enum(MEDIA_SOURCES);
+export type MediaSource = z.infer<typeof MediaSourceSchema>;
+
+export const MEDIA_SOURCE_LABELS: Record<MediaSource, string> = {
+  drive: "Lấy từ Drive theo mã",
+  upload: "Tự tải file lên",
+};
+
+export const MEDIA_SOURCE_HINTS: Record<MediaSource, string> = {
+  drive: "Hệ thống tự tìm ảnh/video trên Drive theo mã sản phẩm và màu.",
+  upload: "Dùng khi file chưa có trên Drive, hoặc muốn dùng file khác. Vẫn cần mã sản phẩm để tra Sheet và viết caption.",
+};
+
+/** Mirrors MAX_UPLOADS_PER_POST / MAX_UPLOAD_BYTES in core/domain/uploaded-media. */
+export const MAX_UPLOAD_FILES = 10;
+export const MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024;
+
+/** Client-side `accept` — a hint for the picker, re-checked on the server. */
+export const UPLOAD_ACCEPT = "image/jpeg,image/png,image/webp,video/mp4,video/quicktime";
+
+export const UploadedAssetSchema = z.object({
+  assetId: z.string(),
+  fileName: z.string(),
+  kind: z.enum(["image", "video"]),
+  sequence: z.number().int().nullable(),
+  sizeBytes: z.number().nullable(),
+});
+
+export type UploadedAsset = z.infer<typeof UploadedAssetSchema>;
+
+export const UploadRejectionSchema = z.object({
+  fileName: z.string(),
+  reason: z.string(),
+  userMessage: z.string(),
+});
+
+export type UploadRejection = z.infer<typeof UploadRejectionSchema>;
+
+export const UploadResponseSchema = z.object({
+  accepted: z.array(UploadedAssetSchema),
+  rejected: z.array(UploadRejectionSchema),
+});
+
+export type UploadResponse = z.infer<typeof UploadResponseSchema>;
+
 export const MEDIA_KINDS = ["image", "video"] as const;
 export const MediaKindSchema = z.enum(MEDIA_KINDS);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
@@ -93,6 +140,8 @@ export const ComposeWizardSchema = z.object({
   color: z.string().trim().max(64, "Tên màu quá dài (tối đa 64 ký tự).").optional(),
   /** Ảnh (mặc định) hay video. Decides which files compose gathers. */
   mediaKind: MediaKindSchema,
+  /** Chế độ A (Drive) hay chế độ B (tự tải lên) — brief §8. */
+  source: MediaSourceSchema,
   /** Only meaningful for a video post; ignored by the server for photos. */
   videoTarget: VideoTargetSchema,
   /** Caption per channel, edited by hand or filled in by the AI step. */
@@ -108,6 +157,7 @@ export const STEP_PRODUCT_FIELDS = [
   "color",
   "mediaKind",
   "videoTarget",
+  "source",
 ] as const;
 
 // --- Step 1 response --------------------------------------------------------

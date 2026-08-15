@@ -210,6 +210,25 @@ export const VideoConfigSchema = z.object({
 
 export type VideoConfig = z.infer<typeof VideoConfigSchema>;
 
+/**
+ * Operator-uploaded media (E9, mode B). Its own group with a working default so
+ * a dev box needs no setup; in Docker the path is a mounted volume, because the
+ * bytes must outlive a container restart — the post that references them can be
+ * scheduled for tomorrow.
+ */
+export const UploadConfigSchema = z.object({
+  /** Directory the blob store writes under; one sub-directory per tenant. */
+  UPLOAD_STORAGE_ROOT: z.string().trim().min(1).default("./var/uploads"),
+  /**
+   * How long an uploaded blob may stay unreferenced before the cleanup job may
+   * remove it (E9.4). Generous on purpose: it is measured from the upload, and
+   * an operator may leave a half-composed post open over a lunch break.
+   */
+  UPLOAD_ORPHAN_TTL_HOURS: z.coerce.number().int().positive().max(720).default(24),
+});
+
+export type UploadConfig = z.infer<typeof UploadConfigSchema>;
+
 export const SecretsConfigSchema = z.object({
   /** base64 of exactly 32 random bytes: `openssl rand -base64 32`. */
   TENANT_SECRETS_ENC_KEY: nonEmpty("TENANT_SECRETS_ENC_KEY").refine(
@@ -280,4 +299,8 @@ export function loadSecretsConfig(env: EnvRecord = process.env): SecretsConfig {
 
 export function loadVideoConfig(env: EnvRecord = process.env): VideoConfig {
   return parseEnv(VideoConfigSchema, env, "video");
+}
+
+export function loadUploadConfig(env: EnvRecord = process.env): UploadConfig {
+  return parseEnv(UploadConfigSchema, env, "upload");
 }

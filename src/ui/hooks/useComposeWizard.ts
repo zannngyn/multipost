@@ -13,10 +13,13 @@ import {
   type CaptionsResponse,
   type ComposeResponse,
   type ComposeWizardValues,
+  type UploadRejection,
+  type UploadResponse,
 } from "@/ui/schemas/compose.schema";
+import type { QueuedFile } from "@/ui/components/compose/upload-queue";
 import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 import { ApiError } from "@/ui/services/api-error";
-import { composePost, generateCaptions } from "@/ui/services/post.api";
+import { composePost, generateCaptions, uploadMedia } from "@/ui/services/post.api";
 
 /**
  * Logic layer of the compose wizard (docs/07 §4.1 + core-wizard).
@@ -83,11 +86,23 @@ export function useComposeWizard() {
       // Ảnh is the default: Phase 1 is an album tool, video is opt-in.
       mediaKind: "image",
       videoTarget: "facebook_video",
+      // Drive is the default mode; mode B is the exception (brief §8).
+      source: "drive",
       captions: emptyCaptions(),
     },
   });
 
   const [composed, setComposed] = useState<ComposeResponse | null>(null);
+  /**
+   * The album in PUBLISH order, which the operator may rearrange (brief §8 —
+   * both file modes end with an ordered album whose first entry is the cover).
+   *
+   * Held here rather than written back into `composed`: the compose response is
+   * the server's answer and must stay comparable to what was returned, while
+   * the arrangement belongs to this post only. Nothing is written to
+   * `media_asset` — that table belongs to the Drive sync.
+   */
+  const [album, setAlbum] = useState<readonly ComposeResponse["media"][number][]>([]);
   const composedKeyRef = useRef<string | null>(null);
   /**
    * True when this mount started on a step past the first one — i.e. a reload
@@ -124,6 +139,35 @@ export function useComposeWizard() {
     [pathname, router, searchParams],
   );
 
+  // --- E9 mode B ------------------------------------------------------------
+  // The queue holds files chosen but not yet sent. It is NOT form state: a File
+  // is not serialisable, and react-hook-form would try to clone it.
+  const [uploadQueue, setUploadQueue] = useState<QueuedFile[]>([]);
+  const [uploadedCount, setUploadedCount] = useState(0);
+  const [uploadRejections, setUploadRejections] = useState<UploadRejection[]>([]);
+
+  const upload = useMutation<UploadResponse, ApiError, void>({
+    mutationFn: () => {
+      const values = form.getValues();
+      return uploadMedia({
+        tenantId: values.tenantId,
+        productCode: values.productCode,
+        files: uploadQueue.map((item) => item.file),
+        // The queue order IS the album order; index 0 is the cover.
+        order: uploadQueue.map((_item, index) => index),
+      });
+    },
+    retry: false,
+    onSuccess: (result) => {
+      setUploadedCount(result.accepted.length);
+      setUploadRejections(result.rejected);
+      // Accepted files are stored server-side now; keeping them queued would
+      // let a second click upload the same album twice.
+      setUploadQueue([]);
+    },
+    onError: () => setUploadRejections([]),
+  });
+
   const compose = useMutation<ComposeResponse, ApiError, void>({
     mutationFn: () => {
       const values = form.getValues();
@@ -133,6 +177,7 @@ export function useComposeWizard() {
         color: values.color,
         mediaKind: values.mediaKind,
         videoTarget: values.videoTarget,
+        source: values.source,
       });
     },
     retry: false,
@@ -150,12 +195,16 @@ export function useComposeWizard() {
       }
       composedKeyRef.current = nextKey;
       setComposed(result);
+      // A new album means a new arrangement. Keeping the old ids would either
+      // drop photos the operator can now see or resurrect ones that are gone.
+      setAlbum(result.media);
       setRewound(false);
     },
     onError: () => {
       // Blocked/failed compose invalidates the current post: step 2 and 3 must
       // not stay reachable with stale data from the previous product.
       setComposed(null);
+      setAlbum([]);
       composedKeyRef.current = null;
     },
   });
@@ -244,11 +293,19 @@ export function useComposeWizard() {
     steps: COMPOSE_STEPS,
     goToStep,
     composed,
+    /** The album in publish order — use this, never `composed.media`. */
+    album,
+    setAlbum,
     compose,
     captions,
     submitProductStep,
     rewound,
     captionsCleared,
+    upload,
+    uploadQueue,
+    setUploadQueue,
+    uploadedCount,
+    uploadRejections,
     /** True once every channel has a non-empty caption (step 3 gate). */
     hasEveryCaption: COMPOSE_CHANNELS.every(
       (channel) => (captionValues?.[channel.id] ?? "").trim().length > 0,

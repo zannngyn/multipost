@@ -41,6 +41,13 @@ const BodySchema = z.object({
   /** Phase 2: which files to gather. Absent = ảnh, the Phase 1 behaviour. */
   mediaKind: z.enum(["image", "video"], { error: "Loại bài chỉ nhận Ảnh hoặc Video." }).optional(),
   /**
+   * E9 (brief §8): where the files come from. Absent = Drive, so every existing
+   * caller keeps mode A behaviour without changing.
+   */
+  source: z
+    .enum(["drive", "upload"], { error: "Nguồn file chỉ nhận Drive hoặc Tự tải lên." })
+    .optional(),
+  /**
    * Destination the clip must satisfy. Spelled exactly as `VideoTarget`
    * (core/domain/video-spec) — the usecase rejects anything else. Ignored for a
    * photo post; the usecase applies its own default when absent.
@@ -84,6 +91,7 @@ export async function POST(request: Request): Promise<Response> {
       colors: color.length > 0 ? [color] : undefined,
       mediaKind,
       ...(body.videoTarget ? { videoTarget: body.videoTarget } : {}),
+      ...(body.source ? { source: body.source } : {}),
     });
 
     // --- Blocked first: nothing downstream may see a half-composed post -----
@@ -103,6 +111,7 @@ export async function POST(request: Request): Promise<Response> {
           reason: result.blocked.reason,
           available_colors: result.availableColors,
           media_kind: mediaKind,
+          media_source: body.source ?? "drive",
           video_target: result.video?.target ?? body.videoTarget ?? null,
         },
       });

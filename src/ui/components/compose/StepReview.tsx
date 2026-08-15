@@ -61,7 +61,9 @@ export function StepReview({ wizard }: { wizard: ComposeWizard }) {
 
       {composed.video ? <VideoSpecCard video={composed.video} clip={composed.media[0]} /> : null}
 
-      <MediaGrid media={composed.media} />
+      {/* Read-only on purpose: this step confirms what will happen. Rearranging
+          belongs to step 1, where the album is chosen. */}
+      <MediaGrid media={wizard.album} />
 
       <PublishPanel wizard={wizard} />
 

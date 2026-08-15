@@ -986,6 +986,8 @@ describe("publishPost — video and reels (E5.3/E5.4)", () => {
 
 const VIDEO_ASSET: MediaAsset = {
   driveFileId: "drive-video-1",
+  origin: "drive",
+  storageKey: null,
   fileName: "MGKVX6310-Tím (1).mp4",
   productCode: "MGKVX6310",
   color: "TÍM",
