@@ -79,6 +79,28 @@ services:
       # tomorrow. Same path in web and worker — one writes, the other sweeps.
       UPLOAD_STORAGE_ROOT: /var/lib/mysp/uploads
       UPLOAD_ORPHAN_TTL_HOURS: ${UPLOAD_ORPHAN_TTL_HOURS:-24}
+      # E5.1 login product. The redirect URI must ALSO be listed in the Meta app
+      # (Facebook Login -> Valid OAuth Redirect URIs) or the dialog refuses it.
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_OAUTH_REDIRECT_URI: ${META_OAUTH_REDIRECT_URI:-}
+      # Opens the Page tokens sealed inside tenant_integration.config. Missing it
+      # fails every channel read with CHANNEL_NOT_CONFIGURED, and CHANGING it
+      # makes the stored tokens unreadable for good — re-connect the channels
+      # first. Read on demand, so a process touching no token still boots.
+      TENANT_SECRETS_ENC_KEY: ${TENANT_SECRETS_ENC_KEY:-}
+      # Facebook fetches every photo from this origin, so it must be the PUBLIC
+      # https host (the Caddy hostname) — localhost is unreachable for Meta.
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
+      MEDIA_SIGNING_SECRET: ${MEDIA_SIGNING_SECRET:-}
+      # E4 caption generation. One provider today (ADR-001 / provider-strategy
+      # section 3.1); the model chain lives in config/ai-models.yaml.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Drive/Sheet sync. The key file is mounted read-only below rather than
+      # inlined as JSON: a multi-line private key inside .env breaks easily.
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_service_account
+    secrets:
+      - google_service_account
     expose:
       - "3000"
     ports:
@@ -147,8 +169,22 @@ services:
       # mounted at the same path as the web process.
       UPLOAD_STORAGE_ROOT: /var/lib/mysp/uploads
       UPLOAD_ORPHAN_TTL_HOURS: ${UPLOAD_ORPHAN_TTL_HOURS:-24}
+      # The publish job opens the sealed Page token before every call to Graph,
+      # so the worker needs the SAME key as web. Without it a scheduled post
+      # fails at its due time with CHANNEL_NOT_CONFIGURED and nothing publishes.
+      TENANT_SECRETS_ENC_KEY: ${TENANT_SECRETS_ENC_KEY:-}
+      # The worker signs the photo URLs it hands to Facebook, so both values must
+      # match web's — a signature made with another secret is rejected on fetch.
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
+      MEDIA_SIGNING_SECRET: ${MEDIA_SIGNING_SECRET:-}
+      # Wired lazily (makeLazyGenerateCaptions / makeLazyGoogleSources): today's
+      # jobs never reach them, but a job that does must not die on a missing key.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/google_service_account
     volumes:
       - uploaddata:/var/lib/mysp/uploads
+    secrets:
+      - google_service_account
     depends_on:
       postgres:
         condition: service_healthy
@@ -208,6 +244,17 @@ services:
     depends_on:
       web:
         condition: service_healthy
+
+# The Google Service Account key, handed to web and worker as a file at
+# /run/secrets/google_service_account (read-only, never in an env var: the
+# private key is multi-line and a stray newline in .env breaks it silently).
+# A compose `secret` rather than a bind mount on purpose — a bind whose source
+# is missing makes Docker create an empty DIRECTORY at that path, and the error
+# only surfaces later, during a sync. This form refuses to start instead.
+# Point GOOGLE_SA_FILE at the key file; keep it out of git (/secrets/).
+secrets:
+  google_service_account:
+    file: ${GOOGLE_SA_FILE:-./secrets/mysp-service-account.json}
 
 volumes:
   pgdata:

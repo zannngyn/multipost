@@ -37,6 +37,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# service account key mounted into the containers (see GOOGLE_SA_FILE)
+/secrets/
+
 # vercel
 .vercel
 
