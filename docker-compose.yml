@@ -79,6 +79,13 @@ services:
       # tomorrow. Same path in web and worker — one writes, the other sweeps.
       UPLOAD_STORAGE_ROOT: /var/lib/mysp/uploads
       UPLOAD_ORPHAN_TTL_HOURS: ${UPLOAD_ORPHAN_TTL_HOURS:-24}
+      # E3.6 — Drive byte cache. Same volume and same path in web and worker:
+      # the web process writes it on a miss, the worker sweeps it hourly. A
+      # cache the sweep cannot see is a disk leak.
+      MEDIA_CACHE_ROOT: /var/lib/mysp/media-cache
+      MEDIA_CACHE_TTL_HOURS: ${MEDIA_CACHE_TTL_HOURS:-72}
+    volumes:
+      - mediacachedata:/var/lib/mysp/media-cache
     expose:
       - "3000"
     ports:
@@ -147,8 +154,13 @@ services:
       # mounted at the same path as the web process.
       UPLOAD_STORAGE_ROOT: /var/lib/mysp/uploads
       UPLOAD_ORPHAN_TTL_HOURS: ${UPLOAD_ORPHAN_TTL_HOURS:-24}
+      # E3.6 — the hourly cache sweep deletes these bytes, so it needs the same
+      # volume mounted at the same path as the web process.
+      MEDIA_CACHE_ROOT: /var/lib/mysp/media-cache
+      MEDIA_CACHE_TTL_HOURS: ${MEDIA_CACHE_TTL_HOURS:-72}
     volumes:
       - uploaddata:/var/lib/mysp/uploads
+      - mediacachedata:/var/lib/mysp/media-cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -222,3 +234,7 @@ volumes:
   # Its own volume so `docker compose down -v` of the app data is a deliberate
   # decision about the operator's files, not a side effect.
   uploaddata:
+  # E3.6 — cached Drive bytes. Shared by web (writes on a miss) and worker
+  # (hourly TTL sweep). Losing it costs re-downloads, nothing else: it holds no
+  # data that does not exist on Drive.
+  mediacachedata:

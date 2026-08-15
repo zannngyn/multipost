@@ -16,6 +16,7 @@ import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
 import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
+import { makeLocalMediaCache } from "@/adapters/media/local-media-cache";
 import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
 import { makeFacebookOAuthClient } from "@/adapters/meta/facebook-oauth";
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
@@ -34,6 +35,7 @@ import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
+import type { MediaByteCache } from "@/core/ports/media-byte-cache";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type {
   ChannelConnectClient,
@@ -59,6 +61,10 @@ import type { ManagePromptTemplates } from "@/core/usecases/manage-prompt-templa
 import { makeReapPostJobs, type ReapPostJobs } from "@/core/usecases/reap-post-jobs";
 import { makeRetryPostJob, type RetryPostJob } from "@/core/usecases/retry-post-job";
 import { makeCleanupUploads, type CleanupUploads } from "@/core/usecases/cleanup-uploads";
+import {
+  makeCleanupMediaCache,
+  type CleanupMediaCache,
+} from "@/core/usecases/cleanup-media-cache";
 import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
 import {
   makeCancelScheduledJob,
@@ -95,6 +101,7 @@ import {
 import {
   loadConfig,
   loadMediaConfig,
+  loadMediaCacheConfig,
   loadUploadConfig,
   loadMetaConfig,
   loadMetaOAuthConfig,
@@ -131,6 +138,8 @@ export interface Usecases {
   uploadMedia: UploadMedia;
   /** E9.4 — periodic sweep of uploads nobody posted. */
   cleanupUploads: CleanupUploads;
+  /** E3.6 — periodic sweep of the Drive byte cache (TTL-based). */
+  cleanupMediaCache: CleanupMediaCache;
   generateCaptions: GenerateCaptions;
   /** E10.7 — versioned prompt catalog (list/create/activate). */
   promptTemplates: ManagePromptTemplates;
@@ -190,6 +199,8 @@ export interface UsecaseOverrides {
   drive?: DriveSource;
   /** E9 — swap the upload store (tests use a temp dir, prod a Docker volume). */
   blobs?: MediaBlobStore;
+  /** E3.6 — swap the Drive byte cache (a smoke script may want it disabled). */
+  mediaCache?: MediaByteCache;
   sheet?: SheetSource;
   /** Worker passes its own queue so one process holds ONE Redis connection. */
   queue?: JobQueue;
@@ -393,6 +404,16 @@ export function makeTenantSecretBox(logger: Logger, env?: EnvRecord): SecretBox 
   });
 }
 
+/** Drive byte cache (E3.6). TTL is configured in hours; the store thinks in ms. */
+function makeMediaCache(logger: Logger, env?: EnvRecord): MediaByteCache {
+  const config = loadMediaCacheConfig(env);
+  return makeLocalMediaCache({
+    root: config.MEDIA_CACHE_ROOT,
+    ttlMs: config.MEDIA_CACHE_TTL_HOURS * 60 * 60 * 1000,
+    logger,
+  });
+}
+
 /** HMAC for signed media URLs; MEDIA_SIGNING_SECRET is read on first signature. */
 function makeLazyMediaSigner(env?: EnvRecord): SignatureFn {
   return makeMediaSigner({ readSecret: () => loadMediaConfig(env).MEDIA_SIGNING_SECRET });
@@ -424,6 +445,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
   // Google sources it needs no lazy wrapper.
   const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
+  // E3.6 — read-through cache in front of Drive. Cheap to build (a path and a
+  // TTL, no connection), so like the blob store it needs no lazy wrapper; both
+  // of its variables have working defaults, so no deployment must set them.
+  const mediaCache = overrides.mediaCache ?? makeMediaCache(deps.logger);
   const mediaSign = makeLazyMediaSigner();
   /**
    * Read on FIRST USE, not here: a web/worker process must boot without
@@ -482,6 +507,11 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     cleanupUploads: makeCleanupUploads({
       media,
       blobs,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+    cleanupMediaCache: makeCleanupMediaCache({
+      cache: mediaCache,
       clock: deps.clock,
       logger: deps.logger,
     }),
@@ -578,6 +608,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     getMediaContent: makeGetMediaContent({
       drive,
       blobs,
+      cache: mediaCache,
       mediaAssets: media,
       sign: mediaSign,
       clock: deps.clock,

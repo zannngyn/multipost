@@ -26,6 +26,11 @@ import {
   CLEANUP_UPLOADS_SCHEDULER_ID,
   makeCleanupUploadsHandler,
 } from "./jobs/cleanup-uploads-job";
+import {
+  CLEANUP_MEDIA_CACHE_JOB_NAME,
+  CLEANUP_MEDIA_CACHE_SCHEDULER_ID,
+  makeCleanupMediaCacheHandler,
+} from "./jobs/cleanup-media-cache-job";
 import { PUBLISH_POST_JOB_NAME, makePublishPostHandler } from "./jobs/publish-post-job";
 import {
   REAP_POST_JOBS_JOB_NAME,
@@ -161,6 +166,10 @@ async function main(): Promise<void> {
       logger,
       cleanupUploads: deps.usecases.cleanupUploads,
     }),
+    [CLEANUP_MEDIA_CACHE_JOB_NAME]: makeCleanupMediaCacheHandler({
+      logger,
+      cleanupMediaCache: deps.usecases.cleanupMediaCache,
+    }),
   };
   consumer = deps.startConsumer(handlers);
 
@@ -185,6 +194,17 @@ async function main(): Promise<void> {
   await deps.queue.enqueueRepeatable({
     schedulerId: CLEANUP_UPLOADS_SCHEDULER_ID,
     jobName: CLEANUP_UPLOADS_JOB_NAME,
+    everyMs: 60 * 60_000,
+    payload: {},
+    attempts: 1,
+  });
+
+  // E3.6 — hourly for the same reason: the cache TTL is measured in days, so a
+  // faster tick would only re-walk the same files. It needs the cache volume
+  // mounted at MEDIA_CACHE_ROOT, the same path the web process writes to.
+  await deps.queue.enqueueRepeatable({
+    schedulerId: CLEANUP_MEDIA_CACHE_SCHEDULER_ID,
+    jobName: CLEANUP_MEDIA_CACHE_JOB_NAME,
     everyMs: 60 * 60_000,
     payload: {},
     attempts: 1,
