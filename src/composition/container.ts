@@ -547,6 +547,14 @@ export function getContainer(): Container {
 export { MEDIA_QUERY_PARAMS, MEDIA_ROUTE_PREFIX } from "@/core/domain/media-url";
 
 /**
+ * E9 upload caps, re-exported for the same reason: the intake route must know
+ * them to refuse a file before buffering it, and a second copy of the numbers
+ * in the route would give one business rule two homes.
+ */
+export { MAX_UPLOADS_PER_POST, MAX_UPLOAD_BYTES } from "@/core/domain/uploaded-media";
+export type { UploadedFile } from "@/core/usecases/upload-media";
+
+/**
  * Drains the DB pool, any lazily built producer queue and the AI registry cache
  * connection. For scripts and graceful shutdown, not per request. (The worker's
  * own queue/connection is owned and closed by worker-container.)
