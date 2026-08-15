@@ -15,6 +15,7 @@ import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
+import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
 import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
@@ -31,6 +32,7 @@ import {
 import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
+import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { ChannelPlatform, ChannelPublisher } from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
@@ -81,6 +83,7 @@ import {
 import {
   loadConfig,
   loadMediaConfig,
+  loadUploadConfig,
   loadMetaConfig,
   loadSecretsConfig,
   loadVideoConfig,
@@ -164,6 +167,8 @@ export type SignMediaUrl = (input: SignMediaUrlRequest) => SignedMediaUrl;
  */
 export interface UsecaseOverrides {
   drive?: DriveSource;
+  /** E9 — swap the upload store (tests use a temp dir, prod a Docker volume). */
+  blobs?: MediaBlobStore;
   sheet?: SheetSource;
   /** Worker passes its own queue so one process holds ONE Redis connection. */
   queue?: JobQueue;
@@ -361,6 +366,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     tiktok: overrides.publishers?.tiktok ?? makeLazyTikTokPublisher(deps.logger),
   };
   const drive = overrides.drive ?? google.drive;
+  // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
+  // Google sources it needs no lazy wrapper.
+  const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
   const mediaSign = makeLazyMediaSigner();
   /**
    * Read on FIRST USE, not here: a web/worker process must boot without
@@ -490,6 +498,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     }),
     getMediaContent: makeGetMediaContent({
       drive,
+      blobs,
       mediaAssets: media,
       sign: mediaSign,
       clock: deps.clock,

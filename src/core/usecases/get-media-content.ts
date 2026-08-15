@@ -5,8 +5,10 @@ import {
   type SignatureFn,
 } from "@/core/domain/media-url";
 import type { MediaKind } from "@/core/domain/media-file-name";
+import type { MediaAsset } from "@/core/domain/product";
 import type { DriveSource, MediaAssetLookup } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
+import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 
 /**
  * E3.6 — serve one media asset's bytes to an UNAUTHENTICATED caller.
@@ -51,6 +53,8 @@ export interface MediaContentResult {
 
 export interface GetMediaContentDeps {
   drive: DriveSource;
+  /** E9 — where operator-uploaded bytes live; Drive holds nothing for those. */
+  blobs: MediaBlobStore;
   mediaAssets: MediaAssetLookup;
   /** Same MAC the signer used — injected, so core never touches a secret. */
   sign: SignatureFn;
@@ -105,18 +109,28 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
       throw tooLarge(tenantId, assetId, asset.sizeBytes, maxBytes);
     }
 
-    const content = await deps.drive.download({ tenantId, fileId: assetId, maxBytes });
+    // Mode A reads from Drive, mode B from the blob store (E9). Both end up as
+    // the same bytes on the same signed URL, which is what lets an uploaded post
+    // travel the existing publish path unchanged (brief section 8).
+    const content =
+      asset.origin === "upload"
+        ? await readUploadedBlob(deps, { tenantId, assetId, asset, maxBytes })
+        : await deps.drive.download({ tenantId, fileId: assetId, maxBytes });
 
     if (!content?.bytes || content.bytes.length === 0) {
       // Facebook would fail on a 0-byte body with an opaque Graph error; make
       // the cause visible here instead.
-      throw new AppError("DRIVE_ERROR", {
-        message: "Drive returned an empty body for a media asset",
-        userMessage: "File ảnh trên Drive rỗng hoặc không tải được — cần kiểm tra lại file.",
+      throw new AppError(asset.origin === "upload" ? "MEDIA_NOT_FOUND" : "DRIVE_ERROR", {
+        message: "Media source returned an empty body for an asset",
+        userMessage:
+          asset.origin === "upload"
+            ? "File đã tải lên không còn đọc được — hãy tải lại file cho bài này."
+            : "File ảnh trên Drive rỗng hoặc không tải được — cần kiểm tra lại file.",
         context: {
           tenant_id: tenantId,
           drive_file_id: assetId,
           file_name: asset.fileName,
+          origin: asset.origin,
           reason: "EMPTY_CONTENT",
         },
       });
@@ -151,6 +165,56 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
 export type GetMediaContent = ReturnType<typeof makeGetMediaContent>;
 
 // --- helpers ----------------------------------------------------------------
+
+/**
+ * Reads the bytes of an uploaded asset.
+ *
+ * A row with `origin = 'upload'` and no storage key is a broken record, not a
+ * reason to fall through to Drive: Drive has never heard of this id, so the
+ * fallback would turn a clear "the upload is gone" into an opaque Drive 404.
+ */
+async function readUploadedBlob(
+  deps: GetMediaContentDeps,
+  input: { tenantId: string; assetId: string; asset: MediaAsset; maxBytes: number },
+): Promise<{ bytes: Uint8Array; mimeType: string | null }> {
+  const { tenantId, assetId, asset, maxBytes } = input;
+
+  if (!asset.storageKey) {
+    deps.logger.error("Uploaded asset has no storage key", {
+      tenant_id: tenantId,
+      drive_file_id: assetId,
+      file_name: asset.fileName,
+      error_code: "MEDIA_NOT_FOUND",
+      reason: "MISSING_STORAGE_KEY",
+    });
+    throw missingUpload(tenantId, assetId, "MISSING_STORAGE_KEY");
+  }
+
+  const blob = await deps.blobs.get({ tenantId, storageKey: asset.storageKey, maxBytes });
+  if (!blob) {
+    // The row outlived its bytes: the cleanup job raced the post, or the volume
+    // was replaced. Say so plainly — this is the "vì sao bài này không lên?"
+    // question business rule 5 exists for.
+    deps.logger.error("Uploaded asset has a storage key but no bytes behind it", {
+      tenant_id: tenantId,
+      drive_file_id: assetId,
+      file_name: asset.fileName,
+      error_code: "MEDIA_NOT_FOUND",
+      reason: "BLOB_MISSING",
+    });
+    throw missingUpload(tenantId, assetId, "BLOB_MISSING");
+  }
+
+  return blob;
+}
+
+function missingUpload(tenantId: string, assetId: string, reason: string): AppError {
+  return new AppError("MEDIA_NOT_FOUND", {
+    message: "Uploaded media asset has no readable bytes",
+    userMessage: "File đã tải lên không còn nữa — hãy tải lại file cho bài này.",
+    context: { tenant_id: tenantId, drive_file_id: assetId, origin: "upload", reason },
+  });
+}
 
 /**
  * One error code for every rejection (expired, forged, malformed): the caller
