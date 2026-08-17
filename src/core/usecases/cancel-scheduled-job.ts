@@ -157,6 +157,12 @@ export function makeCancelScheduledJob(deps: CancelScheduledJobDeps) {
       reason: "OPERATOR_CANCELLED",
       errorCode: CANCELLED_ERROR_CODE,
       errorMessage: userMessage,
+      // Reached only when the platform CONFIRMED it no longer holds the post
+      // (deleteOnPlatform throws on anything less), so the id names nothing any
+      // more. Dropping it keeps "huỷ rồi đổi ý" working: a later ordinary
+      // failure of the re-run must not inherit a dead id and be refused as a
+      // possible duplicate (core/domain/post-job → unconfirmedPlatformPostReason).
+      clearScheduledPostId: handedOff,
     });
     const note = sanitiseNote(input?.note);
     const cancelled = await deps.postJobs.applyTransition({

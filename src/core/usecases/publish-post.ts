@@ -7,12 +7,14 @@ import {
   type VideoTarget as SpecVideoTarget,
 } from "@/core/domain/video-spec";
 import {
+  canOperatorRetryPostJob,
   deferredPostJobQueueId,
   HANDOFF_DEADLINE_MS,
   HANDOFF_FAILED_ERROR_CODE,
   nextHandoffAttemptDelayMs,
   planScheduledPublish,
   postJobDuplicateKey,
+  PUBLISH_UNCONFIRMED_ERROR_CODE,
   transitionPostJob,
   type PostJob,
   type PostJobMedia,
@@ -1130,23 +1132,46 @@ async function handOffToPlatform(
     },
   );
   if (!scheduledOnPlatform) {
-    // Facebook HOLDS the post but the row moved under us. Never silent: nothing
-    // must republish it, and a human has to reconcile.
+    // Facebook HOLDS the post but the row moved under us — in practice the
+    // reaper, which is the only other writer of a `publishing` row and can fire
+    // while a 10-photo album is still uploading (DEFAULT_PUBLISHING_STALE_MS).
+    // Never silent: nothing must republish it, and a human has to reconcile.
+    //
+    // The id cannot be stored on the row (that row is somebody else's now), so
+    // the LOG is the only place it survives — hence the re-read below, which
+    // puts "what the row says now" next to "what Facebook is holding" in one
+    // line. The re-run button on that row is refused by the code the reaper
+    // wrote (PUBLISH_UNCONFIRMED, see reap-post-jobs).
+    const current = await deps.postJobs
+      .findJobById(job.tenantId, job.id)
+      .catch((error: unknown) => {
+        log.warn("Could not re-read the row that won the race", {
+          err: AppError.from(error, "DB_ERROR", { tenant_id: job.tenantId, job_id: job.id }),
+        });
+        return null;
+      });
     const appError = new AppError("INTERNAL", {
       message: "Post handed to the platform but the job row was no longer in 'publishing'",
       userMessage:
-        "Facebook đã nhận lịch đăng nhưng hệ thống không ghi được trạng thái — cần kiểm tra trên Page.",
+        "Facebook đã nhận lịch đăng nhưng hệ thống không ghi được trạng thái — hãy mở Trang, " +
+        "vào mục bài đã lên lịch để kiểm tra; KHÔNG chạy lại bài này.",
       context: {
         tenant_id: job.tenantId,
         job_id: job.id,
         channel: job.channelId,
         scheduled_post_id: handed.scheduledPostId,
         scheduled_at: scheduledAt.toISOString(),
+        row_status_now: current?.status ?? null,
+        row_error_code_now: current?.lastErrorCode ?? null,
       },
     });
     log.error("Handed off but could not store the state", {
       err: appError,
       error_code: "INTERNAL",
+      scheduled_post_id: handed.scheduledPostId,
+      row_status_now: current?.status ?? null,
+      row_error_code_now: current?.lastErrorCode ?? null,
+      operator_retry_allowed: current ? canOperatorRetryPostJob(current) : null,
       alert: "OPERATOR_ATTENTION",
     });
     throw appError;
@@ -1238,6 +1263,10 @@ async function handleHandoffError(
   // retryable status) with a message that never mentions the post that may be
   // sitting on the Page. A dead token found BEFORE the dispatch still blocks:
   // that path carries platform_created_nothing and falls through below.
+  // The second clause is NOT redundant: the port requires exactly one of the two
+  // flags, and a publisher that sets BOTH is contradicting itself. Reading that
+  // as "nothing was created" would be the one mistake with a post on the Page at
+  // the end of it, so the dispatch flag wins.
   if (!createdNothing || flags.feed_dispatched === true) {
     return await failUnconfirmedHandoff(deps, log, job, appError, ctx);
   }
@@ -1344,7 +1373,21 @@ async function failUnconfirmedHandoff(
   appError: AppError,
   ctx: { attempt: number; durationMs: number; scheduledAt: Date },
 ): Promise<never> {
-  const feedDispatched = (appError.context as { feed_dispatched?: unknown }).feed_dispatched === true;
+  const flags = appError.context as {
+    feed_dispatched?: unknown;
+    platform_created_nothing?: unknown;
+  };
+  const feedDispatched = flags.feed_dispatched === true;
+  // What the publisher actually told us, not what we assumed. "none" is the
+  // line to grep for when a publisher forgets the port contract: it means this
+  // job was stopped on the fail-closed default, not on evidence.
+  const handoffEvidence = feedDispatched
+    ? flags.platform_created_nothing === true
+      ? "contradictory"
+      : "feed_dispatched"
+    : flags.platform_created_nothing === true
+      ? "platform_created_nothing"
+      : "none";
   const userMessage =
     `Không xác nhận được kết quả giao lịch cho Facebook (${appError.userMessage}) — ` +
     "bài hẹn CÓ THỂ đã được tạo trên Trang. Hệ thống dừng lại và KHÔNG tự đăng lại để tránh đăng trùng: " +
@@ -1367,9 +1410,13 @@ async function failUnconfirmedHandoff(
     outcome: "failed",
     error_code: HANDOFF_FAILED_ERROR_CODE,
     original_code: appError.code,
-    // The two facts that answer "vì sao bài này không lên" without a debugger.
+    // The facts that answer "vì sao bài này không lên" without a debugger. The
+    // flags are logged AS RECEIVED — a hardcoded `platform_created_nothing:
+    // false` would read as "the publisher said a post may exist" even when it
+    // said nothing at all.
     feed_dispatched: feedDispatched,
-    platform_created_nothing: false,
+    platform_created_nothing: flags.platform_created_nothing === true,
+    handoff_evidence: handoffEvidence,
     attempt: ctx.attempt,
     duration_ms: ctx.durationMs,
     scheduled_at: ctx.scheduledAt.toISOString(),
@@ -1462,10 +1509,26 @@ async function requeueForLater(
 }
 
 /**
- * Publish failed. Three outcomes, never a swallowed error:
- *   TOKEN_EXPIRED           -> blocked, no retry (a retry cannot mint a token)
- *   transient, retry left   -> back to `queued` + rethrow (BullMQ backs off)
- *   transient, last attempt -> `failed` + throw PUBLISH_FAILED
+ * Publish failed. ONE question first, of every error whatever its code, exactly
+ * as on the handoff path: did the publisher PROVE that no request capable of
+ * creating the post was ever dispatched for this job?
+ *
+ *   no proof              -> `failed`, and the queue is told not to come back
+ *                            (failUnconfirmedPublish). The platform may have the
+ *                            post already; BullMQ's backoff would send a second
+ *                            /feed with nobody in the loop, which is the one
+ *                            failure mode business rule 4 exists to prevent.
+ *   proof, TOKEN_EXPIRED  -> blocked, no retry (a retry cannot mint a token)
+ *   proof, retry left     -> back to `queued` + rethrow (BullMQ backs off)
+ *   proof, last attempt   -> `failed` + throw PUBLISH_FAILED
+ *
+ * `retryable` decides nothing until that question is answered: it describes
+ * whether the platform CALL could succeed later, never whether repeating it is
+ * safe. The trade is deliberate and it costs posts — an immediate post whose
+ * /feed timed out on a flaky network now needs a human, where it used to
+ * recover by itself. Everything BEFORE the creating request (reading bytes,
+ * uploading unpublished photos, the pre-flight guards) still carries proof and
+ * still retries; that is most of the error surface.
  */
 async function handlePublishError(
   deps: PublishPostDeps,
@@ -1482,6 +1545,27 @@ async function handlePublishError(
     channel: job.channelId,
     attempt: ctx.attempt,
   });
+
+  const flags = appError.context as {
+    platform_created_nothing?: unknown;
+    feed_dispatched?: unknown;
+  };
+  // The port requires EXACTLY ONE of the two flags. Both at once is a publisher
+  // contradicting itself, and reading that as "nothing was created" is the one
+  // mistake with a post on the Page at the end of it — so the dispatch flag
+  // wins. Neither flag is a publisher that forgot the contract: also fail
+  // closed, and `publish_evidence: "none"` in the log names it.
+  const createdNothing =
+    flags.platform_created_nothing === true && flags.feed_dispatched !== true;
+
+  // Runs BEFORE any routing by error code, TOKEN_EXPIRED included: a 190 coming
+  // back FROM a dispatched /feed says the token died, not that the Page is
+  // empty, and `blocked` is a status an operator may re-queue from. A dead token
+  // found before the dispatch still blocks — that error carries the proof and
+  // falls through below.
+  if (!createdNothing) {
+    return await failUnconfirmedPublish(deps, log, job, appError, ctx);
+  }
 
   if (appError.code === "TOKEN_EXPIRED") {
     const userMessage = appError.userMessage;
@@ -1502,7 +1586,8 @@ async function handlePublishError(
     });
   }
 
-  // Convention with every ChannelPublisher (see core/ports/publisher.ts):
+  // Only now, and only for an error that PROVED nothing was created. Convention
+  // with every ChannelPublisher (see core/ports/publisher.ts):
   // `context.retryable === false` means the platform refused for a reason a
   // backoff cannot change (bad parameter, missing permission, policy block).
   const retryable = (appError.context as { retryable?: unknown }).retryable !== false;
@@ -1520,6 +1605,8 @@ async function handlePublishError(
       max_attempts: ctx.maxAttempts,
       duration_ms: ctx.durationMs,
       will_retry: true,
+      // The proof that let this retry happen. Grep-able next to the refusals.
+      publish_evidence: "platform_created_nothing",
     });
     // Rethrow: the queue adapter owns backoff, not this usecase.
     throw appError;
@@ -1543,7 +1630,10 @@ async function handlePublishError(
     job,
     "failed",
     {
-      reason: retryable ? "RETRIES_EXHAUSTED" : "NON_RETRYABLE_PLATFORM_ERROR",
+      // Not "PLATFORM_ERROR": `retryable: false` is also what our OWN pre-flight
+      // guards raise (no caption, 11 photos, a channel without a Page id), and
+      // calling those a platform error sends the reader to Facebook's logs.
+      reason: retryable ? "RETRIES_EXHAUSTED" : "NON_RETRYABLE_ERROR",
       errorCode: "PUBLISH_FAILED",
       errorMessage: `${finalError.userMessage} (${appError.userMessage})`,
     },
@@ -1567,6 +1657,98 @@ async function handlePublishError(
     },
   );
   throw finalError;
+}
+
+/**
+ * The IMMEDIATE publish ended without a verdict: the request that creates the
+ * post was dispatched (or the publisher could not promise it was not), and
+ * nobody knows whether a post now exists on the channel.
+ *
+ * The job stops here — `failed`, no re-queue, and the thrown code is one the
+ * queue treats as unrecoverable, so BullMQ does not send a second creating
+ * request behind everyone's back. That automatic second attempt is the whole
+ * reason this function exists: the other three doors of this shape needed an
+ * operator to press something, this one pressed itself.
+ *
+ * The row carries PUBLISH_UNCONFIRMED, which also darkens the "Chạy lại" button
+ * (canOperatorRetryPostJob): the recovery is a human one — look at the channel,
+ * then compose a new batch if nothing is there.
+ */
+async function failUnconfirmedPublish(
+  deps: PublishPostDeps,
+  log: Logger,
+  job: PostJob,
+  appError: AppError,
+  ctx: { attempt: number; maxAttempts: number; durationMs: number },
+): Promise<never> {
+  const flags = appError.context as {
+    feed_dispatched?: unknown;
+    platform_created_nothing?: unknown;
+  };
+  const feedDispatched = flags.feed_dispatched === true;
+  // What the publisher actually said, not what we assumed. "none" is the line to
+  // grep for when a publisher forgets the port contract: the job was stopped on
+  // the fail-closed default, not on evidence.
+  const evidence = feedDispatched
+    ? flags.platform_created_nothing === true
+      ? "contradictory"
+      : "feed_dispatched"
+    : flags.platform_created_nothing === true
+      ? "platform_created_nothing"
+      : "none";
+  const userMessage =
+    `Không xác nhận được kết quả đăng bài (${appError.userMessage}) — bài CÓ THỂ đã lên kênh. ` +
+    "Hệ thống dừng lại và KHÔNG tự đăng lại để tránh đăng trùng: hãy mở Trang kiểm tra, " +
+    "nếu chưa có bài thì soạn lại bài mới.";
+
+  const wasScheduled = job.scheduledAt instanceof Date;
+  await move(
+    deps,
+    job,
+    "failed",
+    {
+      reason: "PUBLISH_OUTCOME_UNKNOWN",
+      errorCode: PUBLISH_UNCONFIRMED_ERROR_CODE,
+      errorMessage: userMessage,
+    },
+    wasScheduled ? SCHEDULED_FAILED_AUDIT_ACTION : undefined,
+  );
+  await deps.postJobs.refreshBatchStatus(job.tenantId, job.batchId);
+  log.error("Publish outcome unknown — job stopped so nothing can double-post", {
+    err: appError,
+    outcome: "failed",
+    error_code: PUBLISH_UNCONFIRMED_ERROR_CODE,
+    original_code: appError.code,
+    // Logged AS RECEIVED: a hardcoded `platform_created_nothing: false` would
+    // read as "the publisher said a post may exist" even when it said nothing.
+    feed_dispatched: feedDispatched,
+    platform_created_nothing: flags.platform_created_nothing === true,
+    publish_evidence: evidence,
+    attempt: ctx.attempt,
+    max_attempts: ctx.maxAttempts,
+    duration_ms: ctx.durationMs,
+    will_retry: false,
+    scheduled_at: job.scheduledAt?.toISOString() ?? null,
+    audit_action: wasScheduled ? SCHEDULED_FAILED_AUDIT_ACTION : "post_job.failed",
+    alert: "OPERATOR_ATTENTION",
+  });
+  // PUBLISH_FAILED, not the platform code: the queue adapter's
+  // NON_RETRYABLE_CODES turns it into an UnrecoverableError, which is what
+  // actually stops BullMQ from re-running this job. The row's own code stays
+  // PUBLISH_UNCONFIRMED — the two answer different readers.
+  throw new AppError("PUBLISH_FAILED", {
+    message: `Publish outcome unknown on attempt ${ctx.attempt}/${ctx.maxAttempts}: ${appError.message}`,
+    userMessage,
+    context: {
+      ...appError.context,
+      original_code: appError.code,
+      job_error_code: PUBLISH_UNCONFIRMED_ERROR_CODE,
+      publish_evidence: evidence,
+      max_attempts: ctx.maxAttempts,
+      retryable: false,
+    },
+    cause: appError,
+  });
 }
 
 /** Domain transition + optimistic DB write. Null = another writer won. */

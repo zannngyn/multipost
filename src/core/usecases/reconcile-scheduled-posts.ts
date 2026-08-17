@@ -1,5 +1,10 @@
 import { AppError } from "@/core/domain/errors";
-import { transitionPostJob, type PostJob, type TransitionMeta } from "@/core/domain/post-job";
+import {
+  SCHEDULE_UNCONFIRMED_ERROR_CODE,
+  transitionPostJob,
+  type PostJob,
+  type TransitionMeta,
+} from "@/core/domain/post-job";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type {
@@ -44,8 +49,13 @@ export const RECONCILE_SCHEDULED_POSTS_JOB_NAME = "reconcile-scheduled-posts";
 export const RECONCILED_PUBLISHED_AUDIT_ACTION = "post_job.published_by_platform";
 export const RECONCILED_UNCONFIRMED_AUDIT_ACTION = "post_job.schedule_unconfirmed";
 
-/** Error code stored on the row (free text by contract, see PostJob). */
-export const SCHEDULE_UNCONFIRMED_ERROR_CODE = "SCHEDULE_UNCONFIRMED";
+/**
+ * Error code stored on the row (free text by contract, see PostJob). Defined in
+ * the DOMAIN and re-exported here: it is also the code that refuses the "Chạy
+ * lại" button, and the row, the retry usecase and the job log must read one
+ * constant.
+ */
+export { SCHEDULE_UNCONFIRMED_ERROR_CODE };
 
 /**
  * How long after the hour to start asking. Meta does not publish at the second,
@@ -295,8 +305,10 @@ function assertHandledState(state: never): never {
 }
 
 /**
- * Past the give-up horizon a post nobody can account for becomes `failed`, with
- * the same instruction the reaper gives: CHECK THE PAGE before running it again.
+ * Past the give-up horizon a post nobody can account for becomes `failed` — and
+ * `failed` here is NOT "press Chạy lại": the row still carries the id of an
+ * object Facebook created, so the retry is refused and the message asks for the
+ * one recovery that cannot double-post (delete it on the Page, compose again).
  * Anything else would either hide a live post or invite a duplicate.
  */
 async function giveUpIfTooOld(
@@ -318,8 +330,16 @@ async function giveUp(
   log: Logger,
   reason: string,
 ): Promise<ReconciledJob> {
+  // Not "rồi bấm Chạy lại": the row keeps `scheduledPostId`, so Facebook is
+  // holding — or has already published — a post we can name. Re-running this job
+  // would put a second one next to it, and the retry usecase refuses it for
+  // exactly that reason (core/domain/post-job → unconfirmedPlatformPostReason).
+  // The message must therefore describe the recovery that actually exists.
+  const postIdNote = str(job.scheduledPostId).length > 0 ? ` (mã bài ${str(job.scheduledPostId)})` : "";
   const userMessage =
-    "Không xác nhận được bài đã hẹn trên Facebook sau nhiều lần kiểm tra — hãy mở Trang để xem bài đã lên chưa rồi mới bấm Chạy lại.";
+    `Không xác nhận được bài đã hẹn trên Facebook sau nhiều lần kiểm tra${postIdNote} — ` +
+    "bài CÓ THỂ vẫn nằm trên Trang. Hệ thống KHÔNG tự đăng lại và đã khoá nút Chạy lại để tránh đăng trùng: " +
+    "hãy mở Trang, vào mục bài đã lên lịch, xoá bài nếu thấy rồi soạn lại bài mới.";
   const failed = await move(
     deps,
     job,

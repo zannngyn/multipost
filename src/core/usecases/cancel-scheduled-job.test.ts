@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
-import { deriveBatchStatus, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
+import {
+  canOperatorRetryPostJob,
+  deriveBatchStatus,
+  type PostJob,
+  type PostJobStatus,
+} from "@/core/domain/post-job";
 import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type {
@@ -565,6 +570,11 @@ describe("cancelScheduledJob — a post Facebook is holding (E8.6)", () => {
       platform_post_deleted: true,
       scheduled_post_id: "555000111_777",
     });
+    // The id is dropped from the ROW (it lives on in the audit payload above):
+    // Facebook confirmed the object is gone, and a dead id left behind would
+    // later refuse the re-run of a job that has nothing on the Page.
+    expect(transition.next.scheduledPostId).toBeNull();
+    expect(canOperatorRetryPostJob(transition.next)).toBe(true);
     // Nothing to remove from the queue: Facebook was holding this one.
     expect(h.queue.removedIds).toHaveLength(0);
   });

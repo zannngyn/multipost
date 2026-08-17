@@ -178,6 +178,16 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         // THE anti-duplicate lock firing (business rule 4).
         throw new AppError("DUPLICATE_POST_BLOCKED", {
           message: "A post job already exists for this (batch, code, colour, channel, format)",
+          // Its OWN sentence, not the generic one for this code. Two very
+          // different events raise DUPLICATE_POST_BLOCKED — this one (the lock
+          // stopped a second identical batch, nothing was sent anywhere) and a
+          // refused retry (a post may already be on the Page) — and they need
+          // opposite instructions. The presenter cannot tell them apart, so the
+          // next step has to be written where the cause is known.
+          userMessage:
+            "Lô này đã có bài cho đúng mã sản phẩm / màu / kênh / định dạng đó — đã chặn tạo trùng, " +
+            "chưa có gì được gửi lên kênh. Hãy mở nhật ký đăng của lô để xem bài đã tạo trước đó; " +
+            "nếu muốn đăng lại thì chạy lại chính bài đó thay vì tạo lô mới.",
           context: {
             tenant_id: scope.tenantId,
             batch_id: input.batch.id,

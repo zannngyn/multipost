@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
-import { deriveBatchStatus, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
+import {
+  canOperatorRetryPostJob,
+  deriveBatchStatus,
+  type PostJob,
+  type PostJobStatus,
+} from "@/core/domain/post-job";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
 import type {
@@ -309,8 +314,7 @@ describe("retryPostJob — refusals", () => {
 
       const refusal = lines.find(
         (line) =>
-          line.message ===
-          "Retry refused: the platform may already hold a scheduled post for this job",
+          line.message === "Retry refused: the platform may already hold a post for this job",
       );
       expect(refusal?.level).toBe("warn");
       expect(refusal?.context?.alert).toBe("OPERATOR_ATTENTION");
@@ -345,6 +349,127 @@ describe("retryPostJob — refusals", () => {
       code: "DUPLICATE_POST_BLOCKED",
     });
     expect(queue.enqueued).toHaveLength(0);
+  });
+
+  /**
+   * DOOR 1 — the reconciliation sweep gave up on a post Facebook confirmedly
+   * created (the row still carries its id). Before this guard the row said
+   * `failed`, the button was lit, and pressing it published a live post next to
+   * the one Facebook was holding. The old hedge was a sentence next to that
+   * button; a sentence is not a lock.
+   */
+  it.each([
+    ["inside the handoff window (T-30..T-12)", 20 * 60_000],
+    ["in the dead zone (T-12..T)", 5 * 60_000],
+    ["after the hour has passed", -3 * 60_000],
+  ])(
+    "DOOR 1: refuses a job the reconciler gave up on — pressed %s",
+    async (_label, offsetMs) => {
+      const job = makeJob({
+        status: "failed",
+        lastErrorCode: "SCHEDULE_UNCONFIRMED",
+        lastErrorMessage: "Không xác nhận được bài đã hẹn trên Facebook sau nhiều lần kiểm tra.",
+        // The proof: Facebook created this object for this job.
+        scheduledPostId: "1000000000_2000000000",
+        scheduledAt: new Date(CLOCK.nowMs() + offsetMs),
+      });
+      const { retryPostJob, repo, queue } = harness([job]);
+
+      const error = await retryPostJob({ tenantId: TENANT, postJobId: job.id }).catch(
+        (caught: unknown) => caught as AppError,
+      );
+
+      expect(error).toMatchObject({
+        code: "DUPLICATE_POST_BLOCKED",
+        context: {
+          reason: "PLATFORM_HOLDS_SCHEDULED_POST",
+          scheduled_post_id: "1000000000_2000000000",
+        },
+      });
+      // The id is IN the sentence: an operator cannot delete a post they cannot
+      // find, and the Page's scheduled list is long.
+      expect(error.userMessage).toContain("1000000000_2000000000");
+      expect(error.userMessage).toContain("bài đã lên lịch");
+      expect(repo.transitions).toHaveLength(0);
+      expect(repo.get(job.id)?.status).toBe("failed");
+      expect(queue.enqueued).toHaveLength(0);
+    },
+  );
+
+  /**
+   * DOORS 2 & 3 — the reaper stopped a SCHEDULED job that died in `publishing`
+   * (the typical case: the worker was killed after /feed was dispatched, or
+   * while a 10-photo album was still uploading past the 15' stale window).
+   * Facebook may hold the post, and it is not in the feed the operator checks.
+   */
+  it("DOORS 2+3: refuses a scheduled job the reaper stopped mid-publish", async () => {
+    const job = makeJob({
+      status: "failed",
+      lastErrorCode: "PUBLISH_UNCONFIRMED",
+      lastErrorMessage: "Bài hẹn giờ bị kẹt ở trạng thái đang đăng (worker dừng giữa chừng).",
+      scheduledAt: new Date(CLOCK.nowMs() + 20 * 60_000),
+      attemptCount: 1,
+    });
+    const { retryPostJob, repo, queue } = harness([job]);
+
+    const error = await retryPostJob({ tenantId: TENANT, postJobId: job.id }).catch(
+      (caught: unknown) => caught as AppError,
+    );
+
+    expect(error).toMatchObject({
+      code: "DUPLICATE_POST_BLOCKED",
+      context: { reason: "PUBLISH_OUTCOME_UNKNOWN" },
+    });
+    // Both places, because the reaper cannot tell which kind of post it made.
+    expect(error.userMessage).toContain("bài đã đăng");
+    expect(error.userMessage).toContain("bài đã lên lịch");
+    expect(repo.transitions).toHaveLength(0);
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  /**
+   * The button and the API must answer the SAME question. They used to be two
+   * expressions in two files; a third rule added to one of them would have hidden
+   * the button while the API still accepted the call (or worse, the reverse).
+   */
+  it("never disagrees with canOperatorRetryPostJob (the predicate the job log draws with)", async () => {
+    const rows: PostJob[] = [
+      makeJob({ id: "row-failed-plain", status: "failed", lastErrorCode: "PUBLISH_FAILED" }),
+      makeJob({ id: "row-blocked-stock", status: "blocked", lastErrorCode: "OUT_OF_STOCK" }),
+      makeJob({
+        id: "row-blocked-cancelled",
+        status: "blocked",
+        lastErrorCode: "OPERATOR_CANCELLED",
+        scheduledPostId: "1000000000_3000000000",
+      }),
+      makeJob({ id: "row-handoff", status: "failed", lastErrorCode: "HANDOFF_FAILED" }),
+      makeJob({
+        id: "row-unconfirmed",
+        status: "failed",
+        lastErrorCode: "SCHEDULE_UNCONFIRMED",
+        scheduledPostId: "1000000000_2000000000",
+      }),
+      makeJob({ id: "row-reaped", status: "failed", lastErrorCode: "PUBLISH_UNCONFIRMED" }),
+      makeJob({ id: "row-published", status: "published", publishedPostId: "1_2" }),
+      makeJob({ id: "row-queued", status: "queued" }),
+      makeJob({ id: "row-publishing", status: "publishing" }),
+      makeJob({ id: "row-draft", status: "draft" }),
+      makeJob({ id: "row-scheduled", status: "scheduled_on_facebook", scheduledPostId: "1_9" }),
+    ];
+
+    for (const row of rows) {
+      const { retryPostJob, queue } = harness([row]);
+      const accepted = await retryPostJob({ tenantId: TENANT, postJobId: row.id }).then(
+        () => true,
+        () => false,
+      );
+      expect({ id: row.id, accepted }).toEqual({
+        id: row.id,
+        accepted: canOperatorRetryPostJob(row),
+      });
+      // Whatever the verdict, a refusal never leaves a queue entry behind.
+      expect(queue.enqueued).toHaveLength(accepted ? 1 : 0);
+    }
   });
 
   it("still re-queues a scheduled job that failed for an ORDINARY reason", async () => {

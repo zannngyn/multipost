@@ -1,13 +1,14 @@
 import { AppError } from "@/core/domain/errors";
 import {
-  HANDOFF_FAILED_ERROR_CODE,
   RETRYABLE_POST_JOB_STATUSES,
+  canOperatorRetryPostJob,
   deferredPostJobQueueId,
   isRetryablePostJobStatus,
-  mayHoldUnconfirmedScheduledPost,
   transitionPostJob,
+  unconfirmedPlatformPostReason,
   type PostJob,
   type PostJobStatus,
+  type UnconfirmedPlatformPostReason,
 } from "@/core/domain/post-job";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Clock, Logger } from "@/core/ports/infra";
@@ -38,10 +39,15 @@ import { resolveActorUserId } from "./resolve-actor";
  *   draft      -> INVALID_JOB_TRANSITION. Nothing failed yet; the batch flow
  *                 owns the first enqueue.
  *
- * And one refusal the STATUS cannot express (E8.6): a `failed` job whose last
- * error is HANDOFF_FAILED may already have a scheduled post on the Page, so it
- * is DUPLICATE_POST_BLOCKED — see the guard below for the three ways a retry of
- * such a row ends with two posts.
+ * And one refusal the STATUS cannot express (E8.6): a `failed` job the platform
+ * may already hold a post for — it carries the id of a scheduled object, or a
+ * call ended without a verdict — is DUPLICATE_POST_BLOCKED. See the guard below
+ * for the three ways a retry of such a row ends with two posts.
+ *
+ * BOTH questions are asked through `canOperatorRetryPostJob`, the same predicate
+ * the job log draws its button with. The branches after it only pick the
+ * sentence to show: a rule added to the domain can never light a button in front
+ * of an API that refuses.
  */
 
 export interface RetryPostJobInput {
@@ -115,6 +121,14 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
       channel: job.channelId,
     });
 
+    // ONE question, asked through the same predicate the job log draws its
+    // button with (canOperatorRetryPostJob): a rule added to it can never leave
+    // a lit button in front of an API that refuses, nor the reverse. The
+    // branches below only choose WHICH refusal to explain.
+    if (canOperatorRetryPostJob(job)) {
+      return await requeue(deps, job, input, log);
+    }
+
     if (!isRetryablePostJobStatus(job.status)) {
       const appError = new AppError("INVALID_JOB_TRANSITION", {
         message: `Post job in status ${job.status} cannot be retried`,
@@ -140,140 +154,156 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
     }
 
     // --- The status is not enough (E8.6) ------------------------------------
-    // `failed` + HANDOFF_FAILED means the handoff ended without a verdict:
-    // Facebook may be holding a scheduled post for this exact job. Re-queueing
-    // it opens THREE roads to a second post, and the status guard above sees
-    // none of them, because all three start from a perfectly legal `queued`:
+    // The row is `failed`/`blocked` and the predicate still said no: the
+    // platform may be holding a post for this exact job (it left an id behind,
+    // or a call ended without a verdict). Re-queueing opens THREE roads to a
+    // second post, and the status guard above sees none of them, because all
+    // three start from a perfectly legal `queued`:
     //   pressed in T-30..T-12 -> hand_off  -> a SECOND scheduled post;
     //   pressed in T-12..T    -> wait      -> publish_now at T, live post next
     //                                         to the one Facebook holds;
     //   pressed after T       -> publish_now right away, same result.
     // So the refusal has to happen here, on the row, before anything is queued.
     // Recovery is a human one and the message says exactly what it is.
-    if (mayHoldUnconfirmedScheduledPost(job)) {
-      const appError = new AppError("DUPLICATE_POST_BLOCKED", {
-        message: "Refusing to retry a job whose handoff outcome is unknown",
-        userMessage:
-          "Bài này đã được giao lịch cho Facebook nhưng hệ thống không nhận được xác nhận — " +
-          "Trang CÓ THỂ đang giữ một bài hẹn của bài này. Chạy lại sẽ đăng trùng. " +
-          "Hãy mở Trang, vào mục bài đã lên lịch, xoá bài nếu thấy, rồi soạn lại bài mới.",
-        context: {
-          tenant_id: tenantId,
-          job_id: job.id,
-          batch_id: job.batchId,
-          channel: job.channelId,
-          from: job.status,
-          last_error_code: job.lastErrorCode,
-          scheduled_at: job.scheduledAt?.toISOString() ?? null,
-          reason: "HANDOFF_OUTCOME_UNKNOWN",
-        },
-      });
-      log.warn("Retry refused: the platform may already hold a scheduled post for this job", {
-        err: appError,
-        error_code: appError.code,
-        job_status: job.status,
-        last_error_code: HANDOFF_FAILED_ERROR_CODE,
-        user_message: appError.userMessage,
-        alert: "OPERATOR_ATTENTION",
-      });
-      throw appError;
-    }
-
-    // --- Who is doing this? (audit trail) -----------------------------------
-    const actorUserId = await resolveActorUserId(deps, tenantId, input, log);
-
-    // --- Re-queue: DB first, queue second (a worker must see `queued`) -------
-    // A NEW queue id every time: BullMQ ignores an `add` whose id is still in
-    // the retained set. It is stored IN the transition, so the stale-entry guard
-    // in publish-post recognises the entry this retry is about to create.
-    const queueJobId = deferredPostJobQueueId(job, deps.clock.nowMs());
-    const next = transitionPostJob(job, "queued", { reason: "OPERATOR_RETRY", queueJobId });
-    const queued = await deps.postJobs.applyTransition({
-      tenantId,
-      postJobId: job.id,
-      from: job.status,
-      next,
-      reason: "OPERATOR_RETRY",
-      actorUserId,
-    });
-    if (!queued) {
-      // Somebody else moved the row between the read and the write (a second
-      // click, another operator, a worker). Refuse instead of double-queueing.
-      const appError = new AppError("INVALID_JOB_TRANSITION", {
-        message: "Post job status changed before the retry could be applied",
-        userMessage: "Bài này vừa được xử lý ở nơi khác — hãy tải lại rồi thử lại.",
-        context: {
-          tenant_id: tenantId,
-          job_id: job.id,
-          from: job.status,
-          reason: "CONCURRENT_MODIFICATION",
-        },
-      });
-      log.warn("Retry lost the race for this job", { err: appError, error_code: appError.code });
-      throw appError;
-    }
-
-    const settings = await deps.channels.getPublishSettings(tenantId);
-
-    try {
-      await deps.queue.enqueue(
-        PUBLISH_POST_JOB_NAME,
-        { tenantId, postJobId: queued.id },
-        {
-          jobId: queueJobId,
-          attempts: settings.maxAttempts,
-          backoff: { strategy: "exponential", delayMs: settings.retryBackoffMs },
-        },
-      );
-    } catch (error) {
-      const appError = AppError.from(error, "QUEUE_ERROR", {
+    //
+    // The reason can be null here only if a FOURTH rule is added to
+    // canOperatorRetryPostJob without a sentence in unconfirmedRefusalMessage.
+    // That case is still REFUSED (with the generic sentence), never let through.
+    const unconfirmedReason = unconfirmedPlatformPostReason(job);
+    const appError = new AppError("DUPLICATE_POST_BLOCKED", {
+      message: `Refusing to retry a job the platform may already hold a post for (${
+        unconfirmedReason ?? "UNSPECIFIED"
+      })`,
+      userMessage: unconfirmedRefusalMessage(unconfirmedReason, job.scheduledPostId),
+      context: {
         tenant_id: tenantId,
-        job_id: queued.id,
-        batch_id: queued.batchId,
-        channel: queued.channelId,
-        operation: "retryPostJob.enqueue",
-      });
-      // Put the row back where it was: a `queued` job nobody will ever pick up
-      // is the silent failure this whole file exists to avoid.
-      const userMessage = "Không đưa được bài vào hàng đợi — bài vẫn ở trạng thái lỗi, hãy thử lại.";
-      await revert(deps, queued, job.status, appError.code, userMessage);
-      log.error("Retry could not enqueue the job", {
-        err: appError,
-        error_code: appError.code,
-        reverted_to: job.status,
-      });
-      throw appError;
-    }
-
-    await deps.postJobs.refreshBatchStatus(tenantId, queued.batchId);
-
-    const userMessage = "Đã đưa bài vào hàng đợi để đăng lại — tồn kho sẽ được kiểm tra lại trước khi đăng.";
-    log.info("Post job re-queued by an operator", {
-      previous_status: job.status,
-      previous_error_code: job.lastErrorCode,
-      queue_job_id: queueJobId,
-      attempts: settings.maxAttempts,
-      attempt_count: queued.attemptCount,
-      actor_user_id: actorUserId,
-      actor_email: str(input?.actorEmail) || null,
+        job_id: job.id,
+        batch_id: job.batchId,
+        channel: job.channelId,
+        from: job.status,
+        last_error_code: job.lastErrorCode,
+        scheduled_post_id: job.scheduledPostId,
+        scheduled_at: job.scheduledAt?.toISOString() ?? null,
+        reason: unconfirmedReason ?? "RETRY_REFUSED_BY_DOMAIN",
+      },
     });
-
-    return {
-      tenantId,
-      postJobId: queued.id,
-      batchId: queued.batchId,
-      channelId: queued.channelId,
-      productCode: queued.productCode,
-      previousStatus: job.status,
-      status: queued.status,
-      queueJobId,
-      attemptCount: queued.attemptCount,
-      userMessage,
-    };
+    log.warn("Retry refused: the platform may already hold a post for this job", {
+      err: appError,
+      error_code: appError.code,
+      job_status: job.status,
+      last_error_code: job.lastErrorCode,
+      scheduled_post_id: job.scheduledPostId,
+      refusal_reason: unconfirmedReason ?? "RETRY_REFUSED_BY_DOMAIN",
+      user_message: appError.userMessage,
+      alert: "OPERATOR_ATTENTION",
+    });
+    throw appError;
   };
 }
 
 export type RetryPostJob = ReturnType<typeof makeRetryPostJob>;
+
+// --- the re-queue itself (only reached once the row passed the one guard) ----
+
+async function requeue(
+  deps: RetryPostJobDeps,
+  job: PostJob,
+  input: RetryPostJobInput,
+  log: Logger,
+): Promise<RetryPostJobResult> {
+  const tenantId = job.tenantId;
+  // --- Who is doing this? (audit trail) -------------------------------------
+  const actorUserId = await resolveActorUserId(deps, tenantId, input, log);
+
+  // --- Re-queue: DB first, queue second (a worker must see `queued`) ---------
+  // A NEW queue id every time: BullMQ ignores an `add` whose id is still in
+  // the retained set. It is stored IN the transition, so the stale-entry guard
+  // in publish-post recognises the entry this retry is about to create.
+  const queueJobId = deferredPostJobQueueId(job, deps.clock.nowMs());
+  const next = transitionPostJob(job, "queued", { reason: "OPERATOR_RETRY", queueJobId });
+  const queued = await deps.postJobs.applyTransition({
+    tenantId,
+    postJobId: job.id,
+    from: job.status,
+    next,
+    reason: "OPERATOR_RETRY",
+    actorUserId,
+  });
+  if (!queued) {
+    // Somebody else moved the row between the read and the write (a second
+    // click, another operator, a worker). Refuse instead of double-queueing.
+    const appError = new AppError("INVALID_JOB_TRANSITION", {
+      message: "Post job status changed before the retry could be applied",
+      userMessage: "Bài này vừa được xử lý ở nơi khác — hãy tải lại rồi thử lại.",
+      context: {
+        tenant_id: tenantId,
+        job_id: job.id,
+        from: job.status,
+        reason: "CONCURRENT_MODIFICATION",
+      },
+    });
+    log.warn("Retry lost the race for this job", { err: appError, error_code: appError.code });
+    throw appError;
+  }
+
+  const settings = await deps.channels.getPublishSettings(tenantId);
+
+  try {
+    await deps.queue.enqueue(
+      PUBLISH_POST_JOB_NAME,
+      { tenantId, postJobId: queued.id },
+      {
+        jobId: queueJobId,
+        attempts: settings.maxAttempts,
+        backoff: { strategy: "exponential", delayMs: settings.retryBackoffMs },
+      },
+    );
+  } catch (error) {
+    const appError = AppError.from(error, "QUEUE_ERROR", {
+      tenant_id: tenantId,
+      job_id: queued.id,
+      batch_id: queued.batchId,
+      channel: queued.channelId,
+      operation: "retryPostJob.enqueue",
+    });
+    // Put the row back where it was: a `queued` job nobody will ever pick up
+    // is the silent failure this whole file exists to avoid.
+    const userMessage = "Không đưa được bài vào hàng đợi — bài vẫn ở trạng thái lỗi, hãy thử lại.";
+    await revert(deps, queued, job.status, appError.code, userMessage);
+    log.error("Retry could not enqueue the job", {
+      err: appError,
+      error_code: appError.code,
+      reverted_to: job.status,
+    });
+    throw appError;
+  }
+
+  await deps.postJobs.refreshBatchStatus(tenantId, queued.batchId);
+
+  const userMessage = "Đã đưa bài vào hàng đợi để đăng lại — tồn kho sẽ được kiểm tra lại trước khi đăng.";
+  log.info("Post job re-queued by an operator", {
+    previous_status: job.status,
+    previous_error_code: job.lastErrorCode,
+    queue_job_id: queueJobId,
+    attempts: settings.maxAttempts,
+    attempt_count: queued.attemptCount,
+    actor_user_id: actorUserId,
+    actor_email: str(input?.actorEmail) || null,
+  });
+
+  return {
+    tenantId,
+    postJobId: queued.id,
+    batchId: queued.batchId,
+    channelId: queued.channelId,
+    productCode: queued.productCode,
+    previousStatus: job.status,
+    status: queued.status,
+    queueJobId,
+    attemptCount: queued.attemptCount,
+    userMessage,
+  };
+}
 
 // --- helpers ----------------------------------------------------------------
 
@@ -313,6 +343,53 @@ async function revert(
       error_code: "DB_ERROR",
       alert: "OPERATOR_ATTENTION",
     });
+  }
+}
+
+/**
+ * What an operator can actually DO about a row we refuse to re-run. One sentence
+ * per reason, because the recovery differs: an id we hold can be deleted by
+ * name, an unknown outcome has to be looked for first, and a job that died
+ * mid-publish may have produced either a live post or a scheduled one.
+ *
+ * `null` is the fail-closed case: a refusal added to the domain predicate
+ * without a sentence here still refuses, with the generic instruction.
+ */
+function unconfirmedRefusalMessage(
+  reason: UnconfirmedPlatformPostReason | null,
+  scheduledPostId: string | null,
+): string {
+  const idNote = typeof scheduledPostId === "string" && scheduledPostId.trim().length > 0
+    ? ` (mã bài ${scheduledPostId.trim()})`
+    : "";
+  switch (reason) {
+    case "PLATFORM_HOLDS_SCHEDULED_POST":
+    case "SCHEDULE_UNCONFIRMED":
+      return (
+        `Facebook đã nhận lịch đăng của bài này${idNote} và hệ thống không xác nhận được kết quả — ` +
+        "Trang CÓ THỂ vẫn đang giữ (hoặc đã đăng) bài đó. Chạy lại sẽ đăng trùng. " +
+        "Hãy mở Trang, vào mục bài đã lên lịch, xoá bài nếu thấy, rồi soạn lại bài mới."
+      );
+    case "HANDOFF_OUTCOME_UNKNOWN":
+      return (
+        "Bài này đã được giao lịch cho Facebook nhưng hệ thống không nhận được xác nhận — " +
+        "Trang CÓ THỂ đang giữ một bài hẹn của bài này. Chạy lại sẽ đăng trùng. " +
+        "Hãy mở Trang, vào mục bài đã lên lịch, xoá bài nếu thấy, rồi soạn lại bài mới."
+      );
+    case "PUBLISH_OUTCOME_UNKNOWN":
+      // Covers both writers of PUBLISH_UNCONFIRMED (a reaped scheduled job and
+      // an immediate publish whose creating call gave no answer), so it must not
+      // say "bài hẹn giờ" — most of these rows are ordinary posts.
+      return (
+        "Bài này dừng giữa chừng khi đang gửi lên Facebook — Trang CÓ THỂ đã có bài " +
+        "(đã đăng hoặc đang chờ tới giờ). Chạy lại sẽ đăng trùng. " +
+        "Hãy mở Trang, xem cả bài đã đăng lẫn mục bài đã lên lịch, xoá bài nếu thấy, rồi soạn lại bài mới."
+      );
+    default:
+      return (
+        "Bài này có thể đã tồn tại trên Trang nên hệ thống không cho chạy lại để tránh đăng trùng — " +
+        "hãy mở Trang kiểm tra (cả bài đã đăng lẫn mục bài đã lên lịch) rồi soạn lại bài mới."
+      );
   }
 }
 
