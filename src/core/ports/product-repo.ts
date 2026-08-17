@@ -21,11 +21,64 @@ export interface ProductRepo {
   deleteStale(tenantId: string, syncRunId: string): Promise<number>;
 }
 
+/** One row the E9.4 sweep may remove. Carries its tenant: the sweep has none. */
+export interface OrphanedUpload {
+  readonly tenantId: string;
+  readonly assetId: string;
+  readonly storageKey: string;
+  readonly fileName: string;
+  readonly sizeBytes: number | null;
+}
+
 export interface MediaRepo {
   listByProductCode(tenantId: string, code: string): Promise<readonly MediaAsset[]>;
   /** Insert or update by (tenant, drive file id). Returns rows written. */
   upsertMany(tenantId: string, assets: readonly MediaAsset[], syncRunId: string): Promise<number>;
+  /**
+   * Removes Drive rows the given sync did not see. MUST leave uploaded rows
+   * alone — they belong to no sync run (E9).
+   */
   deleteStale(tenantId: string, syncRunId: string): Promise<number>;
+
+  // --- E9 (mode B) ---------------------------------------------------------
+
+  /**
+   * Records one operator-uploaded asset. Separate from `upsertMany` on purpose:
+   * that one is the sync writer and stamps a run id, which an upload must never
+   * carry, or the next sync would sweep it away.
+   */
+  registerUpload(tenantId: string, asset: MediaAsset): Promise<void>;
+
+  /**
+   * E9.4 — uploaded assets created before `olderThan` that no post job
+   * references, so the cleanup sweep can delete their bytes and their rows.
+   *
+   * Cross-tenant like `PostJobRepo.findStalePublishing`, and for the same
+   * reason: a maintenance sweep has no tenant of its own to run as. Each row
+   * therefore carries its own `tenantId`, and the DELETE below is tenant-scoped
+   * again.
+   */
+  listOrphanedUploads(input: {
+    olderThan: Date;
+    limit: number;
+  }): Promise<readonly OrphanedUpload[]>;
+
+  /**
+   * Uploads of ONE product code that no post job references yet — regardless of
+   * age. `uploadMedia` clears these before storing a new album, so a second
+   * upload for the same code replaces the abandoned one instead of merging
+   * with it and producing duplicate sequence numbers.
+   *
+   * Referenced uploads are deliberately excluded: a scheduled post still needs
+   * its rows to resolve a signed media URL.
+   */
+  listUnreferencedUploadsForCode(
+    tenantId: string,
+    productCode: string,
+  ): Promise<readonly OrphanedUpload[]>;
+
+  /** Removes uploaded rows by asset id. Returns how many were removed. */
+  deleteUploads(tenantId: string, assetIds: readonly string[]): Promise<number>;
 }
 
 // --- Sync run ---------------------------------------------------------------

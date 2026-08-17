@@ -1,10 +1,10 @@
-import { asc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 
 import { AppError } from "@/core/domain/errors";
 import { MEDIA_KINDS, type MediaKind } from "@/core/domain/media-file-name";
-import type { MediaAsset } from "@/core/domain/product";
+import { MEDIA_ORIGINS, type MediaAsset, type MediaOrigin } from "@/core/domain/product";
 import type { MediaAssetLookup } from "@/core/ports/drive-source";
-import type { MediaRepo } from "@/core/ports/product-repo";
+import type { MediaRepo, OrphanedUpload } from "@/core/ports/product-repo";
 
 import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
@@ -24,8 +24,18 @@ function toDomain(row: MediaAssetRow): MediaAsset {
     });
   }
 
+  if (!(MEDIA_ORIGINS as readonly string[]).includes(row.origin)) {
+    throw new AppError("DB_ERROR", {
+      message: `Unknown media origin '${row.origin}' returned by the database`,
+      userMessage: "Dữ liệu ảnh/video không hợp lệ. Vui lòng chạy lại đồng bộ.",
+      context: { drive_file_id: row.driveFileId, origin: row.origin },
+    });
+  }
+
   return {
     driveFileId: row.driveFileId,
+    origin: row.origin as MediaOrigin,
+    storageKey: row.storageKey,
     fileName: row.fileName,
     productCode: row.productCode,
     color: row.color,
@@ -147,6 +157,10 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
           modifiedTime: toModifiedDate(asset.modifiedTime),
           warnings: [...asset.warnings],
           needsReview: asset.needsReview,
+          // upsertMany is the SYNC writer; an uploaded asset is registered by
+          // registerUpload instead and must never be stamped with a run id.
+          origin: "drive" as const,
+          storageKey: null,
           lastSyncRunId: syncRunId,
         }),
       );
@@ -192,12 +206,25 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
     return written;
   }
 
+  /**
+   * Removes the Drive rows the latest sync did not see.
+   *
+   * Scoped to `origin = 'drive'` on purpose: an uploaded row (E9) belongs to no
+   * sync run at all, so an unscoped "everything not from this run" would delete
+   * every file the operator uploaded the moment the next Drive sync ran, and
+   * strand its bytes in the blob store.
+   */
   async deleteStale(tenantId: string, syncRunId: string): Promise<number> {
     const scope = forTenant(this.db, tenantId);
     try {
       const deleted = await scope.db
         .delete(mediaAssets)
-        .where(scope.where(mediaAssets, ne(mediaAssets.lastSyncRunId, syncRunId)))
+        .where(
+          scope.where(
+            mediaAssets,
+            and(eq(mediaAssets.origin, "drive"), ne(mediaAssets.lastSyncRunId, syncRunId)),
+          ),
+        )
         .returning({ id: mediaAssets.id });
       return deleted.length;
     } catch (error) {
@@ -206,6 +233,201 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
         field: "syncRunId",
         operation: "media.deleteStale",
         sync_run_id: syncRunId,
+      });
+    }
+  }
+
+  // --- E9 (mode B) ---------------------------------------------------------
+
+  async registerUpload(tenantId: string, asset: MediaAsset): Promise<void> {
+    const scope = forTenant(this.db, tenantId);
+
+    if (asset.origin !== "upload" || !asset.storageKey) {
+      // A programming error, not a data error: writing this row without a key
+      // would create an asset whose bytes can never be found.
+      throw new AppError("INVALID_INPUT", {
+        message: "registerUpload requires an asset with origin 'upload' and a storage key",
+        context: {
+          tenant_id: scope.tenantId,
+          drive_file_id: asset?.driveFileId ?? null,
+          origin: asset?.origin ?? null,
+          operation: "media.registerUpload",
+        },
+      });
+    }
+
+    try {
+      await scope.db.insert(mediaAssets).values(
+        scope.row({
+          driveFileId: asset.driveFileId,
+          fileName: asset.fileName,
+          productCode: asset.productCode,
+          color: asset.color,
+          colorRaw: asset.colorRaw,
+          sequence: asset.sequence,
+          kind: asset.kind,
+          aiGenerated: asset.variants.aiGenerated,
+          realPhoto: asset.variants.realPhoto,
+          backView: asset.variants.backView,
+          mimeType: asset.mimeType,
+          sizeBytes: asset.sizeBytes,
+          modifiedTime: toModifiedDate(asset.modifiedTime),
+          warnings: [...asset.warnings],
+          needsReview: asset.needsReview,
+          origin: "upload" as const,
+          storageKey: asset.storageKey,
+          // No sync run: see the note on deleteStale.
+          lastSyncRunId: null,
+        }),
+      );
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "driveFileId",
+        operation: "media.registerUpload",
+        drive_file_id: asset.driveFileId,
+      });
+    }
+  }
+
+  /**
+   * "Orphan" means no post job carries the asset in its media array. The check
+   * is a jsonb containment probe rather than a join: post_job.media is the only
+   * place an asset id is referenced, and it is a document, not a foreign key.
+   *
+   * Not tenant-scoped, like `findStalePublishing`: a maintenance sweep runs as
+   * nobody. Each row carries its tenant so the delete can scope itself again.
+   *
+   * PERF: the containment probe cannot use an index on post_job.media until a
+   * GIN index exists there. Acceptable while this runs once an hour over rows
+   * older than a day; revisit if post_job grows large.
+   */
+  async listOrphanedUploads(input: {
+    olderThan: Date;
+    limit: number;
+  }): Promise<readonly OrphanedUpload[]> {
+    const limit = input?.limit;
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 100;
+
+    try {
+      const rows = await this.db
+        .select({
+          tenantId: mediaAssets.tenantId,
+          assetId: mediaAssets.driveFileId,
+          storageKey: mediaAssets.storageKey,
+          fileName: mediaAssets.fileName,
+          sizeBytes: mediaAssets.sizeBytes,
+        })
+        .from(mediaAssets)
+        .where(
+          and(
+            eq(mediaAssets.origin, "upload"),
+            lt(mediaAssets.createdAt, input.olderThan),
+            sql`NOT EXISTS (
+              SELECT 1 FROM post_job pj
+              WHERE pj.tenant_id = ${mediaAssets.tenantId}
+                AND pj.media @> jsonb_build_array(
+                      jsonb_build_object('driveFileId', ${mediaAssets.driveFileId}::text))
+            )`,
+          ),
+        )
+        .orderBy(asc(mediaAssets.createdAt))
+        .limit(safeLimit);
+
+      // A row with no storage key has no bytes to remove; the usecase still
+      // deletes the row, so keep it in the list rather than hiding it.
+      return rows.map((row) => ({
+        tenantId: row.tenantId,
+        assetId: row.assetId,
+        storageKey: row.storageKey ?? "",
+        fileName: row.fileName,
+        sizeBytes: row.sizeBytes,
+      }));
+    } catch (error) {
+      throw wrapDbError(error, {
+        field: "olderThan",
+        operation: "media.listOrphanedUploads",
+      });
+    }
+  }
+
+  async listUnreferencedUploadsForCode(
+    tenantId: string,
+    productCode: string,
+  ): Promise<readonly OrphanedUpload[]> {
+    const scope = forTenant(this.db, tenantId);
+    const code = typeof productCode === "string" ? productCode.trim().toUpperCase() : "";
+    if (code.length === 0) return [];
+
+    try {
+      const rows = await scope.db
+        .select({
+          tenantId: mediaAssets.tenantId,
+          assetId: mediaAssets.driveFileId,
+          storageKey: mediaAssets.storageKey,
+          fileName: mediaAssets.fileName,
+          sizeBytes: mediaAssets.sizeBytes,
+        })
+        .from(mediaAssets)
+        .where(
+          scope.where(
+            mediaAssets,
+            and(
+              eq(mediaAssets.origin, "upload"),
+              eq(mediaAssets.productCode, code),
+              // Same "nobody posted it" predicate as the sweep.
+              sql`NOT EXISTS (
+                SELECT 1 FROM post_job pj
+                WHERE pj.tenant_id = ${mediaAssets.tenantId}
+                  AND pj.media @> jsonb_build_array(
+                        jsonb_build_object('driveFileId', ${mediaAssets.driveFileId}::text))
+              )`,
+            ),
+          ),
+        );
+
+      return rows.map((row) => ({
+        tenantId: row.tenantId,
+        assetId: row.assetId,
+        storageKey: row.storageKey ?? "",
+        fileName: row.fileName,
+        sizeBytes: row.sizeBytes,
+      }));
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "productCode",
+        operation: "media.listUnreferencedUploadsForCode",
+        product_code: code,
+      });
+    }
+  }
+
+  async deleteUploads(tenantId: string, assetIds: readonly string[]): Promise<number> {
+    const scope = forTenant(this.db, tenantId);
+    const ids = [...new Set(assetIds ?? [])].filter(
+      (id) => typeof id === "string" && id.length > 0,
+    );
+    if (ids.length === 0) return 0;
+
+    try {
+      const deleted = await scope.db
+        .delete(mediaAssets)
+        .where(
+          scope.where(
+            mediaAssets,
+            // Scoped to uploads so a bad id list can never remove a synced row.
+            and(eq(mediaAssets.origin, "upload"), inArray(mediaAssets.driveFileId, ids)),
+          ),
+        )
+        .returning({ id: mediaAssets.id });
+      return deleted.length;
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "assetIds",
+        operation: "media.deleteUploads",
+        count: ids.length,
       });
     }
   }

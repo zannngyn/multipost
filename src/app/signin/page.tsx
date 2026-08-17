@@ -23,8 +23,10 @@ export const dynamic = "force-dynamic";
  * generic message — we never print the raw code as the main text.
  */
 const ERROR_MESSAGES: Record<string, string> = {
+  // Covers both gates, and the case where the operator simply pressed "Huỷ" at
+  // the provider — declining is not a failure, so the wording stays neutral.
   AccessDenied:
-    "Tài khoản Google này không thuộc tên miền được phép truy cập. Hãy đăng nhập bằng email công ty, hoặc liên hệ quản trị viên để được cấp quyền.",
+    "Tài khoản này chưa được cấp quyền vào hệ thống, hoặc bạn đã huỷ ở bước cấp quyền. Với Google, hãy dùng email thuộc tên miền được phép; với Facebook, nhờ quản trị viên thêm tài khoản của bạn vào danh sách cho phép.",
   Verification:
     "Liên kết đăng nhập đã hết hạn hoặc đã được dùng. Hãy bấm “Đăng nhập bằng Google” để thử lại.",
   Configuration:
@@ -89,6 +91,28 @@ export default async function SignInPage(props: PageProps<"/signin">) {
             Sau khi đăng nhập, bạn sẽ quay lại: <span className="font-mono">{returnUrl}</span>
           </p>
         ) : null}
+      </form>
+
+      {/* E5.2 — the same round trip signs the operator in AND brings back the
+          Page tokens, so a successful Facebook sign-in leaves the channels
+          already connected. Full-page redirect, never a popup: popups are
+          blocked often enough that they need a fallback anyway
+          (web-auth-methods rule 1). */}
+      <form
+        action={async (formData: FormData) => {
+          "use server";
+          const target = safeReturnUrl(formData.get("returnUrl"));
+          await signIn("facebook", { redirectTo: target });
+        }}
+        className="space-y-3"
+      >
+        <input type="hidden" name="returnUrl" value={returnUrl} />
+        <Button type="submit" size="lg" variant="outline" className="w-full">
+          Đăng nhập bằng Facebook
+        </Button>
+        <p className="text-muted-foreground text-xs">
+          Dành cho tài khoản đã được cấp quyền. Đăng nhập xong, danh sách Fanpage được lấy về luôn.
+        </p>
       </form>
     </main>
   );

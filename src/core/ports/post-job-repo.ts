@@ -245,6 +245,14 @@ export interface PostJobRepo {
   findOverdueQueued(query: OverdueScanQuery): Promise<readonly PostJob[]>;
 
   /**
+   * E8.6 — jobs the platform is holding (`scheduled_on_facebook`) whose hour
+   * passed before `dueBefore`. The input of the reconciliation sweep: Facebook
+   * publishes them itself and tells nobody, so something has to ask.
+   * CROSS-TENANT, same exception and same reasoning as above.
+   */
+  findScheduledOnPlatformDue(query: OverdueScanQuery): Promise<readonly PostJob[]>;
+
+  /**
    * `published_at` of the newest published job on that channel — the input of
    * the spacing gate. Null when the channel never published.
    */

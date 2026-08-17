@@ -1,7 +1,12 @@
 import { AppError, type ErrorCode } from "@/core/domain/errors";
 import { evaluateProductInventory, type InventoryDecision } from "@/core/domain/inventory";
 import { isSameColor, normalizeColorName, type MediaKind } from "@/core/domain/media-file-name";
-import { toPromptInput, type MediaAsset, type ProductContent } from "@/core/domain/product";
+import {
+  toPromptInput,
+  type MediaAsset,
+  type MediaOrigin,
+  type ProductContent,
+} from "@/core/domain/product";
 import { isTenantId } from "@/core/domain/tenant";
 import {
   evaluateVideoSpec,
@@ -55,6 +60,15 @@ export interface ComposePostInput {
   readonly sequences?: readonly number[];
   /** Album kind. Video posts land in Phase 2 but the filter is already honest. */
   readonly mediaKind?: MediaKind;
+  /**
+   * Which of the two file modes this post uses (brief section 8). Defaults to
+   * Drive, so mode A keeps behaving exactly as before.
+   *
+   * The filter is not optional politeness: both modes store their assets in the
+   * same table under the same product code, so without it a mode A post would
+   * quietly absorb files the operator uploaded for a different post.
+   */
+  readonly source?: MediaOrigin;
   /**
    * Destination the video must satisfy (`facebook_video` / `facebook_reels`).
    * Ignored for photo posts; defaults to DEFAULT_VIDEO_TARGET.
@@ -195,15 +209,19 @@ export function makeComposePost(deps: ComposePostDeps) {
 
     // --- Media --------------------------------------------------------------
     const kind: MediaKind = input?.mediaKind ?? "image";
+    const source: MediaOrigin = input?.source ?? "drive";
     const all = await deps.media.listByProductCode(tenantId, productCode);
-    const ofKind = all.filter((asset) => asset.kind === kind);
+    const fromSource = all.filter((asset) => asset.origin === source);
+    const ofKind = fromSource.filter((asset) => asset.kind === kind);
     const availableColors = collectColors(ofKind);
 
     if (ofKind.length === 0) {
       log.warn("Compose blocked: no media of the requested kind", {
         error_code: "MEDIA_NOT_FOUND",
         media_kind: kind,
+        media_source: source,
         media_total: all.length,
+        media_from_source: fromSource.length,
       });
       return {
         ...base,
@@ -214,7 +232,10 @@ export function makeComposePost(deps: ComposePostDeps) {
         blocked: {
           code: "MEDIA_NOT_FOUND",
           reason: kind === "video" ? "NO_VIDEO_FOR_CODE" : "NO_MEDIA_FOR_CODE",
-          userMessage: `Mã ${productCode} chưa có ${kind === "video" ? "video" : "ảnh"} hợp lệ trên Drive`,
+          userMessage:
+            source === "upload"
+              ? `Bài này chưa có ${kind === "video" ? "video" : "ảnh"} nào được tải lên`
+              : `Mã ${productCode} chưa có ${kind === "video" ? "video" : "ảnh"} hợp lệ trên Drive`,
         },
       };
     }
@@ -338,7 +359,15 @@ export function makeComposePost(deps: ComposePostDeps) {
     if (needingReview > 0) {
       warnings.push(`${needingReview} file trong bài có tên không đúng chuẩn — nên kiểm tra lại`);
     }
-    if (kind === "image" && sequences.length === 0 && selected.length < MIN_AUTO_MEDIA) {
+    // Mode A only: the 5..10 range describes what to pick automatically out of a
+    // Drive folder. In mode B the operator chose the files by hand, so telling
+    // them three is "below the minimum" is noise, not information.
+    if (
+      source === "drive" &&
+      kind === "image" &&
+      sequences.length === 0 &&
+      selected.length < MIN_AUTO_MEDIA
+    ) {
       warnings.push(
         `Mã ${productCode} chỉ có ${selected.length} ảnh (ít hơn mức tối thiểu ${MIN_AUTO_MEDIA})`,
       );

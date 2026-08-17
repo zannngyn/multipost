@@ -8,6 +8,10 @@ import {
 } from "@/core/domain/video-spec";
 import {
   deferredPostJobQueueId,
+  HANDOFF_DEADLINE_MS,
+  HANDOFF_FAILED_ERROR_CODE,
+  nextHandoffAttemptDelayMs,
+  planScheduledPublish,
   postJobDuplicateKey,
   transitionPostJob,
   type PostJob,
@@ -22,11 +26,14 @@ import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
 import type { MediaAssetLookup } from "@/core/ports/drive-source";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
+import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import type {
   ChannelConfig,
   ChannelConfigRepo,
   ChannelPlatform,
   ChannelPublisher,
+  PublishMediaItem,
+  PublishSettings,
   SignMediaUrlFn,
   VideoTarget as PublisherVideoTarget,
 } from "@/core/ports/publisher";
@@ -39,12 +46,20 @@ import type {
  * Order is the whole point (business rules 3 + 4):
  *
  *   1. load + status guard   — published/publishing are never published again
+ *   1c. handoff window (E8.6) — a scheduled post outside its window goes back to
+ *                              the queue; nothing is claimed and nothing is sent
  *   2. spacing gate          — too soon on this channel? re-enqueue, stay queued
  *   3. CLAIM queued->publishing (optimistic, WHERE status='queued')
  *   4. STOCK RECHECK         — the last gate before the API call, ALWAYS
  *   5. channel config        — token/page id from tenant_integration
- *   6. publish               — the only outbound call
- *   7. published + post id
+ *   6. publish OR hand off   — the only outbound call
+ *   7. published + post id, or `scheduled_on_facebook` + the remote post id
+ *
+ * E8.6 — a scheduled IMAGE post is NOT published by this worker: between T-30
+ * and T-12 it is uploaded and handed to Facebook with `scheduled_publish_time`,
+ * so the post survives this process and Redis dying. The stock recheck and the
+ * claim still run FIRST, before anything is uploaded: handing a sold-out product
+ * to Facebook would publish it at the hour with nobody able to stop it.
  *
  * The spacing gate sits BEFORE the claim on purpose: a deferred job must stay
  * `queued` (it is queued), and a failing re-enqueue must not leave a job stuck
@@ -60,13 +75,43 @@ export const PUBLISH_POST_JOB_NAME = "publish-post";
  */
 export const AUTO_CANCELLED_AUDIT_ACTION = "post_job.auto_cancelled";
 export const SCHEDULED_FAILED_AUDIT_ACTION = "post_job.scheduled_publish_failed";
+/** E8.6 — Facebook accepted the schedule and now holds the post. */
+export const HANDED_OFF_AUDIT_ACTION = "post_job.scheduled_on_facebook";
+/**
+ * E8.6 — the handoff window closed without a handoff, so the post went out on
+ * the normal path AFTER its hour. Its own event: nobody was watching at that
+ * hour, and "it published, just late" must be answerable from the trail.
+ */
+export const LATE_PUBLISH_AUDIT_ACTION = "post_job.published_late";
+
+/** Error code stored on a job that could not be handed over in time. */
+export const HANDOFF_EXPIRED_ERROR_CODE = "HANDOFF_EXPIRED";
+/**
+ * Error code stored when a handoff ended WITHOUT a verdict: the platform may or
+ * may not be holding a scheduled post for this job. The job stops there — see
+ * failUnconfirmedHandoff for why neither a retry nor a publish at the hour is
+ * allowed afterwards.
+ *
+ * Defined in the DOMAIN and re-exported here: this usecase writes the code, the
+ * retry usecase and the job log read it back off the row, and a second copy of
+ * the string would let those two drift apart without a test noticing.
+ */
+export { HANDOFF_FAILED_ERROR_CODE };
+/**
+ * The platform refused the SCHEDULE but created nothing (E8.6). The post is not
+ * lost: it goes out on the normal path at its hour, and this code says why the
+ * handoff did not happen.
+ */
+export const HANDOFF_REFUSED_ERROR_CODE = "HANDOFF_REFUSED";
 
 export type PublishPostOutcome =
   | "published"
   /** The job was already live — a re-run after a crash. Nothing was called. */
   | "already_published"
-  /** Spacing gate: re-enqueued with a delay, still queued. */
+  /** Spacing gate or handoff window: re-enqueued with a delay, still queued. */
   | "deferred"
+  /** E8.6 — the platform accepted the schedule; it will publish at the hour. */
+  | "scheduled_on_facebook"
   /** A rule said no (stock, token, channel). The platform was NOT called. */
   | "blocked"
   /** Another worker owns it, or the job is not in a publishable state. */
@@ -99,6 +144,8 @@ export interface PublishPostResult {
   readonly status: PostJobStatus | null;
   readonly publishedPostId: string | null;
   readonly publishedUrl: string | null;
+  /** E8.6 — id of the post the platform is holding, when it took the schedule. */
+  readonly scheduledPostId: string | null;
   readonly errorCode: string | null;
   /** Vietnamese, for the operator screen. */
   readonly userMessage: string | null;
@@ -144,6 +191,13 @@ export interface PublishPostDeps {
   videoProbe?: VideoAssetProbe;
   /** Resolves a post_job media item back to the synced asset the probe needs. */
   mediaAssets?: MediaAssetLookup;
+  /**
+   * E5 — reads ONE photo's bytes (cache first, then Drive / the blob store).
+   * Required, not optional: the Facebook photo path uploads the bytes itself, so
+   * a process without it could not publish an image post at all — and a silent
+   * fallback to "let Facebook fetch the URL" is the bug this replaces.
+   */
+  readMediaBytes: ReadMediaBytes;
 }
 
 export function makePublishPost(deps: PublishPostDeps) {
@@ -237,62 +291,46 @@ export function makePublishPost(deps: PublishPostDeps) {
     const settings = await deps.channels.getPublishSettings(tenantId);
     const maxAttempts = maxAttemptsFromQueue ?? settings.maxAttempts;
 
+    // --- 1c. Handoff window (E8.6) ------------------------------------------
+    // A scheduled IMAGE post is not published by this worker at all: it is
+    // handed to Facebook, which holds it and publishes at the hour even if this
+    // process (or Redis) dies in between. The window says what to do right now.
+    // Videos keep the old behaviour (the queue waits for the hour).
+    const plan = planScheduledPublish(job.scheduledAt, deps.clock.nowMs(), {
+      canHandOff: job.format === "image_post",
+    });
+    if (plan.action === "wait") {
+      // Still `queued`, nothing claimed, nothing sent: come back later.
+      return await deferQueuedJob(deps, log, job, {
+        delayMs: plan.wakeInMs,
+        reason: plan.reason,
+        settings,
+        maxAttempts,
+        attempt,
+        logMessage: "Publish deferred: outside the handoff window",
+        extraLog: {
+          scheduled_at: job.scheduledAt?.toISOString() ?? null,
+          plan: plan.reason,
+        },
+      });
+    }
+
     // --- 2. Spacing gate (brief §6, PENDING(E1): per channel) ----------------
     const lastPublishedAt = await deps.postJobs.findLastPublishedAt(tenantId, job.channelId);
     const waitMs = spacingWaitMs(lastPublishedAt, deps.clock.nowMs(), settings.spacingMs);
     if (waitMs > 0) {
-      // A NEW queue id: BullMQ silently drops an `add` whose id is still
-      // retained, which would lose this post entirely.
-      const deferredQueueJobId = deferredPostJobQueueId(job, deps.clock.nowMs());
-      // The row must point at the entry that will actually run, or the guard
-      // above would treat the deferred entry as stale and the post would never
-      // go out. Written BEFORE the enqueue, rolled back if the enqueue fails.
-      const pointed = await deps.postJobs.setQueueJobId({
-        tenantId,
-        postJobId: job.id,
-        queueJobId: deferredQueueJobId,
-      });
-      if (!pointed) {
-        log.warn("Publish skipped: the job left `queued` while the spacing gate ran", {
-          outcome: "skipped",
-          reason: "ROW_CHANGED_DURING_DEFERRAL",
-          attempt,
-        });
-        return result(job, "skipped", { deferredMs: null, skipReason: "ROW_CHANGED_DURING_DEFERRAL" });
-      }
-      try {
-        await deps.queue.enqueue(
-          PUBLISH_POST_JOB_NAME,
-          { tenantId, postJobId: job.id },
-          {
-            jobId: deferredQueueJobId,
-            delayMs: waitMs,
-            attempts: maxAttempts,
-            backoff: { strategy: "exponential", delayMs: settings.retryBackoffMs },
-          },
-        );
-      } catch (error) {
-        // Put the pointer back on the entry that is running right now, so the
-        // queue retry of THIS message is not rejected as stale.
-        await deps.postJobs
-          .setQueueJobId({ tenantId, postJobId: job.id, queueJobId: job.queueJobId })
-          .catch(() => false);
-        throw AppError.from(error, "QUEUE_ERROR", {
-          tenant_id: tenantId,
-          job_id: job.id,
-          channel: job.channelId,
-          operation: "publishPost.deferForSpacing",
-        });
-      }
-      log.info("Publish deferred by the spacing gate", {
-        outcome: "deferred",
-        queue_job_id: deferredQueueJobId,
-        wait_ms: waitMs,
-        spacing_ms: settings.spacingMs,
-        last_published_at: lastPublishedAt?.toISOString() ?? null,
+      return await deferQueuedJob(deps, log, job, {
+        delayMs: waitMs,
+        reason: "SPACING_GATE",
+        settings,
+        maxAttempts,
         attempt,
+        logMessage: "Publish deferred by the spacing gate",
+        extraLog: {
+          spacing_ms: settings.spacingMs,
+          last_published_at: lastPublishedAt?.toISOString() ?? null,
+        },
       });
-      return result(job, "deferred", { deferredMs: waitMs });
     }
 
     // --- 3. Claim: queued -> publishing (optimistic) -------------------------
@@ -454,50 +492,100 @@ export function makePublishPost(deps: PublishPostDeps) {
       }
     }
 
-    // --- 6a. Fresh media URLs (E3.6) ----------------------------------------
-    // Signed links are short-lived on purpose; the ones minted when the batch
-    // was created may already be dead by the time this attempt runs.
-    let media: readonly PostJobMedia[];
-    try {
-      const resigned = resignMedia(deps, claimed);
-      media = resigned.media;
-      log.debug("Media URLs re-signed for this attempt", {
+    // --- 6a. What the platform gets: bytes for photos, a URL for a video ----
+    // Photos are UPLOADED (multipart `source`). Handing Graph a `url=` made
+    // Facebook fetch the file itself and give up around 30s — 4 of 10 photos on
+    // a measured real post; the same 10 went through as bytes. A video still
+    // travels as a signed URL (Meta/TikTok download it themselves), so that path
+    // keeps the re-signing step.
+    let media: readonly PublishMediaItem[] = [];
+    let videoUrl = "";
+    if (claimed.format === "image_post") {
+      const items = buildMediaItems(deps, claimed);
+      if (!items.ok) {
+        const blocked = await block(
+          deps,
+          claimed,
+          "MEDIA_NOT_FOUND",
+          items.userMessage,
+          items.reason,
+        );
+        log.error("Publish blocked: a photo of this job has no asset id to read bytes from", {
+          outcome: "blocked",
+          error_code: "MEDIA_NOT_FOUND",
+          reason: items.reason,
+          file_name: items.fileName,
+          media_count: claimed.media.length,
+          attempt,
+          alert: "OPERATOR_ATTENTION",
+        });
+        return result(blocked ?? claimed, "blocked", {
+          deferredMs: null,
+          errorCode: "MEDIA_NOT_FOUND",
+          userMessage: items.userMessage,
+        });
+      }
+      media = items.media;
+      log.debug("Photo bytes will be uploaded for this attempt", {
         media_count: media.length,
-        // Expiry only: the URL itself carries a MAC.
-        media_url_expires_at: resigned.expiresAtMs
-          ? new Date(resigned.expiresAtMs).toISOString()
-          : null,
         attempt,
       });
-    } catch (error) {
-      const appError = AppError.from(error, "INVALID_INPUT", {
-        tenant_id: tenantId,
-        job_id: claimed.id,
-        channel: claimed.channelId,
-        reason: "MEDIA_URL_SIGNING_FAILED",
-      });
-      const userMessage =
-        "Không tạo được liên kết ảnh công khai cho bài này — kiểm tra cấu hình MEDIA_PUBLIC_BASE_URL / khoá ký liên kết.";
-      // Blocked, not failed: a retry cannot fix a configuration problem, and the
-      // platform was never called.
-      const blocked = await block(
-        deps,
-        claimed,
-        appError.code,
-        userMessage,
-        "MEDIA_URL_SIGNING_FAILED",
-      );
-      log.error("Publish blocked: could not sign the media URLs", {
-        err: appError,
-        outcome: "blocked",
-        error_code: appError.code,
+    } else {
+      try {
+        const resigned = resignMedia(deps, claimed);
+        // One video per post: media[0] is the file, the rest (if any) is a
+        // thumbnail choice we do not use yet.
+        videoUrl = resigned.media[0]?.url ?? "";
+        log.debug("Media URLs re-signed for this attempt", {
+          media_count: resigned.media.length,
+          // Expiry only: the URL itself carries a MAC.
+          media_url_expires_at: resigned.expiresAtMs
+            ? new Date(resigned.expiresAtMs).toISOString()
+            : null,
+          attempt,
+        });
+      } catch (error) {
+        const appError = AppError.from(error, "INVALID_INPUT", {
+          tenant_id: tenantId,
+          job_id: claimed.id,
+          channel: claimed.channelId,
+          reason: "MEDIA_URL_SIGNING_FAILED",
+        });
+        const userMessage =
+          "Không tạo được liên kết video công khai cho bài này — kiểm tra cấu hình MEDIA_PUBLIC_BASE_URL / khoá ký liên kết.";
+        // Blocked, not failed: a retry cannot fix a configuration problem, and
+        // the platform was never called.
+        const blocked = await block(
+          deps,
+          claimed,
+          appError.code,
+          userMessage,
+          "MEDIA_URL_SIGNING_FAILED",
+        );
+        log.error("Publish blocked: could not sign the media URLs", {
+          err: appError,
+          outcome: "blocked",
+          error_code: appError.code,
+          attempt,
+          alert: "OPERATOR_ATTENTION",
+        });
+        return result(blocked ?? claimed, "blocked", {
+          deferredMs: null,
+          errorCode: appError.code,
+          userMessage,
+        });
+      }
+    }
+
+    // --- 6b. Handoff: Facebook holds the post, we do not (E8.6) -------------
+    if (plan.action === "hand_off") {
+      return await handOffToPlatform(deps, log, claimed, {
+        publisher,
+        channel,
+        media,
+        settings,
         attempt,
-        alert: "OPERATOR_ATTENTION",
-      });
-      return result(blocked ?? claimed, "blocked", {
-        deferredMs: null,
-        errorCode: appError.code,
-        userMessage,
+        leadMs: plan.leadMs,
       });
     }
 
@@ -518,9 +606,7 @@ export function makePublishPost(deps: PublishPostDeps) {
               tenantId,
               channel,
               caption: claimed.captionText,
-              // One video per post: media[0] is the file, the rest (if any) is
-              // a thumbnail choice we do not use yet.
-              videoUrl: media[0]?.url ?? "",
+              videoUrl,
               // TikTok compares it against the account's own cap (creator_info).
               durationSec: videoDurationSec,
               target:
@@ -537,12 +623,24 @@ export function makePublishPost(deps: PublishPostDeps) {
     }
 
     // --- 7. Published -------------------------------------------------------
-    const done = await move(deps, claimed, "published", {
-      reason: "PUBLISHED",
-      publishedPostId: published.postId,
-      publishedUrl: published.url,
-      publishedAt: deps.clock.now(),
-    });
+    // A scheduled post that reached this line went out on the NORMAL path after
+    // its hour (the handoff window closed before Facebook took it). It is a
+    // publish, not a failure — but it is late, and the trail must say so
+    // instead of showing an on-time post (business rule 5).
+    const lateByMs = plan.action === "publish_now" ? plan.lateByMs : 0;
+    const publishedLate = lateByMs > 0 && claimed.scheduledAt instanceof Date;
+    const done = await move(
+      deps,
+      claimed,
+      "published",
+      {
+        reason: publishedLate ? "PUBLISHED_LATE" : "PUBLISHED",
+        publishedPostId: published.postId,
+        publishedUrl: published.url,
+        publishedAt: deps.clock.now(),
+      },
+      publishedLate ? LATE_PUBLISH_AUDIT_ACTION : undefined,
+    );
     if (!done) {
       // The post EXISTS on the platform but the row moved under us. Never
       // silent: this needs a human to reconcile, so it is logged as an error
@@ -564,15 +662,24 @@ export function makePublishPost(deps: PublishPostDeps) {
     }
 
     await deps.postJobs.refreshBatchStatus(tenantId, claimed.batchId);
-    log.info("Published", {
-      outcome: "published",
-      published_post_id: done.publishedPostId,
-      published_url: done.publishedUrl,
-      attempt,
-      attempt_count: done.attemptCount,
-      duration_ms: deps.clock.nowMs() - startedAt,
-      media_count: done.media.length,
-    });
+    log[publishedLate ? "warn" : "info"](
+      publishedLate ? "Published LATE — the scheduled hour had already passed" : "Published",
+      {
+        outcome: "published",
+        published_post_id: done.publishedPostId,
+        published_url: done.publishedUrl,
+        attempt,
+        attempt_count: done.attemptCount,
+        // Includes the upload time now: the worker, not Meta, waits for the bytes.
+        duration_ms: deps.clock.nowMs() - startedAt,
+        media_count: done.media.length,
+        scheduled_at: claimed.scheduledAt?.toISOString() ?? null,
+        late_by_ms: lateByMs,
+        ...(publishedLate
+          ? { audit_action: LATE_PUBLISH_AUDIT_ACTION, alert: "OPERATOR_ATTENTION" }
+          : {}),
+      },
+    );
     return result(done, "published", { deferredMs: null });
   };
 }
@@ -764,6 +871,597 @@ function resignMedia(
 }
 
 /**
+ * Turns the job's media rows into LAZY byte sources for the publisher.
+ *
+ * Lazy on purpose: an album is up to 10 files of ~9MB, the publisher uploads
+ * them one at a time, and the worker runs several jobs at once — reading all ten
+ * here would hold ~90MB per job for nothing. `readBytes` of photo k runs
+ * immediately before photo k is uploaded.
+ *
+ * A row without an asset id has nothing to read from, so it is refused HERE,
+ * with its file name, instead of becoming an opaque platform error later. Those
+ * rows predate signed media URLs and used to be published by their stored URL —
+ * the very mechanism this change removes.
+ */
+function buildMediaItems(
+  deps: PublishPostDeps,
+  job: PostJob,
+):
+  | { ok: true; media: readonly PublishMediaItem[] }
+  | { ok: false; reason: string; fileName: string | null; userMessage: string } {
+  const rows = Array.isArray(job.media) ? job.media : [];
+  const media: PublishMediaItem[] = [];
+
+  for (const item of rows) {
+    const assetId = typeof item?.driveFileId === "string" ? item.driveFileId.trim() : "";
+    const fileName = typeof item?.fileName === "string" ? item.fileName : "";
+    if (assetId.length === 0) {
+      return {
+        ok: false,
+        reason: "LEGACY_MEDIA_WITHOUT_ASSET_ID",
+        fileName: fileName || null,
+        userMessage: `Ảnh "${fileName || "không rõ tên"}" của bài này thiếu mã file — cần tạo lại bài đăng.`,
+      };
+    }
+    media.push({
+      driveFileId: assetId,
+      fileName,
+      // Reads the cache first, then Drive / the blob store (read-media-bytes).
+      readBytes: () => deps.readMediaBytes({ tenantId: job.tenantId, assetId, jobId: job.id }),
+    });
+  }
+
+  return { ok: true, media };
+}
+
+/**
+ * Puts a still-`queued` job back on the queue with a delay, and points the row
+ * at the NEW entry. Used by the spacing gate and by the handoff window — both
+ * mean "nothing is wrong, come back later", and both must leave the job exactly
+ * where it is (`queued`, unclaimed, nothing sent).
+ *
+ * Order: point the row at the new entry FIRST, enqueue second. The stale-entry
+ * guard in publishPost would otherwise reject the deferred entry and the post
+ * would never go out. A failed enqueue rolls the pointer back.
+ */
+async function deferQueuedJob(
+  deps: PublishPostDeps,
+  log: Logger,
+  job: PostJob,
+  ctx: {
+    delayMs: number;
+    reason: string;
+    settings: PublishSettings;
+    maxAttempts: number;
+    attempt: number;
+    logMessage: string;
+    extraLog?: Record<string, unknown>;
+  },
+): Promise<PublishPostResult> {
+  // A NEW queue id: BullMQ silently drops an `add` whose id is still retained,
+  // which would lose this post entirely.
+  const deferredQueueJobId = deferredPostJobQueueId(job, deps.clock.nowMs());
+  const pointed = await deps.postJobs.setQueueJobId({
+    tenantId: job.tenantId,
+    postJobId: job.id,
+    queueJobId: deferredQueueJobId,
+  });
+  if (!pointed) {
+    log.warn("Publish skipped: the job left `queued` while it was being deferred", {
+      outcome: "skipped",
+      reason: "ROW_CHANGED_DURING_DEFERRAL",
+      defer_reason: ctx.reason,
+      attempt: ctx.attempt,
+    });
+    return result(job, "skipped", { deferredMs: null, skipReason: "ROW_CHANGED_DURING_DEFERRAL" });
+  }
+
+  try {
+    await deps.queue.enqueue(
+      PUBLISH_POST_JOB_NAME,
+      { tenantId: job.tenantId, postJobId: job.id },
+      {
+        jobId: deferredQueueJobId,
+        delayMs: ctx.delayMs,
+        attempts: ctx.maxAttempts,
+        backoff: { strategy: "exponential", delayMs: ctx.settings.retryBackoffMs },
+      },
+    );
+  } catch (error) {
+    // Put the pointer back on the entry that is running right now, so the queue
+    // retry of THIS message is not rejected as stale. Its own failure is logged,
+    // never swallowed: the QUEUE_ERROR below is the cause the caller must see.
+    await deps.postJobs
+      .setQueueJobId({ tenantId: job.tenantId, postJobId: job.id, queueJobId: job.queueJobId })
+      .catch((rollbackError: unknown) => {
+        log.error("Could not restore the queue pointer after a failed deferral", {
+          err: AppError.from(rollbackError, "DB_ERROR", {
+            tenant_id: job.tenantId,
+            job_id: job.id,
+          }),
+          reason: "DEFER_ROLLBACK_FAILED",
+          alert: "OPERATOR_ATTENTION",
+        });
+        return false;
+      });
+    throw AppError.from(error, "QUEUE_ERROR", {
+      tenant_id: job.tenantId,
+      job_id: job.id,
+      channel: job.channelId,
+      operation: "publishPost.defer",
+      defer_reason: ctx.reason,
+    });
+  }
+
+  log.info(ctx.logMessage, {
+    outcome: "deferred",
+    queue_job_id: deferredQueueJobId,
+    wait_ms: ctx.delayMs,
+    defer_reason: ctx.reason,
+    attempt: ctx.attempt,
+    ...(ctx.extraLog ?? {}),
+  });
+  return result(job, "deferred", { deferredMs: ctx.delayMs });
+}
+
+/**
+ * E8.6 — hand ONE claimed job to the platform's own scheduler.
+ *
+ * The job is already `publishing` (claimed), the stock has been re-checked and
+ * the channel resolved: everything above this line is identical to an immediate
+ * publish, which is the point — the only difference is WHO waits for the hour.
+ *
+ * Outcomes:
+ *   accepted            -> `scheduled_on_facebook` + the remote post id. The
+ *                          queue is done with this job; only the reconciliation
+ *                          sweep may declare it published.
+ *   token dead, proven
+ *   before the dispatch -> `blocked`, like the immediate path. A token error
+ *                          answered TO the dispatch is an unknown outcome, not
+ *                          a block — see handleHandoffError.
+ *   failed BEFORE the
+ *   creating request    -> back to `queued`: another attempt inside the window,
+ *                          or a wake-up AT the hour that publishes on the normal
+ *                          path. Safe only because the platform provably holds
+ *                          nothing (port contract: platform_created_nothing).
+ *   outcome unknown     -> `failed`. NOT retried and NOT published at the hour:
+ *                          the platform may already hold a scheduled post for
+ *                          this job, and either move would put two posts on the
+ *                          Page at the same minute.
+ */
+async function handOffToPlatform(
+  deps: PublishPostDeps,
+  log: Logger,
+  job: PostJob,
+  ctx: {
+    publisher: ChannelPublisher;
+    channel: ChannelConfig;
+    media: readonly PublishMediaItem[];
+    settings: PublishSettings;
+    attempt: number;
+    leadMs: number;
+  },
+): Promise<PublishPostResult> {
+  const scheduledAt = job.scheduledAt;
+  const scheduler = ctx.publisher.scheduled;
+  if (!(scheduledAt instanceof Date)) {
+    // Unreachable through planScheduledPublish, but a handoff without an hour
+    // would ask the platform to hold a post forever.
+    throw new AppError("INTERNAL", {
+      message: "handOffToPlatform called for a job without a scheduled time",
+      context: { tenant_id: job.tenantId, job_id: job.id, channel: job.channelId },
+    });
+  }
+  if (!scheduler) {
+    // This platform cannot hold a post. Give the job back to the queue and let
+    // it publish at the hour, exactly as before E8.6.
+    log.warn("Platform has no scheduler — falling back to publishing at the hour", {
+      reason: "HANDOFF_NOT_SUPPORTED",
+      platform: ctx.channel.platform,
+      scheduled_at: scheduledAt.toISOString(),
+    });
+    return await requeueForLater(deps, log, job, {
+      delayMs: Math.max(0, scheduledAt.getTime() - deps.clock.nowMs()),
+      reason: "HANDOFF_NOT_SUPPORTED",
+      errorCode: null,
+      errorMessage: null,
+      settings: ctx.settings,
+      attempt: ctx.attempt,
+    });
+  }
+
+  // The window is re-read HERE, not trusted from the top of the run: the stock
+  // recheck, the channel read and the media lookup all take time, and a handoff
+  // that drifted past T-12 would be refused by Facebook after a full upload.
+  const now = planScheduledPublish(scheduledAt, deps.clock.nowMs());
+  if (now.action !== "hand_off") {
+    const delayMs = now.action === "wait" ? now.wakeInMs : 0;
+    log.warn("The handoff window closed while this job was being prepared", {
+      reason: "WINDOW_CLOSED_BEFORE_HANDOFF",
+      plan: now.action,
+      scheduled_at: scheduledAt.toISOString(),
+      wake_in_ms: delayMs,
+    });
+    return await requeueForLater(deps, log, job, {
+      delayMs,
+      reason: "WINDOW_CLOSED_BEFORE_HANDOFF",
+      errorCode: null,
+      errorMessage: null,
+      settings: ctx.settings,
+      attempt: ctx.attempt,
+    });
+  }
+
+  const startedAt = deps.clock.nowMs();
+  let handed: { scheduledPostId: string };
+  try {
+    handed = await scheduler.schedulePost({
+      tenantId: job.tenantId,
+      channel: ctx.channel,
+      caption: job.captionText,
+      media: ctx.media,
+      idempotencyKey: postJobDuplicateKey(job),
+      publishAt: scheduledAt,
+    });
+  } catch (error) {
+    return await handleHandoffError(deps, log, job, error, {
+      attempt: ctx.attempt,
+      settings: ctx.settings,
+      durationMs: deps.clock.nowMs() - startedAt,
+      scheduledAt,
+    });
+  }
+
+  const scheduledOnPlatform = await move(
+    deps,
+    job,
+    "scheduled_on_facebook",
+    { reason: "HANDED_OFF_TO_PLATFORM", scheduledPostId: handed.scheduledPostId },
+    HANDED_OFF_AUDIT_ACTION,
+    // The default audit payload only carries `published_post_id`, which is null
+    // here — so the single most important event of a scheduled post (the moment
+    // the object was created on Facebook) would leave no id behind. The cancel
+    // and the reconciliation sweep both store it; this must too.
+    // `scheduled_at` is NOT repeated here: the repo writes its own and merges
+    // this payload UNDER it, so the copy would be silently dropped anyway.
+    {
+      scheduled_post_id: handed.scheduledPostId,
+      lead_ms: ctx.leadMs,
+    },
+  );
+  if (!scheduledOnPlatform) {
+    // Facebook HOLDS the post but the row moved under us. Never silent: nothing
+    // must republish it, and a human has to reconcile.
+    const appError = new AppError("INTERNAL", {
+      message: "Post handed to the platform but the job row was no longer in 'publishing'",
+      userMessage:
+        "Facebook đã nhận lịch đăng nhưng hệ thống không ghi được trạng thái — cần kiểm tra trên Page.",
+      context: {
+        tenant_id: job.tenantId,
+        job_id: job.id,
+        channel: job.channelId,
+        scheduled_post_id: handed.scheduledPostId,
+        scheduled_at: scheduledAt.toISOString(),
+      },
+    });
+    log.error("Handed off but could not store the state", {
+      err: appError,
+      error_code: "INTERNAL",
+      alert: "OPERATOR_ATTENTION",
+    });
+    throw appError;
+  }
+
+  await deps.postJobs.refreshBatchStatus(job.tenantId, job.batchId);
+  log.info("Handed the post to the platform's scheduler", {
+    outcome: "scheduled_on_facebook",
+    scheduled_post_id: handed.scheduledPostId,
+    scheduled_at: scheduledAt.toISOString(),
+    lead_ms: ctx.leadMs,
+    duration_ms: deps.clock.nowMs() - startedAt,
+    media_count: job.media.length,
+    attempt: ctx.attempt,
+    audit_action: HANDED_OFF_AUDIT_ACTION,
+  });
+  return result(scheduledOnPlatform, "scheduled_on_facebook", { deferredMs: null });
+}
+
+/**
+ * A failed handoff. ONE question decides everything, and it is asked FIRST, of
+ * every error whatever its code: does the platform provably hold nothing for
+ * this job? Without that proof the job stops (see failUnconfirmedHandoff) — no
+ * retry, no publish at the hour, no `blocked` either, because `blocked` is a
+ * status an operator may re-queue from.
+ *
+ * Only once the answer is yes does the code matter:
+ *   TOKEN_EXPIRED         -> blocked; a retry cannot mint a token.
+ *   not retryable         -> back to `queued`, publish at the hour.
+ *   transient             -> another attempt inside the window, or a wake-up AT
+ *                            the hour on the normal path. "Another attempt"
+ *                            means the NEXT slot of the handoff window, not a
+ *                            BullMQ backoff: the window is minutes wide and the
+ *                            queue's backoff knows nothing about the hour.
+ *
+ * `retryable` never decides the first question: it describes whether the
+ * platform CALL could succeed later, not whether repeating it is safe.
+ */
+async function handleHandoffError(
+  deps: PublishPostDeps,
+  log: Logger,
+  job: PostJob,
+  error: unknown,
+  ctx: { attempt: number; settings: PublishSettings; durationMs: number; scheduledAt: Date },
+): Promise<PublishPostResult> {
+  const appError = AppError.from(error, "META_ERROR", {
+    tenant_id: job.tenantId,
+    job_id: job.id,
+    batch_id: job.batchId,
+    product_code: job.productCode,
+    channel: job.channelId,
+    attempt: ctx.attempt,
+    operation: "publishPost.handOff",
+    scheduled_at: ctx.scheduledAt.toISOString(),
+  });
+
+  const flags = appError.context as {
+    platform_created_nothing?: unknown;
+    feed_dispatched?: unknown;
+  };
+  // Refused BEFORE anything that could create a post was ever sent (port
+  // contract: the publisher's own pre-flight guards and the media upload, which
+  // only makes unpublished objects). Facebook answers #100 to a
+  // `scheduled_publish_time` under its ~10-minute minimum, and an album upload
+  // can easily eat the ~2 minutes between the handoff deadline and that minimum.
+  // Failing the job there would drop a post while the safe path — wait for T and
+  // publish normally — was still fully available, and cannot double-post because
+  // the platform holds nothing.
+  const createdNothing = flags.platform_created_nothing === true;
+
+  // ANYTHING ELSE is an unknown outcome — the creating request was dispatched
+  // (`feed_dispatched`), or the publisher gave no proof at all. This branch must
+  // never lead anywhere near the normal publish path and is never retried: the
+  // platform may be holding a scheduled post for this job right now, and the
+  // most misleading evidence looks exactly like a refusal (#506 DUPLICATE_POST
+  // answered to a retry after a lost answer). A second handoff would ask for a
+  // second scheduled post at the same minute; publishing at the hour would put a
+  // live post next to the one the platform is holding. Both are business rule 4.
+  //
+  // Note this ignores `retryable`: it describes whether the PLATFORM CALL could
+  // succeed later, not whether repeating it is safe. Only the flag above can say
+  // that, and it wins over `retryable` in both directions.
+  //
+  // This gate runs BEFORE any routing by error code, TOKEN_EXPIRED included. A
+  // 190/OAuthException coming back from a dispatched /feed is still an answer to
+  // that ONE request: it says the token is dead, it does not say the Page holds
+  // nothing — an earlier attempt may have created the scheduled post before the
+  // token was revoked. Blocking on the code would put the job in `blocked` (a
+  // retryable status) with a message that never mentions the post that may be
+  // sitting on the Page. A dead token found BEFORE the dispatch still blocks:
+  // that path carries platform_created_nothing and falls through below.
+  if (!createdNothing || flags.feed_dispatched === true) {
+    return await failUnconfirmedHandoff(deps, log, job, appError, ctx);
+  }
+
+  if (appError.code === "TOKEN_EXPIRED") {
+    const blocked = await block(deps, job, "TOKEN_EXPIRED", appError.userMessage, "TOKEN_EXPIRED");
+    log.error("Handoff blocked: channel token expired or revoked", {
+      err: appError,
+      outcome: "blocked",
+      error_code: "TOKEN_EXPIRED",
+      attempt: ctx.attempt,
+      duration_ms: ctx.durationMs,
+      platform_created_nothing: true,
+      alert: "OPERATOR_ATTENTION",
+    });
+    return result(blocked ?? job, "blocked", {
+      deferredMs: null,
+      errorCode: "TOKEN_EXPIRED",
+      userMessage: appError.userMessage,
+    });
+  }
+
+  const retryable = (appError.context as { retryable?: unknown }).retryable !== false;
+  if (!retryable) {
+    const delayMs = Math.max(0, ctx.scheduledAt.getTime() - deps.clock.nowMs());
+    const userMessage = `Facebook không nhận lịch đăng của bài này (${appError.userMessage}) — chưa có bài nào được tạo trên Trang, hệ thống sẽ đăng thẳng vào giờ đã hẹn.`;
+    const requeued = await requeueForLater(deps, log, job, {
+      delayMs,
+      reason: "HANDOFF_REFUSED_NOTHING_CREATED",
+      errorCode: HANDOFF_REFUSED_ERROR_CODE,
+      errorMessage: userMessage,
+      settings: ctx.settings,
+      attempt: ctx.attempt,
+    });
+    log.error("Facebook refused the schedule but created nothing — publishing at the hour instead", {
+      err: appError,
+      error_code: HANDOFF_REFUSED_ERROR_CODE,
+      original_code: appError.code,
+      attempt: ctx.attempt,
+      duration_ms: ctx.durationMs,
+      publish_in_ms: delayMs,
+      scheduled_at: ctx.scheduledAt.toISOString(),
+      platform_created_nothing: true,
+      alert: "OPERATOR_ATTENTION",
+    });
+    return requeued;
+  }
+
+  // Transient: try again inside the window, or wake up AT the hour and publish
+  // on the normal path (late by seconds instead of not at all).
+  const delayMs = nextHandoffAttemptDelayMs(ctx.scheduledAt, deps.clock.nowMs());
+  // Another handoff only happens if the next wake-up is still before the
+  // deadline; otherwise that wake-up lands ON the hour and publishes normally.
+  const windowStillOpen =
+    deps.clock.nowMs() + delayMs <= ctx.scheduledAt.getTime() - HANDOFF_DEADLINE_MS;
+  const userMessage = windowStillOpen
+    ? `Chưa giao được lịch cho Facebook (${appError.userMessage}) — hệ thống sẽ thử lại trước giờ đăng.`
+    : `Không giao được lịch cho Facebook (${appError.userMessage}) — bài sẽ được đăng thẳng vào giờ đã hẹn.`;
+  const requeued = await requeueForLater(deps, log, job, {
+    delayMs,
+    reason: windowStillOpen ? "HANDOFF_RETRY" : HANDOFF_EXPIRED_ERROR_CODE,
+    errorCode: windowStillOpen ? appError.code : HANDOFF_EXPIRED_ERROR_CODE,
+    errorMessage: userMessage,
+    settings: ctx.settings,
+    attempt: ctx.attempt,
+  });
+  log.error(
+    windowStillOpen
+      ? "Handoff failed, another attempt fits before the deadline"
+      : "Handoff window closed — the post will be published at its hour instead",
+    {
+      err: appError,
+      error_code: appError.code,
+      attempt: ctx.attempt,
+      duration_ms: ctx.durationMs,
+      next_attempt_in_ms: delayMs,
+      scheduled_at: ctx.scheduledAt.toISOString(),
+      window_still_open: windowStillOpen,
+      alert: "OPERATOR_ATTENTION",
+    },
+  );
+  return requeued;
+}
+
+/**
+ * The handoff ended without a verdict: the request that creates the post on the
+ * platform was dispatched (or the publisher could not promise it was not), and
+ * nobody knows whether a scheduled post now exists.
+ *
+ * The job stops here — `failed`, no retry, no publish at the hour — because both
+ * ways forward can put a second post on the Page in the same minute:
+ *   - another handoff  -> a second scheduled post;
+ *   - publishing at T  -> a live post next to the one the platform holds.
+ * A post that does not go out is a bad day; two posts on a customer's Page is
+ * the failure this whole flow exists to prevent (business rule 4).
+ *
+ * The Vietnamese message therefore says the ONE thing an operator can act on:
+ * look at the Page's scheduled posts before doing anything with this job.
+ */
+async function failUnconfirmedHandoff(
+  deps: PublishPostDeps,
+  log: Logger,
+  job: PostJob,
+  appError: AppError,
+  ctx: { attempt: number; durationMs: number; scheduledAt: Date },
+): Promise<never> {
+  const feedDispatched = (appError.context as { feed_dispatched?: unknown }).feed_dispatched === true;
+  const userMessage =
+    `Không xác nhận được kết quả giao lịch cho Facebook (${appError.userMessage}) — ` +
+    "bài hẹn CÓ THỂ đã được tạo trên Trang. Hệ thống dừng lại và KHÔNG tự đăng lại để tránh đăng trùng: " +
+    "hãy mở Trang, mục bài đã lên lịch, xoá bài nếu thấy rồi hẹn lại.";
+
+  await move(
+    deps,
+    job,
+    "failed",
+    {
+      reason: "HANDOFF_OUTCOME_UNKNOWN",
+      errorCode: HANDOFF_FAILED_ERROR_CODE,
+      errorMessage: userMessage,
+    },
+    SCHEDULED_FAILED_AUDIT_ACTION,
+  );
+  await deps.postJobs.refreshBatchStatus(job.tenantId, job.batchId);
+  log.error("Handoff outcome unknown — job stopped so nothing can double-post", {
+    err: appError,
+    outcome: "failed",
+    error_code: HANDOFF_FAILED_ERROR_CODE,
+    original_code: appError.code,
+    // The two facts that answer "vì sao bài này không lên" without a debugger.
+    feed_dispatched: feedDispatched,
+    platform_created_nothing: false,
+    attempt: ctx.attempt,
+    duration_ms: ctx.durationMs,
+    scheduled_at: ctx.scheduledAt.toISOString(),
+    audit_action: SCHEDULED_FAILED_AUDIT_ACTION,
+    alert: "OPERATOR_ATTENTION",
+  });
+  // Rethrown so the queue records a failure; the row already carries the why.
+  throw appError;
+}
+
+/**
+ * Gives a CLAIMED job back to the queue for a later run: `publishing -> queued`
+ * with a new entry id, then the enqueue.
+ *
+ * If the enqueue fails the row stays `queued` with an id nothing answers to —
+ * which is exactly the case the reaper detects (`queue.has` false) and fixes on
+ * its next sweep, so the post is not lost.
+ */
+async function requeueForLater(
+  deps: PublishPostDeps,
+  log: Logger,
+  job: PostJob,
+  ctx: {
+    delayMs: number;
+    reason: string;
+    errorCode: string | null;
+    errorMessage: string | null;
+    settings: PublishSettings;
+    attempt: number;
+  },
+): Promise<PublishPostResult> {
+  const queueJobId = deferredPostJobQueueId(job, deps.clock.nowMs());
+  const requeued = await move(deps, job, "queued", {
+    reason: ctx.reason,
+    errorCode: ctx.errorCode,
+    errorMessage: ctx.errorMessage,
+    queueJobId,
+  });
+  if (!requeued) {
+    log.warn("Could not give the job back to the queue: the row changed under us", {
+      outcome: "skipped",
+      reason: "ROW_CHANGED_DURING_REQUEUE",
+      requeue_reason: ctx.reason,
+    });
+    return result(job, "skipped", { deferredMs: null, skipReason: "ROW_CHANGED_DURING_REQUEUE" });
+  }
+
+  try {
+    await deps.queue.enqueue(
+      PUBLISH_POST_JOB_NAME,
+      { tenantId: job.tenantId, postJobId: job.id },
+      {
+        jobId: queueJobId,
+        delayMs: ctx.delayMs,
+        attempts: ctx.settings.maxAttempts,
+        backoff: { strategy: "exponential", delayMs: ctx.settings.retryBackoffMs },
+      },
+    );
+  } catch (error) {
+    // The row is `queued` with a queue id that does not exist. Loud, not silent:
+    // the reaper re-enqueues it, but an operator must see that it happened.
+    const appError = AppError.from(error, "QUEUE_ERROR", {
+      tenant_id: job.tenantId,
+      job_id: job.id,
+      channel: job.channelId,
+      operation: "publishPost.requeueForLater",
+      requeue_reason: ctx.reason,
+    });
+    log.error("Job returned to `queued` but the new queue entry could not be created", {
+      err: appError,
+      error_code: appError.code,
+      queue_job_id: queueJobId,
+      alert: "OPERATOR_ATTENTION",
+    });
+    throw appError;
+  }
+
+  log.info("Job returned to the queue for a later run", {
+    outcome: "deferred",
+    queue_job_id: queueJobId,
+    wait_ms: ctx.delayMs,
+    requeue_reason: ctx.reason,
+    attempt: ctx.attempt,
+  });
+  return result(requeued, "deferred", {
+    deferredMs: ctx.delayMs,
+    errorCode: ctx.errorCode,
+    userMessage: ctx.errorMessage,
+  });
+}
+
+/**
  * Publish failed. Three outcomes, never a swallowed error:
  *   TOKEN_EXPIRED           -> blocked, no retry (a retry cannot mint a token)
  *   transient, retry left   -> back to `queued` + rethrow (BullMQ backs off)
@@ -878,6 +1576,7 @@ async function move(
   to: PostJobStatus,
   meta: TransitionMeta & { reason: string },
   auditAction?: string,
+  auditPayload?: Readonly<Record<string, unknown>>,
 ): Promise<PostJob | null> {
   const next = transitionPostJob(job, to, meta);
   return deps.postJobs.applyTransition({
@@ -887,6 +1586,7 @@ async function move(
     next,
     reason: meta.reason,
     ...(auditAction ? { auditAction } : {}),
+    ...(auditPayload ? { auditPayload } : {}),
   });
 }
 
@@ -929,6 +1629,7 @@ function result(
     status: job.status,
     publishedPostId: job.publishedPostId,
     publishedUrl: job.publishedUrl,
+    scheduledPostId: job.scheduledPostId,
     errorCode: extra.errorCode ?? job.lastErrorCode,
     userMessage: extra.userMessage ?? job.lastErrorMessage,
     deferredMs: extra.deferredMs,

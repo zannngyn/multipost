@@ -17,6 +17,12 @@ const capabilitiesSchema = z.object({
   vision: z.boolean(),
   structuredOutput: z.boolean(),
   maxOutputTokens: z.number().int().positive(),
+  /**
+   * Defaults to true: accepting a temperature is the norm, and an older registry
+   * that predates this field must keep behaving exactly as it did. A model that
+   * rejects the parameter (GPT-5 family) has to say so explicitly.
+   */
+  temperature: z.boolean().default(true),
 });
 
 const modelSchema = z.object({

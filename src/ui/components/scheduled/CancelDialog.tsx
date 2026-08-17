@@ -16,6 +16,7 @@ import { Textarea } from "@/ui/components/ui/textarea";
 import {
   MAX_CANCEL_NOTE_LENGTH,
   formatScheduledAt,
+  isHeldByPlatform,
   type ScheduledJobEntry,
 } from "@/ui/schemas/scheduled.schema";
 import type { ApiError } from "@/ui/services/api-error";
@@ -81,9 +82,18 @@ export function CancelDialog({
         {job ? (
           <form noValidate className="space-y-4" onSubmit={handleSubmit}>
             <p className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm">
-              Huỷ xong bài sẽ chuyển sang trạng thái “Bị chặn” và không bao giờ lên kênh này. Không
-              hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không
-              bị ảnh hưởng.
+              {isHeldByPlatform(job.status)
+                ? // E8.6: this cancel reaches OUT to Facebook and deletes the
+                  // post there first. Saying only "chuyển sang Bị chặn" would
+                  // hide the part the operator can verify on the Page.
+                  //
+                  // The removal CAN fail (dead page token, Graph down), and the
+                  // usecase then refuses the cancel with the post still
+                  // scheduled — so this is worded as an attempt, not a promise.
+                  // "Facebook sẽ không đăng nữa" belongs to the success message
+                  // the server sends back, where it is true.
+                  "Bài này đang được Facebook giữ. Khi bấm huỷ, hệ thống sẽ cố gỡ bài khỏi Facebook trước, gỡ được mới đánh dấu “Bị chặn”. Nếu không gỡ được, màn hình sẽ báo lại kèm hướng dẫn — bài vẫn sẽ tự đăng cho tới khi bạn vào Trang xoá tay. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."
+                : "Huỷ xong bài sẽ chuyển sang trạng thái “Bị chặn” và không bao giờ lên kênh này. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."}
             </p>
 
             <div className="space-y-1.5">
@@ -115,7 +125,13 @@ export function CancelDialog({
               </p>
             ) : null}
 
-            {error ? <ApiErrorNotice error={error} /> : null}
+            {/*
+              `operation="cancel"`: a failure here is a failed REMOVAL, not a
+              rejected post. Without it the block borrowed the publish wording
+              ("Chạy lại"), which is the opposite of what a post Facebook still
+              holds needs — see present-api-error.
+            */}
+            {error ? <ApiErrorNotice error={error} operation="cancel" /> : null}
 
             <DialogFooter>
               <Button

@@ -80,6 +80,13 @@ function stubFetch(handler: (url: string, init: RequestInit) => Response | Promi
   return spy;
 }
 
+/** Body of the single stubbed HTTP call; fails loudly if nothing was sent. */
+function requestBodyOf(spy: ReturnType<typeof stubFetch>): BodyInit | null | undefined {
+  const call = spy.mock.calls[0];
+  expect(call).toBeDefined();
+  return call?.[1]?.body;
+}
+
 function makeAdapter() {
   return makeOpenAIProviderAdapter({
     apiKey: "test-key",
@@ -105,6 +112,31 @@ describe("OpenAI adapter — wiring", () => {
     expect(() => makeOpenAIProviderAdapter({ apiKey: " ", logger: makeFakeLogger() })).toThrowError(
       AppError,
     );
+  });
+
+  /**
+   * Regression, verified live 15/08/2026: a GPT-5 model answers
+   * 400 "Unsupported parameter: 'temperature' is not supported with this model".
+   * The engine decides not to send one (registry capability); this pins that an
+   * absent temperature really does leave the wire, rather than being serialised
+   * as `"temperature": null`.
+   */
+  it("omits temperature from the request body when the engine sends none", async () => {
+    const spy = stubFetch(() => jsonResponse(responseBody(JSON.stringify(content))));
+
+    await makeAdapter().complete(request);
+
+    const body = JSON.parse(String(requestBodyOf(spy)));
+    expect(body).not.toHaveProperty("temperature");
+    expect(body.max_output_tokens).toBe(900);
+  });
+
+  it("sends the temperature when the engine does supply one", async () => {
+    const spy = stubFetch(() => jsonResponse(responseBody(JSON.stringify(content))));
+
+    await makeAdapter().complete({ ...request, temperature: 0.8 });
+
+    expect(JSON.parse(String(requestBodyOf(spy))).temperature).toBe(0.8);
   });
 
   it("strips the keywords strict structured outputs reject", () => {

@@ -130,6 +130,11 @@ function makeHarness(options: {
       return assets.length;
     },
     deleteStale: async () => 0,
+    // E9 additions; syncing never calls them.
+    registerUpload: async () => {},
+    listOrphanedUploads: async () => [],
+    listUnreferencedUploadsForCode: async () => [],
+    deleteUploads: async () => 0,
   };
   const syncRuns: SyncRunRepo = {
     start: async (_input: StartSyncRunInput) => ({ id: "run-1" }),

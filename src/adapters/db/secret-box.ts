@@ -156,8 +156,22 @@ export function isSealedSecret(value: unknown): boolean {
  */
 const SECRET_FIELD_PATTERN = /(token|secret|password|passwd|credential|api[_-]?key|private[_-]?key)/i;
 
+/**
+ * ...except a field that only DESCRIBES a credential. `tokenExpiresAt` is an
+ * ISO date: encrypting it costs a round trip for nothing, and — worse — an old
+ * unsealed row made `findPlaintextSecretFields` shout "unencrypted secret:
+ * channels[0].tokenExpiresAt" about a date. A warning that cries wolf teaches
+ * the operator to skip the one that matters.
+ *
+ * Suffix-anchored on purpose: `accessToken`, `refreshToken`, `userAccessToken`
+ * are untouched — only `*ExpiresAt` / `*_expires_at` names are excluded.
+ */
+const CREDENTIAL_METADATA_PATTERN = /expires_?at$/i;
+
 export function isSecretFieldName(name: unknown): boolean {
-  return typeof name === "string" && SECRET_FIELD_PATTERN.test(name);
+  if (typeof name !== "string") return false;
+  if (CREDENTIAL_METADATA_PATTERN.test(name)) return false;
+  return SECRET_FIELD_PATTERN.test(name);
 }
 
 /** Depth cap: config blobs are shallow; a cycle must not hang a request. */
@@ -171,7 +185,12 @@ export function sealConfigSecrets<T>(config: T, box: SecretBox): T {
   return mapSecretFields(config, box, "seal", {}, 0) as T;
 }
 
-/** Opens every secret-looking string field. Plaintext legacy values pass through. */
+/**
+ * Opens every SEALED value, whatever it is called, plus the plaintext legacy
+ * values sitting under a credential-looking name. Asymmetric with `seal` on
+ * purpose — see mapSecretFields: what we wrote yesterday must open today even
+ * if the naming rule changed in between.
+ */
 export function openConfigSecrets<T>(config: T, box: SecretBox, context: SecretFieldContext = {}): T {
   return mapSecretFields(config, box, "open", context, 0) as T;
 }
@@ -233,13 +252,34 @@ function mapSecretFields(
 
   const result: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
-    if (typeof child === "string" && isSecretFieldName(key) && child.length > 0) {
+    if (typeof child === "string" && child.length > 0) {
       if (mode === "seal") {
-        result[key] = isSealedSecret(child) ? child : box.sealSecret(child);
+        // Sealing is decided by the field NAME: that is the rule a new provider
+        // adding `refreshToken` inherits for free.
+        if (isSecretFieldName(key)) {
+          result[key] = isSealedSecret(child) ? child : box.sealSecret(child);
+          continue;
+        }
       } else {
-        result[key] = box.openSecret(child, { ...context, field: key });
+        /**
+         * Opening is decided by the ENVELOPE, not by the name. The name rule
+         * moves over time (excluding `*ExpiresAt`, some future `*Utc` suffix),
+         * and a value sealed under yesterday's rule must still open — otherwise
+         * the envelope survives into the schema, the whole provider row fails
+         * validation, and a tenant loses `listChannels` + every write with no
+         * way to fix it from the UI. `enc:v1:` is unambiguous; use it.
+         */
+        if (isSealedSecret(child)) {
+          result[key] = box.openSecret(child, { ...context, field: key });
+          continue;
+        }
+        // Not sealed, but named like a credential: legacy plaintext. openSecret
+        // returns it unchanged and logs the warning that keeps it visible.
+        if (isSecretFieldName(key)) {
+          result[key] = box.openSecret(child, { ...context, field: key });
+          continue;
+        }
       }
-      continue;
     }
     result[key] = mapSecretFields(child, box, mode, context, depth + 1);
   }

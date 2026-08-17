@@ -335,7 +335,11 @@ async function runTier(deps: ContentEngineDeps, input: TierRunInput): Promise<Ti
         outputSchema: GENERATED_CONTENT_JSON_SCHEMA,
         maxOutputTokens: policy.policy.maxOutputTokens,
         timeoutMs: policy.policy.timeoutMs,
-        temperature: policy.policy.temperature,
+        // Sending a temperature to a model that rejects the parameter is a 400,
+        // classified `bad_request` — terminal, no retry, no escalation. The task
+        // keeps stating the temperature it WANTS; the model decides whether it
+        // can be honoured.
+        temperature: entry.capabilities.temperature ? policy.policy.temperature : undefined,
         metadata: { generationId, task: request.task, tenantId },
       });
     } catch (error) {

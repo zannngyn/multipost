@@ -12,12 +12,13 @@ Dự án nội bộ, SaaS-ready. Phase hiện tại: **Phase 1 — MVP Facebook*
 | `docs/05-data-profile.md` | Hiện trạng dữ liệu thật (Drive/Sheet) — đọc trước khi viết parser |
 | `docs/06-doi-chieu-brief-vs-plan.md` | Ma trận truy vết brief ↔ plan |
 | `docs/07-kien-truc-clean-architecture.md` | **Kiến trúc bắt buộc**: cấu trúc thư mục, luật phụ thuộc một chiều, khuôn port/usecase, FE 4 lớp |
+| `docs/08-tien-do-du-an.md` | **Tiến độ đã kiểm chứng** theo epic + việc đang bị chặn. Đọc trước khi hỏi "làm gì tiếp", cập nhật sau mỗi lần merge vào `dev` |
 | `docs/ai/` | **AI architecture ĐÃ DUYỆT** (ADR-001): gateway, registry, routing, validation, evaluation, cost |
 | `sample-data/` | Dữ liệu test thật: listing 5.500 file, snapshot Sheet, 5 mã mẫu |
 
 ## Stack (đã chốt — không đổi khi chưa bàn)
 
-Next.js App Router + TypeScript · PostgreSQL + Drizzle · BullMQ + Redis (queue; Redis kiêm cache nóng registry + rate-limit) · worker Node riêng cùng repo · Tailwind + shadcn/ui · AI Gateway đa provider (Google/Gemini paid-tier primary + OpenAI fallback, registry YAML+DB — `docs/ai/`, ADR-001) · Google Service Account · Docker Compose trên 1 VPS.
+Next.js App Router + TypeScript · PostgreSQL + Drizzle · BullMQ + Redis (queue; Redis kiêm cache nóng registry + rate-limit) · worker Node riêng cùng repo · Tailwind + shadcn/ui · AI Gateway đa provider, **hiện chạy MỘT provider: OpenAI** (quyết định 15/08/2026 — chưa có key Google paid tier; Google tắt nhưng adapter còn nguyên, bật lại bằng env + `config/ai-models.yaml`, không sửa code. Hệ quả: tạm không có provider fallback. Chi tiết `docs/ai/provider-strategy.md` §3.1) · Google Service Account · Docker Compose trên 1 VPS.
 
 ## Flow agent team — BẮT BUỘC
 

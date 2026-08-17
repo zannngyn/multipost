@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
-import { MAX_SCHEDULE_AHEAD_MS, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
+import {
+  HANDOFF_WINDOW_START_MS,
+  MAX_SCHEDULE_AHEAD_MS,
+  type PostJob,
+  type PostJobStatus,
+} from "@/core/domain/post-job";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo, RescheduleJobInput } from "@/core/ports/post-job-repo";
 import type { ChannelConfigRepo } from "@/core/ports/publisher";
+
+import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 
 import { makeReschedulePostJob } from "./reschedule-post-job";
 
@@ -52,6 +59,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     publishedPostId: null,
     publishedUrl: null,
     publishedAt: null,
+    scheduledPostId: null,
     captionText: "caption",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: SCHEDULED_AT,
@@ -99,6 +107,9 @@ function makeRepo(job: PostJob | null, options: { rejectReschedule?: boolean } =
     async findOverdueQueued() {
       return [];
     },
+    async findScheduledOnPlatformDue() {
+      return [];
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -143,6 +154,7 @@ const CHANNELS: ChannelConfigRepo = {
   findChannel: async () => null,
   listChannels: async () => [],
   getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 }),
+  ...channelWriteStubs(),
 };
 
 function harness(
@@ -295,7 +307,8 @@ describe("reschedulePostJob — move the hour", () => {
     // A fresh queue id: BullMQ ignores an `add` whose id is still retained.
     expect(result.queueJobId).not.toBe("pp.old-entry");
     expect(queue.enqueued[0].opts?.jobId).toBe(result.queueJobId);
-    expect(queue.enqueued[0].opts?.delayMs).toBe(6 * 60 * 60 * 1000);
+    // E8.6: the entry wakes at T-30 (the handoff window), not at T.
+    expect(queue.enqueued[0].opts?.delayMs).toBe(6 * 60 * 60 * 1000 - HANDOFF_WINDOW_START_MS);
     expect(queue.removedIds).toEqual(["pp.old-entry"]);
     expect(repo.calls[0]).toMatchObject({
       scheduledAt: NEW_AT,

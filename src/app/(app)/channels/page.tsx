@@ -1,15 +1,24 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
 import { getOperatorSession } from "@/app/_auth/session";
-import { ChannelGroupsScreen } from "@/ui/components/channels/ChannelGroupsScreen";
+import { ChannelsFallback } from "@/ui/components/channels/ChannelsFallback";
+import { ConnectedChannelsScreen } from "@/ui/components/channels/ConnectedChannelsScreen";
 
 /**
- * "Nhóm kênh" (E7.6 / E10.3). Server Component guard, client screen.
+ * "Kênh" (E5.1). Server Component guard, client screen.
+ *
+ * The screen owns its own frame (Layout + header), so this page adds no
+ * container of its own.
+ *
+ * It reads the OAuth callback from the query string, so it must sit under a
+ * <Suspense> boundary — `useSearchParams()` suspends until the request's search
+ * params are known.
  */
 
 export const metadata: Metadata = {
-  title: "Nhóm kênh — MYSP",
+  title: "Kênh — MYSP",
   robots: { index: false, follow: false },
 };
 
@@ -24,8 +33,8 @@ export default async function ChannelsPage() {
   if (!session) redirect("/signin?returnUrl=%2Fchannels");
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <ChannelGroupsScreen />
-    </div>
+    <Suspense fallback={<ChannelsFallback />}>
+      <ConnectedChannelsScreen />
+    </Suspense>
   );
 }

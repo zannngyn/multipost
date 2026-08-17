@@ -11,6 +11,7 @@ import type { Logger } from "@/core/ports/infra";
 
 import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
+import { lockIntegrationRow } from "./integration-lock";
 import { auditLogs, tenantIntegrations } from "./schema";
 import { findPlaintextSecretFields } from "./secret-box";
 import { forTenant } from "./tenant-scope";
@@ -166,9 +167,15 @@ export class DrizzleCatalogConfigRepo implements CatalogConfigRepo {
   }
 
   /**
-   * Upsert + audit in ONE transaction. The previous config is read inside that
-   * transaction so two operators saving at the same time cannot produce an
-   * audit row claiming a change that never happened.
+   * Upsert + audit in ONE transaction, behind the per-(tenant, provider)
+   * advisory lock every writer of `tenant_integration` takes.
+   *
+   * The lock is what makes the promise below true. Reading the previous config
+   * "inside the transaction" is not enough on its own: the FIRST save of a
+   * tenant has no row for `FOR UPDATE` to lock, so two operators saving at the
+   * same moment would both read nothing, both write an audit row saying
+   * `old: null`, and the second upsert would drop the first one's source (and
+   * any other key of the google blob). See adapters/db/integration-lock.
    *
    * Other keys of `config` are preserved: the google row is shared with future
    * provider settings, and a source change must not silently drop them.
@@ -205,11 +212,17 @@ export class DrizzleCatalogConfigRepo implements CatalogConfigRepo {
     try {
       return await scope.db.transaction(async (tx) => {
         const txScope = forTenant(tx, scope.tenantId);
+        // First, and before the read: a save that arrives while another one is
+        // in flight waits here instead of racing it.
+        await lockIntegrationRow(txScope, GOOGLE_PROVIDER);
+
         const existing = await txScope.db
           .select({ config: tenantIntegrations.config })
           .from(tenantIntegrations)
           .where(txScope.where(tenantIntegrations, eq(tenantIntegrations.provider, GOOGLE_PROVIDER)))
-          .limit(1);
+          .limit(1)
+          // Row-level guard for any writer that skips the advisory lock.
+          .for("update");
 
         const currentConfig = existing[0]?.config ?? {};
         const parsedPrevious = CatalogConfigSchema.safeParse(currentConfig);

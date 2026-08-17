@@ -37,6 +37,8 @@ const validContent: CaptionContent = {
 // Stage 1 — schema
 // ---------------------------------------------------------------------------
 
+const NUL = "\u0000";
+
 describe("stage 1 — schema", () => {
   it("rejects null / string / array payloads without leaking them", () => {
     for (const payload of [null, "some text", [1, 2, 3]]) {
@@ -45,6 +47,35 @@ describe("stage 1 — schema", () => {
       expect(result.failures[0].rule).toBe("schema.not_object");
       expect(JSON.stringify(result.failures)).not.toContain("some text");
     }
+  });
+
+  /**
+   * Measured live 15/08/2026: gpt-4.1-mini returned mojibake carrying U+0000.
+   * It used to pass stage 1, get rejected at stage 3 with a confusing "source
+   * not found", and then break the ai_generation INSERT (Postgres cannot store
+   * NUL). Rejecting it here makes the escalation carry an honest reason.
+   */
+  it.each([
+    ["title", { ...validContent, title: `MÙA${NUL} HÈ` }],
+    ["body", { ...validContent, body: `Dáng suông${NUL} nhẹ nhàng.` }],
+    ["hashtags", { ...validContent, hashtags: [`#a${NUL}`, "#b", "#c"] }],
+    [
+      "claims",
+      {
+        ...validContent,
+        claims: [{ field: "material", statement: "lụa", sourceText: `lụa${NUL} mềm mát` }],
+      },
+    ],
+  ])("rejects a control character in %s", (_where, payload) => {
+    const result = validateSchema(payload);
+
+    expect(result.ok).toBe(false);
+    expect(result.failures[0].rule).toBe("schema.control_characters");
+  });
+
+  it("keeps accepting the newlines and tabs real copy uses", () => {
+    const result = validateSchema({ ...validContent, body: "Dòng 1\nDòng 2\tcó tab" });
+    expect(result.ok).toBe(true);
   });
 
   it("rejects fewer than 3 hashtags", () => {
@@ -154,6 +185,100 @@ describe("stage 3 — claims", () => {
         ...validContent,
         claims: [
           { field: "material", statement: "lụa tơ tằm cao cấp", sourceText: "lụa tơ tằm cao cấp" },
+        ],
+      },
+      context,
+    );
+    expect(failures.map((item) => item.rule)).toContain("claim.source_not_found");
+  });
+
+  /**
+   * Regression from real runs on 15/08/2026: the prompt lists the product as
+   * "- Chủng loại: Đầm", the model quotes the whole line, and stage 3 blocked
+   * 3 of 4 real generations for it.
+   */
+  it.each([
+    "- Chủng loại: Đầm",
+    "Chủng loại: Đầm",
+    "* Mùa vụ: Hè 2026",
+    "- Mô tả sản phẩm: Chất liệu lụa mềm mát",
+  ])("accepts a source quoted with the prompt's own label prefix (%j)", (sourceText) => {
+    const failures = validateClaims(
+      { ...validContent, claims: [{ field: "other", statement: "kiểu dáng", sourceText }] },
+      context,
+    );
+    expect(failures).toEqual([]);
+  });
+
+  it("still rejects an invented value even when it wears a label prefix", () => {
+    const failures = validateClaims(
+      {
+        ...validContent,
+        claims: [{ field: "material", statement: "linen", sourceText: "- Chất liệu: linen Ý" }],
+      },
+      context,
+    );
+    expect(failures.map((item) => item.rule)).toContain("claim.source_not_found");
+  });
+
+  /**
+   * Found by review of the first fix: stripping "anything before a colon" turned
+   * `sourceText` into a free text field. It is not published, but it IS stored in
+   * ai_generation and shown to the human approver as the evidence for a claim, so
+   * invented text there is a real misrepresentation — a price-shaped string most
+   * of all.
+   */
+  it.each([
+    "Hàng nhập khẩu Ý cao cấp: Đầm",
+    "Giá chỉ 350.000: Đầm",
+    "Bịa: Hè 2026",
+  ])("rejects a made-up prefix pretending to be a label (%j)", (sourceText) => {
+    const failures = validateClaims(
+      { ...validContent, claims: [{ field: "other", statement: "x", sourceText }] },
+      context,
+    );
+    expect(failures.map((item) => item.rule)).toContain("claim.source_not_found");
+  });
+
+  it("rejects a one-character source that would match almost anything", () => {
+    const failures = validateClaims(
+      { ...validContent, claims: [{ field: "other", statement: "x", sourceText: "a" }] },
+      context,
+    );
+    // Distinct from an EMPTY source: the model did quote something, it is just
+    // too short to prove anything, and the operator deserves the true reason.
+    expect(failures.map((item) => item.rule)).toContain("claim.source_too_short");
+  });
+
+  it("still reports a truly empty source as such", () => {
+    const failures = validateClaims(
+      { ...validContent, claims: [{ field: "other", statement: "x", sourceText: "   " }] },
+      context,
+    );
+    expect(failures.map((item) => item.rule)).toContain("claim.empty_source");
+  });
+
+  it("requires a whole word, not a fragment buried inside one", () => {
+    // "uông" sits inside "suông" but is not a word of the description.
+    const failures = validateClaims(
+      { ...validContent, claims: [{ field: "other", statement: "x", sourceText: "uông" }] },
+      context,
+    );
+    expect(failures.map((item) => item.rule)).toContain("claim.source_not_found");
+  });
+
+  it("does not let a long prefix hide an ungrounded claim", () => {
+    // 33+ chars before the colon: beyond what a label can plausibly be, so the
+    // stripping rule must not apply and the claim stays ungrounded.
+    const failures = validateClaims(
+      {
+        ...validContent,
+        claims: [
+          {
+            field: "other",
+            statement: "bịa",
+            sourceText: "Đây là một đoạn mở đầu rất dài dùng để né kiểm tra: vải dệt kim Nhật",
+          },
         ],
       },
       context,

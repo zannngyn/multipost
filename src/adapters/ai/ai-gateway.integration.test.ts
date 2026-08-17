@@ -49,10 +49,15 @@ const secondChannelOutput = {
   confidence: 0.79,
 };
 
-function makeStack(steps: Parameters<typeof makeScriptedProvider>[1], openaiSteps?: Parameters<typeof makeScriptedProvider>[1]) {
+/**
+ * Single-provider stack (owner decision 15/08/2026): the shipped registry lists
+ * OpenAI models only. Google is still WIRED here on purpose — the tests must
+ * show the engine never wanders to a provider the registry did not name.
+ */
+function makeStack(steps: Parameters<typeof makeScriptedProvider>[1]) {
   const logger = makeFakeLogger();
-  const google = makeScriptedProvider("google", steps);
-  const openai = makeScriptedProvider("openai", openaiSteps ?? [{ kind: "ok", output: goodOutput }]);
+  const openai = makeScriptedProvider("openai", steps);
+  const google = makeScriptedProvider("google", [{ kind: "ok", output: goodOutput }]);
 
   const engine = makeContentEngine({
     providers: { google, openai },
@@ -83,37 +88,39 @@ const baseRequest: ContentGenerationRequest = {
 };
 
 describe("AI gateway — real registry + real prompt", () => {
-  it("routes facebook_content to the cheap Google model and passes validation", async () => {
-    const { engine, google } = makeStack([{ kind: "ok", output: goodOutput }]);
-
-    const result = await engine.generate(baseRequest);
-
-    expect(result.metadata.provider).toBe("google");
-    expect(result.metadata.tier).toBe("cheap");
-    expect(result.metadata.model).toBe("gemini-3.5-flash-lite");
-    expect(result.metadata.promptTemplateId).toBe("facebook-product-content");
-
-    const prompt = google.calls[0].messages[0].parts[0];
-    expect(prompt.type === "text" && prompt.text).toContain("Penny");
-    expect(google.calls[0].maxOutputTokens).toBe(900);
-    expect(google.calls[0].timeoutMs).toBe(30_000);
-  });
-
-  it("falls back to the OpenAI model of the SAME tier when Google is rate limited", async () => {
-    const { engine, openai } = makeStack([
-      { kind: "fail", code: "AI_RATE_LIMITED", failureKind: "rate_limited" },
-    ]);
+  it("routes facebook_content to the cheap OpenAI model and passes validation", async () => {
+    const { engine, openai } = makeStack([{ kind: "ok", output: goodOutput }]);
 
     const result = await engine.generate(baseRequest);
 
     expect(result.metadata.provider).toBe("openai");
-    expect(result.metadata.model).toBe("gpt-5-mini");
-    expect(result.metadata.fallbackUsed).toBe(true);
-    expect(openai.calls[0].model).toBe("gpt-5-mini");
+    expect(result.metadata.tier).toBe("cheap");
+    expect(result.metadata.model).toBe("gpt-4.1-mini");
+    expect(result.metadata.promptTemplateId).toBe("facebook-product-content");
+
+    const prompt = openai.calls[0].messages[0].parts[0];
+    expect(prompt.type === "text" && prompt.text).toContain("Penny");
+    expect(openai.calls[0].maxOutputTokens).toBe(3_000);
+    expect(openai.calls[0].timeoutMs).toBe(60_000);
+    // gpt-4.1-mini accepts a temperature, so the task's 0.8 must reach it.
+    expect(openai.calls[0].temperature).toBe(0.8);
+  });
+
+  it("fails the generation on an infra error instead of swapping to an unlisted provider", async () => {
+    // Single provider = no infra fallback road. Google is wired but absent from
+    // every tier, so the engine must surface the outage, not quietly use it.
+    const { engine, google } = makeStack([
+      { kind: "fail", code: "AI_RATE_LIMITED", failureKind: "rate_limited" },
+    ]);
+
+    await expect(engine.generate(baseRequest)).rejects.toMatchObject({
+      code: "AI_RATE_LIMITED",
+    });
+    expect(google.calls).toHaveLength(0);
   });
 
   it("escalates cheap -> mid when validation fails, using registry tiers", async () => {
-    const { engine, google } = makeStack([
+    const { engine, openai } = makeStack([
       { kind: "ok", output: { ...goodOutput, body: "Đầm lụa mềm mát, chỉ 1.250.000 thôi nàng ơi." } },
       { kind: "ok", output: goodOutput },
     ]);
@@ -121,8 +128,10 @@ describe("AI gateway — real registry + real prompt", () => {
     const result = await engine.generate(baseRequest);
 
     expect(result.metadata.tier).toBe("mid");
-    expect(result.metadata.model).toBe("gemini-3.6-flash");
-    expect(google.calls).toHaveLength(2);
+    expect(result.metadata.model).toBe("gpt-5.4-mini");
+    expect(openai.calls).toHaveLength(2);
+    // ...and gpt-5.4-mini rejects it, so the same task must send none.
+    expect(openai.calls[1].temperature).toBeUndefined();
   });
 
   it("accepts a second channel whose caption differs from the first // PENDING(D1)", async () => {
@@ -149,7 +158,7 @@ describe("AI gateway — real registry + real prompt", () => {
   });
 
   it("blocks the whole post when every tier keeps writing a price", async () => {
-    const { engine, google } = makeStack([
+    const { engine, openai } = makeStack([
       { kind: "ok", output: { ...goodOutput, body: "Chỉ 750.000 cho mùa hè này." } },
     ]);
 
@@ -157,20 +166,27 @@ describe("AI gateway — real registry + real prompt", () => {
       code: "CAPTION_VALIDATION_FAILED",
     });
     // cheap -> mid -> top, exactly maxEscalations = 2 from the YAML.
-    expect(google.calls.map((call) => call.model)).toEqual([
-      "gemini-3.5-flash-lite",
-      "gemini-3.6-flash",
-      "gemini-3.1-pro",
+    expect(openai.calls.map((call) => call.model)).toEqual([
+      "gpt-4.1-mini",
+      "gpt-5.4-mini",
+      "gpt-4.1",
     ]);
+    // The ladder alternates families, so the temperature knob comes back at the
+    // top rung — proof the engine decides per MODEL, not once per generation.
+    expect(openai.calls.map((call) => call.temperature)).toEqual([0.8, undefined, 0.8]);
   });
 
-  it("stops with AI_BUDGET_EXCEEDED rather than escalating onto the unpriced flagship", async () => {
-    // openai:gpt-5 carries a deliberately high placeholder price, so the top-tier
-    // fallback cannot be reached inside the $0.05 ceiling.
-    const { engine } = makeStack(
-      [{ kind: "ok", output: { ...goodOutput, body: "Chỉ 750.000 thôi." }, usage: { inputTokens: 900_000, outputTokens: 900, cachedTokens: 0 } }],
-      [{ kind: "ok", output: goodOutput }],
-    );
+  it("stops with AI_BUDGET_EXCEEDED instead of escalating past the ceiling", async () => {
+    // A single runaway attempt already spends more than the $0.05 per-generation
+    // ceiling, so the escalation to `mid` must never leave.
+    const { engine, openai } = makeStack([
+      {
+        kind: "ok",
+        output: { ...goodOutput, body: "Chỉ 750.000 thôi." },
+        usage: { inputTokens: 900_000, outputTokens: 900, cachedTokens: 0 },
+      },
+      { kind: "ok", output: goodOutput },
+    ]);
 
     try {
       await engine.generate(baseRequest);
@@ -179,5 +195,6 @@ describe("AI gateway — real registry + real prompt", () => {
       expect(AppError.is(error)).toBe(true);
       expect((error as AppError).code).toBe("AI_BUDGET_EXCEEDED");
     }
+    expect(openai.calls).toHaveLength(1);
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isAllowedEmail } from "./auth.config";
+import { isAllowedEmail, isAllowedFacebookUser } from "./auth.config";
 import { isDevFakeSessionEnabled } from "./dev-session";
 import { DEFAULT_RETURN_URL, safeReturnUrl } from "./return-url";
 
@@ -57,6 +57,44 @@ describe("isAllowedEmail — happy path", () => {
 
   it("is case-insensitive and trims surrounding spaces", () => {
     expect(isAllowedEmail("  Boss@MYSP.VN  ", ALLOWED)).toBe(true);
+  });
+});
+
+describe("isAllowedFacebookUser — edge cases", () => {
+  const ALLOWED_IDS = ["1234567890", "9876543210"];
+
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["a number", 1234567890],
+    ["an object", { id: "1234567890" }],
+    ["empty string", ""],
+    ["whitespace only", "   "],
+  ])("rejects %s", (_label, value) => {
+    expect(isAllowedFacebookUser(value, ALLOWED_IDS)).toBe(false);
+  });
+
+  it("rejects everyone when the list is absent — a missing allow-list is not an open door", () => {
+    expect(isAllowedFacebookUser("1234567890", undefined)).toBe(false);
+  });
+
+  it("rejects everyone when the list is empty — fail closed", () => {
+    expect(isAllowedFacebookUser("1234567890", [])).toBe(false);
+  });
+
+  it("rejects an id that merely contains an allow-listed one", () => {
+    expect(isAllowedFacebookUser("11234567890", ALLOWED_IDS)).toBe(false);
+    expect(isAllowedFacebookUser("1234567890123", ALLOWED_IDS)).toBe(false);
+  });
+});
+
+describe("isAllowedFacebookUser — happy path", () => {
+  it("accepts an allow-listed id", () => {
+    expect(isAllowedFacebookUser("1234567890", ["1234567890"])).toBe(true);
+  });
+
+  it("trims surrounding spaces, matching how the env list is parsed", () => {
+    expect(isAllowedFacebookUser("  1234567890  ", ["1234567890"])).toBe(true);
   });
 });
 

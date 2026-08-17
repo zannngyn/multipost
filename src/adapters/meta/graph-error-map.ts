@@ -21,6 +21,8 @@ export interface GraphErrorBody {
   readonly fbtrace_id?: string;
   readonly error_user_title?: string;
   readonly error_user_msg?: string;
+  /** Meta's own "this may succeed on a retry" flag. Only trusted for codes we do not classify ourselves. */
+  readonly is_transient?: boolean;
 }
 
 export interface MapGraphErrorInput {
@@ -54,6 +56,11 @@ const PERMISSION_CODES = new Set([3, 10, 200, 210, 283, 299]);
 /** Meta's own "temporary problem, try again" family. */
 const TRANSIENT_CODES = new Set([1, 2, 31]);
 
+/** Same illness (Facebook could not download the image), same instruction. */
+const MEDIA_FETCH_FAILED_MESSAGE =
+  "Facebook không tải được ảnh từ liên kết công khai đã gửi — hệ thống sẽ thử lại. " +
+  "Nếu vẫn lặp lại, kiểm tra MEDIA_PUBLIC_BASE_URL có truy cập được từ Internet không.";
+
 const BY_CODE: Readonly<Record<number, MappedGraphError>> = {
   100: {
     code: "META_ERROR",
@@ -77,8 +84,18 @@ const BY_CODE: Readonly<Record<number, MappedGraphError>> = {
   },
   1609005: {
     code: "META_ERROR",
-    userMessage: "Facebook không tải được ảnh từ đường dẫn đã gửi. Kiểm tra link ảnh công khai.",
-    retryable: false,
+    userMessage: MEDIA_FETCH_FAILED_MESSAGE,
+    // One failed fetch is not permanent: Meta re-downloads the image on retry.
+    retryable: true,
+    reason: "MEDIA_FETCH_FAILED",
+  },
+  // 324 "Missing or invalid image file": Meta could not download the image from
+  // the public link. Observed to be intermittent on the very same URL, and Meta
+  // itself answers with is_transient=true — so it must not kill the job.
+  324: {
+    code: "META_ERROR",
+    userMessage: MEDIA_FETCH_FAILED_MESSAGE,
+    retryable: true,
     reason: "MEDIA_FETCH_FAILED",
   },
 };
@@ -90,7 +107,9 @@ export function mapGraphError(input: MapGraphErrorInput): AppError {
   const graphCode = typeof error?.code === "number" ? error.code : null;
   const subcode = typeof error?.error_subcode === "number" ? error.error_subcode : null;
 
-  const mapped = classify(graphCode, subcode, httpStatus, input?.cause);
+  const isTransient = error?.is_transient === true;
+
+  const mapped = classify(graphCode, subcode, httpStatus, input?.cause, isTransient);
 
   const message = [
     "Graph API error",
@@ -112,6 +131,7 @@ export function mapGraphError(input: MapGraphErrorInput): AppError {
       graph_type: error?.type ?? null,
       graph_message: error?.message ?? null,
       graph_user_message: error?.error_user_msg ?? null,
+      graph_is_transient: error?.is_transient ?? null,
       fbtrace_id: error?.fbtrace_id ?? null,
       http_status: httpStatus,
       retryable: mapped.retryable,
@@ -126,7 +146,11 @@ function classify(
   subcode: number | null,
   httpStatus: number | null,
   cause: unknown,
+  isTransient: boolean,
 ): MappedGraphError {
+  // Order matters: the code tables win over Meta's is_transient flag, which the
+  // platform also sets on dead tokens and missing permissions. Retrying those
+  // burns attempts and delays the alert to the operator.
   if (graphCode !== null) {
     if (TOKEN_CODES.has(graphCode)) {
       return {
@@ -189,6 +213,17 @@ function classify(
         "Facebook từ chối truy cập (token hoặc quyền không hợp lệ) — cần kết nối lại kênh.",
       retryable: false,
       reason: "HTTP_UNAUTHORIZED",
+    };
+  }
+  // Unclassified code that Meta itself flagged as transient: prefer a retry over
+  // failing the job. Reached only after the token/permission tables and after the
+  // 401/403 branch, so an auth problem can never land here.
+  if (isTransient) {
+    return {
+      code: "META_ERROR",
+      userMessage: "Facebook báo lỗi tạm thời khi đăng bài — hệ thống sẽ thử lại.",
+      retryable: true,
+      reason: "TRANSIENT_FLAGGED",
     };
   }
   if (httpStatus !== null && httpStatus >= 400) {

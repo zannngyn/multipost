@@ -18,8 +18,8 @@ import {
 
 /**
  * Logic layer of the preset channel groups (E7.6 / E10.3), docs/07 §4.1.
- * Shared by the /channels screen (CRUD) and by the wizard's channel picker —
- * one query key, so creating a group on /channels shows up in the wizard
+ * Shared by the /channels/groups screen (CRUD) and by the wizard's channel
+ * picker — one query key, so creating a group there shows up in the wizard
  * without a reload (core-component-reuse: share the rule, not just the widget).
  */
 

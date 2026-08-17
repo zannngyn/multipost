@@ -114,6 +114,7 @@ Chi tiết routing: `model-routing.md`. Chi tiết validation: `validation.md`. 
 
 ## 7. Điểm chờ quyết định khi duyệt
 
-1. ✅ **ĐÃ CHỐT (owner, 12/08/2026): Google AI Studio làm provider chính** — Gemini phủ cả 3 tier; OpenAI làm fallback hạ tầng ngày 1; Anthropic đợt 2 nếu benchmark cần. **Điều kiện bắt buộc: paid tier từ môi trường có dữ liệu thật** (free tier cho Google quyền dùng dữ liệu để training — xem provider-strategy.md mục 3).
+1. ⚠️ **TẠM HOÃN 15/08/2026 — hiện chạy MỘT provider: OpenAI** (chưa cấp được key Google paid tier). Chi tiết + cách bật lại: `provider-strategy.md` §3.1. Quyết định gốc bên dưới vẫn là đích đến.
+   ✅ **ĐÃ CHỐT (owner, 12/08/2026): Google AI Studio làm provider chính** — Gemini phủ cả 3 tier; OpenAI làm fallback hạ tầng ngày 1; Anthropic đợt 2 nếu benchmark cần. **Điều kiện bắt buộc: paid tier từ môi trường có dữ liệu thật** (free tier cho Google quyền dùng dữ liệu để training — xem provider-strategy.md mục 3).
 2. ⏳ **Model cụ thể trong từng tier**: đề xuất Gemini 3.5 Flash-Lite (cheap) / 3.6 Flash (mid) / 3.1 Pro (top), nhưng **chốt sau benchmark** trên eval dataset (nguyên tắc #10, #13) — benchmark đợt 1 so Flash-Lite vs Flash vs GPT-5 mini trên tiếng Việt bán hàng.
 3. ✅ **ĐÃ CHỐT (owner, 12/08/2026): Registry = YAML-trong-repo + DB override theo tenant**, cache nóng trong Redis (stack đã có Redis từ quyết định cùng ngày).

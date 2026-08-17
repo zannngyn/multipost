@@ -41,8 +41,10 @@ export interface BatchTotals {
   readonly blocked: number;
   readonly queued: number;
   readonly publishing: number;
+  /** E8.6 — handed to Facebook, waiting for its hour. Nothing is live yet. */
+  readonly scheduledOnFacebook: number;
   readonly draft: number;
-  /** draft + queued + publishing — "còn đang chạy". */
+  /** draft + queued + publishing + scheduled_on_facebook — "còn đang chạy". */
   readonly inProgress: number;
 }
 
@@ -108,8 +110,14 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
       blocked: summary.byStatus.blocked,
       queued: summary.byStatus.queued,
       publishing: summary.byStatus.publishing,
+      scheduledOnFacebook: summary.byStatus.scheduled_on_facebook,
       draft: summary.byStatus.draft,
-      inProgress: summary.byStatus.draft + summary.byStatus.queued + summary.byStatus.publishing,
+      inProgress:
+        summary.byStatus.draft +
+        summary.byStatus.queued +
+        summary.byStatus.publishing +
+        // Waiting on Facebook is still "running": the post is not live.
+        summary.byStatus.scheduled_on_facebook,
     };
 
     const channels: BatchChannelStatus[] = summary.jobs.map((job) => ({

@@ -1,5 +1,5 @@
 /**
- * Skeleton shaped like the real batch screen: same card, same five totals, same
+ * Skeleton shaped like the real batch screen: same card, same six totals, same
  * four table columns and row height — a skeleton of the wrong shape is just a
  * layout shift with extra steps (web-feedback-states / web-data-table rule 1).
  */
@@ -12,8 +12,8 @@ export function BatchStatusSkeleton() {
           <div className="bg-muted h-5 w-24 rounded-full" />
         </div>
         <div className="bg-muted h-4 w-full max-w-md rounded" />
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-          {[0, 1, 2, 3, 4].map((cell) => (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {[0, 1, 2, 3, 4, 5].map((cell) => (
             <div key={cell} className="bg-muted/40 space-y-2 rounded-lg border p-3">
               <div className="bg-muted h-3 w-16 rounded" />
               <div className="bg-muted h-6 w-10 rounded" />

@@ -54,6 +54,24 @@ export function isAllowedEmail(email: unknown, allowedDomains: readonly string[]
   return allowedDomains.includes(domain);
 }
 
+/**
+ * Facebook allow-list check. The identity key is the provider user id, never the
+ * e-mail: Facebook does not always return one, and an e-mail can move between
+ * accounts (core-auth-methods — "e-mail from a provider is not an identity").
+ * An empty or absent list rejects everyone, so forgetting to configure it fails
+ * closed instead of opening the tool to anyone with a Facebook account.
+ */
+export function isAllowedFacebookUser(
+  providerAccountId: unknown,
+  allowedIds: readonly string[] | undefined,
+): boolean {
+  if (typeof providerAccountId !== "string") return false;
+  const id = providerAccountId.trim().toLowerCase();
+  if (id.length === 0) return false;
+  if (!allowedIds || allowedIds.length === 0) return false;
+  return allowedIds.includes(id);
+}
+
 /** Structured warn without pulling the pino adapter into the edge/auth bundle. */
 function warnAuth(message: string, context: Record<string, unknown>): void {
   console.warn(JSON.stringify({ level: "warn", time: new Date().toISOString(), message, ...context }));
@@ -81,20 +99,65 @@ export function buildBaseAuthConfig(): NextAuthConfig {
     providers: [],
     callbacks: {
       /**
+       * Auth.js derives `session.user` from the token's e-mail and returns NO
+       * user at all when it is missing — the middleware then treats a perfectly
+       * valid cookie as "not signed in" and bounces the operator back to
+       * /signin. Facebook does not guarantee an address (accounts registered
+       * with a phone number have none), so one is synthesised from the identity
+       * key that IS guaranteed: the provider user id.
+       *
+       * It is deliberately unroutable (.local) and unmistakably internal — this
+       * is a name for the audit trail, never something to send mail to. Access
+       * is still decided by the allow-list in `signIn`, never by this address.
+       */
+      jwt({ token, account, profile }) {
+        if (account?.provider !== "facebook") return token;
+
+        if (!token.email) {
+          const email = typeof profile?.email === "string" ? profile.email.trim() : "";
+          token.email = email.length > 0 ? email : `fb-${account.providerAccountId}@facebook.local`;
+        }
+        if (!token.name && typeof profile?.name === "string") {
+          token.name = profile.name;
+        }
+        return token;
+      },
+
+      /**
        * The only authorisation gate in E1: verified Google e-mail + allow-listed
        * domain. Returning `false` makes Auth.js redirect to `pages.error`.
        */
       signIn({ account, profile }) {
-        const allowedDomains = loadAuthEnv().AUTH_ALLOWED_DOMAINS;
+        const env = loadAuthEnv();
+        const allowedDomains = env.AUTH_ALLOWED_DOMAINS;
         const email = typeof profile?.email === "string" ? profile.email : null;
 
         // --- Edge cases first (CLAUDE.md technical rule 1) -------------------
-        if (account?.provider !== "google") {
+        if (account?.provider !== "google" && account?.provider !== "facebook") {
           warnAuth("Sign-in rejected: unexpected provider", {
             error_code: "UNAUTHORIZED",
             provider: account?.provider ?? null,
           });
           return false;
+        }
+
+        /**
+         * Facebook has its own gate: an allow-list of user ids. It deliberately
+         * does NOT fall through to the e-mail checks below — matching a Google
+         * account by e-mail would hand this tool to whoever registered that
+         * address at Facebook (core-auth-methods, account-linking hijack).
+         */
+        if (account.provider === "facebook") {
+          if (!isAllowedFacebookUser(account.providerAccountId, env.AUTH_FACEBOOK_ALLOWED_USER_IDS)) {
+            warnAuth("Sign-in rejected: Facebook user id not allow-listed", {
+              error_code: "UNAUTHORIZED",
+              provider: "facebook",
+              facebook_user_id: account.providerAccountId ?? null,
+              allow_list_configured: Boolean(env.AUTH_FACEBOOK_ALLOWED_USER_IDS?.length),
+            });
+            return false;
+          }
+          return true;
         }
 
         if (profile?.email_verified !== true) {

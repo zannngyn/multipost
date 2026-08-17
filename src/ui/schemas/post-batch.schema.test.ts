@@ -4,17 +4,23 @@ import { batchPollInterval } from "@/ui/hooks/usePostBatch";
 
 import {
   BatchStatusResponseSchema,
+  POST_JOB_STATUSES,
+  POST_JOB_STATUS_LABELS,
+  POST_JOB_STATUS_TONES,
   PostJobLogResponseSchema,
   facebookPostUrl,
   formatDurationMs,
   isSettledBatchStatus,
+  isSettledJobStatus,
   jobLogSearchParams,
   parseJobLogFilter,
   type BatchStatusResponse,
 } from "./post-batch.schema";
 
 /**
- * Edge cases first (CLAUDE.md technical rule 1). Two rules must never regress:
+ * Edge cases first (CLAUDE.md technical rule 1). Three rules must never regress:
+ *  - every status of the domain state machine parses (a missing one breaks the
+ *    screen the day the first job reaches it, not the day it is added);
  *  - polling STOPS when a batch is settled (a forever-poll is a silent bug);
  *  - a bad URL filter falls back to "tất cả", it never crashes the screen.
  */
@@ -34,6 +40,7 @@ function makeBatch(overrides: Partial<BatchStatusResponse> = {}): BatchStatusRes
       blocked: 0,
       queued: 2,
       publishing: 0,
+      scheduledOnFacebook: 0,
       draft: 0,
       inProgress: 2,
     },
@@ -97,7 +104,75 @@ describe("jobLogSearchParams", () => {
   });
 });
 
+describe("post job statuses", () => {
+  it("mirrors the whole domain state machine, including scheduled_on_facebook", () => {
+    // The mirror is the contract: a status the server can emit but this list
+    // does not know makes /jobs and /scheduled fail to parse (E8.6 regression).
+    expect([...POST_JOB_STATUSES]).toEqual([
+      "draft",
+      "queued",
+      "publishing",
+      "scheduled_on_facebook",
+      "published",
+      "failed",
+      "blocked",
+    ]);
+  });
+
+  it("gives every status its own label and a tone", () => {
+    const labels = POST_JOB_STATUSES.map((status) => POST_JOB_STATUS_LABELS[status]);
+    for (const label of labels) expect(label.trim().length).toBeGreaterThan(0);
+    // No two statuses may read the same: "Facebook đang giữ bài" and "hệ thống
+    // đang giữ bài" are different answers to "vì sao bài chưa lên?".
+    expect(new Set(labels).size).toBe(POST_JOB_STATUSES.length);
+    for (const status of POST_JOB_STATUSES) {
+      expect(POST_JOB_STATUS_TONES[status]).toBeDefined();
+    }
+  });
+
+  it("does not treat a Facebook-held post as done", () => {
+    expect(isSettledJobStatus("scheduled_on_facebook")).toBe(false);
+    expect(isSettledJobStatus("published")).toBe(true);
+  });
+
+  it("keeps the new status filterable from the URL", () => {
+    expect(parseJobLogFilter(new URLSearchParams("status=scheduled_on_facebook")).status).toBe(
+      "scheduled_on_facebook",
+    );
+  });
+});
+
 describe("response schemas", () => {
+  it("accepts a channel that Facebook is holding", () => {
+    const payload = makeBatch({
+      totals: {
+        total: 1,
+        published: 0,
+        failed: 0,
+        blocked: 0,
+        queued: 0,
+        publishing: 0,
+        scheduledOnFacebook: 1,
+        draft: 0,
+        inProgress: 1,
+      },
+      channels: [
+        {
+          channelId: "fbpage-a",
+          postJobId: "job-1",
+          status: "scheduled_on_facebook",
+          attemptCount: 1,
+          publishedPostId: null,
+          publishedUrl: null,
+          publishedAt: null,
+          lastErrorCode: null,
+          userMessage: "Facebook đã nhận lịch và sẽ tự đăng.",
+        },
+      ],
+    });
+    expect(BatchStatusResponseSchema.safeParse(payload).success).toBe(true);
+  });
+
   it("rejects a batch payload with an unknown job status", () => {
     const payload = makeBatch({
       channels: [
