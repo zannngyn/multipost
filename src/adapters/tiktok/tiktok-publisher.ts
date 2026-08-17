@@ -9,7 +9,7 @@ import type {
   PublishVideoPostInput,
 } from "@/core/ports/publisher";
 
-import type { TikTokClient } from "./tiktok-client";
+import type { TikTokClient, TikTokResponse } from "./tiktok-client";
 import { mapTikTokError } from "./tiktok-error-map";
 
 /**
@@ -39,6 +39,20 @@ import { mapTikTokError } from "./tiktok-error-map";
  * machine. Live publishing is blocked upstream by the app audit (E0.3) and the
  * domain verification (E0.4); until both land, an unaudited app can only post
  * SELF_ONLY (see the error map).
+ *
+ * WHICH CALL CREATES THE POST (port contract: platform_created_nothing vs
+ * feed_dispatched). `video/init/` is the line: after it TikTok owns a publish
+ * task, pulls the file and finishes the post on its own, so a lost answer means
+ * a video may exist that this process will never hear about.
+ *
+ *   pre-flight guards, creator_info, the local gates -> platform_created_nothing
+ *   init/ and every status poll after it              -> feed_dispatched
+ *
+ * The polls are on the "dispatched" side even though a status query creates
+ * nothing: the flag answers "could this JOB have created a post?", and from
+ * init/ onwards the answer is yes whatever the poll says. FAILED is no
+ * exception — it is one publish task's verdict, not proof about the account,
+ * and an earlier attempt of the same job may have succeeded unheard.
  */
 
 const CREATOR_INFO_PATH = "post/publish/creator_info/query/";
@@ -106,6 +120,8 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
           channel: input?.channel?.channelId ?? null,
           provider: "tiktok",
           retryable: false,
+          // Refused here; TikTok was never called.
+          platform_created_nothing: true,
         },
       });
     },
@@ -116,6 +132,10 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
       const caption = typeof input?.caption === "string" ? input.caption.trim() : "";
       const videoUrl = typeof input?.videoUrl === "string" ? input.videoUrl.trim() : "";
 
+      // Every guard down to the init/ call runs before anything that could
+      // create a video, so each carries `platform_created_nothing` (port
+      // contract). Missing flags would read as "a video may exist" and cost the
+      // caller its whole retry surface — the regression this block prevents.
       if (!channel || channel.platform !== "tiktok" || !channel.accessToken?.trim()) {
         throw new AppError("CHANNEL_NOT_CONFIGURED", {
           message: "TikTok publisher needs a tiktok channel with an access token",
@@ -124,6 +144,7 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
             channel: channel?.channelId ?? null,
             platform: channel?.platform ?? null,
             provider: "tiktok",
+            platform_created_nothing: true,
           },
         });
       }
@@ -139,6 +160,7 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
             provider: "tiktok",
             target: input?.target ?? null,
             retryable: false,
+            platform_created_nothing: true,
           },
         });
       }
@@ -146,14 +168,24 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
         throw new AppError("INVALID_INPUT", {
           message: "publishVideoPost needs a public http(s) video URL",
           userMessage: "Video chưa có liên kết công khai — TikTok không tải về được.",
-          context: { tenant_id: input.tenantId, channel: channel.channelId, provider: "tiktok" },
+          context: {
+            tenant_id: input.tenantId,
+            channel: channel.channelId,
+            provider: "tiktok",
+            platform_created_nothing: true,
+          },
         });
       }
       if (caption.length === 0) {
         throw new AppError("INVALID_INPUT", {
           message: "Refusing to publish a TikTok video without a caption",
           userMessage: "Bài đăng chưa có nội dung — không đăng.",
-          context: { tenant_id: input.tenantId, channel: channel.channelId, provider: "tiktok" },
+          context: {
+            tenant_id: input.tenantId,
+            channel: channel.channelId,
+            provider: "tiktok",
+            platform_created_nothing: true,
+          },
         });
       }
 
@@ -165,7 +197,12 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
           message: "TikTok channel has no privacyLevel configured",
           userMessage:
             "Kênh TikTok chưa cấu hình mức riêng tư (privacy level) — bổ sung trước khi đăng.",
-          context: { tenant_id: input.tenantId, channel: channel.channelId, provider: "tiktok" },
+          context: {
+            tenant_id: input.tenantId,
+            channel: channel.channelId,
+            provider: "tiktok",
+            platform_created_nothing: true,
+          },
         });
       }
 
@@ -179,15 +216,29 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
       const title = truncateUtf16(caption, TIKTOK_TITLE_MAX_LENGTH);
 
       // --- 1. creator_info (mandatory before every post) ---------------------
-      const creatorRaw = await deps.client.post({
-        path: CREATOR_INFO_PATH,
-        body: {},
-        accessToken: channel.accessToken,
-        context: { ...logContext, step: "creator_info" },
-      });
+      // A read-only query. Its failures — dead token, rate limit, TikTok outage
+      // — are the ones worth another attempt, and this flag is what keeps that
+      // attempt available.
+      let creatorRaw: TikTokResponse;
+      try {
+        creatorRaw = await deps.client.post({
+          path: CREATOR_INFO_PATH,
+          body: {},
+          accessToken: channel.accessToken,
+          context: { ...logContext, step: "creator_info" },
+        });
+      } catch (error) {
+        throw AppError.from(error, "TIKTOK_ERROR", {
+          ...logContext,
+          step: "creator_info",
+          platform_created_nothing: true,
+        });
+      }
       const creator = CreatorInfoSchema.safeParse(creatorRaw.data);
       if (!creator.success) {
-        throw unusable(creatorRaw.data, logContext, "creator_info", creator.error);
+        throw unusable(creatorRaw.data, logContext, "creator_info", creator.error, {
+          platform_created_nothing: true,
+        });
       }
 
       // --- 2. local gates ----------------------------------------------------
@@ -202,6 +253,7 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
             configured: options.privacyLevel,
             allowed: creator.data.privacy_level_options,
             retryable: false,
+            platform_created_nothing: true,
           },
         });
       }
@@ -218,31 +270,47 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
             duration_sec: durationSec,
             max_duration_sec: maxDuration,
             retryable: false,
+            platform_created_nothing: true,
           },
         });
       }
 
       // --- 3. init (PULL_FROM_URL) ------------------------------------------
-      const initRaw = await deps.client.post({
-        path: INIT_PATH,
-        body: {
-          post_info: {
-            title,
-            privacy_level: options.privacyLevel,
-            disable_duet: options.disableDuet ?? false,
-            disable_stitch: options.disableStitch ?? false,
-            disable_comment: options.disableComment ?? false,
-            // The captions of this product are written by an LLM: declaring it
-            // is TikTok policy, and the default therefore stays true.
-            is_aigc: options.isAigc,
+      // THE creating request. From the moment it leaves this process TikTok may
+      // own a publish task for this job, pull the file and finish the post
+      // without us — so no answer to it, and nothing after it, can promise the
+      // account is empty (port contract: feed_dispatched).
+      let initRaw: TikTokResponse;
+      try {
+        initRaw = await deps.client.post({
+          path: INIT_PATH,
+          body: {
+            post_info: {
+              title,
+              privacy_level: options.privacyLevel,
+              disable_duet: options.disableDuet ?? false,
+              disable_stitch: options.disableStitch ?? false,
+              disable_comment: options.disableComment ?? false,
+              // The captions of this product are written by an LLM: declaring it
+              // is TikTok policy, and the default therefore stays true.
+              is_aigc: options.isAigc,
+            },
+            source_info: { source: "PULL_FROM_URL", video_url: videoUrl },
           },
-          source_info: { source: "PULL_FROM_URL", video_url: videoUrl },
-        },
-        accessToken: channel.accessToken,
-        context: { ...logContext, step: "init" },
-      });
+          accessToken: channel.accessToken,
+          context: { ...logContext, step: "init" },
+        });
+      } catch (error) {
+        throw AppError.from(error, "TIKTOK_ERROR", {
+          ...logContext,
+          step: "init",
+          feed_dispatched: true,
+        });
+      }
       const init = InitSchema.safeParse(initRaw.data);
-      if (!init.success) throw unusable(initRaw.data, logContext, "init", init.error);
+      if (!init.success) {
+        throw unusable(initRaw.data, logContext, "init", init.error, { feed_dispatched: true });
+      }
 
       log.info("TikTok publish initiated", {
         publish_id: init.data.publish_id,
@@ -252,18 +320,37 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
       });
 
       // --- 4. poll until the post exists or fails ---------------------------
+      // init/ is already out, so EVERY exit from this loop carries
+      // `feed_dispatched`: a video may exist regardless of what the poll says.
+      const dispatched = {
+        ...logContext,
+        step: "status",
+        publish_id: init.data.publish_id,
+        feed_dispatched: true,
+      };
       const startedAt = now();
       let polls = 0;
       for (;;) {
-        const statusRaw = await deps.client.post({
-          path: STATUS_PATH,
-          body: { publish_id: init.data.publish_id },
-          accessToken: channel.accessToken,
-          context: { ...logContext, step: "status", publish_id: init.data.publish_id },
-        });
+        let statusRaw: TikTokResponse;
+        try {
+          statusRaw = await deps.client.post({
+            path: STATUS_PATH,
+            body: { publish_id: init.data.publish_id },
+            accessToken: channel.accessToken,
+            context: { ...logContext, step: "status", publish_id: init.data.publish_id },
+          });
+        } catch (error) {
+          throw AppError.from(error, "TIKTOK_ERROR", { ...dispatched, polls });
+        }
         polls += 1;
         const parsed = StatusSchema.safeParse(statusRaw.data);
-        if (!parsed.success) throw unusable(statusRaw.data, logContext, "status", parsed.error);
+        if (!parsed.success) {
+          throw unusable(statusRaw.data, logContext, "status", parsed.error, {
+            feed_dispatched: true,
+            publish_id: init.data.publish_id,
+            polls,
+          });
+        }
         const status = parsed.data.status.toUpperCase();
 
         if (status === "PUBLISH_COMPLETE") {
@@ -284,12 +371,10 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
           // TikTok reports the real cause as a slug in fail_reason: run it
           // through the same table as an HTTP error so the operator gets the
           // same sentence either way.
-          throw mapFailReason(failReason, {
-            ...logContext,
-            step: "status",
-            publish_id: init.data.publish_id,
-            polls,
-          });
+          // FAILED is this publish task's verdict, not proof about the account:
+          // an earlier attempt of the same job may have finished a video we
+          // never heard about. Dispatched side, therefore no automatic retry.
+          throw mapFailReason(failReason, { ...dispatched, polls });
         }
 
         if (now() - startedAt >= pollTimeoutMs) {
@@ -300,9 +385,7 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
             userMessage:
               "TikTok chưa xử lý xong video sau thời gian chờ — kiểm tra trên TikTok trước khi đăng lại để tránh trùng bài.",
             context: {
-              ...logContext,
-              step: "status",
-              publish_id: init.data.publish_id,
+              ...dispatched,
               last_status: status,
               polls,
               timeout_ms: pollTimeoutMs,
@@ -357,6 +440,8 @@ function unusable(
   context: Record<string, unknown>,
   step: string,
   error: z.ZodError,
+  /** Post-creation evidence for the caller (port contract). Required by it. */
+  extra: Record<string, unknown> = {},
 ): AppError {
   return new AppError("PUBLISH_FAILED", {
     message: `TikTok answered ${step} without the expected fields`,
@@ -364,6 +449,7 @@ function unusable(
       "TikTok trả về dữ liệu không đọc được — cần kiểm tra thủ công trên TikTok trước khi đăng lại.",
     context: {
       ...context,
+      ...extra,
       step,
       issues: error.issues.map((issue) => issue.path.join(".")),
       response_keys: typeof raw === "object" && raw !== null ? Object.keys(raw) : null,

@@ -316,3 +316,129 @@ describe("TikTok publisher — failures", () => {
     });
   });
 });
+
+/**
+ * The port contract's post-creation evidence, on the platform that carried none
+ * of it. `video/init/` is the line: before it a retry is free, after it the
+ * caller must treat the outcome as unknown, because TikTok finishes the post on
+ * its own and a lost answer means a video may exist that we never hear about.
+ *
+ * These assertions are what stops the immediate-publish fix from silently
+ * deleting TikTok's whole retry surface — publish-post routes on these flags and
+ * on nothing else.
+ */
+describe("TikTok publisher — did this call create a post?", () => {
+  it.each([
+    ["a reels target", { target: "reels" as const }],
+    ["no video URL", { videoUrl: "" }],
+    ["an empty caption", { caption: "   " }],
+  ])("pre-flight refusal of %s says nothing was created", async (_label, patch) => {
+    const fetchImpl = scriptedFetch({});
+    const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
+    await expect(publisher.publishVideoPost(input(patch))).rejects.toMatchObject({
+      context: { platform_created_nothing: true },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("a creator_info failure stays retryable: init/ was never sent", async () => {
+    // The most common TikTok failure by far — a dead token or a rate limit on
+    // the mandatory pre-flight query. Losing the retry here would cost posts for
+    // nothing, since not one creating request left the process.
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (!url.endsWith("creator_info/query/")) throw new Error(`unexpected url ${url}`);
+      return jsonResponse({ error: { code: "rate_limit_exceeded", message: "slow down" } }, 429);
+    });
+    const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    await expect(publisher.publishVideoPost(input())).rejects.toMatchObject({
+      context: { platform_created_nothing: true, retryable: true, step: "creator_info" },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("a privacy level the account forbids says nothing was created", async () => {
+    const fetchImpl = scriptedFetch({
+      creator: { data: { privacy_level_options: ["PUBLIC_TO_EVERYONE"] }, error: OK },
+    });
+    const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    await expect(publisher.publishVideoPost(input())).rejects.toMatchObject({
+      context: { reason: "PRIVACY_LEVEL_MISMATCH", platform_created_nothing: true },
+    });
+  });
+
+  it("an init/ refusal is a DISPATCH, not proof that nothing exists", async () => {
+    // TikTok refusing THIS request says nothing about a previous attempt of the
+    // same job whose answer was lost while TikTok kept pulling the file.
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("creator_info/query/")) return jsonResponse(CREATOR_OK);
+      if (url.endsWith("video/init/")) {
+        return jsonResponse(
+          { error: { code: "url_ownership_unverified", message: "verify the domain" } },
+          400,
+        );
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    const error = await publisher.publishVideoPost(input()).then(
+      () => null,
+      (caught: unknown) => caught as { context: Record<string, unknown> },
+    );
+    expect(error?.context).toMatchObject({ feed_dispatched: true, step: "init" });
+    expect(error?.context.platform_created_nothing).toBeUndefined();
+  });
+
+  it("a transport failure on init/ is a dispatch too (the worst case)", async () => {
+    // Timeout with the request already out: TikTok may own the publish task.
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("creator_info/query/")) return jsonResponse(CREATOR_OK);
+      throw new Error("socket hang up");
+    });
+    const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    await expect(publisher.publishVideoPost(input())).rejects.toMatchObject({
+      // `retryable: true` from the error map — and it must NOT buy a retry here.
+      context: { feed_dispatched: true, step: "init", retryable: true },
+    });
+  });
+
+  it("a FAILED status poll is on the dispatched side", async () => {
+    const fetchImpl = scriptedFetch({
+      status: [{ data: { status: "FAILED", fail_reason: "video_pull_failed" }, error: OK }],
+    });
+    const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    // The error map replaces `reason` with its own slug-derived one, so the
+    // step is what says where this came from.
+    await expect(publisher.publishVideoPost(input())).rejects.toMatchObject({
+      context: { feed_dispatched: true, step: "status", reason: "VIDEO_PULL_FAILED" },
+    });
+  });
+
+  it("giving up on a poll that never settles is on the dispatched side", async () => {
+    let clock = 0;
+    const fetchImpl = scriptedFetch({
+      status: [{ data: { status: "PROCESSING_UPLOAD" }, error: OK }],
+    });
+    const publisher = makeTikTokPublisher({
+      client: makeTikTokClient({
+        logger: silentLogger(),
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+      logger: silentLogger(),
+      sleep: async () => {
+        clock += 30_000;
+      },
+      now: () => clock,
+      pollIntervalMs: 1,
+      pollTimeoutMs: 60_000,
+    });
+
+    await expect(publisher.publishVideoPost(input())).rejects.toMatchObject({
+      context: { feed_dispatched: true, last_status: "PROCESSING_UPLOAD" },
+    });
+  });
+});

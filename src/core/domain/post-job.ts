@@ -231,12 +231,20 @@ export const HANDOFF_FAILED_ERROR_CODE = "HANDOFF_FAILED";
 export const SCHEDULE_UNCONFIRMED_ERROR_CODE = "SCHEDULE_UNCONFIRMED";
 
 /**
- * The reaper found a SCHEDULED job stuck in `publishing` (see
- * core/usecases/reap-post-jobs): a worker died between the claim and the answer,
- * with the creating request possibly already dispatched. Its own code, separate
- * from the reaper's plain PUBLISH_FAILED, because for a scheduled job the
- * evidence is invisible in the feed — the post, if it exists, sits in the Page's
- * *scheduled* posts — and a plain PUBLISH_FAILED is a row an operator may re-run.
+ * "The publish request went out and nobody knows what came of it." TWO writers,
+ * one meaning:
+ *
+ *   1. the reaper finds a SCHEDULED job stuck in `publishing` (see
+ *      core/usecases/reap-post-jobs): a worker died between the claim and the
+ *      answer, with the creating request possibly already dispatched;
+ *   2. publish-post's own immediate path gets an error from a publisher that
+ *      could not promise nothing was created (`feed_dispatched`, or no evidence
+ *      at all — see failUnconfirmedPublish). Typically a /feed that timed out.
+ *
+ * Its own code, separate from the plain PUBLISH_FAILED, because that one is a
+ * row an operator may re-run — and here the next run may land beside a post that
+ * already exists. For a scheduled job the evidence is not even in the feed: the
+ * post, if any, sits in the Page's *scheduled* posts.
  */
 export const PUBLISH_UNCONFIRMED_ERROR_CODE = "PUBLISH_UNCONFIRMED";
 
@@ -252,7 +260,11 @@ export const UNCONFIRMED_PLATFORM_POST_REASONS = [
   "HANDOFF_OUTCOME_UNKNOWN",
   /** The sweep gave up confirming a handed-over post (SCHEDULE_UNCONFIRMED). */
   "SCHEDULE_UNCONFIRMED",
-  /** A scheduled job died mid-publish and was reaped (PUBLISH_UNCONFIRMED). */
+  /**
+   * The publish request was dispatched and no verdict came back
+   * (PUBLISH_UNCONFIRMED): a reaped scheduled job, or an immediate publish whose
+   * creating call ended in silence.
+   */
   "PUBLISH_OUTCOME_UNKNOWN",
 ] as const;
 export type UnconfirmedPlatformPostReason = (typeof UNCONFIRMED_PLATFORM_POST_REASONS)[number];
@@ -278,7 +290,9 @@ export type UnconfirmedPlatformPostReason = (typeof UNCONFIRMED_PLATFORM_POST_RE
  *   c) SCHEDULE_UNCONFIRMED — the sweep gave up (and the row also matches (a),
  *      which is why (a) alone would already be enough; the code stays listed so
  *      the guard survives a row whose id was cleared by hand).
- *   d) PUBLISH_UNCONFIRMED — a scheduled job was reaped out of `publishing`.
+ *   d) PUBLISH_UNCONFIRMED — the publish request went out without a verdict: a
+ *      scheduled job reaped out of `publishing`, or an immediate publish whose
+ *      creating call timed out (publish-post: failUnconfirmedPublish).
  *
  * `scheduledAt` is deliberately NOT part of any condition: it would silently
  * disable the guard for a row whose hour went missing, and this predicate must

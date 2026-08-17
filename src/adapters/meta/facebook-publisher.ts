@@ -49,6 +49,21 @@ import type { GraphClient, GraphFilePart } from "./graph-client";
  * guaranteed upstream: the unique index on post_job + the `queued -> publishing`
  * claim (business rule 4). This adapter never retries on its own.
  *
+ * WHICH CALL CREATES THE POST (port contract: platform_created_nothing vs
+ * feed_dispatched, and the reason every outbound call below sits in its own
+ * try/catch). Everything before the creating request is safe to repeat and says
+ * so; the creating request and everything after it is not:
+ *
+ *   image, 1 photo   /photos published=true      <- CREATES
+ *   image, album     /photos published=false ... then /feed   <- CREATES
+ *   video (feed)     /videos                     <- CREATES
+ *   reel             video_reels start + upload  then finish  <- CREATES
+ *
+ * A refusal answered TO the creating request is NOT proof that nothing exists:
+ * an earlier attempt may have committed the post and lost the answer, and #506
+ * DUPLICATE_POST is exactly what Facebook answers next. So those errors say
+ * `feed_dispatched` and the caller stops the job instead of sending it again.
+ *
  * The multipart shape follows the Apps Script flow that has been posting to the
  * real Page for months (`source: file.getBlob()`, `published=false`, then
  * `/feed` with `attached_media[i]`) and the 10/10 run reproduced on that Page.
@@ -149,22 +164,41 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
 
       // --- Single photo: one call, published immediately ---------------------
       if (media.length === 1) {
+        // Reading the bytes creates nothing (readPart flags that itself).
         const file = await readPart(media[0], 0, logContext);
-        const raw = await deps.graph.postMultipart({
-          path: `${pageId}/photos`,
-          params: { message: caption, published: "true" },
-          files: [file],
-          accessToken: channel.accessToken,
-          context: {
+        let raw: Record<string, unknown>;
+        try {
+          raw = await deps.graph.postMultipart({
+            path: `${pageId}/photos`,
+            params: { message: caption, published: "true" },
+            files: [file],
+            accessToken: channel.accessToken,
+            context: {
+              ...logContext,
+              step: "photos.single",
+              drive_file_id: media[0].driveFileId,
+              file_name: file.fileName,
+              bytes: file.bytes.length,
+            },
+          });
+        } catch (error) {
+          // `published=true`: THIS call is the one that creates the post. Once it
+          // has left the process nothing coming back proves the Page is empty —
+          // not a timeout, and not a Graph refusal either (an earlier attempt may
+          // have committed the post and lost the answer, and #506 DUPLICATE_POST
+          // is what Facebook then answers). Port contract: feed_dispatched.
+          throw AppError.from(error, "META_ERROR", {
             ...logContext,
             step: "photos.single",
-            drive_file_id: media[0].driveFileId,
-            file_name: file.fileName,
-            bytes: file.bytes.length,
-          },
-        });
+            feed_dispatched: true,
+          });
+        }
         const parsed = PhotoResponseSchema.safeParse(raw);
-        if (!parsed.success) throw unusableResponse(raw, parsed.error, logContext, "photos.single");
+        if (!parsed.success) {
+          throw unusableResponse(raw, parsed.error, logContext, "photos.single", {
+            feed_dispatched: true,
+          });
+        }
 
         // post_id is the FEED post ("<page>_<post>"); id is the photo object.
         const postId = parsed.data.post_id ?? parsed.data.id;
@@ -173,21 +207,51 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       }
 
       // --- Album: upload unpublished photos, then one feed post -------------
-      const mediaFbIds = await uploadAlbumPhotos(deps, channel, media, logContext);
+      let mediaFbIds: string[];
+      try {
+        mediaFbIds = await uploadAlbumPhotos(deps, channel, media, logContext);
+      } catch (error) {
+        // Same reasoning as the scheduled path: these calls only make
+        // `published=false` photo objects, which are not posts. Whatever failed
+        // here, the Page holds nothing for this job — so the caller keeps its
+        // retry, and this is the bulk of the error surface.
+        //
+        // No `step` here on purpose: the inner error already names its own
+        // (`media.read` for an unreadable photo, `photos.album` for a Graph
+        // refusal), and overwriting it would answer "which photo, and doing
+        // what?" with a shrug.
+        throw AppError.from(error, "META_ERROR", {
+          ...logContext,
+          platform_created_nothing: true,
+        });
+      }
 
       const params: Record<string, string> = { message: caption };
       mediaFbIds.forEach((mediaFbId, index) => {
         params[`attached_media[${index}]`] = JSON.stringify({ media_fbid: mediaFbId });
       });
 
-      const raw = await deps.graph.post({
-        path: `${pageId}/feed`,
-        params,
-        accessToken: channel.accessToken,
-        context: { ...logContext, step: "feed", media_count: mediaFbIds.length },
-      });
+      let raw: Record<string, unknown>;
+      try {
+        raw = await deps.graph.post({
+          path: `${pageId}/feed`,
+          params,
+          accessToken: channel.accessToken,
+          context: { ...logContext, step: "feed", media_count: mediaFbIds.length },
+        });
+      } catch (error) {
+        // The creating request has left the process — see the single-photo path.
+        throw AppError.from(error, "META_ERROR", {
+          ...logContext,
+          step: "feed",
+          media_count: mediaFbIds.length,
+          feed_dispatched: true,
+        });
+      }
       const parsed = FeedResponseSchema.safeParse(raw);
-      if (!parsed.success) throw unusableResponse(raw, parsed.error, logContext, "feed");
+      if (!parsed.success) {
+        throw unusableResponse(raw, parsed.error, logContext, "feed", { feed_dispatched: true });
+      }
 
       log.info("Album post published", {
         post_id: parsed.data.id,
@@ -231,6 +295,9 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       const videoUrl = typeof input?.videoUrl === "string" ? input.videoUrl.trim() : "";
       const target = input?.target;
 
+      // Every guard below runs before a single request leaves this process, so
+      // each one carries `platform_created_nothing` (port contract). Without it
+      // the caller has to assume a video may exist and stops the job for good.
       if (!channel || channel.platform !== "facebook" || !channel.externalId?.trim()) {
         throw new AppError("CHANNEL_NOT_CONFIGURED", {
           message: "Facebook publisher needs a facebook channel with a Page id",
@@ -238,6 +305,7 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
             tenant_id: input?.tenantId ?? null,
             channel: channel?.channelId ?? null,
             platform: channel?.platform ?? null,
+            platform_created_nothing: true,
           },
         });
       }
@@ -245,21 +313,34 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
         throw new AppError("INVALID_INPUT", {
           message: "publishVideoPost needs a public http(s) video URL",
           userMessage: "Video chưa có liên kết công khai — Facebook không tải về được.",
-          context: { tenant_id: input.tenantId, channel: channel.channelId },
+          context: {
+            tenant_id: input.tenantId,
+            channel: channel.channelId,
+            platform_created_nothing: true,
+          },
         });
       }
       if (caption.length === 0) {
         throw new AppError("INVALID_INPUT", {
           message: "Refusing to publish a video without a caption",
           userMessage: "Bài đăng chưa có nội dung — không đăng.",
-          context: { tenant_id: input.tenantId, channel: channel.channelId },
+          context: {
+            tenant_id: input.tenantId,
+            channel: channel.channelId,
+            platform_created_nothing: true,
+          },
         });
       }
       if (target !== "video" && target !== "reels") {
         throw new AppError("INVALID_INPUT", {
           message: `Unknown video target "${String(target)}"`,
           userMessage: "Định dạng video không hợp lệ.",
-          context: { tenant_id: input.tenantId, channel: channel.channelId, target },
+          context: {
+            tenant_id: input.tenantId,
+            channel: channel.channelId,
+            target,
+            platform_created_nothing: true,
+          },
         });
       }
 
@@ -275,14 +356,29 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
 
       // --- Feed video: one call ---------------------------------------------
       if (target === "video") {
-        const raw = await deps.graph.post({
-          path: `${pageId}/videos`,
-          params: { file_url: videoUrl, description: caption },
-          accessToken: channel.accessToken,
-          context: { ...logContext, step: "videos" },
-        });
+        // ONE call, and it is the creating one: Meta accepts the video and
+        // publishes it. Nothing that comes back can promise the Page is empty.
+        let raw: Record<string, unknown>;
+        try {
+          raw = await deps.graph.post({
+            path: `${pageId}/videos`,
+            params: { file_url: videoUrl, description: caption },
+            accessToken: channel.accessToken,
+            context: { ...logContext, step: "videos" },
+          });
+        } catch (error) {
+          throw AppError.from(error, "META_ERROR", {
+            ...logContext,
+            step: "videos",
+            feed_dispatched: true,
+          });
+        }
         const parsed = VideoResponseSchema.safeParse(raw);
-        if (!parsed.success) throw unusableResponse(raw, parsed.error, logContext, "videos");
+        if (!parsed.success) {
+          throw unusableResponse(raw, parsed.error, logContext, "videos", {
+            feed_dispatched: true,
+          });
+        }
 
         const postId = parsed.data.post_id ?? parsed.data.id;
         log.info("Video post published", { post_id: postId, video_id: parsed.data.id });
@@ -290,45 +386,96 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       }
 
       // --- Reels: start -> upload -> finish ----------------------------------
-      const startRaw = await deps.graph.post({
-        path: `${pageId}/video_reels`,
-        params: { upload_phase: "start" },
-        accessToken: channel.accessToken,
-        context: { ...logContext, step: "reels.start" },
-      });
+      // Only the FINISH phase publishes (`video_state=PUBLISHED`). Start and
+      // upload create an unpublished video container and move bytes into it —
+      // the same role `published=false` photos play in an album — so a failure
+      // there leaves the Page empty and stays retryable.
+      // PENDING(graph-video-verify): confirm on the first live Reel that a
+      // started-but-never-finished video really shows up nowhere on the Page.
+      let startRaw: Record<string, unknown>;
+      try {
+        startRaw = await deps.graph.post({
+          path: `${pageId}/video_reels`,
+          params: { upload_phase: "start" },
+          accessToken: channel.accessToken,
+          context: { ...logContext, step: "reels.start" },
+        });
+      } catch (error) {
+        throw AppError.from(error, "META_ERROR", {
+          ...logContext,
+          step: "reels.start",
+          platform_created_nothing: true,
+        });
+      }
       const start = ReelsStartSchema.safeParse(startRaw);
-      if (!start.success) throw unusableResponse(startRaw, start.error, logContext, "reels.start");
+      if (!start.success) {
+        throw unusableResponse(startRaw, start.error, logContext, "reels.start", {
+          platform_created_nothing: true,
+        });
+      }
       const videoId = start.data.video_id;
 
       // Hosted-file transfer: the bytes never pass through this process.
-      await deps.graph.postAbsolute({
-        url: start.data.upload_url ?? `${REELS_UPLOAD_BASE_URL}/${videoId}`,
-        headers: {
-          Authorization: `OAuth ${channel.accessToken}`,
-          file_url: videoUrl,
-        },
-        context: { ...logContext, step: "reels.upload", video_id: videoId },
-      });
-
-      const finishRaw = await deps.graph.post({
-        path: `${pageId}/video_reels`,
-        params: {
-          upload_phase: "finish",
+      try {
+        await deps.graph.postAbsolute({
+          url: start.data.upload_url ?? `${REELS_UPLOAD_BASE_URL}/${videoId}`,
+          headers: {
+            Authorization: `OAuth ${channel.accessToken}`,
+            file_url: videoUrl,
+          },
+          context: { ...logContext, step: "reels.upload", video_id: videoId },
+        });
+      } catch (error) {
+        throw AppError.from(error, "META_ERROR", {
+          ...logContext,
+          step: "reels.upload",
           video_id: videoId,
-          video_state: "PUBLISHED",
-          description: caption,
-        },
-        accessToken: channel.accessToken,
-        context: { ...logContext, step: "reels.finish", video_id: videoId },
-      });
+          platform_created_nothing: true,
+        });
+      }
+
+      let finishRaw: Record<string, unknown>;
+      try {
+        finishRaw = await deps.graph.post({
+          path: `${pageId}/video_reels`,
+          params: {
+            upload_phase: "finish",
+            video_id: videoId,
+            video_state: "PUBLISHED",
+            description: caption,
+          },
+          accessToken: channel.accessToken,
+          context: { ...logContext, step: "reels.finish", video_id: videoId },
+        });
+      } catch (error) {
+        // The publishing request is out. Same rule as /feed: unknown outcome.
+        throw AppError.from(error, "META_ERROR", {
+          ...logContext,
+          step: "reels.finish",
+          video_id: videoId,
+          feed_dispatched: true,
+        });
+      }
       const finish = ReelsFinishSchema.safeParse(finishRaw);
-      if (!finish.success) throw unusableResponse(finishRaw, finish.error, logContext, "reels.finish");
+      if (!finish.success) {
+        throw unusableResponse(finishRaw, finish.error, logContext, "reels.finish", {
+          feed_dispatched: true,
+        });
+      }
       if (finish.data.success === false) {
-        // An explicit "no" with a 200 body: never call that published.
+        // An explicit "no" with a 200 body: never call that published — and
+        // never call it "nothing was created" either. It answers the request
+        // that publishes, which a previous attempt may already have completed.
         throw new AppError("META_ERROR", {
           message: "Reels finish phase reported success=false",
           userMessage: "Facebook không đăng được Reel này — xem nhật ký để biết chi tiết.",
-          context: { ...logContext, step: "reels.finish", video_id: videoId, retryable: false },
+          context: {
+            ...logContext,
+            step: "reels.finish",
+            video_id: videoId,
+            retryable: false,
+            feed_dispatched: true,
+          },
         });
       }
 
@@ -721,7 +868,10 @@ async function uploadAlbumPhotos(
     });
     const parsed = PhotoResponseSchema.safeParse(raw);
     if (!parsed.success) {
-      throw unusableResponse(raw, parsed.error, logContext, `photos.album[${index}]`);
+      // `published=false`: whatever this answer was, it is not a post.
+      throw unusableResponse(raw, parsed.error, logContext, `photos.album[${index}]`, {
+        platform_created_nothing: true,
+      });
     }
     mediaFbIds.push(parsed.data.id);
   }
@@ -882,6 +1032,11 @@ function parseUnixSeconds(value: number | string | undefined): Date | null {
  *
  * An empty body is refused here, before Graph is called: Facebook answers an
  * empty part with an opaque "invalid image file" and a retry would repeat it.
+ *
+ * Every error out of here carries `platform_created_nothing`: reading bytes
+ * sends nothing to Facebook. It matters most on the SINGLE-photo path, where
+ * this runs immediately before the one call that publishes — without the flag a
+ * Drive hiccup would be read as "a post may exist" and stop the job for good.
  */
 async function readPart(
   item: PublishMediaItem,
@@ -901,6 +1056,7 @@ async function readPart(
         file_name: fileName,
         reason: "MEDIA_READER_MISSING",
         retryable: false,
+        platform_created_nothing: true,
       },
     });
   }
@@ -915,6 +1071,7 @@ async function readPart(
       drive_file_id: item.driveFileId ?? null,
       file_name: fileName,
       step: "media.read",
+      platform_created_nothing: true,
     });
   }
 
@@ -930,6 +1087,7 @@ async function readPart(
         file_name: fileName,
         reason: "EMPTY_MEDIA_BYTES",
         retryable: false,
+        platform_created_nothing: true,
       },
     });
   }

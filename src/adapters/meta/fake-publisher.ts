@@ -24,6 +24,19 @@ import { mapGraphError, type GraphErrorBody } from "./graph-error-map";
  *
  * Same failure vocabulary as the real adapter: every scripted error goes through
  * mapGraphError, so a test asserts on the codes production would produce.
+ *
+ * WHAT THIS FAKE CAN AND CANNOT MODEL. The port makes every publisher say
+ * whether a request capable of creating the post was dispatched
+ * (platform_created_nothing / feed_dispatched), and the caller routes on it.
+ * Every scenario here fails BEFORE that request — the way Graph surfaces a dead
+ * token or a rate limit on the first photo upload — so they all carry
+ * `platform_created_nothing: true` and keep their retry, which is what the smoke
+ * script's "thử lại rồi published" sections demonstrate.
+ *
+ * The dangerous half — a creating request that WAS dispatched and whose answer
+ * was lost — is deliberately not scriptable here: proving it needs the real
+ * Graph adapter and a real HTTP failure, which is what
+ * composition/facebook-immediate-duplicate.test.ts does.
  */
 
 export interface FakePublishScenario {
@@ -138,14 +151,19 @@ export function makeFakeChannelPublisher(options: {
         if (!channel) {
           throw new AppError("CHANNEL_NOT_CONFIGURED", {
             message: "Fake publisher called without a channel",
-            context: { tenant_id: input?.tenantId ?? null },
+            context: { tenant_id: input?.tenantId ?? null, platform_created_nothing: true },
           });
         }
         if (!(input?.publishAt instanceof Date)) {
           throw new AppError("INVALID_INPUT", {
             message: "Fake schedulePost needs a publishAt date",
             userMessage: "Giờ hẹn đăng không hợp lệ — không giao lịch cho Facebook.",
-            context: { tenant_id: input.tenantId, channel: channel.channelId, retryable: false },
+            context: {
+              tenant_id: input.tenantId,
+              channel: channel.channelId,
+              retryable: false,
+              platform_created_nothing: true,
+            },
           });
         }
 
@@ -184,7 +202,12 @@ export function makeFakeChannelPublisher(options: {
           const error = mapGraphError({
             error: scenario.graphError,
             httpStatus: 400,
-            context: { tenant_id: input.tenantId, channel: channel.channelId, fake: true },
+            context: {
+              tenant_id: input.tenantId,
+              channel: channel.channelId,
+              fake: true,
+              platform_created_nothing: true,
+            },
           });
           record("error", error.code);
           throw error;
@@ -203,6 +226,7 @@ export function makeFakeChannelPublisher(options: {
               fake: true,
               failure_number: failed + 1,
               failure_budget: budget,
+              platform_created_nothing: true,
             },
           });
           record("error", error.code);
@@ -242,7 +266,7 @@ export function makeFakeChannelPublisher(options: {
       if (!channel) {
         throw new AppError("CHANNEL_NOT_CONFIGURED", {
           message: "Fake publisher called without a channel",
-          context: { tenant_id: input?.tenantId ?? null },
+          context: { tenant_id: input?.tenantId ?? null, platform_created_nothing: true },
         });
       }
 
@@ -269,6 +293,7 @@ export function makeFakeChannelPublisher(options: {
               drive_file_id: item.driveFileId,
               reason: "EMPTY_MEDIA_BYTES",
               retryable: false,
+              platform_created_nothing: true,
             },
           });
         }
@@ -296,7 +321,12 @@ export function makeFakeChannelPublisher(options: {
         const error = mapGraphError({
           error: scenario.graphError,
           httpStatus: 400,
-          context: { tenant_id: input.tenantId, channel: channel.channelId, fake: true },
+          context: {
+            tenant_id: input.tenantId,
+            channel: channel.channelId,
+            fake: true,
+            platform_created_nothing: true,
+          },
         });
         record("error", error.code);
         throw error;
@@ -316,6 +346,7 @@ export function makeFakeChannelPublisher(options: {
             fake: true,
             failure_number: failed + 1,
             failure_budget: budget,
+            platform_created_nothing: true,
           },
         });
         record("error", error.code);
@@ -339,7 +370,7 @@ export function makeFakeChannelPublisher(options: {
       if (!channel) {
         throw new AppError("CHANNEL_NOT_CONFIGURED", {
           message: "Fake publisher called without a channel",
-          context: { tenant_id: input?.tenantId ?? null },
+          context: { tenant_id: input?.tenantId ?? null, platform_created_nothing: true },
         });
       }
       const target: VideoTarget = input?.target === "reels" ? "reels" : "video";
@@ -398,6 +429,7 @@ export function makeFakeChannelPublisher(options: {
             target,
             failure_number: failed + 1,
             failure_budget: budget,
+            platform_created_nothing: true,
           },
         });
         record("error", error.code);

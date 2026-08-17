@@ -571,11 +571,22 @@ describe("spacingWaitMs", () => {
   });
 });
 
+/**
+ * These fakes stand in for a ChannelPublisher, so they obey ITS contract: every
+ * error names whether a request capable of creating the post was dispatched
+ * (core/ports/publisher.ts). `platform_created_nothing: true` here is not
+ * decoration — it is what a real publisher puts on a pre-flight refusal, a byte
+ * read and an unpublished-photo upload, and it is what keeps the retry alive.
+ * The flagless case has its own describe block below.
+ */
 describe("publishPost — platform failures", () => {
   it("blocks (no retry) when the token is dead", async () => {
     const tokenError = new AppError("TOKEN_EXPIRED", {
       message: "Session expired",
-      context: { graph_code: 190, retryable: false },
+      // Found BEFORE the creating request — e.g. Graph refusing the first
+      // unpublished photo upload. That is what makes `blocked` (a status an
+      // operator may re-queue from) the right answer.
+      context: { graph_code: 190, retryable: false, platform_created_nothing: true },
     });
     const { publish, publisher, repo } = harness({
       publish: async () => {
@@ -593,7 +604,9 @@ describe("publishPost — platform failures", () => {
   it("puts the job back in `queued` and rethrows when a retry is left", async () => {
     const { publish, repo } = harness({
       publish: async () => {
-        throw new AppError("META_ERROR", { context: { retryable: true } });
+        throw new AppError("META_ERROR", {
+          context: { retryable: true, platform_created_nothing: true },
+        });
       },
     });
 
@@ -611,7 +624,9 @@ describe("publishPost — platform failures", () => {
   it("fails permanently on the last attempt", async () => {
     const { publish, repo } = harness({
       publish: async () => {
-        throw new AppError("META_ERROR", { context: { retryable: true } });
+        throw new AppError("META_ERROR", {
+          context: { retryable: true, platform_created_nothing: true },
+        });
       },
     });
 
@@ -625,7 +640,14 @@ describe("publishPost — platform failures", () => {
   it("does not burn retries on a non-retryable platform error", async () => {
     const { publish, repo } = harness({
       publish: async () => {
-        throw new AppError("META_ERROR", { context: { retryable: false, reason: "PERMISSION_DENIED" } });
+        throw new AppError("META_ERROR", {
+          context: {
+            retryable: false,
+            reason: "PERMISSION_DENIED",
+            // A permission check that failed before the album was even uploaded.
+            platform_created_nothing: true,
+          },
+        });
       },
     });
 
@@ -634,6 +656,135 @@ describe("publishPost — platform failures", () => {
     ).rejects.toMatchObject({ code: "PUBLISH_FAILED" });
 
     expect(repo.get("job-1")?.status).toBe("failed");
+    // An ordinary failure: the operator may re-run it, nothing is on the Page.
+    expect(repo.get("job-1")?.lastErrorCode).toBe("PUBLISH_FAILED");
+  });
+});
+
+/**
+ * B2 — the door BullMQ opened by itself. The three doors closed before this one
+ * all needed an operator to press something; this one is the queue's own
+ * backoff, and the request it repeats is the one that creates the post.
+ *
+ * The rule under test: a retry needs PROOF that nothing was created. No proof —
+ * the creating request was dispatched, or the publisher said nothing at all —
+ * means the job stops, whatever `retryable` claims.
+ */
+describe("publishPost — no automatic second attempt at a creating request", () => {
+  /** What a real publisher throws when the answer to /feed never arrived. */
+  const dispatched = () =>
+    new AppError("META_ERROR", {
+      message: "socket hang up",
+      userMessage: "Không kết nối được tới Facebook — hệ thống sẽ thử lại.",
+      // The error map calls a timeout retryable, and it IS: the CALL could
+      // succeed later. That says nothing about whether repeating it is safe.
+      context: { retryable: true, reason: "NETWORK_ERROR", feed_dispatched: true },
+    });
+
+  it("fails the job instead of re-queueing when the creating request was dispatched", async () => {
+    const { publish, publisher, repo, queue } = harness({
+      publish: async () => {
+        throw dispatched();
+      },
+    });
+
+    await expect(
+      publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({
+      // PUBLISH_FAILED is in the queue adapter's NON_RETRYABLE_CODES, so BullMQ
+      // raises an UnrecoverableError instead of backing off into a second /feed.
+      code: "PUBLISH_FAILED",
+      context: { publish_evidence: "feed_dispatched", retryable: false },
+    });
+
+    const row = repo.get("job-1");
+    expect(row?.status).toBe("failed");
+    expect(row?.lastErrorCode).toBe("PUBLISH_UNCONFIRMED");
+    expect(row?.lastErrorMessage).toContain("CÓ THỂ đã lên kênh");
+    expect(row?.lastErrorMessage).toContain("mở Trang kiểm tra");
+    // Two attempts were still allowed; neither the usecase nor the queue takes
+    // them, and the publisher was called exactly once.
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("does not block on TOKEN_EXPIRED answered TO the creating request", async () => {
+    // `blocked` is a status an operator may re-queue from, and a 190 coming back
+    // from a dispatched /feed says the token died — not that the Page is empty.
+    const { publish, repo } = harness({
+      publish: async () => {
+        throw new AppError("TOKEN_EXPIRED", {
+          message: "Session expired",
+          context: { graph_code: 190, retryable: false, feed_dispatched: true },
+        });
+      },
+    });
+
+    await expect(
+      publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ code: "PUBLISH_FAILED" });
+
+    expect(repo.get("job-1")).toMatchObject({
+      status: "failed",
+      lastErrorCode: "PUBLISH_UNCONFIRMED",
+    });
+  });
+
+  it("fails closed for a publisher that forgot the flag entirely", async () => {
+    // A publisher out of contract must not silently regain the retry: "no
+    // evidence" is treated exactly like "a post may exist", and the log says so.
+    const { publish, repo } = harness({
+      publish: async () => {
+        throw new AppError("META_ERROR", { context: { retryable: true } });
+      },
+    });
+
+    await expect(
+      publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ context: { publish_evidence: "none" } });
+
+    expect(repo.get("job-1")).toMatchObject({
+      status: "failed",
+      lastErrorCode: "PUBLISH_UNCONFIRMED",
+    });
+  });
+
+  it("treats a publisher that sets BOTH flags as a dispatch", async () => {
+    const { publish, repo } = harness({
+      publish: async () => {
+        throw new AppError("META_ERROR", {
+          context: { retryable: true, platform_created_nothing: true, feed_dispatched: true },
+        });
+      },
+    });
+
+    await expect(
+      publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ context: { publish_evidence: "contradictory" } });
+
+    expect(repo.get("job-1")?.lastErrorCode).toBe("PUBLISH_UNCONFIRMED");
+  });
+
+  it("keeps the retry for everything BEFORE the creating request", async () => {
+    // The other half of the trade: the upload phase is most of the error surface
+    // and is provably safe to repeat, so it must behave exactly as it did.
+    let attempts = 0;
+    const { publish, repo } = harness({
+      publish: async () => {
+        attempts += 1;
+        throw new AppError("META_ERROR", {
+          message: "Graph refused photo 3",
+          context: { retryable: true, reason: "RATE_LIMITED", platform_created_nothing: true },
+        });
+      },
+    });
+
+    await expect(
+      publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ code: "META_ERROR" });
+
+    expect(attempts).toBe(1);
+    expect(repo.get("job-1")).toMatchObject({ status: "queued", lastErrorCode: "META_ERROR" });
   });
 });
 
@@ -711,7 +862,12 @@ describe("publishPost — photos travel as BYTES (E5, the Graph 324 fix)", () =>
         for (const item of media) await item.readBytes();
         if (fail) {
           fail = false;
-          throw new AppError("META_ERROR", { message: "temporary", context: { retryable: true } });
+          // An upload-phase failure: nothing that creates a post went out, which
+          // is what leaves the second attempt available.
+          throw new AppError("META_ERROR", {
+            message: "temporary",
+            context: { retryable: true, platform_created_nothing: true },
+          });
         }
         return { postId: "555000111_2", url: null };
       },
@@ -732,7 +888,13 @@ describe("publishPost — photos travel as BYTES (E5, the Graph 324 fix)", () =>
         throw new AppError("DRIVE_ERROR", { message: "Drive is unreachable" });
       },
       publish: async ({ media }: PublishImagePostInput) => {
-        for (const item of media) await item.readBytes();
+        // Mirrors the real adapter's readPart: a byte read sends nothing to the
+        // platform, so the error says so and stays retryable.
+        try {
+          for (const item of media) await item.readBytes();
+        } catch (error) {
+          throw AppError.from(error, "DRIVE_ERROR", { platform_created_nothing: true });
+        }
         return { postId: "555000111_1", url: null };
       },
     });

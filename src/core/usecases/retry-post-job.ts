@@ -377,8 +377,11 @@ function unconfirmedRefusalMessage(
         "Hãy mở Trang, vào mục bài đã lên lịch, xoá bài nếu thấy, rồi soạn lại bài mới."
       );
     case "PUBLISH_OUTCOME_UNKNOWN":
+      // Covers both writers of PUBLISH_UNCONFIRMED (a reaped scheduled job and
+      // an immediate publish whose creating call gave no answer), so it must not
+      // say "bài hẹn giờ" — most of these rows are ordinary posts.
       return (
-        "Bài hẹn giờ này dừng giữa chừng khi đang gửi lên Facebook — Trang CÓ THỂ đã có bài " +
+        "Bài này dừng giữa chừng khi đang gửi lên Facebook — Trang CÓ THỂ đã có bài " +
         "(đã đăng hoặc đang chờ tới giờ). Chạy lại sẽ đăng trùng. " +
         "Hãy mở Trang, xem cả bài đã đăng lẫn mục bài đã lên lịch, xoá bài nếu thấy, rồi soạn lại bài mới."
       );

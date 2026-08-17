@@ -18,12 +18,25 @@ import { mapTikTokError } from "./tiktok-error-map";
  *
  * Same failure vocabulary as the real adapter: every scripted error goes
  * through mapTikTokError, so a test asserts on the codes production produces.
+ * That includes the post-creation evidence flag the port requires
+ * (platform_created_nothing / feed_dispatched) — without it every scenario here
+ * would fail closed in the caller and the fake would prove the opposite of what
+ * production does. Each scenario below says which PHASE it stands for.
  */
 
 export interface FakeTikTokScenario {
-  /** Fail this many calls with a retryable error, then succeed. */
+  /**
+   * Fail this many calls with a retryable error, then succeed. Stands for a
+   * rate limit at the creator_info phase: nothing was dispatched, so the caller
+   * keeps its retry.
+   */
   readonly transientFailures?: number;
-  /** Fail EVERY call with this TikTok error slug (e.g. "url_ownership_unverified"). */
+  /**
+   * Fail EVERY call with this TikTok error slug (e.g. "url_ownership_unverified"
+   * — the answer to `video/init/` when the pull domain is not verified). Stands
+   * for a refusal of the CREATING request: the caller must treat the outcome as
+   * unknown, exactly as with a real init/ error.
+   */
   readonly errorCode?: string;
   /** Publish is accepted but the status poll ends in FAILED with this slug. */
   readonly failReason?: string;
@@ -89,6 +102,7 @@ export function makeFakeTikTokPublisher(
           channel: input?.channel?.channelId ?? null,
           provider: "tiktok",
           retryable: false,
+          platform_created_nothing: true,
         },
       });
     },
@@ -98,7 +112,11 @@ export function makeFakeTikTokPublisher(
       if (!channel) {
         throw new AppError("CHANNEL_NOT_CONFIGURED", {
           message: "Fake TikTok publisher called without a channel",
-          context: { tenant_id: input?.tenantId ?? null, provider: "tiktok" },
+          context: {
+            tenant_id: input?.tenantId ?? null,
+            provider: "tiktok",
+            platform_created_nothing: true,
+          },
         });
       }
       if (input?.target !== "video") {
@@ -111,6 +129,7 @@ export function makeFakeTikTokPublisher(
             channel: channel.channelId,
             provider: "tiktok",
             retryable: false,
+            platform_created_nothing: true,
           },
         });
       }
@@ -136,12 +155,14 @@ export function makeFakeTikTokPublisher(
 
       const context = { tenant_id: input.tenantId, channel: channel.channelId, fake: true };
 
-      // An error slug refused at init (creator_info / init phase).
+      // A refusal of the CREATING request (video/init/). A refusal is not proof
+      // that nothing exists — an earlier attempt may have created the video and
+      // lost the answer — so it carries the dispatch flag, like the real adapter.
       if (scenario.errorCode) {
         const error = mapTikTokError({
           error: { code: scenario.errorCode, message: `Fake TikTok error ${scenario.errorCode}` },
           httpStatus: 400,
-          context,
+          context: { ...context, step: "init", feed_dispatched: true },
         });
         record("error", error.code);
         throw error;
@@ -154,7 +175,14 @@ export function makeFakeTikTokPublisher(
         const error = mapTikTokError({
           error: { code: "rate_limit_exceeded", message: "Fake TikTok rate limit" },
           httpStatus: 429,
-          context: { ...context, failure_number: failed + 1, failure_budget: budget },
+          context: {
+            ...context,
+            step: "creator_info",
+            failure_number: failed + 1,
+            failure_budget: budget,
+            // Before init/: repeating this cannot double-post.
+            platform_created_nothing: true,
+          },
         });
         record("error", error.code);
         throw error;
@@ -164,7 +192,13 @@ export function makeFakeTikTokPublisher(
       if (scenario.failReason) {
         const error = mapTikTokError({
           error: { code: scenario.failReason, message: `publish failed: ${scenario.failReason}` },
-          context: { ...context, step: "status", reason: "PUBLISH_STATUS_FAILED" },
+          // The poll runs AFTER init/, so a video may exist whatever it says.
+          context: {
+            ...context,
+            step: "status",
+            reason: "PUBLISH_STATUS_FAILED",
+            feed_dispatched: true,
+          },
         });
         record("error", error.code);
         throw error;

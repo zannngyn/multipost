@@ -401,6 +401,42 @@ export type RemotePostState =
   | { readonly state: "unknown"; readonly reason: string };
 
 /**
+ * THE contract every publishing method on this file obeys — `publishImagePost`,
+ * `publishVideoPost` and `schedulePost` alike. It answers ONE question about a
+ * failure, and it is the only question the caller can route on:
+ *
+ *     could this JOB have created a post on the platform?
+ *
+ * Every AppError thrown out of any of those three MUST carry EXACTLY ONE of
+ * `context.platform_created_nothing = true` or `context.feed_dispatched = true`.
+ * Neither flag (or both at once) is read as "a post may exist": the caller fails
+ * closed, which costs a post that could have gone out — so say it, do not rely
+ * on it.
+ *
+ * `context.platform_created_nothing = true` ONLY when the implementer knows that
+ * NO REQUEST CAPABLE OF CREATING THE POST HAS EVER BEEN DISPATCHED for this job
+ * — in practice: its own pre-flight guards, reading the media bytes, and
+ * preparation steps (uploading media as unpublished objects, opening an upload
+ * session) that cannot produce a post. Those are safe to repeat, and they are
+ * most of the error surface, so the caller keeps its retry there.
+ *
+ * A platform error answer to the CREATING request does NOT qualify, however
+ * clearly it says "refused". It only describes that one request, while the flag
+ * is a claim about the JOB: an earlier attempt may have created the post and
+ * lost the answer (timeout, killed worker), and the platform may then refuse the
+ * retry precisely BECAUSE the post exists (Facebook #506 DUPLICATE_POST).
+ * Errors from a dispatched creating request carry `context.feed_dispatched =
+ * true`, which is REQUIRED on them: the caller must treat their outcome as
+ * unknown, must not retry them, and must never put that job back on a publish
+ * path. `retryable` does NOT decide this — it says whether the CALL could
+ * succeed later, never whether repeating it is safe.
+ *
+ * The flag name is historical (Facebook's `/feed`); it means "the request that
+ * creates the post has been dispatched" on every platform, TikTok's
+ * `video/init/` included.
+ */
+
+/**
  * The half of a platform that can HOLD a post until its hour (E8.6). Optional
  * on ChannelPublisher: a platform without it keeps the old behaviour (the queue
  * holds the job and publishes at T), which is what TikTok does in Phase 2.
@@ -408,31 +444,9 @@ export type RemotePostState =
  * Contract for every implementer:
  * - `schedulePost` returns only when the platform ACCEPTED the schedule, with
  *   the id of the object it now holds; anything else throws (never a silent
- *   "probably fine"). Every AppError it throws MUST carry EXACTLY ONE of
- *   `context.platform_created_nothing = true` or `context.feed_dispatched =
- *   true` — the answer to "could this call have created a post?" is the only
- *   thing the caller can route on, and a publisher that forgets it turns an
- *   ordinary dead-token error into "đi tìm bài hẹn" for a post that never
- *   existed. Neither flag (or both) is treated as "a post may exist": the
- *   caller fails closed, which costs a post that could have gone out — say it,
- *   do not rely on it.
- *
- *   `context.platform_created_nothing = true` ONLY when the implementer knows
- *   that NO REQUEST CAPABLE OF CREATING THE POST HAS EVER BEEN DISPATCHED for
- *   this job — in practice: its own pre-flight guards, and preparation steps
- *   (uploading media as unpublished objects) that cannot produce a post. The
- *   caller may then fall back to publishing at the hour without any risk of a
- *   double post.
- *
- *   A platform error answer to the CREATING request does NOT qualify, however
- *   clearly it says "refused". It only describes that one request, while the
- *   flag is a claim about the job: an earlier attempt may have created the post
- *   and lost the answer (timeout, killed worker), and the platform may then
- *   refuse the retry precisely BECAUSE the post exists (Facebook #506
- *   DUPLICATE_POST). Errors from a dispatched creating request carry
- *   `context.feed_dispatched = true`, which is REQUIRED on them: the caller must
- *   treat their outcome as unknown and must never publish that job on the normal
- *   path.
+ *   "probably fine"), carrying the post-creation evidence flag documented
+ *   above. Here `platform_created_nothing` also lets the caller fall back to
+ *   publishing at the hour without any risk of a double post.
  * - `getPostState` never guesses: no proof means `unknown`, with a reason.
  * - `deleteScheduledPost` returns TRUE only when the platform confirmed it no
  *   longer holds the post, and FALSE only when the platform positively reported
@@ -450,9 +464,14 @@ export interface ScheduledPublisher {
 /**
  * Contract for every implementer:
  * - Throws AppError('TOKEN_EXPIRED') when the credential is dead — the caller
- *   blocks the job instead of retrying.
+ *   blocks the job instead of retrying, but ONLY when the error also proves
+ *   `platform_created_nothing`: a 190 answered TO the creating request says the
+ *   token died, not that the Page is empty.
  * - Throws AppError('META_ERROR') for anything else, with the platform error
  *   code/subcode in `context` so the log names the real cause.
+ * - EVERY error carries the post-creation evidence flag documented above
+ *   (`platform_created_nothing` / `feed_dispatched`). Without it the caller must
+ *   assume a post may exist and stops the job, so a forgotten flag costs posts.
  * - Never retries internally: retry policy belongs to the usecase + queue.
  */
 export interface ChannelPublisher {
