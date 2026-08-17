@@ -48,6 +48,8 @@ import { makePublishPostHandler } from "@/worker/jobs/publish-post-job";
 import { AppError } from "@/core/domain/errors";
 import { transitionPostJob } from "@/core/domain/post-job";
 
+import { assertSafeToSeed } from "./smoke-guard";
+
 /**
  * E5/E7 end-to-end smoke test on a REAL Postgres + REAL Redis, with the
  * FakeChannelPublisher standing in for Graph API (no Page token exists yet).
@@ -174,6 +176,14 @@ async function main(): Promise<void> {
   // Same box the container wires, so what this script seeds is what production
   // reads (adapters/db/secret-box).
   const secretBox = makeTenantSecretBox(logger);
+
+  // Before the first write: seeding REPLACES the tenant_integration row, so a
+  // database holding real Fanpages would lose them and their Page tokens.
+  await assertSafeToSeed({
+    db,
+    ownedChannelIds: [CHANNEL_A, CHANNEL_B, CHANNEL_TIKTOK],
+    scriptName: "publish-smoke",
+  });
   // Same variable the container reads lazily; the script needs it for its asserts.
   const mediaBaseUrl = loadMediaConfig().MEDIA_PUBLIC_BASE_URL;
   const channelConfig = new DrizzleChannelConfigRepo(db, { box: secretBox, logger });
@@ -1110,19 +1120,23 @@ async function main(): Promise<void> {
         : "LEAK",
   });
 
-  // ... and the operator can pick it up from there.
+  // ... and the operator can pick it up from there. This job is scheduled 20
+  // minutes out, i.e. INSIDE the handoff window (E8.6), so the retry does not
+  // publish it: it hands it to Facebook, which publishes at the hour.
   const reapedRetry = await retryPostJob({
     tenantId: DEMO_TENANT_ID,
     postJobId: stuckJobId,
     actorEmail: "van@example.com",
   });
-  await waitForBatch(db, batchV, ["published"], 60_000);
+  await waitForBatch(db, batchV, ["scheduled_on_facebook"], 60_000);
   const afterReapRetry = await repo.findJobById(DEMO_TENANT_ID, stuckJobId);
   print({
     retry_after_reap: {
       previousStatus: reapedRetry.previousStatus,
       status: afterReapRetry?.status,
+      scheduledPostId: afterReapRetry?.scheduledPostId,
       postId: afterReapRetry?.publishedPostId,
+      note: "scheduled inside the handoff window -> Facebook holds it, nothing is live yet",
     },
   });
 
@@ -1136,7 +1150,10 @@ async function main(): Promise<void> {
     channelIds: [CHANNEL_A],
     captionByChannel: captions,
     media: MEDIA,
-    scheduledAt: new Date(Date.now() + 30 * 60_000),
+    // 90 minutes, not 30: since E8.6 the queue entry wakes at T-30, so a job
+    // scheduled exactly 30 minutes out would be picked up by the worker before
+    // this case can lose its entry on purpose.
+    scheduledAt: new Date(Date.now() + 90 * 60_000),
   });
   const lostJobId = lostBatch.channels[0].postJobId;
   const lostEntryId = lostBatch.channels[0].queueJobId;
