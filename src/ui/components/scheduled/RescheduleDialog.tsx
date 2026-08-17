@@ -16,6 +16,7 @@ import {
 import { useNowMs } from "@/ui/hooks/useNowMs";
 import {
   formatScheduledAt,
+  rescheduleBlockedReason,
   toDateTimeLocalValue,
   validateScheduleInput,
   type ScheduledJobEntry,
@@ -79,6 +80,16 @@ export function RescheduleDialog({
   }
 
   const isQueueWarning = error?.code === "QUEUE_ERROR";
+  /**
+   * The dialog lives in the URL, so a deep link (or a page left open while the
+   * worker handed the post to Facebook) can reach a row the server will refuse.
+   * Show the reason instead of a form that can only ever come back with a 409.
+   */
+  const blockedReason =
+    job && !job.canReschedule
+      ? (rescheduleBlockedReason(job) ??
+        "Bài này đã qua giờ hẹn nên không đổi giờ được nữa — hãy mở nhật ký để xem kết quả.")
+      : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -92,7 +103,21 @@ export function RescheduleDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {job ? (
+        {job && blockedReason ? (
+          <>
+            <p
+              role="status"
+              className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
+            >
+              {blockedReason}
+            </p>
+            <DialogFooter>
+              <Button type="button" onClick={() => onOpenChange(false)}>
+                Đóng
+              </Button>
+            </DialogFooter>
+          </>
+        ) : job ? (
           <form noValidate className="space-y-4" onSubmit={handleSubmit}>
             <ScheduleTimeField
               id={fieldId}

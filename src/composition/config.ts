@@ -270,6 +270,29 @@ export const UploadConfigSchema = z.object({
 
 export type UploadConfig = z.infer<typeof UploadConfigSchema>;
 
+/**
+ * Drive byte cache (E3.6 hardening). Its own lazy group with working defaults,
+ * like the upload group: a dev box needs no setup, and in Docker the path is a
+ * mounted volume shared by web (writes on a miss) and worker (sweeps).
+ *
+ * It exists because Graph API fetches every photo URL itself and gives up around
+ * 30s, while Drive answered in 6.7s–99.9s per file on a real 10-photo post.
+ */
+export const MediaCacheConfigSchema = z.object({
+  /** Directory the cache writes under; one sub-directory per tenant. */
+  MEDIA_CACHE_ROOT: z.string().trim().min(1).default("./var/media-cache"),
+  /**
+   * How long a cached copy may be served before it is re-read from Drive. This
+   * is the staleness budget of the whole feature: a file REPLACED on Drive under
+   * the same id keeps serving its old bytes until the entry expires. 72h is a
+   * compromise — long enough that a post re-published over a weekend still hits,
+   * short enough that a mistake fixed on Drive reaches Facebook within days.
+   */
+  MEDIA_CACHE_TTL_HOURS: z.coerce.number().int().positive().max(720).default(72),
+});
+
+export type MediaCacheConfig = z.infer<typeof MediaCacheConfigSchema>;
+
 export const SecretsConfigSchema = z.object({
   /** base64 of exactly 32 random bytes: `openssl rand -base64 32`. */
   TENANT_SECRETS_ENC_KEY: nonEmpty("TENANT_SECRETS_ENC_KEY").refine(
@@ -360,4 +383,8 @@ export function loadVideoConfig(env: EnvRecord = process.env): VideoConfig {
 
 export function loadUploadConfig(env: EnvRecord = process.env): UploadConfig {
   return parseEnv(UploadConfigSchema, env, "upload");
+}
+
+export function loadMediaCacheConfig(env: EnvRecord = process.env): MediaCacheConfig {
+  return parseEnv(MediaCacheConfigSchema, env, "media-cache");
 }

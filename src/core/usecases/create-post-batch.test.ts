@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
-import { deriveBatchStatus, type PostJob } from "@/core/domain/post-job";
+import {
+  deriveBatchStatus,
+  HANDOFF_WINDOW_START_MS,
+  type PostJob,
+} from "@/core/domain/post-job";
 import type { Product } from "@/core/domain/product";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
@@ -103,10 +107,11 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
           publishedPostId: null,
           publishedUrl: null,
           publishedAt: null,
+          scheduledPostId: null,
           captionText: job.captionText,
           media: job.media,
           scheduledAt: job.scheduledAt,
-        queueJobId: null,
+          queueJobId: null,
         };
         store.set(created.id, created);
         return created;
@@ -144,6 +149,9 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
     async findOverdueQueued() {
       return [];
     },
+    async findScheduledOnPlatformDue() {
+      return [];
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -155,7 +163,15 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
         productCode: jobs[0]?.productCode ?? "",
         status: deriveBatchStatus(jobs.map((job) => job.status)),
         total: jobs.length,
-        byStatus: { draft: 0, queued: 0, publishing: 0, published: 0, failed: 0, blocked: 0 },
+        byStatus: {
+          draft: 0,
+          queued: 0,
+          publishing: 0,
+          scheduled_on_facebook: 0,
+          published: 0,
+          failed: 0,
+          blocked: 0,
+        },
         startedAt: CLOCK.now(),
         finishedAt: null,
         jobs,
@@ -531,13 +547,15 @@ describe("createPostBatch — fan-out (business rule 6)", () => {
     );
   });
 
-  it("delays the queue job when the post is scheduled for later", async () => {
+  it("wakes the queue job at the start of the handoff window, not at the hour", async () => {
     const { createPostBatch, queue } = harness();
     await createPostBatch({
       ...BASE_INPUT,
       scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
     });
-    expect(queue.enqueued[0].opts?.delayMs).toBe(3_600_000);
+    // E8.6: T is one hour away, so the worker wakes at T-30 and hands the post
+    // to Facebook there — waiting the full hour would leave nothing to hand.
+    expect(queue.enqueued[0].opts?.delayMs).toBe(3_600_000 - HANDOFF_WINDOW_START_MS);
   });
 
   it("generates a batch id when the caller does not supply one", async () => {
@@ -593,7 +611,10 @@ describe("createPostBatch — scheduling (E8.1)", () => {
 
     const result = await createPostBatch({ ...BASE_INPUT, scheduledAt: IN_ONE_HOUR });
 
-    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([3_600_000, 3_600_000]);
+    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([
+      3_600_000 - HANDOFF_WINDOW_START_MS,
+      3_600_000 - HANDOFF_WINDOW_START_MS,
+    ]);
     for (const job of repo.store.values()) {
       expect(job.scheduledAt).toEqual(IN_ONE_HOUR);
     }
@@ -608,7 +629,10 @@ describe("createPostBatch — scheduling (E8.1)", () => {
       scheduledAtByChannel: { "fbpage-a": IN_ONE_HOUR, "fbpage-b": IN_TWO_HOURS },
     });
 
-    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([3_600_000, 7_200_000]);
+    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([
+      3_600_000 - HANDOFF_WINDOW_START_MS,
+      7_200_000 - HANDOFF_WINDOW_START_MS,
+    ]);
     const jobs = [...repo.store.values()];
     expect(jobs.map((job) => job.scheduledAt)).toEqual([IN_ONE_HOUR, IN_TWO_HOURS]);
     expect(result.channels.map((entry) => entry.scheduledAt)).toEqual([IN_ONE_HOUR, IN_TWO_HOURS]);
@@ -621,7 +645,10 @@ describe("createPostBatch — scheduling (E8.1)", () => {
       scheduledAt: IN_ONE_HOUR,
       scheduledAtByChannel: { "fbpage-b": IN_TWO_HOURS },
     });
-    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([3_600_000, 7_200_000]);
+    expect(queue.enqueued.map((entry) => entry.opts?.delayMs)).toEqual([
+      3_600_000 - HANDOFF_WINDOW_START_MS,
+      7_200_000 - HANDOFF_WINDOW_START_MS,
+    ]);
   });
 
   it("blocks ONLY the channel with a bad hour (rule 6)", async () => {

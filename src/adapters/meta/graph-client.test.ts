@@ -175,3 +175,147 @@ describe("get — credentials live in the URL, so no body preview ever", () => {
     expect(error.context).toMatchObject({ body_preview: "<html>upstream said no</html>" });
   });
 });
+
+// --- The schema boundary decides what the error map can even see --------------
+
+/** The exact body Meta returns for an image it could not download. */
+const GRAPH_324 = {
+  error: {
+    message: "Missing or invalid image file",
+    type: "OAuthException",
+    code: 324,
+    error_subcode: 2069019,
+    is_transient: true,
+    error_user_title: "Phải có hình ảnh",
+    error_user_msg: "Đảm bảo rằng bài viết trên Trang của bạn chứa hình ảnh dùng được trong quảng cáo.",
+    fbtrace_id: "Axyz",
+  },
+};
+
+describe("is_transient survives the envelope schema", () => {
+  it("maps a real 324 answer to a retryable META_ERROR", async () => {
+    const { client } = harness({ status: 400, body: GRAPH_324 });
+
+    const error = await expectAppError(
+      client.post({
+        path: "555000111/photos",
+        params: { url: "https://cdn.example.com/f.jpg", published: "false" },
+        accessToken: PAGE_TOKEN,
+        context: { job_id: "j1" },
+      }),
+    );
+
+    expect(error.code).toBe("META_ERROR");
+    expect(error.context).toMatchObject({
+      job_id: "j1",
+      graph_code: 324,
+      graph_subcode: 2069019,
+      graph_is_transient: true,
+      reason: "MEDIA_FETCH_FAILED",
+      retryable: true,
+    });
+  });
+
+  it("passes the flag down for a code the map does not know", async () => {
+    const { client } = harness({ status: 400, body: { error: { code: 999999, is_transient: true } } });
+
+    const error = await expectAppError(
+      client.post({ path: "555000111/feed", params: {}, accessToken: PAGE_TOKEN }),
+    );
+
+    expect(error.context).toMatchObject({ reason: "TRANSIENT_FLAGGED", retryable: true });
+  });
+
+  it("leaves an unflagged unknown code permanent", async () => {
+    const { client } = harness({ status: 400, body: { error: { code: 999999 } } });
+
+    const error = await expectAppError(
+      client.post({ path: "555000111/feed", params: {}, accessToken: PAGE_TOKEN }),
+    );
+
+    expect(error.context).toMatchObject({
+      reason: "HTTP_CLIENT_ERROR",
+      retryable: false,
+      graph_is_transient: null,
+    });
+  });
+
+  it("keeps a transient-flagged token error non-retryable", async () => {
+    const { client } = harness({
+      status: 401,
+      body: { error: { code: 190, message: "Session has expired", is_transient: true } },
+    });
+
+    const error = await expectAppError(
+      client.post({ path: "555000111/feed", params: {}, accessToken: PAGE_TOKEN }),
+    );
+
+    expect(error.code).toBe("TOKEN_EXPIRED");
+    expect(error.context).toMatchObject({
+      reason: "TOKEN_INVALID",
+      retryable: false,
+      graph_is_transient: true,
+    });
+  });
+
+  it("applies the same mapping on the absolute upload host", async () => {
+    const { client } = harness({ status: 400, body: GRAPH_324 });
+
+    const error = await expectAppError(
+      client.postAbsolute({ url: UPLOAD_URL, headers: { Authorization: `OAuth ${PAGE_TOKEN}` } }),
+    );
+
+    expect(error.context).toMatchObject({ graph_is_transient: true, retryable: true });
+  });
+
+  it("keeps the error object when the flag itself arrives with a wrong type", async () => {
+    // A hint of the wrong type must cost the hint, not `code`: without this the
+    // whole envelope fails and the job dies on a generic HTTP_CLIENT_ERROR.
+    const { client } = harness({
+      status: 400,
+      body: { error: { ...GRAPH_324.error, is_transient: "yes" } },
+    });
+
+    const error = await expectAppError(
+      client.post({ path: "555000111/photos", params: {}, accessToken: PAGE_TOKEN }),
+    );
+
+    expect(error.context).toMatchObject({
+      graph_code: 324,
+      graph_subcode: 2069019,
+      reason: "MEDIA_FETCH_FAILED",
+      retryable: true,
+      graph_is_transient: null,
+    });
+  });
+
+  it("warns instead of staying silent when the envelope cannot be read", async () => {
+    const { client, lines } = harness({
+      status: 400,
+      body: { error: { code: "not-a-number", message: "x", access_token: PAGE_TOKEN } },
+    });
+
+    const error = await expectAppError(
+      client.post({ path: "555000111/photos", params: {}, accessToken: PAGE_TOKEN }),
+    );
+
+    // The answer is unreadable, so the HTTP fallback is correct here...
+    expect(error.context).toMatchObject({ reason: "HTTP_CLIENT_ERROR", graph_code: null });
+    // ...but it must be traceable: keys named, values never quoted.
+    const warning = lines.find((line) => line.level === "warn");
+    expect(warning?.context).toMatchObject({
+      http_status: 400,
+      body_keys: expect.arrayContaining(["error", "error.code"]),
+      schema_issue_paths: expect.arrayContaining(["error.code"]),
+    });
+    expect(JSON.stringify(lines)).not.toContain(PAGE_TOKEN);
+  });
+
+  it("does not invent a flag on a body with no error object at all", async () => {
+    const { client } = harness({ body: { id: "1_2" } });
+
+    expect(
+      await client.post({ path: "555000111/photos", params: {}, accessToken: PAGE_TOKEN }),
+    ).toEqual({ id: "1_2" });
+  });
+});

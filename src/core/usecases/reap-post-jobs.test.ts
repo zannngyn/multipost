@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
-import type { PostJob } from "@/core/domain/post-job";
+import {
+  HANDOFF_WINDOW_START_MS,
+  type PostJob,
+  type PostJobStatus,
+} from "@/core/domain/post-job";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
 import type {
@@ -66,6 +70,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     publishedPostId: null,
     publishedUrl: null,
     publishedAt: null,
+    scheduledPostId: null,
     captionText: "caption",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
@@ -116,7 +121,14 @@ function makeRepo(options: RepoOptions = {}) {
     },
     async setQueueJobId(input) {
       queueIdWrites.push({ queueJobId: input.queueJobId, auditAction: input.auditAction });
-      return !options.rejectSetQueueId;
+      if (options.rejectSetQueueId) return false;
+      // Mirrors the Drizzle repo's `WHERE ... status = 'queued'`. That predicate
+      // is the ONLY thing standing between branch (b) and a re-publish, so the
+      // fake must not be more permissive than the database.
+      const row = [...(options.overdue ?? []), ...(options.stale ?? [])].find(
+        (job) => job.id === input.postJobId,
+      );
+      return row?.status === "queued";
     },
     async rescheduleJob() {
       return null;
@@ -132,6 +144,9 @@ function makeRepo(options: RepoOptions = {}) {
       scans.overdue.push(query);
       return options.overdue ?? [];
     },
+    async findScheduledOnPlatformDue() {
+      return [];
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -143,7 +158,15 @@ function makeRepo(options: RepoOptions = {}) {
         productCode: "MGKVX6310",
         status: "failed" as const,
         total: 1,
-        byStatus: { draft: 0, queued: 0, publishing: 0, published: 0, failed: 1, blocked: 0 },
+        byStatus: {
+          draft: 0,
+          queued: 0,
+          publishing: 0,
+          scheduled_on_facebook: 0,
+          published: 0,
+          failed: 1,
+          blocked: 0,
+        },
         startedAt: new Date(NOW),
         finishedAt: new Date(NOW),
         jobs: [],
@@ -228,7 +251,12 @@ describe("reapPostJobs — a quiet sweep", () => {
     const { reapPostJobs, repo } = harness();
     await reapPostJobs();
     expect(repo.scans.stale[0].olderThan.getTime()).toBe(NOW - DEFAULT_PUBLISHING_STALE_MS);
-    expect(repo.scans.overdue[0].dueBefore.getTime()).toBe(NOW - DEFAULT_OVERDUE_QUEUED_MS);
+    // E8.6: "overdue" is measured from the moment the job should have WOKEN UP
+    // (T-30), not from T — a lost entry must be found while the handoff is
+    // still possible.
+    expect(repo.scans.overdue[0].dueBefore.getTime()).toBe(
+      NOW - DEFAULT_OVERDUE_QUEUED_MS + HANDOFF_WINDOW_START_MS,
+    );
   });
 
   it("accepts per-run overrides and ignores nonsense ones", async () => {
@@ -236,7 +264,9 @@ describe("reapPostJobs — a quiet sweep", () => {
     await reapPostJobs({ publishingStaleMs: 60_000, overdueQueuedMs: 0, limit: -5 });
     expect(repo.scans.stale[0].olderThan.getTime()).toBe(NOW - 60_000);
     // 0 and -5 fall back to the defaults instead of scanning "everything".
-    expect(repo.scans.overdue[0].dueBefore.getTime()).toBe(NOW - DEFAULT_OVERDUE_QUEUED_MS);
+    expect(repo.scans.overdue[0].dueBefore.getTime()).toBe(
+      NOW - DEFAULT_OVERDUE_QUEUED_MS + HANDOFF_WINDOW_START_MS,
+    );
     expect(repo.scans.stale[0].limit).toBe(50);
   });
 });
@@ -341,6 +371,41 @@ describe("reapPostJobs — overdue scheduled jobs", () => {
     expect(result).toMatchObject({ requeued: 0, skipped: 1 });
     expect(queue.enqueued).toHaveLength(0);
   });
+
+  /**
+   * The lemma "the reaper never republishes" is only true of branch (a) by
+   * construction; branch (b) DOES enqueue, and what keeps it away from a row
+   * that may already be on the platform is one predicate: `setQueueJobId` only
+   * writes while the row is still `queued`. Nothing tested that, so a widened
+   * scan (or a repo that dropped the WHERE clause) would have re-enqueued a job
+   * Facebook is holding, or one a worker is publishing right now.
+   */
+  it.each(["scheduled_on_facebook", "publishing", "failed", "published"] as PostJobStatus[])(
+    "does not re-enqueue an overdue row that is %s, whatever the scan returned",
+    async (status) => {
+      const { reapPostJobs, repo, queue } = harness(
+        {
+          overdue: [
+            makeJob({
+              status,
+              scheduledAt: new Date(NOW - 30 * 60_000),
+              queueJobId: "pp.lost-entry",
+              scheduledPostId: status === "scheduled_on_facebook" ? "555000111_sched" : null,
+            }),
+          ],
+        },
+        { present: false },
+      );
+
+      const result = await reapPostJobs();
+
+      expect(result).toMatchObject({ requeued: 0, skipped: 1 });
+      expect(queue.enqueued).toHaveLength(0);
+      // It TRIED to point the row at a new entry and the guard said no — which
+      // is exactly where the safety lives.
+      expect(repo.queueIdWrites).toHaveLength(1);
+    },
+  );
 
   it("puts the queue id back when the enqueue fails", async () => {
     const { reapPostJobs, repo, lines } = harness(

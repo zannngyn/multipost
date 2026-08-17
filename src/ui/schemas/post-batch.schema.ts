@@ -19,6 +19,13 @@ export const POST_JOB_STATUSES = [
   "draft",
   "queued",
   "publishing",
+  /**
+   * E8.6 — the post exists on Facebook as an unpublished, scheduled object and
+   * Facebook itself will publish it at the hour. Deliberately NOT merged into
+   * `queued`: "the queue job finished" is not "the platform accepted the
+   * schedule", and only the reconciliation sweep may turn this into `published`.
+   */
+  "scheduled_on_facebook",
   "published",
   "failed",
   "blocked",
@@ -43,7 +50,11 @@ export type PostFormat = z.infer<typeof PostFormatSchema>;
 /** Statuses the operator may re-run by hand — mirrors RETRYABLE_POST_JOB_STATUSES. */
 export const RETRYABLE_POST_JOB_STATUSES: readonly PostJobStatus[] = ["failed", "blocked"];
 
-/** Nothing is running any more — mirrors SETTLED_POST_JOB_STATUSES. */
+/**
+ * Nothing is running any more — mirrors SETTLED_POST_JOB_STATUSES.
+ * `scheduled_on_facebook` is NOT settled: nothing is live yet, and the sweep
+ * still has to confirm what Facebook did with it.
+ */
 const SETTLED_POST_JOB_STATUSES: readonly PostJobStatus[] = ["published", "failed", "blocked"];
 
 /** A batch nobody is working on any more: polling must stop here. */
@@ -68,6 +79,12 @@ export const POST_JOB_STATUS_LABELS: Record<PostJobStatus, string> = {
   draft: "Nháp",
   queued: "Chờ đăng",
   publishing: "Đang đăng",
+  // Three different waits, three different words. "Chờ đăng" = OUR system is
+  // holding it; "Facebook giữ lịch" = the post is already on Facebook and
+  // Facebook will publish it; "Đã đăng" = it is live. Reusing one label for the
+  // first two would hide the only fact that matters when something goes wrong:
+  // who is holding the post right now.
+  scheduled_on_facebook: "Facebook giữ lịch",
   published: "Đã đăng",
   failed: "Lỗi",
   blocked: "Bị chặn",
@@ -89,6 +106,10 @@ export const POST_JOB_STATUS_TONES: Record<PostJobStatus, StatusTone> = {
   draft: "neutral",
   queued: "info",
   publishing: "info",
+  // Not `success`: nothing is live yet. It is on track, like `queued`, so it
+  // gets the same neutral-positive tone — the LABEL carries the difference,
+  // never the colour (core-accessibility).
+  scheduled_on_facebook: "info",
   published: "success",
   failed: "danger",
   // Blocked is a RULE saying no (hết hàng, kênh chưa cấu hình), not a crash.
@@ -155,6 +176,8 @@ export const BatchTotalsSchema = z.object({
   blocked: z.number(),
   queued: z.number(),
   publishing: z.number(),
+  /** E8.6 — handed to Facebook, waiting for its hour. Counted inside inProgress. */
+  scheduledOnFacebook: z.number(),
   draft: z.number(),
   inProgress: z.number(),
 });

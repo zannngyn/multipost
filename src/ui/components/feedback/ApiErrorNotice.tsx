@@ -3,7 +3,11 @@
 import { Link } from "@astryxdesign/core";
 
 import { ErrorState } from "@/ui/components/feedback/ErrorState";
-import { presentApiError, toApiError } from "@/ui/components/feedback/present-api-error";
+import {
+  presentApiError,
+  toApiError,
+  type ApiErrorOperation,
+} from "@/ui/components/feedback/present-api-error";
 
 /**
  * Renders any error coming out of the data layer, already classified by
@@ -17,15 +21,22 @@ export function ApiErrorNotice({
   onRetry,
   className,
   extraAction,
+  operation,
 }: {
   error: unknown;
   /** Ignored for 4xx — a retry there would repeat the same bad request. */
   onRetry?: () => void;
   className?: string;
   extraAction?: React.ReactNode;
+  /**
+   * The action that failed, when its wording differs from the default
+   * publish/read one (see `ApiErrorOperation`). Only the title and the next
+   * step change; the reason still comes from the server.
+   */
+  operation?: ApiErrorOperation;
 }) {
   const apiError = toApiError(error);
-  const view = presentApiError(apiError);
+  const view = presentApiError(apiError, operation ? { operation } : undefined);
 
   return (
     <ErrorState

@@ -9,6 +9,7 @@ import type { MediaAsset } from "@/core/domain/product";
 import type { DriveSource, MediaAssetLookup } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
+import type { MediaByteCache } from "@/core/ports/media-byte-cache";
 
 /**
  * E3.6 — serve one media asset's bytes to an UNAUTHENTICATED caller.
@@ -24,7 +25,17 @@ import type { MediaBlobStore } from "@/core/ports/media-blob-store";
  *                              endpoint cannot be used as an oracle
  *   2. tenant-scoped lookup -> MEDIA_NOT_FOUND (also the isolation gate: the
  *                              Service Account can read EVERY tenant's folder)
- *   3. Drive download       -> MEDIA_NOT_FOUND / DRIVE_ERROR from the adapter
+ *   3. cache, then Drive    -> MEDIA_NOT_FOUND / DRIVE_ERROR from the adapter
+ *
+ * Step 3 is READ-THROUGH since the 324 incident: Graph API fetches these URLs
+ * itself and gives up around 30s, while Drive took 6.7s–99.9s per file on a real
+ * 10-photo post (6 of 10 photos failed). A cache hit removes Drive from the path
+ * entirely; a miss pays the download once and stores it for every later fetch —
+ * Meta re-fetches per photo, per retry and per channel.
+ *
+ * The cache is an OPTIMISATION, never a precondition: a broken cache degrades to
+ * the old behaviour (log + serve from Drive) and never turns into a failed
+ * request. Mode B (uploaded) assets bypass it — their bytes are already local.
  *
  * The signature never appears in a log line, in an AppError context, or in the
  * response — only the rejection reason code does.
@@ -51,10 +62,15 @@ export interface MediaContentResult {
   readonly cacheSeconds: number;
 }
 
+/** Which path served the bytes; `bypass` = mode B, whose bytes are already local. */
+export type MediaCacheOutcome = "hit" | "miss" | "bypass";
+
 export interface GetMediaContentDeps {
   drive: DriveSource;
   /** E9 — where operator-uploaded bytes live; Drive holds nothing for those. */
   blobs: MediaBlobStore;
+  /** Read-through cache in front of Drive — the fix for the Graph 324 timeouts. */
+  cache: MediaByteCache;
   mediaAssets: MediaAssetLookup;
   /** Same MAC the signer used — injected, so core never touches a secret. */
   sign: SignatureFn;
@@ -109,13 +125,25 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
       throw tooLarge(tenantId, assetId, asset.sizeBytes, maxBytes);
     }
 
-    // Mode A reads from Drive, mode B from the blob store (E9). Both end up as
-    // the same bytes on the same signed URL, which is what lets an uploaded post
-    // travel the existing publish path unchanged (brief section 8).
-    const content =
-      asset.origin === "upload"
-        ? await readUploadedBlob(deps, { tenantId, assetId, asset, maxBytes })
-        : await deps.drive.download({ tenantId, fileId: assetId, maxBytes });
+    // Mode A reads from the cache and falls back to Drive; mode B reads the blob
+    // store (E9). Both end up as the same bytes on the same signed URL, which is
+    // what lets an uploaded post travel the existing publish path unchanged
+    // (brief section 8).
+    let cacheOutcome: MediaCacheOutcome = "bypass";
+    let content: MediaBytes;
+
+    if (asset.origin === "upload") {
+      content = await readUploadedBlob(deps, { tenantId, assetId, asset, maxBytes });
+    } else {
+      const cached = await readCache(deps, { tenantId, assetId, maxBytes });
+      if (cached) {
+        cacheOutcome = "hit";
+        content = cached;
+      } else {
+        cacheOutcome = "miss";
+        content = await deps.drive.download({ tenantId, fileId: assetId, maxBytes });
+      }
+    }
 
     if (!content?.bytes || content.bytes.length === 0) {
       // Facebook would fail on a 0-byte body with an opaque Graph error; make
@@ -139,6 +167,17 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
       throw tooLarge(tenantId, assetId, content.bytes.length, maxBytes);
     }
 
+    // Written only after the size/emptiness gates: a cache must never hold bytes
+    // this route would refuse to serve.
+    if (cacheOutcome === "miss") {
+      await writeCache(deps, {
+        tenantId,
+        assetId,
+        bytes: content.bytes,
+        mimeType: content.mimeType,
+      });
+    }
+
     const mimeType = pickMime(content.mimeType, asset.mimeType);
     log.info("Signed media request served", {
       drive_file_id: assetId,
@@ -147,6 +186,9 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
       kind: asset.kind,
       mime_type: mimeType,
       bytes: content.bytes.length,
+      // "vì sao bài này không lên": a run of misses means every Meta fetch is
+      // paying the Drive latency that caused the 324 timeouts.
+      cache: cacheOutcome,
     });
 
     return {
@@ -165,6 +207,61 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
 export type GetMediaContent = ReturnType<typeof makeGetMediaContent>;
 
 // --- helpers ----------------------------------------------------------------
+
+/** What every source (cache, Drive, blob store) boils down to here. */
+interface MediaBytes {
+  readonly bytes: Uint8Array;
+  readonly mimeType: string | null;
+}
+
+/**
+ * Cache read that CANNOT fail the request.
+ *
+ * A broken cache (unreadable volume, wrong permissions) must degrade to the
+ * behaviour this route had before it existed — slow, but serving the picture.
+ * The error is not swallowed: it is logged with tenant + asset and the outcome
+ * is recorded as a miss, so a permanently broken volume shows up as a warn on
+ * every request rather than as silence.
+ */
+async function readCache(
+  deps: GetMediaContentDeps,
+  input: { tenantId: string; assetId: string; maxBytes: number },
+): Promise<MediaBytes | null> {
+  try {
+    return await deps.cache.get(input);
+  } catch (error) {
+    deps.logger.warn("Media cache read failed — falling back to Drive", {
+      tenant_id: input.tenantId,
+      drive_file_id: input.assetId,
+      reason: "CACHE_READ_FAILED",
+      err: AppError.from(error, "INTERNAL").toLogObject(),
+    });
+    return null;
+  }
+}
+
+/**
+ * Cache write that CANNOT fail the request either — same reasoning as the read,
+ * and more pressing: the caller is Meta's fetcher waiting on a photo it will
+ * abandon after ~30s. A full disk means the next fetch is slow, not that this
+ * one fails.
+ */
+async function writeCache(
+  deps: GetMediaContentDeps,
+  input: { tenantId: string; assetId: string; bytes: Uint8Array; mimeType: string | null },
+): Promise<void> {
+  try {
+    await deps.cache.put(input);
+  } catch (error) {
+    deps.logger.warn("Media cache write failed — the bytes were served anyway", {
+      tenant_id: input.tenantId,
+      drive_file_id: input.assetId,
+      bytes: input.bytes.length,
+      reason: "CACHE_WRITE_FAILED",
+      err: AppError.from(error, "INTERNAL").toLogObject(),
+    });
+  }
+}
 
 /**
  * Reads the bytes of an uploaded asset.

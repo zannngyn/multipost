@@ -2,6 +2,7 @@ import { AppError } from "@/core/domain/errors";
 import {
   deferredPostJobQueueId,
   evaluateScheduledAt,
+  handoffWakeDelayMs,
   scheduleRejectionMessage,
   type PostJob,
 } from "@/core/domain/post-job";
@@ -146,13 +147,16 @@ export function makeReschedulePostJob(deps: ReschedulePostJobDeps) {
 
     // --- 3. New queue entry -------------------------------------------------
     const settings = await deps.channels.getPublishSettings(tenantId);
+    // E8.6: wake at the start of the handoff window (T-30), like a freshly
+    // created scheduled job — publish-post decides what to do at that moment.
+    const wakeInMs = handoffWakeDelayMs(verdict.at, nowMs);
     try {
       await deps.queue.enqueue(
         PUBLISH_POST_JOB_NAME,
         { tenantId, postJobId: job.id },
         {
           jobId: queueJobId,
-          delayMs: verdict.delayMs,
+          delayMs: wakeInMs,
           attempts: settings.maxAttempts,
           backoff: { strategy: "exponential", delayMs: settings.retryBackoffMs },
         },
@@ -187,6 +191,7 @@ export function makeReschedulePostJob(deps: ReschedulePostJobDeps) {
       delay_ms: verdict.delayMs,
       previous_queue_job_id: job.queueJobId,
       queue_job_id: queueJobId,
+      wake_in_ms: wakeInMs,
       previous_queue_entry_removed: previousQueueEntryRemoved,
       actor_user_id: actorUserId,
       actor_email: str(input?.actorEmail) || null,
@@ -219,7 +224,14 @@ function assertReschedulable(job: PostJob, nowMs: number, log: Logger): void {
       userMessage:
         job.status === "published"
           ? "Bài này đã đăng rồi — không đổi giờ được."
-          : `Bài đang ở trạng thái "${job.status}" nên không đổi giờ được.`,
+          : job.status === "scheduled_on_facebook"
+            ? // E8.6, deliberate limitation: Facebook is holding this post and
+              // rewriting our row would change nothing on the Page. Cancelling
+              // DOES reach Facebook (it deletes the post there), so "huỷ rồi
+              // hẹn lại" is a real path — unlike a reschedule that silently
+              // lies. See the report note if this ever gets implemented.
+              "Bài này đã được giao cho Facebook giữ nên không đổi giờ trực tiếp được — hãy bấm Huỷ (hệ thống sẽ gỡ bài trên Facebook) rồi tạo lại với giờ mới."
+            : `Bài đang ở trạng thái "${job.status}" nên không đổi giờ được.`,
       context: {
         tenant_id: job.tenantId,
         job_id: job.id,
