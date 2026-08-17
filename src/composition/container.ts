@@ -65,6 +65,7 @@ import {
   makeCleanupMediaCache,
   type CleanupMediaCache,
 } from "@/core/usecases/cleanup-media-cache";
+import { makeReadMediaBytes, type ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
 import {
   makeCancelScheduledJob,
@@ -211,6 +212,11 @@ export interface UsecaseOverrides {
   videoProbe?: VideoAssetProbe;
   /** E5.1 — tests/scripts connect channels without a Meta app. */
   channelConnect?: ChannelConnectClient;
+  /**
+   * E5 — the photo bytes the publisher uploads. Overridden by the smoke script,
+   * whose media ids are fixtures that exist in neither Drive nor the snapshot.
+   */
+  readMediaBytes?: ReadMediaBytes;
 }
 
 export interface Container extends Infra {
@@ -572,6 +578,19 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // without ffprobe boots fine and only warns when a video is published.
       videoProbe: overrides.videoProbe ?? makeLazyVideoProbe(drive, deps.logger),
       mediaAssets: media,
+      // E5 — the photo path UPLOADS bytes (multipart `source`) instead of
+      // handing Graph a URL to fetch, so it needs a way to read one file at a
+      // time: cache first, then Drive / the blob store. Same store and same
+      // lookup the media route serves from; nothing here re-reads the config.
+      readMediaBytes:
+        overrides.readMediaBytes ??
+        makeReadMediaBytes({
+          cache: mediaCache,
+          drive,
+          blobs,
+          mediaAssets: media,
+          logger: deps.logger,
+        }),
     }),
     getBatchStatus: makeGetBatchStatus({ postJobs, logger: deps.logger }),
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),

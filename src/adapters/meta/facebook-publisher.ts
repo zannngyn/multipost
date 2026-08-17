@@ -6,37 +6,47 @@ import type { Logger } from "@/core/ports/infra";
 import type {
   ChannelPublisher,
   PublishImagePostInput,
+  PublishMediaItem,
   PublishResult,
   PublishVideoPostInput,
 } from "@/core/ports/publisher";
 
-import type { GraphClient } from "./graph-client";
+import type { GraphClient, GraphFilePart } from "./graph-client";
 
 /**
  * E5.2 — publish an image post on a Facebook Page.
  *
- * Two shapes, both plain Graph API calls:
+ * Two shapes, both plain Graph API calls, both sending the BYTES:
  *
- *   1 photo   POST /{page-id}/photos        url=<image> message=<caption>
+ *   1 photo   POST /{page-id}/photos        source=<bytes> message=<caption>
  *             -> { id, post_id }            (published straight away)
  *
- *   N photos  POST /{page-id}/photos        url=<image> published=false
+ *   N photos  POST /{page-id}/photos        source=<bytes> published=false
  *             for each photo, then
  *             POST /{page-id}/feed          message=<caption>
  *                                           attached_media[i]={"media_fbid":"<id>"}
  *             -> { id }                     (the album post)
  *
- * The photos are uploaded BY URL: Facebook fetches them itself, so the URL must
- * be publicly reachable (an unreachable one comes back as Graph code 1609005,
- * mapped to a Vietnamese message in graph-error-map.ts).
+ * WHY BYTES AND NOT `url=`: with a URL, Facebook downloads the file itself and
+ * abandons the attempt around 30s (Graph code 324, "Missing or invalid image
+ * file"). Measured on one real 10-photo post: 4 of 10 photos accepted, three
+ * hangs of exactly 29.5s. The same 10 photos uploaded as multipart `source`
+ * went 10/10 in 41.8s on the same Page — because the side that waits is now the
+ * worker, and the worker may wait. It also removes the dependency on a publicly
+ * reachable media URL entirely.
+ *
+ * The bytes are read ONE FILE AT A TIME, immediately before that file's upload
+ * (`PublishMediaItem.readBytes`): an album is up to 10 files of ~9MB and the
+ * worker runs several jobs in parallel.
  *
  * There is no idempotency key in this API. Publishing exactly once is therefore
  * guaranteed upstream: the unique index on post_job + the `queued -> publishing`
  * claim (business rule 4). This adapter never retries on its own.
  *
- * NOT VERIFIED against a real Page from this machine (no Page token available):
- * the request shapes follow Meta's Pages API reference, but the first real run
- * must happen on a test Page — see the report.
+ * The multipart shape follows the Apps Script flow that has been posting to the
+ * real Page for months (`source: file.getBlob()`, `published=false`, then
+ * `/feed` with `attached_media[i]`) and the 10/10 run reproduced on that Page.
+ * THIS adapter's own first run on a real Page is still pending.
  */
 
 /** A published photo answers with both ids; an unpublished one only with `id`. */
@@ -118,11 +128,19 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
 
       // --- Single photo: one call, published immediately ---------------------
       if (media.length === 1) {
-        const raw = await deps.graph.post({
+        const file = await readPart(media[0], 0, logContext);
+        const raw = await deps.graph.postMultipart({
           path: `${pageId}/photos`,
-          params: { url: media[0].url, message: caption, published: "true" },
+          params: { message: caption, published: "true" },
+          files: [file],
           accessToken: channel.accessToken,
-          context: { ...logContext, step: "photos.single" },
+          context: {
+            ...logContext,
+            step: "photos.single",
+            drive_file_id: media[0].driveFileId,
+            file_name: file.fileName,
+            bytes: file.bytes.length,
+          },
         });
         const parsed = PhotoResponseSchema.safeParse(raw);
         if (!parsed.success) throw unusableResponse(raw, parsed.error, logContext, "photos.single");
@@ -134,13 +152,24 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       }
 
       // --- Album: upload unpublished photos, then one feed post -------------
+      // Sequential on purpose: the album order IS the order of these calls, and
+      // one file at a time is what keeps a 10-photo job at one buffer, not ten.
       const mediaFbIds: string[] = [];
       for (const [index, item] of media.entries()) {
-        const raw = await deps.graph.post({
+        const file = await readPart(item, index, logContext);
+        const raw = await deps.graph.postMultipart({
           path: `${pageId}/photos`,
-          params: { url: item.url, published: "false", temporary: "true" },
+          params: { published: "false", temporary: "true" },
+          files: [file],
           accessToken: channel.accessToken,
-          context: { ...logContext, step: "photos.album", media_index: index, file_name: item.fileName },
+          context: {
+            ...logContext,
+            step: "photos.album",
+            media_index: index,
+            drive_file_id: item.driveFileId,
+            file_name: file.fileName,
+            bytes: file.bytes.length,
+          },
         });
         const parsed = PhotoResponseSchema.safeParse(raw);
         if (!parsed.success) {
@@ -310,6 +339,71 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       return { postId, url: permalink(postId) };
     },
   };
+}
+
+/**
+ * Reads the bytes of ONE photo, immediately before that photo is uploaded.
+ *
+ * Never swallows: whatever the source threw keeps its own code (MEDIA_NOT_FOUND
+ * for a deleted file, DRIVE_ERROR for an outage) and gains the context that says
+ * WHICH photo of WHICH post failed — the question "vì sao bài này không lên"
+ * cannot be answered by "photo read failed" alone.
+ *
+ * An empty body is refused here, before Graph is called: Facebook answers an
+ * empty part with an opaque "invalid image file" and a retry would repeat it.
+ */
+async function readPart(
+  item: PublishMediaItem,
+  index: number,
+  logContext: Record<string, unknown>,
+): Promise<GraphFilePart> {
+  const fileName = typeof item?.fileName === "string" && item.fileName.trim().length > 0
+    ? item.fileName.trim()
+    : `photo-${index + 1}.jpg`;
+  if (typeof item?.readBytes !== "function") {
+    throw new AppError("INVALID_INPUT", {
+      message: "Album item has no way to read its bytes",
+      userMessage: "Không đọc được file ảnh của bài này — kiểm tra lại dữ liệu bài đăng.",
+      context: {
+        ...logContext,
+        media_index: index,
+        file_name: fileName,
+        reason: "MEDIA_READER_MISSING",
+        retryable: false,
+      },
+    });
+  }
+
+  let content;
+  try {
+    content = await item.readBytes();
+  } catch (error) {
+    throw AppError.from(error, "DRIVE_ERROR", {
+      ...logContext,
+      media_index: index,
+      drive_file_id: item.driveFileId ?? null,
+      file_name: fileName,
+      step: "media.read",
+    });
+  }
+
+  const bytes = content?.bytes;
+  if (!bytes || bytes.length === 0) {
+    throw new AppError("MEDIA_NOT_FOUND", {
+      message: "Media source returned no bytes for an album item",
+      userMessage: `Ảnh "${fileName}" rỗng hoặc không đọc được — không đăng.`,
+      context: {
+        ...logContext,
+        media_index: index,
+        drive_file_id: item.driveFileId ?? null,
+        file_name: fileName,
+        reason: "EMPTY_MEDIA_BYTES",
+        retryable: false,
+      },
+    });
+  }
+
+  return { field: "source", fileName, bytes, mimeType: content.mimeType ?? null };
 }
 
 /** Host Meta uses for hosted/resumable uploads (not the Graph host). */

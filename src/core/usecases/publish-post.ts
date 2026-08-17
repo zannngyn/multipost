@@ -22,11 +22,13 @@ import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
 import type { MediaAssetLookup } from "@/core/ports/drive-source";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
+import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import type {
   ChannelConfig,
   ChannelConfigRepo,
   ChannelPlatform,
   ChannelPublisher,
+  PublishMediaItem,
   SignMediaUrlFn,
   VideoTarget as PublisherVideoTarget,
 } from "@/core/ports/publisher";
@@ -144,6 +146,13 @@ export interface PublishPostDeps {
   videoProbe?: VideoAssetProbe;
   /** Resolves a post_job media item back to the synced asset the probe needs. */
   mediaAssets?: MediaAssetLookup;
+  /**
+   * E5 — reads ONE photo's bytes (cache first, then Drive / the blob store).
+   * Required, not optional: the Facebook photo path uploads the bytes itself, so
+   * a process without it could not publish an image post at all — and a silent
+   * fallback to "let Facebook fetch the URL" is the bug this replaces.
+   */
+  readMediaBytes: ReadMediaBytes;
 }
 
 export function makePublishPost(deps: PublishPostDeps) {
@@ -454,51 +463,89 @@ export function makePublishPost(deps: PublishPostDeps) {
       }
     }
 
-    // --- 6a. Fresh media URLs (E3.6) ----------------------------------------
-    // Signed links are short-lived on purpose; the ones minted when the batch
-    // was created may already be dead by the time this attempt runs.
-    let media: readonly PostJobMedia[];
-    try {
-      const resigned = resignMedia(deps, claimed);
-      media = resigned.media;
-      log.debug("Media URLs re-signed for this attempt", {
+    // --- 6a. What the platform gets: bytes for photos, a URL for a video ----
+    // Photos are UPLOADED (multipart `source`). Handing Graph a `url=` made
+    // Facebook fetch the file itself and give up around 30s — 4 of 10 photos on
+    // a measured real post; the same 10 went through as bytes. A video still
+    // travels as a signed URL (Meta/TikTok download it themselves), so that path
+    // keeps the re-signing step.
+    let media: readonly PublishMediaItem[] = [];
+    let videoUrl = "";
+    if (claimed.format === "image_post") {
+      const items = buildMediaItems(deps, claimed);
+      if (!items.ok) {
+        const blocked = await block(
+          deps,
+          claimed,
+          "MEDIA_NOT_FOUND",
+          items.userMessage,
+          items.reason,
+        );
+        log.error("Publish blocked: a photo of this job has no asset id to read bytes from", {
+          outcome: "blocked",
+          error_code: "MEDIA_NOT_FOUND",
+          reason: items.reason,
+          file_name: items.fileName,
+          media_count: claimed.media.length,
+          attempt,
+          alert: "OPERATOR_ATTENTION",
+        });
+        return result(blocked ?? claimed, "blocked", {
+          deferredMs: null,
+          errorCode: "MEDIA_NOT_FOUND",
+          userMessage: items.userMessage,
+        });
+      }
+      media = items.media;
+      log.debug("Photo bytes will be uploaded for this attempt", {
         media_count: media.length,
-        // Expiry only: the URL itself carries a MAC.
-        media_url_expires_at: resigned.expiresAtMs
-          ? new Date(resigned.expiresAtMs).toISOString()
-          : null,
         attempt,
       });
-    } catch (error) {
-      const appError = AppError.from(error, "INVALID_INPUT", {
-        tenant_id: tenantId,
-        job_id: claimed.id,
-        channel: claimed.channelId,
-        reason: "MEDIA_URL_SIGNING_FAILED",
-      });
-      const userMessage =
-        "Không tạo được liên kết ảnh công khai cho bài này — kiểm tra cấu hình MEDIA_PUBLIC_BASE_URL / khoá ký liên kết.";
-      // Blocked, not failed: a retry cannot fix a configuration problem, and the
-      // platform was never called.
-      const blocked = await block(
-        deps,
-        claimed,
-        appError.code,
-        userMessage,
-        "MEDIA_URL_SIGNING_FAILED",
-      );
-      log.error("Publish blocked: could not sign the media URLs", {
-        err: appError,
-        outcome: "blocked",
-        error_code: appError.code,
-        attempt,
-        alert: "OPERATOR_ATTENTION",
-      });
-      return result(blocked ?? claimed, "blocked", {
-        deferredMs: null,
-        errorCode: appError.code,
-        userMessage,
-      });
+    } else {
+      try {
+        const resigned = resignMedia(deps, claimed);
+        // One video per post: media[0] is the file, the rest (if any) is a
+        // thumbnail choice we do not use yet.
+        videoUrl = resigned.media[0]?.url ?? "";
+        log.debug("Media URLs re-signed for this attempt", {
+          media_count: resigned.media.length,
+          // Expiry only: the URL itself carries a MAC.
+          media_url_expires_at: resigned.expiresAtMs
+            ? new Date(resigned.expiresAtMs).toISOString()
+            : null,
+          attempt,
+        });
+      } catch (error) {
+        const appError = AppError.from(error, "INVALID_INPUT", {
+          tenant_id: tenantId,
+          job_id: claimed.id,
+          channel: claimed.channelId,
+          reason: "MEDIA_URL_SIGNING_FAILED",
+        });
+        const userMessage =
+          "Không tạo được liên kết video công khai cho bài này — kiểm tra cấu hình MEDIA_PUBLIC_BASE_URL / khoá ký liên kết.";
+        // Blocked, not failed: a retry cannot fix a configuration problem, and
+        // the platform was never called.
+        const blocked = await block(
+          deps,
+          claimed,
+          appError.code,
+          userMessage,
+          "MEDIA_URL_SIGNING_FAILED",
+        );
+        log.error("Publish blocked: could not sign the media URLs", {
+          err: appError,
+          outcome: "blocked",
+          error_code: appError.code,
+          attempt,
+          alert: "OPERATOR_ATTENTION",
+        });
+        return result(blocked ?? claimed, "blocked", {
+          deferredMs: null,
+          errorCode: appError.code,
+          userMessage,
+        });
+      }
     }
 
     // --- 6. Publish ---------------------------------------------------------
@@ -518,9 +565,7 @@ export function makePublishPost(deps: PublishPostDeps) {
               tenantId,
               channel,
               caption: claimed.captionText,
-              // One video per post: media[0] is the file, the rest (if any) is
-              // a thumbnail choice we do not use yet.
-              videoUrl: media[0]?.url ?? "",
+              videoUrl,
               // TikTok compares it against the account's own cap (creator_info).
               durationSec: videoDurationSec,
               target:
@@ -570,6 +615,7 @@ export function makePublishPost(deps: PublishPostDeps) {
       published_url: done.publishedUrl,
       attempt,
       attempt_count: done.attemptCount,
+      // Includes the upload time now: the worker, not Meta, waits for the bytes.
       duration_ms: deps.clock.nowMs() - startedAt,
       media_count: done.media.length,
     });
@@ -761,6 +807,50 @@ function resignMedia(
     return { driveFileId: assetId, fileName: item.fileName, url: signed.url };
   });
   return { media, expiresAtMs: Number.isFinite(earliest) ? earliest : null };
+}
+
+/**
+ * Turns the job's media rows into LAZY byte sources for the publisher.
+ *
+ * Lazy on purpose: an album is up to 10 files of ~9MB, the publisher uploads
+ * them one at a time, and the worker runs several jobs at once — reading all ten
+ * here would hold ~90MB per job for nothing. `readBytes` of photo k runs
+ * immediately before photo k is uploaded.
+ *
+ * A row without an asset id has nothing to read from, so it is refused HERE,
+ * with its file name, instead of becoming an opaque platform error later. Those
+ * rows predate signed media URLs and used to be published by their stored URL —
+ * the very mechanism this change removes.
+ */
+function buildMediaItems(
+  deps: PublishPostDeps,
+  job: PostJob,
+):
+  | { ok: true; media: readonly PublishMediaItem[] }
+  | { ok: false; reason: string; fileName: string | null; userMessage: string } {
+  const rows = Array.isArray(job.media) ? job.media : [];
+  const media: PublishMediaItem[] = [];
+
+  for (const item of rows) {
+    const assetId = typeof item?.driveFileId === "string" ? item.driveFileId.trim() : "";
+    const fileName = typeof item?.fileName === "string" ? item.fileName : "";
+    if (assetId.length === 0) {
+      return {
+        ok: false,
+        reason: "LEGACY_MEDIA_WITHOUT_ASSET_ID",
+        fileName: fileName || null,
+        userMessage: `Ảnh "${fileName || "không rõ tên"}" của bài này thiếu mã file — cần tạo lại bài đăng.`,
+      };
+    }
+    media.push({
+      driveFileId: assetId,
+      fileName,
+      // Reads the cache first, then Drive / the blob store (read-media-bytes).
+      readBytes: () => deps.readMediaBytes({ tenantId: job.tenantId, assetId, jobId: job.id }),
+    });
+  }
+
+  return { ok: true, media };
 }
 
 /**

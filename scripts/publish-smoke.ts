@@ -78,13 +78,39 @@ const PRODUCT_B = "MR0AC6080";
 const SPACING_MS = 3_000;
 
 /**
- * Callers pass ASSETS, never URLs (C0): create-post-batch signs each one, and
- * publish-post re-signs them right before the API call.
+ * Callers pass ASSETS, never URLs (C0). create-post-batch still signs a link
+ * per photo (the preview screen uses it), but the PUBLISH path uploads the
+ * bytes: Facebook fetching a URL itself is what timed out at ~30s (Graph 324).
  */
 const MEDIA = [
   { driveFileId: "drive-1", fileName: `${PRODUCT_A}-Tím (1).jpg`, kind: "image" },
   { driveFileId: "drive-2", fileName: `${PRODUCT_A}-Tím (3).jpg`, kind: "image" },
 ];
+
+/** 1x1 PNG — enough to prove bytes travelled, small enough to keep in memory. */
+const SMOKE_PHOTO_BYTES = new Uint8Array(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "base64",
+  ),
+);
+
+/**
+ * Stands in for read-media-bytes. The smoke's asset ids are fixtures that exist
+ * in neither Drive nor the snapshot, and what this script proves is the publish
+ * flow — the cache/Drive/blob logic has its own tests (read-media-bytes.test).
+ * The counter is the assertion: a photo that was never read was never uploaded.
+ */
+function makeSmokeMediaBytes() {
+  const reads: string[] = [];
+  return {
+    reads,
+    readMediaBytes: async (input: { tenantId: string; assetId: string }) => {
+      reads.push(input.assetId);
+      return { bytes: SMOKE_PHOTO_BYTES, mimeType: "image/jpeg" };
+    },
+  };
+}
 
 /** `/api/media/<assetId>?tenant=<uuid>&expires=<ms>&sig=<hex>` */
 const SIGNED_MEDIA_URL =
@@ -135,11 +161,13 @@ async function main(): Promise<void> {
   const publisher = makeFakeChannelPublisher();
   // E6: the channel's platform decides which fake runs, exactly like production.
   const tiktokPublisher = makeFakeTikTokPublisher();
+  const mediaBytes = makeSmokeMediaBytes();
   const usecases = makeUsecases(infra, {
     queue,
     publisher,
     publishers: { facebook: publisher, tiktok: tiktokPublisher },
     videoProbe: { probeAsset: async () => SMOKE_VIDEO_SPEC },
+    readMediaBytes: mediaBytes.readMediaBytes,
   });
   const repo = new DrizzlePostJobRepo(db);
 
@@ -303,7 +331,10 @@ async function main(): Promise<void> {
       })
       .onConflictDoUpdate({
         target: [products.tenantId, products.code],
-        set: { stockRaw, lastSyncRunId: syncRunId },
+        // `noteRaw` too: a later case writes "HẾT HÀNG" into this row, and
+        // without resetting it here the NEXT run of the script starts with a
+        // product the stock gate blocks at creation time.
+        set: { stockRaw, noteRaw: "", lastSyncRunId: syncRunId },
       });
   };
   await seedProduct(PRODUCT_A, "Giannal", "104");
@@ -418,8 +449,8 @@ async function main(): Promise<void> {
     gap_per_channel_ms: gapsByChannel(timeline),
   });
 
-  // --- Media URLs: signed on create, RE-SIGNED before the API call (C0) -----
-  heading("m) URL ảnh: ký lúc tạo job + KÝ LẠI ngay trước khi gọi publisher");
+  // --- Media: a signed link is stored for the preview, BYTES go to the API --
+  heading("m) Ảnh: job lưu link ký (xem trước) nhưng đăng bằng BYTE, không đưa URL");
   const storedMedia = (
     await db
       .select({ media: postJobs.media, channel: postJobs.channelId })
@@ -435,19 +466,21 @@ async function main(): Promise<void> {
       shape_ok: SIGNED_MEDIA_URL.test(item.url),
       expires: expiresOf(item.url),
     })),
+    // The publish path hands over BYTES now: no URL, one read per photo, in
+    // album order. A photo that was never read was never uploaded.
     handed_to_publisher: batch1Calls.map((call) => ({
       channel: call.channelId,
-      urls: call.mediaUrls.map(redactUrl),
-      shape_ok: call.mediaUrls.every((url) => SIGNED_MEDIA_URL.test(url)),
-      expires: call.mediaUrls.map(expiresOf),
+      asset_ids: call.mediaAssetIds,
+      bytes: call.mediaBytes,
+      urls: call.mediaUrls,
     })),
-    // Different expiry = the link was minted again at publish time, not reused.
-    resigned_before_publish: batch1Calls.every((call) =>
-      call.mediaUrls.every((url) => {
-        const stored = storedMedia.find((item) => url.includes(`/api/media/${item.driveFileId}?`));
-        return Boolean(stored) && expiresOf(url) !== expiresOf(stored?.url ?? "");
-      }),
+    uploaded_bytes_not_urls: batch1Calls.every(
+      (call) =>
+        call.mediaUrls.length === 0 &&
+        call.mediaBytes.length === call.mediaCount &&
+        call.mediaBytes.every((size) => size > 0),
     ),
+    media_reads: mediaBytes.reads.length,
   });
 
   // --- Case c: same batch id twice -> duplicate blocked ---------------------
@@ -673,16 +706,16 @@ async function main(): Promise<void> {
   const batch7CallsA = publisher.calls.filter(
     (call) => call.idempotencyKey.includes(batch7) && call.channelId === CHANNEL_A,
   );
-  const firstExpiry = expiresOf(batch7CallsA[0]?.mediaUrls[0] ?? "");
-  const retryExpiry = expiresOf(batch7CallsA[batch7CallsA.length - 1]?.mediaUrls[0] ?? "");
   print({
-    media_url_on_retry: {
+    media_bytes_on_retry: {
       channel_a_calls: batch7CallsA.length,
-      first_attempt_expires: firstExpiry,
-      retried_attempt_expires: retryExpiry,
-      // TTL is 6h < the queue window a retry can span: a reused link would die.
-      fresh_link_on_retry: Boolean(firstExpiry && retryExpiry && retryExpiry > firstExpiry),
-      sample_url: redactUrl(batch7CallsA[batch7CallsA.length - 1]?.mediaUrls[0] ?? ""),
+      // Every attempt reads the file again: nothing is carried over from a
+      // failed attempt, and there is no link left to expire in between.
+      bytes_per_attempt: batch7CallsA.map((call) => call.mediaBytes),
+      asset_ids: batch7CallsA.at(-1)?.mediaAssetIds ?? [],
+      read_again_on_retry: batch7CallsA.every(
+        (call) => call.mediaBytes.length === call.mediaCount && call.mediaBytes.every((n) => n > 0),
+      ),
     },
   });
   const afterRetry = await getBatchStatus({ tenantId: DEMO_TENANT_ID, batchId: batch7 });
@@ -1281,6 +1314,8 @@ async function main(): Promise<void> {
       mediaBaseUrl: () => mediaBaseUrl,
       videoProbe: probe as never,
       mediaAssets: videoAssetLookup as never,
+      // Video jobs never read photo bytes; wired because the dep is required.
+      readMediaBytes: mediaBytes.readMediaBytes,
     });
 
   const makeVideoBatch = async (format: "video_post" | "reels") => {

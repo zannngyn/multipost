@@ -37,8 +37,16 @@ export interface FakePublishCall {
   readonly pageId: string;
   readonly caption: string;
   readonly mediaCount: number;
-  /** URLs handed over for THIS call — the proof they were re-signed (E3.6). */
+  /**
+   * What was handed over for THIS call. Photos travel as BYTES now, so the fake
+   * records what it read (asset id + byte count) instead of a URL; the video
+   * path still gets one URL and records it here as its only entry.
+   */
   readonly mediaUrls: readonly string[];
+  /** Asset ids of the photos, in album order. Empty for a video call. */
+  readonly mediaAssetIds: readonly string[];
+  /** Bytes actually read per photo — 0 would mean nothing was uploaded. */
+  readonly mediaBytes: readonly number[];
   readonly idempotencyKey: string;
   readonly at: Date;
   readonly outcome: "published" | "error";
@@ -96,14 +104,40 @@ export function makeFakeChannelPublisher(options: {
         await new Promise((resolve) => setTimeout(resolve, scenario.delayMs));
       }
 
+      const items = input.media ?? [];
+      // The fake READS the bytes like the real adapter does — one file at a
+      // time, in album order. Skipping it would make the smoke script prove a
+      // publish path that never touches Drive or the cache.
+      const mediaBytes: number[] = [];
+      for (const [index, item] of items.entries()) {
+        const content = await item.readBytes();
+        if (!content?.bytes || content.bytes.length === 0) {
+          throw new AppError("MEDIA_NOT_FOUND", {
+            message: "Fake publisher was handed an empty photo",
+            userMessage: `Ảnh "${item.fileName}" rỗng hoặc không đọc được — không đăng.`,
+            context: {
+              tenant_id: input.tenantId,
+              channel: channel.channelId,
+              media_index: index,
+              drive_file_id: item.driveFileId,
+              reason: "EMPTY_MEDIA_BYTES",
+              retryable: false,
+            },
+          });
+        }
+        mediaBytes.push(content.bytes.length);
+      }
+
       const record = (outcome: "published" | "error", errorCode?: string): void => {
         calls.push({
           kind: "image",
           channelId: channel.channelId,
           pageId: channel.externalId,
           caption: input.caption,
-          mediaCount: input.media?.length ?? 0,
-          mediaUrls: (input.media ?? []).map((item) => item.url),
+          mediaCount: items.length,
+          mediaUrls: [],
+          mediaAssetIds: items.map((item) => item.driveFileId),
+          mediaBytes,
           idempotencyKey: input.idempotencyKey,
           at: new Date(),
           outcome,
@@ -179,6 +213,8 @@ export function makeFakeChannelPublisher(options: {
           caption: input.caption,
           mediaCount: 1,
           mediaUrls: [videoUrl],
+          mediaAssetIds: [],
+          mediaBytes: [],
           idempotencyKey: input.idempotencyKey,
           at: new Date(),
           outcome,

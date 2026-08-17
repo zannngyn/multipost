@@ -135,7 +135,13 @@ describe("TikTok publisher — refused before any call", () => {
         tenantId: "t",
         channel: CHANNEL,
         caption: "x",
-        media: [{ driveFileId: "d", fileName: "f.jpg", url: "https://cdn/1.jpg" }],
+        media: [
+          {
+            driveFileId: "d",
+            fileName: "f.jpg",
+            readBytes: async () => ({ bytes: new Uint8Array([1, 2, 3]), mimeType: "image/jpeg" }),
+          },
+        ],
         idempotencyKey: "k",
       }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });

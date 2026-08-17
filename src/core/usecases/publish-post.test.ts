@@ -18,9 +18,12 @@ import type {
   ChannelConfig,
   ChannelConfigRepo,
   ChannelPublisher,
+  PublishImagePostInput,
   PublishSettings,
   SignMediaUrlFn,
 } from "@/core/ports/publisher";
+
+import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 
 import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import { makePublishPost, spacingWaitMs } from "./publish-post";
@@ -239,7 +242,12 @@ interface Harness {
   };
   clock: ReturnType<typeof fixedClock>;
   signer: ReturnType<typeof fakeSigner>;
+  /** The byte source handed to the publisher's lazy `readBytes`. */
+  readMediaBytes: ReturnType<typeof vi.fn>;
 }
+
+/** Stand-in photo bytes; a real JPEG header so nothing looks like an empty buffer. */
+const PHOTO_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
 
 const MEDIA_BASE_URL = "https://mysp.example.com";
 
@@ -263,13 +271,14 @@ function harness(options: {
   product?: Product | null;
   channel?: ChannelConfig | null;
   settings?: Partial<PublishSettings>;
-  publish?: () => Promise<{ postId: string; url: string | null }>;
+  publish?: (input: PublishImagePostInput) => Promise<{ postId: string; url: string | null }>;
   publishVideo?: () => Promise<{ postId: string; url: string | null }>;
   publishers?: Partial<Record<"facebook" | "tiktok", ChannelPublisher>>;
   videoProbe?: VideoAssetProbe;
   mediaAssets?: MediaAssetLookup;
   signMediaUrl?: SignMediaUrlFn;
   mediaBaseUrl?: () => string;
+  readMediaBytes?: ReadMediaBytes;
 } = {}): Harness {
   const repo = makeMemoryRepo(options.jobs ?? [makeJob()]);
   const queue = makeQueue();
@@ -278,19 +287,24 @@ function harness(options: {
     publishImagePost: vi.fn(
       options.publish ?? (async () => ({ postId: "555000111_1", url: "https://fb/555000111_1" })),
     ),
+    // Not derived from `options.publish` any more: an image call now carries
+    // byte sources and a video call carries a URL, so one scripted function
+    // cannot stand for both.
     publishVideoPost: vi.fn(
-      options.publishVideo ??
-        options.publish ??
-        (async () => ({ postId: "555000111_2", url: "https://fb/555000111_2" })),
+      options.publishVideo ?? (async () => ({ postId: "555000111_2", url: "https://fb/555000111_2" })),
     ),
   };
   const signer = fakeSigner(clock);
+  const readMediaBytes = vi.fn<ReadMediaBytes>(
+    options.readMediaBytes ?? (async () => ({ bytes: PHOTO_BYTES, mimeType: "image/jpeg" })),
+  );
   return {
     repo,
     queue,
     clock,
     publisher,
     signer,
+    readMediaBytes,
     publish: makePublishPost({
       postJobs: repo,
       products: makeProducts(options.product === undefined ? makeProduct("104") : options.product),
@@ -304,6 +318,7 @@ function harness(options: {
       mediaBaseUrl: options.mediaBaseUrl ?? (() => MEDIA_BASE_URL),
       videoProbe: options.videoProbe,
       mediaAssets: options.mediaAssets,
+      readMediaBytes,
     }),
   };
 }
@@ -583,8 +598,8 @@ describe("publishPost — platform failures", () => {
   });
 });
 
-describe("publishPost — signed media URLs (E3.6)", () => {
-  it("re-signs every photo immediately before the API call", async () => {
+describe("publishPost — photos travel as BYTES (E5, the Graph 324 fix)", () => {
+  it("hands the publisher a lazy byte source per photo, in album order", async () => {
     const h = harness({
       jobs: [
         makeJob({
@@ -599,19 +614,62 @@ describe("publishPost — signed media URLs (E3.6)", () => {
     await h.publish({ tenantId: TENANT, postJobId: "job-1" });
 
     const input = h.publisher.publishImagePost.mock.calls[0][0];
-    expect(h.signer.calls.map((call) => call.assetId)).toEqual(["drive-1", "drive-2"]);
-    expect(input.media.map((item: { url: string }) => item.url)).toEqual([
-      `${MEDIA_BASE_URL}/api/media/drive-1?tenant=${TENANT}&expires=${h.signer.calls[0].expiresAtMs}&sig=deadbeef`,
-      `${MEDIA_BASE_URL}/api/media/drive-2?tenant=${TENANT}&expires=${h.signer.calls[1].expiresAtMs}&sig=deadbeef`,
+    expect(input.media.map((item: { driveFileId: string }) => item.driveFileId)).toEqual([
+      "drive-1",
+      "drive-2",
     ]);
-    // The row keeps the URL it was created with; only the outbound call is fresh.
-    expect(h.repo.get("job-1")?.media[0].url).toBe("https://old.example/stale-1.jpg");
+    // Lazy: nothing is read until the publisher asks for that photo.
+    expect(h.readMediaBytes).not.toHaveBeenCalled();
+    // No URL is minted for a photo any more — that handover is what failed.
+    expect(h.signer.calls).toHaveLength(0);
+    expect(input.media[0].url).toBeUndefined();
+
+    const content = await input.media[1].readBytes();
+    expect(content).toEqual({ bytes: PHOTO_BYTES, mimeType: "image/jpeg" });
+    expect(h.readMediaBytes).toHaveBeenCalledWith({
+      tenantId: TENANT,
+      assetId: "drive-2",
+      jobId: "job-1",
+    });
   });
 
-  it("gives a RETRIED attempt a newer link than the first one (TTL < queue wait)", async () => {
+  it("publishes an image post even when MEDIA_PUBLIC_BASE_URL is missing", async () => {
+    // The photo path no longer depends on a publicly reachable URL at all —
+    // that is half the point of uploading the bytes.
+    const h = harness({
+      mediaBaseUrl: () => {
+        throw new AppError("INVALID_INPUT", { message: "MEDIA_PUBLIC_BASE_URL is missing" });
+      },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a legacy item that has no asset id to read bytes from", async () => {
+    const h = harness({
+      jobs: [
+        makeJob({ media: [{ driveFileId: "", fileName: "old.jpg", url: "https://cdn/old.jpg" }] }),
+      ],
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "MEDIA_NOT_FOUND" });
+    expect(result.userMessage).toContain("old.jpg");
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(h.repo.get("job-1")?.status).toBe("blocked");
+  });
+
+  it("re-reads the bytes on a retried attempt instead of reusing a stale handle", async () => {
     let fail = true;
     const h = harness({
-      publish: async () => {
+      publish: async ({ media }: PublishImagePostInput) => {
+        // The real publisher reads inside the call; the fake does the same so
+        // the retry is measured the way production behaves.
+        for (const item of media) await item.readBytes();
         if (fail) {
           fail = false;
           throw new AppError("META_ERROR", { message: "temporary", context: { retryable: true } });
@@ -623,19 +681,66 @@ describe("publishPost — signed media URLs (E3.6)", () => {
     await expect(
       h.publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
     ).rejects.toMatchObject({ code: "META_ERROR" });
-
-    // The job waited in the queue longer than a signed link lives.
     h.clock.advance(7 * 60 * 60 * 1000);
     await h.publish({ tenantId: TENANT, postJobId: "job-1", attempt: 2, maxAttempts: 3 });
 
-    const first = h.publisher.publishImagePost.mock.calls[0][0].media[0].url;
-    const second = h.publisher.publishImagePost.mock.calls[1][0].media[0].url;
-    expect(second).not.toBe(first);
-    expect(h.signer.calls[1].expiresAtMs).toBeGreaterThan(h.signer.calls[0].expiresAtMs);
+    expect(h.readMediaBytes).toHaveBeenCalledTimes(2);
   });
 
-  it("blocks the job (never calls the platform) when the base URL is missing", async () => {
+  it("fails the attempt (retryable) when the bytes cannot be read", async () => {
     const h = harness({
+      readMediaBytes: async () => {
+        throw new AppError("DRIVE_ERROR", { message: "Drive is unreachable" });
+      },
+      publish: async ({ media }: PublishImagePostInput) => {
+        for (const item of media) await item.readBytes();
+        return { postId: "555000111_1", url: null };
+      },
+    });
+
+    await expect(
+      h.publish({ tenantId: TENANT, postJobId: "job-1", attempt: 1, maxAttempts: 3 }),
+    ).rejects.toMatchObject({ code: "DRIVE_ERROR" });
+    // Back to `queued`: a Drive hiccup is worth another attempt, and the post
+    // was never created on the platform.
+    expect(h.repo.get("job-1")).toMatchObject({ status: "queued", lastErrorCode: "DRIVE_ERROR" });
+  });
+
+  it("reads nothing at all when the stock recheck blocks the post", async () => {
+    const h = harness({ product: makeProduct("0") });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.errorCode).toBe("OUT_OF_STOCK");
+    expect(h.readMediaBytes).not.toHaveBeenCalled();
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+});
+
+describe("publishPost — signed media URLs stay on the VIDEO path (E3.6)", () => {
+  const videoJob = () =>
+    makeJob({
+      format: "video_post",
+      media: [{ driveFileId: "drive-9", fileName: "clip.mp4", url: "https://old.example/x.mp4" }],
+    });
+
+  it("re-signs the video URL immediately before the API call", async () => {
+    const h = harness({ jobs: [videoJob()] });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const input = h.publisher.publishVideoPost.mock.calls[0][0];
+    expect(h.signer.calls.map((call) => call.assetId)).toEqual(["drive-9"]);
+    expect(input.videoUrl).toBe(
+      `${MEDIA_BASE_URL}/api/media/drive-9?tenant=${TENANT}&expires=${h.signer.calls[0].expiresAtMs}&sig=deadbeef`,
+    );
+    // The row keeps the URL it was created with; only the outbound call is fresh.
+    expect(h.repo.get("job-1")?.media[0].url).toBe("https://old.example/x.mp4");
+  });
+
+  it("blocks a VIDEO job (never calls the platform) when the base URL is missing", async () => {
+    const h = harness({
+      jobs: [videoJob()],
       mediaBaseUrl: () => {
         throw new AppError("INVALID_INPUT", { message: "MEDIA_PUBLIC_BASE_URL is missing" });
       },
@@ -644,26 +749,12 @@ describe("publishPost — signed media URLs (E3.6)", () => {
     const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
 
     expect(result.outcome).toBe("blocked");
-    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
     expect(h.repo.get("job-1")).toMatchObject({
       status: "blocked",
       lastErrorCode: "INVALID_INPUT",
     });
     expect(result.userMessage).toContain("MEDIA_PUBLIC_BASE_URL");
-  });
-
-  it("publishes a legacy item without a drive file id using its stored URL", async () => {
-    const h = harness({
-      jobs: [
-        makeJob({ media: [{ driveFileId: "", fileName: "old.jpg", url: "https://cdn/old.jpg" }] }),
-      ],
-    });
-
-    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
-
-    const input = h.publisher.publishImagePost.mock.calls[0][0];
-    expect(input.media[0].url).toBe("https://cdn/old.jpg");
-    expect(h.signer.calls).toHaveLength(0);
   });
 });
 
@@ -732,8 +823,11 @@ describe("publishPost — happy path", () => {
       products,
       channels,
       publisher: {
-        publishImagePost: async () => {
+        publishImagePost: async (input) => {
           order.push("publish");
+          // The real adapter reads each photo inside the call; doing the same
+          // here is what puts "read-bytes" in its true place in the order.
+          for (const item of input.media) await item.readBytes();
           return { postId: "555000111_9", url: null };
         },
         publishVideoPost: async () => {
@@ -746,15 +840,22 @@ describe("publishPost — happy path", () => {
       logger: silentLogger(),
       signMediaUrl: fakeSigner(fixedClock()).sign,
       mediaBaseUrl: () => MEDIA_BASE_URL,
+      readMediaBytes: async () => {
+        order.push("read-bytes");
+        return { bytes: PHOTO_BYTES, mimeType: "image/jpeg" };
+      },
     });
 
     await publish({ tenantId: TENANT, postJobId: "job-1" });
 
+    // The bytes are read AFTER the claim and AFTER the stock recheck: business
+    // rule 3 stays the last gate, the upload is only preparation for the call.
     expect(order).toEqual([
       "transition:publishing",
       "stock-recheck",
       "channel-config",
       "publish",
+      "read-bytes",
       "transition:published",
     ]);
   });
@@ -976,6 +1077,8 @@ describe("publishPost — video and reels (E5.3/E5.4)", () => {
       } as never,
       signMediaUrl: fakeSigner(fixedClock()).sign,
       mediaBaseUrl: () => MEDIA_BASE_URL,
+      // A reels job never reads photo bytes; wired because the dep is required.
+      readMediaBytes: async () => ({ bytes: PHOTO_BYTES, mimeType: "image/jpeg" }),
     });
 
     await publish({ tenantId: TENANT, postJobId: "job-1" });

@@ -8,16 +8,16 @@
 
 import type { ChannelGroup } from "@/core/domain/channel-group";
 import type { SignedMediaUrl } from "@/core/domain/media-url";
-import type { PostJobMedia } from "@/core/domain/post-job";
 
 /**
- * Mints the public, time-limited URL Graph API fetches for one media asset
+ * Mints the public, time-limited URL a platform fetches for one media asset
  * (E3.6). Declared as a port because the MAC lives in adapters/crypto: core
  * builds posts, it never touches a signing secret.
  *
- * Both sides of the publish flow use it — create-post-batch when the job is
- * built, publish-post again right before the API call, because a job may sit in
- * the queue (spacing + retries) longer than a link lives.
+ * Still used by create-post-batch (the stored job keeps a link for the preview
+ * screen) and by the VIDEO path, which hands the platform a URL. The Facebook
+ * PHOTO path no longer uses it: it uploads the bytes itself (see
+ * PublishMediaItem).
  */
 export type SignMediaUrlFn = (input: {
   readonly tenantId: string;
@@ -271,13 +271,45 @@ export interface ChannelGroupRepo {
   deleteGroup(tenantId: string, groupId: string): Promise<boolean>;
 }
 
+/** Bytes of ONE media file plus the content type to declare for them. */
+export interface PublishMediaBytes {
+  readonly bytes: Uint8Array;
+  /** Null when the source reported none; the adapter picks a safe default. */
+  readonly mimeType: string | null;
+}
+
+/**
+ * One photo of a post, as a LAZY byte source.
+ *
+ * Why bytes and not a URL: handing Graph a `url=` makes Facebook download the
+ * file itself, and it abandons that download around 30s — measured on a real
+ * 10-photo post, 4 of 10 made it. Uploading the bytes ourselves (multipart
+ * `source`) put 10 of 10 on the same Page, because WE are the side that waits
+ * and the worker may wait as long as it needs.
+ *
+ * Why `readBytes` is a FUNCTION and not the bytes: an album is up to 10 files of
+ * ~9 MB, the worker runs several jobs at once, and a publisher uploads photo by
+ * photo anyway. The bytes of photo k are read immediately before photo k is
+ * uploaded and dropped afterwards, so one job holds one file, not ten.
+ *
+ * Contract for callers: `readBytes` may throw (asset gone, Drive down). It is a
+ * failure of THIS post, never something to swallow — the publisher reports which
+ * item failed and the usecase decides retry vs block.
+ */
+export interface PublishMediaItem {
+  /** Asset identity (Drive file id, or `upload_<hex>` for mode B). */
+  readonly driveFileId: string;
+  readonly fileName: string;
+  readonly readBytes: () => Promise<PublishMediaBytes>;
+}
+
 export interface PublishImagePostInput {
   readonly tenantId: string;
   readonly channel: ChannelConfig;
   /** Final approved caption for THIS channel (brief §7.2: one per channel). */
   readonly caption: string;
   /** Ordered album, index 0 is the cover. 1..10 items. */
-  readonly media: readonly PostJobMedia[];
+  readonly media: readonly PublishMediaItem[];
   /**
    * The anti-duplicate tuple, passed for logging/tracing only. The Graph API has
    * no idempotency header for photo posts: the real protection is the unique

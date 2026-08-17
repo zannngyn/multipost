@@ -20,6 +20,15 @@ import { mapGraphError, type GraphErrorBody } from "./graph-error-map";
 export const DEFAULT_GRAPH_VERSION = "v23.0";
 const DEFAULT_BASE_URL = "https://graph.facebook.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
+/**
+ * Uploads get their own, longer budget. A photo post sends up to 10 files of
+ * several MB each and a measured real upload took ~3.8s for 7.75MB on a good
+ * link; a hotel wifi is an order of magnitude slower, and killing a 9MB upload
+ * at 30s would re-create the very failure this transport exists to remove.
+ */
+const DEFAULT_UPLOAD_TIMEOUT_MS = 180_000;
+/** Content type for a part whose source reported none (606 files have no extension). */
+const FALLBACK_PART_MIME = "application/octet-stream";
 
 /**
  * Hosts `postAbsolute` may send a Page token to.
@@ -69,6 +78,8 @@ export interface GraphClientDeps {
   version?: string;
   baseUrl?: string;
   timeoutMs?: number;
+  /** Budget for a multipart upload; defaults to 180s, not the 30s of a form POST. */
+  uploadTimeoutMs?: number;
   /** Injection seam for tests; production uses global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -81,6 +92,36 @@ export interface GraphPostInput {
   readonly accessToken: string;
   /** Log-only context (tenant, job, channel). NEVER a token. */
   readonly context?: Record<string, unknown>;
+}
+
+/** One file part of a multipart POST, e.g. the `source` field of /photos. */
+export interface GraphFilePart {
+  /** Form field name Graph expects — `source` for a photo. */
+  readonly field: string;
+  /** Sent as the part's filename; Graph uses it for nothing but diagnostics. */
+  readonly fileName: string;
+  readonly bytes: Uint8Array;
+  /** Null falls back to application/octet-stream. */
+  readonly mimeType: string | null;
+}
+
+/**
+ * A multipart POST on the Graph host: the same form fields as `post`, plus file
+ * parts carrying the bytes.
+ *
+ * It exists because `url=` makes Facebook fetch the file and abandon it around
+ * 30s (error 324). With `source=` we do the waiting, which is the difference
+ * between 4/10 and 10/10 photos on the same real Page test.
+ */
+export interface GraphMultipartPostInput {
+  readonly path: string;
+  readonly params: Readonly<Record<string, string>>;
+  readonly files: readonly GraphFilePart[];
+  readonly accessToken: string;
+  /** Log-only context (tenant, job, channel). NEVER a token. */
+  readonly context?: Record<string, unknown>;
+  /** Per-call override of the upload budget. */
+  readonly timeoutMs?: number;
 }
 
 /**
@@ -120,6 +161,8 @@ export interface GraphGetInput {
 export interface GraphClient {
   get(input: GraphGetInput): Promise<Record<string, unknown>>;
   post(input: GraphPostInput): Promise<Record<string, unknown>>;
+  /** Same endpoint vocabulary as `post`, with the file bytes in the body. */
+  postMultipart(input: GraphMultipartPostInput): Promise<Record<string, unknown>>;
   postAbsolute(input: GraphAbsolutePostInput): Promise<Record<string, unknown>>;
 }
 
@@ -127,6 +170,7 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
   const version = (deps.version ?? DEFAULT_GRAPH_VERSION).trim() || DEFAULT_GRAPH_VERSION;
   const baseUrl = (deps.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const uploadTimeoutMs = positiveMs(deps.uploadTimeoutMs) ?? DEFAULT_UPLOAD_TIMEOUT_MS;
   const doFetch = deps.fetchImpl ?? globalThis.fetch;
   const logger = deps.logger.child({ component: "graph-client", graph_version: version });
 
@@ -353,6 +397,104 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
     },
 
     /**
+     * Multipart sibling of `post`: same URL, same error handling, same "the
+     * token lives in the body, never in the query string, never in a log" rule.
+     * Only the encoding and the timeout differ — bytes take longer than a form.
+     */
+    async postMultipart(input: GraphMultipartPostInput): Promise<Record<string, unknown>> {
+      // --- Edge cases first ------------------------------------------------
+      const path = typeof input?.path === "string" ? input.path.replace(/^\/+/, "").trim() : "";
+      const token = typeof input?.accessToken === "string" ? input.accessToken.trim() : "";
+      if (path.length === 0 || token.length === 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "Graph multipart POST requires a path and an access token",
+          userMessage: "Thiếu thông tin kết nối tới Facebook — không gửi được yêu cầu.",
+          context: { ...(input?.context ?? {}), path: path || null, has_token: token.length > 0 },
+        });
+      }
+      const files = Array.isArray(input?.files) ? input.files : [];
+      if (files.length === 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "Graph multipart POST requires at least one file part",
+          userMessage: "Không có dữ liệu ảnh để gửi lên Facebook.",
+          context: { ...(input?.context ?? {}), path, reason: "NO_FILE_PART" },
+        });
+      }
+
+      const form = new FormData();
+      for (const [key, value] of Object.entries(input.params ?? {})) {
+        if (value === undefined || value === null) continue;
+        form.set(key, String(value));
+      }
+      for (const file of files) {
+        const bytes = file?.bytes;
+        // An empty part comes back from Graph as an opaque "invalid image file";
+        // refusing here keeps the reason readable and saves a round trip.
+        if (!bytes || bytes.length === 0) {
+          throw new AppError("INVALID_INPUT", {
+            message: "Refusing to upload an empty file part",
+            userMessage: "File ảnh rỗng — không gửi lên Facebook.",
+            context: {
+              ...(input.context ?? {}),
+              path,
+              field: file?.field ?? null,
+              file_name: file?.fileName ?? null,
+              reason: "EMPTY_FILE_PART",
+              retryable: false,
+            },
+          });
+        }
+        const blob = new Blob([toArrayBuffer(bytes)], {
+          type: cleanMime(file.mimeType) ?? FALLBACK_PART_MIME,
+        });
+        form.append(file.field, blob, file.fileName || "upload.bin");
+      }
+      // In the body like the form POST, and after the parts so a caller cannot
+      // overwrite it with a `params` entry.
+      form.set("access_token", token);
+
+      const callTimeoutMs = positiveMs(input?.timeoutMs) ?? uploadTimeoutMs;
+      const totalBytes = files.reduce((sum, file) => sum + (file?.bytes?.length ?? 0), 0);
+      const startedAt = Date.now();
+      let response: Response;
+      try {
+        response = await doFetch(`${baseUrl}/${version}/${path}`, {
+          method: "POST",
+          // No content-type header: fetch must set the multipart boundary.
+          body: form,
+          signal: AbortSignal.timeout(callTimeoutMs),
+        });
+      } catch (error) {
+        const appError = mapGraphError({
+          cause: error,
+          context: {
+            ...(input.context ?? {}),
+            path,
+            timeout_ms: callTimeoutMs,
+            upload_bytes: totalBytes,
+          },
+        });
+        logger.error("Graph upload failed before an answer", {
+          err: appError,
+          error_code: appError.code,
+          path,
+          upload_bytes: totalBytes,
+          duration_ms: Date.now() - startedAt,
+        });
+        throw appError;
+      }
+
+      return readAnswer(response, {
+        startedAt,
+        label: "Graph upload",
+        context: { ...(input.context ?? {}), path, upload_bytes: totalBytes },
+        // Credentials are in the multipart body, so an echoed error page is
+        // diagnostic rather than dangerous — same call as the form POST.
+        bodyPreview: true,
+      });
+    },
+
+    /**
      * Same failure vocabulary as `post`, different transport: absolute URL, no
      * form body, credentials in a header. Kept in this file so ONE place owns
      * timeouts, error mapping and "a non-JSON body is not a success".
@@ -434,6 +576,29 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
  * `https://rupload.facebook.com@evil.example/x` must resolve to `evil.example`,
  * which a naive "contains rupload.facebook.com" check would happily accept.
  */
+/**
+ * Copy of the bytes as a plain ArrayBuffer.
+ *
+ * A Uint8Array can be a VIEW into a bigger buffer (Node hands those out when it
+ * slices a read); passing the view's `.buffer` straight to Blob would upload the
+ * whole underlying buffer — someone else's bytes included.
+ */
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.length);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
+function cleanMime(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const mime = value.split(";")[0]?.trim().toLowerCase() ?? "";
+  return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(mime) ? mime : null;
+}
+
+function positiveMs(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 function uploadHostOf(url: string): string | null {
   try {
     return new URL(url).hostname.toLowerCase();
