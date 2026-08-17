@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { StatusTone } from "./post-batch.schema";
 import { tenantIdField } from "./tenant-health.schema";
 
 /**
@@ -93,39 +94,94 @@ export const SYNC_STATUS_LABELS: Record<SyncRunStatus, string> = {
   failed: "Thất bại",
 };
 
-/** Counts grouped the way an operator reads them: nguồn → kết quả ghi. */
-export const SYNC_COUNT_GROUPS: readonly {
-  title: string;
-  items: readonly { key: keyof SyncRunCounts; label: string; tone?: "warn" }[];
-}[] = [
-  {
-    title: "Ảnh / video trên Drive",
-    items: [
-      { key: "driveFilesSeen", label: "File đã quét" },
-      { key: "mediaParsed", label: "File đọc được" },
-      { key: "mediaRejected", label: "File bị loại", tone: "warn" },
-      { key: "mediaDuplicatesDropped", label: "File trùng đã bỏ", tone: "warn" },
-      { key: "mediaNeedingReview", label: "File cần rà soát", tone: "warn" },
-      { key: "mediaWithoutProduct", label: "File không khớp mã nào", tone: "warn" },
-    ],
+/**
+ * The ONE mapping from run status to severity colour. Every block that paints a
+ * run — the rail badge, the "đã chạy xong" banner — reads this: two tables would
+ * drift, and an operator reads the colour before the sentence, so a green box
+ * saying "Xong nhưng có vấn đề" is a lie told faster than the text can correct.
+ *
+ * `StatusTone` is reused from `post-batch.schema` rather than imported from the
+ * Badge component: a schema is the bottom layer of the FE (docs/07 §4.1) and
+ * must not depend on a component, not even for a type — `tsPreCompilationDeps`
+ * counts a type-only import as a real edge. The tone is still checked against
+ * the component's own union where it is consumed (`<Badge tone={…}>` in
+ * `SyncRunRail`), which is the assignment that would actually break.
+ */
+export const SYNC_STATUS_TONES: Record<SyncRunStatus, StatusTone> = {
+  running: "info",
+  succeeded: "success",
+  partial: "warning",
+  failed: "danger",
+};
+
+export const SYNC_STATUS_HINTS: Record<SyncRunStatus, string> = {
+  running: "Lần đồng bộ này chưa kết thúc. Tải lại trang sau ít phút để xem kết quả.",
+  succeeded: "Toàn bộ dữ liệu đọc được đã vào hệ thống.",
+  partial: "Đã ghi dữ liệu, nhưng có file và dòng bị bỏ qua — xem “Cần xử lý”.",
+  failed: "Lần chạy này hỏng giữa chừng. Dữ liệu trong hệ thống vẫn là của lần đồng bộ trước.",
+};
+
+/** How serious a group of issues is — drives the dot, the bar and the wording. */
+export type SyncIssueSeverity = "neutral" | "warning" | "error";
+
+export type SyncIssueGuide = {
+  severity: SyncIssueSeverity;
+  /** What the operator has to DO, in Vietnamese. Never a bare restatement. */
+  action: string;
+};
+
+/**
+ * Guidance per `errorCode` written by the sync usecase
+ * (`core/usecases/sync-catalog.ts` — SHEET_ERROR, SHEET_ROW_INVALID,
+ * FILE_NAME_INVALID, PRODUCT_NOT_FOUND, MEDIA_NOT_FOUND).
+ *
+ * Deliberately NOT exhaustive: a new code added on the server must still show
+ * up on the screen with a usable sentence rather than disappear, so
+ * `syncIssueGuide` falls back instead of indexing blindly.
+ */
+const SYNC_ISSUE_GUIDES: Record<string, SyncIssueGuide> = {
+  FILE_NAME_INVALID: {
+    severity: "warning",
+    action:
+      "Tên file không theo chuẩn MÃSP-Màu (số), hoặc là bản trùng đã bị bỏ — đổi tên trên Drive rồi chạy lại.",
   },
-  {
-    title: "Sản phẩm trên Sheet",
-    items: [
-      { key: "sheetRowsSeen", label: "Dòng đã đọc" },
-      { key: "productsParsed", label: "Sản phẩm đọc được" },
-      { key: "sheetRowsRejected", label: "Dòng bị loại", tone: "warn" },
-      { key: "productsWithConflict", label: "Mã mâu thuẫn dữ liệu", tone: "warn" },
-      { key: "productsWithoutMedia", label: "Sản phẩm chưa có ảnh", tone: "warn" },
-    ],
+  SHEET_ROW_INVALID: {
+    severity: "error",
+    action:
+      "Dòng Sheet thiếu ô bắt buộc, hoặc hai dòng cùng mã nhưng khác dữ liệu — sửa trên Sheet rồi chạy lại.",
   },
-  {
-    title: "Ghi vào hệ thống",
-    items: [
-      { key: "productsWritten", label: "Sản phẩm đã ghi" },
-      { key: "mediaWritten", label: "File đã ghi" },
-      { key: "productsDeleted", label: "Sản phẩm đã xoá" },
-      { key: "mediaDeleted", label: "File đã xoá" },
-    ],
+  SHEET_ERROR: {
+    severity: "error",
+    action: "Cột trên Sheet bị thiếu hoặc lặp tên — sửa lại tiêu đề cột cho khớp mẫu rồi chạy lại.",
   },
-];
+  PRODUCT_NOT_FOUND: {
+    severity: "error",
+    action:
+      "Drive có ảnh cho mã này nhưng Sheet chưa có dòng nào — thêm dòng vào Sheet hoặc đổi tên file.",
+  },
+  MEDIA_NOT_FOUND: {
+    severity: "warning",
+    action:
+      "Sheet có mã này nhưng Drive chưa có file nào khớp — tải ảnh lên rồi chạy lại. Mã này chưa đăng được.",
+  },
+};
+
+const UNKNOWN_ISSUE_ACTION =
+  "Mã lỗi này chưa có hướng dẫn sẵn — mở ví dụ bên dưới để biết file/dòng nào và vì sao.";
+
+/**
+ * Severity + guidance for one error code. An unknown code is never dropped and
+ * never silently downgraded: the tone is inferred from the code itself, and
+ * anything that does not match a known shape lands on `warning`.
+ */
+export function syncIssueGuide(errorCode: string): SyncIssueGuide {
+  const known = SYNC_ISSUE_GUIDES[errorCode];
+  if (known) return known;
+
+  const code = errorCode.toUpperCase();
+  if (code.includes("DUPLICATE")) return { severity: "neutral", action: UNKNOWN_ISSUE_ACTION };
+  if (/CONFLICT|INVALID|NOT_FOUND|MISSING/.test(code)) {
+    return { severity: "error", action: UNKNOWN_ISSUE_ACTION };
+  }
+  return { severity: "warning", action: UNKNOWN_ISSUE_ACTION };
+}

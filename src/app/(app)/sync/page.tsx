@@ -25,8 +25,11 @@ export default async function SyncPage() {
   // Component must not trust that it was reached through the guard.
   if (!session) redirect("/signin?returnUrl=%2Fsync");
 
+  // Full-bleed: the screen owns its own sticky header, scroll region and right
+  // rail, so it takes the whole content area of the shell rather than sitting in
+  // a centred column (core-layout-shell §fixed shell).
   return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+    <div className="h-full min-h-0">
       <SyncScreen />
     </div>
   );
