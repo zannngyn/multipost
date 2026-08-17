@@ -408,7 +408,15 @@ export type RemotePostState =
  * Contract for every implementer:
  * - `schedulePost` returns only when the platform ACCEPTED the schedule, with
  *   the id of the object it now holds; anything else throws (never a silent
- *   "probably fine"). An AppError thrown by it carries
+ *   "probably fine"). Every AppError it throws MUST carry EXACTLY ONE of
+ *   `context.platform_created_nothing = true` or `context.feed_dispatched =
+ *   true` — the answer to "could this call have created a post?" is the only
+ *   thing the caller can route on, and a publisher that forgets it turns an
+ *   ordinary dead-token error into "đi tìm bài hẹn" for a post that never
+ *   existed. Neither flag (or both) is treated as "a post may exist": the
+ *   caller fails closed, which costs a post that could have gone out — say it,
+ *   do not rely on it.
+ *
  *   `context.platform_created_nothing = true` ONLY when the implementer knows
  *   that NO REQUEST CAPABLE OF CREATING THE POST HAS EVER BEEN DISPATCHED for
  *   this job — in practice: its own pre-flight guards, and preparation steps
@@ -422,9 +430,9 @@ export type RemotePostState =
  *   and lost the answer (timeout, killed worker), and the platform may then
  *   refuse the retry precisely BECAUSE the post exists (Facebook #506
  *   DUPLICATE_POST). Errors from a dispatched creating request carry
- *   `context.feed_dispatched = true` for the log; the caller must treat their
- *   outcome as unknown and must never publish that job on the normal path.
- *   Without either flag the caller also assumes a post may exist.
+ *   `context.feed_dispatched = true`, which is REQUIRED on them: the caller must
+ *   treat their outcome as unknown and must never publish that job on the normal
+ *   path.
  * - `getPostState` never guesses: no proof means `unknown`, with a reason.
  * - `deleteScheduledPost` returns TRUE only when the platform confirmed it no
  *   longer holds the post, and FALSE only when the platform positively reported

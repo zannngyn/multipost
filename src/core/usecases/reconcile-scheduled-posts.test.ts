@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
-import type { PostJob } from "@/core/domain/post-job";
+import { canOperatorRetryPostJob, type PostJob } from "@/core/domain/post-job";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { ApplyTransitionInput, OverdueScanQuery, PostJobRepo } from "@/core/ports/post-job-repo";
 import type {
@@ -369,6 +369,37 @@ describe("reconcileScheduledPosts — closing the loop", () => {
     // The same instruction the reaper gives: look before you re-run.
     expect(transition.next.lastErrorMessage).toContain("mở Trang");
     expect(transition.auditAction).toBe(RECONCILED_UNCONFIRMED_AUDIT_ACTION);
+  });
+
+  /**
+   * DOOR 1. `failed` here does NOT mean "press Chạy lại": the row still carries
+   * the id of an object Facebook created, so a re-run publishes a second post
+   * next to it. Before this, the only thing standing between the operator and
+   * that duplicate was a sentence next to a lit button.
+   */
+  it("leaves a row nobody may re-run, and says so", async () => {
+    const h = harness({
+      jobs: [
+        makeJob({
+          scheduledAt: new Date(NOW - 48 * 60 * 60_000),
+          scheduledPostId: "1000000000_2000000000",
+        }),
+      ],
+      state: { state: "unknown", reason: "NO_IS_PUBLISHED_FIELD" },
+    });
+
+    await h.reconcile({ giveUpMs: 24 * 60 * 60_000 });
+
+    const next = h.repo.transitions[0].next;
+    // The id survives the move to `failed` — it is what refuses the re-run.
+    expect(next.scheduledPostId).toBe("1000000000_2000000000");
+    expect(canOperatorRetryPostJob(next)).toBe(false);
+
+    const message = next.lastErrorMessage ?? "";
+    expect(message).toContain("1000000000_2000000000");
+    expect(message).toContain("bài đã lên lịch");
+    // The old text invited the exact duplicate this row is about.
+    expect(message).not.toContain("rồi mới bấm Chạy lại");
   });
 
   it("fails a row that carries no platform post id — nothing could ever confirm it", async () => {

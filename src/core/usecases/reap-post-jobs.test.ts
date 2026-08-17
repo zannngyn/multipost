@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
 import {
+  canOperatorRetryPostJob,
   HANDOFF_WINDOW_START_MS,
+  PUBLISH_UNCONFIRMED_ERROR_CODE,
   type PostJob,
   type PostJobStatus,
 } from "@/core/domain/post-job";
@@ -296,6 +298,54 @@ describe("reapPostJobs — jobs stuck in `publishing`", () => {
     expect(
       lines.some((line) => line.level === "error" && line.context?.alert === "OPERATOR_ATTENTION"),
     ).toBe(true);
+  });
+
+  /**
+   * DOOR 2. An IMMEDIATE post reaped out of `publishing` stays retryable: the
+   * operator can look at the feed and see for themselves. That is the whole
+   * reason the scheduled case below cannot be treated the same way.
+   */
+  it("leaves an immediate post retryable, and points at the Page", async () => {
+    const { reapPostJobs, repo } = harness({ stale: [makeJob({ scheduledAt: null })] });
+
+    await reapPostJobs();
+
+    const next = repo.transitions[0].next;
+    expect(next.lastErrorCode).toBe("PUBLISH_FAILED");
+    expect(next.lastErrorMessage).toContain("mở Trang");
+    expect(canOperatorRetryPostJob(next)).toBe(true);
+  });
+
+  /**
+   * DOOR 2, the real one. A SCHEDULED job dies in `publishing` typically because
+   * the worker was killed after /feed was dispatched — Facebook may be holding
+   * the post, and a held post is NOT in the feed. The old message said "kiểm tra
+   * trên kênh", so the operator saw an empty feed and pressed Chạy lại.
+   */
+  it("refuses a re-run for a SCHEDULED job and never says 'check the channel'", async () => {
+    const scheduled = makeJob({ scheduledAt: new Date(NOW + 20 * 60_000) });
+    const { reapPostJobs, repo, queue } = harness({ stale: [scheduled] });
+
+    const result = await reapPostJobs();
+
+    expect(result.failed).toBe(1);
+    expect(queue.enqueued).toHaveLength(0);
+    expect(repo.transitions[0]).toMatchObject({
+      from: "publishing",
+      reason: "PUBLISHING_STALE_SCHEDULED",
+      auditAction: REAPER_FAILED_AUDIT_ACTION,
+    });
+    const next = repo.transitions[0].next;
+    expect(next).toMatchObject({ status: "failed", lastErrorCode: PUBLISH_UNCONFIRMED_ERROR_CODE });
+
+    // THE assertion of this door: the row the reaper leaves behind offers no
+    // "Chạy lại" — in the job log or in the API.
+    expect(canOperatorRetryPostJob(next)).toBe(false);
+
+    const message = next.lastErrorMessage ?? "";
+    expect(message).toContain("bài đã lên lịch");
+    expect(message).not.toContain("kiểm tra trên kênh");
+    expect(repo.transitions[0].auditPayload).toMatchObject({ was_scheduled: true });
   });
 
   it("leaves a job that finished during the sweep alone", async () => {

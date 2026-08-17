@@ -47,8 +47,13 @@ export type PostBatchStatus = z.infer<typeof PostBatchStatusSchema>;
 export const PostFormatSchema = z.enum(["image_post", "video_post", "reels"]);
 export type PostFormat = z.infer<typeof PostFormatSchema>;
 
-/** Statuses the operator may re-run by hand — mirrors RETRYABLE_POST_JOB_STATUSES. */
-export const RETRYABLE_POST_JOB_STATUSES: readonly PostJobStatus[] = ["failed", "blocked"];
+/**
+ * There is deliberately NO "retryable statuses" list here. The status alone has
+ * not decided that since E8.6: a `failed` job the platform may hold a post for
+ * is refused too, and only the server knows (the API sends `canRetry` per row).
+ * A screen that drew the button from a status list would re-open exactly the
+ * duplicate door that guard closed.
+ */
 
 /**
  * Nothing is running any more — mirrors SETTLED_POST_JOB_STATUSES.

@@ -738,8 +738,8 @@ interface ValidatedImagePost {
 
 /**
  * The gate both image paths share: a Facebook channel with a Page id, 1..10
- * photos and a non-empty caption. Same errors as before it was extracted — the
- * immediate path is the one that has run on a real Page and must not change.
+ * photos and a non-empty caption. Same error CODES the immediate path has always
+ * raised, with two flags added to their context.
  *
  * These are THE pre-flight guards the scheduled path's contract names (see
  * makeFacebookScheduledPublisher): they run before a single byte leaves this
@@ -747,8 +747,13 @@ interface ValidatedImagePost {
  * off, the caller has to assume a scheduled post may exist and tells the
  * operator to go hunt for one on the Page — for a post that provably was never
  * sent anywhere, while dropping a job that could still have gone out at its
- * hour. `retryable: false` for the same reason in the other direction: no
- * backoff invents a caption, a Page id, or the 11th photo out of an album.
+ * hour.
+ *
+ * `retryable: false` for the same reason in the other direction: no backoff
+ * invents a caption, a Page id, or the 11th photo out of an album. It DOES
+ * change the immediate path, deliberately: such a job now fails on attempt 1
+ * instead of burning `maxAttempts` retries and the minutes between them on an
+ * input that cannot become valid on its own.
  */
 function assertImagePost(input: PublishImagePostInput): ValidatedImagePost {
   const channel = input?.channel;

@@ -7,6 +7,7 @@ import {
   type VideoTarget as SpecVideoTarget,
 } from "@/core/domain/video-spec";
 import {
+  canOperatorRetryPostJob,
   deferredPostJobQueueId,
   HANDOFF_DEADLINE_MS,
   HANDOFF_FAILED_ERROR_CODE,
@@ -1130,23 +1131,46 @@ async function handOffToPlatform(
     },
   );
   if (!scheduledOnPlatform) {
-    // Facebook HOLDS the post but the row moved under us. Never silent: nothing
-    // must republish it, and a human has to reconcile.
+    // Facebook HOLDS the post but the row moved under us — in practice the
+    // reaper, which is the only other writer of a `publishing` row and can fire
+    // while a 10-photo album is still uploading (DEFAULT_PUBLISHING_STALE_MS).
+    // Never silent: nothing must republish it, and a human has to reconcile.
+    //
+    // The id cannot be stored on the row (that row is somebody else's now), so
+    // the LOG is the only place it survives — hence the re-read below, which
+    // puts "what the row says now" next to "what Facebook is holding" in one
+    // line. The re-run button on that row is refused by the code the reaper
+    // wrote (PUBLISH_UNCONFIRMED, see reap-post-jobs).
+    const current = await deps.postJobs
+      .findJobById(job.tenantId, job.id)
+      .catch((error: unknown) => {
+        log.warn("Could not re-read the row that won the race", {
+          err: AppError.from(error, "DB_ERROR", { tenant_id: job.tenantId, job_id: job.id }),
+        });
+        return null;
+      });
     const appError = new AppError("INTERNAL", {
       message: "Post handed to the platform but the job row was no longer in 'publishing'",
       userMessage:
-        "Facebook đã nhận lịch đăng nhưng hệ thống không ghi được trạng thái — cần kiểm tra trên Page.",
+        "Facebook đã nhận lịch đăng nhưng hệ thống không ghi được trạng thái — hãy mở Trang, " +
+        "vào mục bài đã lên lịch để kiểm tra; KHÔNG chạy lại bài này.",
       context: {
         tenant_id: job.tenantId,
         job_id: job.id,
         channel: job.channelId,
         scheduled_post_id: handed.scheduledPostId,
         scheduled_at: scheduledAt.toISOString(),
+        row_status_now: current?.status ?? null,
+        row_error_code_now: current?.lastErrorCode ?? null,
       },
     });
     log.error("Handed off but could not store the state", {
       err: appError,
       error_code: "INTERNAL",
+      scheduled_post_id: handed.scheduledPostId,
+      row_status_now: current?.status ?? null,
+      row_error_code_now: current?.lastErrorCode ?? null,
+      operator_retry_allowed: current ? canOperatorRetryPostJob(current) : null,
       alert: "OPERATOR_ATTENTION",
     });
     throw appError;
@@ -1238,6 +1262,10 @@ async function handleHandoffError(
   // retryable status) with a message that never mentions the post that may be
   // sitting on the Page. A dead token found BEFORE the dispatch still blocks:
   // that path carries platform_created_nothing and falls through below.
+  // The second clause is NOT redundant: the port requires exactly one of the two
+  // flags, and a publisher that sets BOTH is contradicting itself. Reading that
+  // as "nothing was created" would be the one mistake with a post on the Page at
+  // the end of it, so the dispatch flag wins.
   if (!createdNothing || flags.feed_dispatched === true) {
     return await failUnconfirmedHandoff(deps, log, job, appError, ctx);
   }
@@ -1344,7 +1372,21 @@ async function failUnconfirmedHandoff(
   appError: AppError,
   ctx: { attempt: number; durationMs: number; scheduledAt: Date },
 ): Promise<never> {
-  const feedDispatched = (appError.context as { feed_dispatched?: unknown }).feed_dispatched === true;
+  const flags = appError.context as {
+    feed_dispatched?: unknown;
+    platform_created_nothing?: unknown;
+  };
+  const feedDispatched = flags.feed_dispatched === true;
+  // What the publisher actually told us, not what we assumed. "none" is the
+  // line to grep for when a publisher forgets the port contract: it means this
+  // job was stopped on the fail-closed default, not on evidence.
+  const handoffEvidence = feedDispatched
+    ? flags.platform_created_nothing === true
+      ? "contradictory"
+      : "feed_dispatched"
+    : flags.platform_created_nothing === true
+      ? "platform_created_nothing"
+      : "none";
   const userMessage =
     `Không xác nhận được kết quả giao lịch cho Facebook (${appError.userMessage}) — ` +
     "bài hẹn CÓ THỂ đã được tạo trên Trang. Hệ thống dừng lại và KHÔNG tự đăng lại để tránh đăng trùng: " +
@@ -1367,9 +1409,13 @@ async function failUnconfirmedHandoff(
     outcome: "failed",
     error_code: HANDOFF_FAILED_ERROR_CODE,
     original_code: appError.code,
-    // The two facts that answer "vì sao bài này không lên" without a debugger.
+    // The facts that answer "vì sao bài này không lên" without a debugger. The
+    // flags are logged AS RECEIVED — a hardcoded `platform_created_nothing:
+    // false` would read as "the publisher said a post may exist" even when it
+    // said nothing at all.
     feed_dispatched: feedDispatched,
-    platform_created_nothing: false,
+    platform_created_nothing: flags.platform_created_nothing === true,
+    handoff_evidence: handoffEvidence,
     attempt: ctx.attempt,
     duration_ms: ctx.durationMs,
     scheduled_at: ctx.scheduledAt.toISOString(),
@@ -1543,7 +1589,10 @@ async function handlePublishError(
     job,
     "failed",
     {
-      reason: retryable ? "RETRIES_EXHAUSTED" : "NON_RETRYABLE_PLATFORM_ERROR",
+      // Not "PLATFORM_ERROR": `retryable: false` is also what our OWN pre-flight
+      // guards raise (no caption, 11 photos, a channel without a Page id), and
+      // calling those a platform error sends the reader to Facebook's logs.
+      reason: retryable ? "RETRIES_EXHAUSTED" : "NON_RETRYABLE_ERROR",
       errorCode: "PUBLISH_FAILED",
       errorMessage: `${finalError.userMessage} (${appError.userMessage})`,
     },

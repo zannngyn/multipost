@@ -25,7 +25,10 @@ import {
   postJobDuplicateKey,
   postJobOperatorMessage,
   postJobQueueId,
+  PUBLISH_UNCONFIRMED_ERROR_CODE,
+  SCHEDULE_UNCONFIRMED_ERROR_CODE,
   transitionPostJob,
+  unconfirmedPlatformPostReason,
   type PostJob,
   type PostJobStatus,
 } from "./post-job";
@@ -647,13 +650,125 @@ describe("mayHoldUnconfirmedScheduledPost / canOperatorRetryPostJob", () => {
     );
   });
 
-  it("stays narrow: only `failed` + that one code", () => {
+  it("stays narrow: `failed`, and only these codes without an id", () => {
     expect(mayHoldUnconfirmedScheduledPost({ ...unconfirmed, status: "blocked" })).toBe(false);
     expect(
       mayHoldUnconfirmedScheduledPost({ ...unconfirmed, lastErrorCode: "PUBLISH_FAILED" }),
     ).toBe(false);
     expect(mayHoldUnconfirmedScheduledPost({ ...unconfirmed, lastErrorCode: null })).toBe(false);
     expect(mayHoldUnconfirmedScheduledPost(null)).toBe(false);
+  });
+
+  /**
+   * DOOR 1 — the reconciliation sweep gives up on a handed-over post and marks
+   * the row `failed` + SCHEDULE_UNCONFIRMED. `transitionPostJob` KEEPS
+   * `scheduledPostId`, so that row names a post Facebook really created: this is
+   * stronger evidence than HANDOFF_FAILED, where we only suspect one.
+   */
+  it("refuses a row the platform left an id on (reconciler gave up)", () => {
+    const gaveUp = makeJob({
+      status: "failed",
+      lastErrorCode: SCHEDULE_UNCONFIRMED_ERROR_CODE,
+      scheduledPostId: "1000000000_2000000000",
+      scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+    });
+    expect(unconfirmedPlatformPostReason(gaveUp)).toBe("PLATFORM_HOLDS_SCHEDULED_POST");
+    expect(canOperatorRetryPostJob(gaveUp)).toBe(false);
+
+    // Even with the id scrubbed by hand, the CODE alone still refuses.
+    expect(canOperatorRetryPostJob({ ...gaveUp, scheduledPostId: null })).toBe(false);
+    expect(unconfirmedPlatformPostReason({ ...gaveUp, scheduledPostId: null })).toBe(
+      "SCHEDULE_UNCONFIRMED",
+    );
+    // And an id with nothing but spaces is not an id.
+    expect(canOperatorRetryPostJob({ ...gaveUp, lastErrorCode: "PUBLISH_FAILED", scheduledPostId: "   " })).toBe(
+      true,
+    );
+  });
+
+  /**
+   * DOORS 2 & 3 — the reaper stops a SCHEDULED job that died in `publishing`.
+   * The creating request may already have been dispatched, and whatever it
+   * created (a live post, or one waiting for its hour) is not something the
+   * operator can rule out by glancing at the feed.
+   */
+  it("refuses a scheduled job the reaper stopped mid-publish", () => {
+    const reaped = makeJob({
+      status: "failed",
+      lastErrorCode: PUBLISH_UNCONFIRMED_ERROR_CODE,
+      scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+    });
+    expect(unconfirmedPlatformPostReason(reaped)).toBe("PUBLISH_OUTCOME_UNKNOWN");
+    expect(canOperatorRetryPostJob(reaped)).toBe(false);
+  });
+
+  /**
+   * The one case that MUST stay retryable: a cancel that Facebook confirmed
+   * leaves `blocked` (cancel-scheduled-job), never `failed` — so "huỷ rồi đổi ý"
+   * is still one click away, id or no id.
+   */
+  it("keeps a cancelled scheduled job retryable, id and all", () => {
+    const cancelled = makeJob({
+      status: "blocked",
+      lastErrorCode: "OPERATOR_CANCELLED",
+      scheduledPostId: "1000000000_2000000000",
+      scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+    });
+    expect(unconfirmedPlatformPostReason(cancelled)).toBeNull();
+    expect(canOperatorRetryPostJob(cancelled)).toBe(true);
+  });
+
+  /**
+   * ...and it must STAY retryable one step further. A confirmed cancel drops the
+   * id (`clearScheduledPostId`), so when the re-run later fails for an ordinary
+   * reason the row does not inherit a dead id and get refused as a duplicate.
+   */
+  it("drops the platform id on a confirmed cancel, and only then", () => {
+    const handedOver = makeJob({
+      status: "scheduled_on_facebook",
+      scheduledPostId: "1000000000_2000000000",
+      scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+    });
+    const cancelled = transitionPostJob(handedOver, "blocked", {
+      reason: "OPERATOR_CANCELLED",
+      errorCode: "OPERATOR_CANCELLED",
+      errorMessage: "Đã gỡ bài đã hẹn khỏi Facebook.",
+      clearScheduledPostId: true,
+    });
+    expect(cancelled.scheduledPostId).toBeNull();
+
+    // Re-queued by the operator, then a plain publish failure later on.
+    const requeued = transitionPostJob(cancelled, "queued", { reason: "OPERATOR_RETRY" });
+    const failedAgain = transitionPostJob(
+      transitionPostJob(requeued, "publishing", { reason: "CLAIMED" }),
+      "failed",
+      { reason: "RETRIES_EXHAUSTED", errorCode: "PUBLISH_FAILED" },
+    );
+    expect(canOperatorRetryPostJob(failedAgain)).toBe(true);
+
+    // Without the flag the id survives — that is the default for every other
+    // caller, and what keeps door 1 shut.
+    expect(
+      transitionPostJob(handedOver, "failed", {
+        reason: "STILL_SCHEDULED",
+        errorCode: SCHEDULE_UNCONFIRMED_ERROR_CODE,
+      }).scheduledPostId,
+    ).toBe("1000000000_2000000000");
+  });
+
+  it("keeps the platform post id when a handed-over job stops (the whole basis of door 1)", () => {
+    const handedOver = makeJob({
+      status: "scheduled_on_facebook",
+      scheduledPostId: "1000000000_2000000000",
+      scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+    });
+    const failed = transitionPostJob(handedOver, "failed", {
+      reason: "STILL_SCHEDULED",
+      errorCode: SCHEDULE_UNCONFIRMED_ERROR_CODE,
+      errorMessage: "Không xác nhận được bài đã hẹn.",
+    });
+    expect(failed.scheduledPostId).toBe("1000000000_2000000000");
+    expect(canOperatorRetryPostJob(failed)).toBe(false);
   });
 
   it("keeps every ordinary failed/blocked job retryable", () => {

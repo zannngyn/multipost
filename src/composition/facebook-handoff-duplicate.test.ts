@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { deriveBatchStatus, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
+import {
+  deriveBatchStatus,
+  transitionPostJob,
+  type PostJob,
+  type PostJobStatus,
+} from "@/core/domain/post-job";
 import type { Product } from "@/core/domain/product";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
@@ -10,6 +15,11 @@ import type { ChannelConfig, ChannelConfigRepo, SignMediaUrlFn } from "@/core/po
 import { channelWriteStubs } from "@/core/usecases/__fixtures__/channel-config-repo";
 import { makeListPostJobs } from "@/core/usecases/list-post-jobs";
 import { makePublishPost } from "@/core/usecases/publish-post";
+import {
+  PUBLISH_UNCONFIRMED_ERROR_CODE,
+  STALE_SCHEDULED_PUBLISHING_REASON,
+} from "@/core/usecases/reap-post-jobs";
+import { SCHEDULE_UNCONFIRMED_ERROR_CODE } from "@/core/usecases/reconcile-scheduled-posts";
 import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import { makeRetryPostJob } from "@/core/usecases/retry-post-job";
 
@@ -497,5 +507,147 @@ describe("operator retry — a job that may hold a scheduled post is refused at 
 
     expect(result.status).toBe("queued");
     expect(h.queue.enqueued).toHaveLength(1);
+  });
+});
+
+/**
+ * The other three doors of the same shape, found by the gate after the handoff
+ * one was closed. Each one produces a `failed` row that an operator could
+ * re-run while Facebook holds — or may hold — the post:
+ *
+ *   1. the reconciliation sweep gives up: `failed` + SCHEDULE_UNCONFIRMED, and
+ *      the row STILL CARRIES the id of a post Facebook really created;
+ *   2. the reaper stops a scheduled job stuck in `publishing`, which is exactly
+ *      what a worker killed after /feed leaves behind;
+ *   3. the handoff succeeds but the row moved under us (the reaper fired while a
+ *      10-photo album was uploading) — Facebook holds the post, our row says
+ *      `failed`.
+ *
+ * Checked here, with the REAL Graph adapter wired in, because the proof is
+ * negative: the mocked `fetch` is never touched, i.e. not one byte reached
+ * Facebook on any road out of those rows.
+ */
+describe("the three remaining doors — no re-run for a row the platform may hold a post for", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** DOOR 1 — the row `giveUp` in reconcile-scheduled-posts leaves behind. */
+  function reconcilerGaveUp(scheduledAt: Date): PostJob {
+    return makeJob({
+      status: "failed",
+      attemptCount: 1,
+      lastErrorCode: SCHEDULE_UNCONFIRMED_ERROR_CODE,
+      lastErrorMessage:
+        "Không xác nhận được bài đã hẹn trên Facebook sau nhiều lần kiểm tra (mã bài 555000111_HELD) — " +
+        "bài CÓ THỂ vẫn nằm trên Trang.",
+      // The id of a post Facebook accepted: this row is not a suspicion.
+      scheduledPostId: "555000111_HELD",
+      scheduledAt,
+      queueJobId: null,
+    });
+  }
+
+  /** DOOR 2 — the row the reaper leaves on a SCHEDULED job stuck in publishing. */
+  function reaperStoppedScheduled(scheduledAt: Date): PostJob {
+    return transitionPostJob(
+      makeJob({ status: "publishing", attemptCount: 1, scheduledAt, queueJobId: null }),
+      "failed",
+      {
+        reason: STALE_SCHEDULED_PUBLISHING_REASON,
+        errorCode: PUBLISH_UNCONFIRMED_ERROR_CODE,
+        errorMessage:
+          "Bài hẹn giờ bị kẹt ở trạng thái đang đăng (worker dừng giữa chừng) — " +
+          "Facebook CÓ THỂ đã nhận bài này.",
+      },
+    );
+  }
+
+  it.each([
+    ["DOOR 1 (reconciler gave up, id in hand)", reconcilerGaveUp],
+    ["DOOR 2 (reaper stopped a scheduled job mid-publish)", reaperStoppedScheduled],
+  ])("%s: the button is dark, the API refuses, Facebook is never called", async (_label, row) => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      calls.push(String(url));
+      return jsonResponse({ id: "555000111_SECOND" });
+    });
+    // The hour is already inside the handoff window, i.e. the most dangerous
+    // moment: a re-queue here asks Facebook for a SECOND scheduled post.
+    const h = harness(fetchImpl as unknown as typeof fetch, row(new Date(NOW + 20 * 60_000)));
+
+    const log = await h.listJobs({ tenantId: TENANT });
+    expect(log.items[0]).toMatchObject({ status: "failed", canRetry: false });
+
+    await expect(h.retry({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "DUPLICATE_POST_BLOCKED",
+    });
+
+    expect(h.queue.enqueued).toHaveLength(0);
+    expect(h.repo.get("job-1")?.status).toBe("failed");
+    expect(calls).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  /**
+   * DOOR 3, played out for real: the reaper marks the row `failed` WHILE the
+   * album is still uploading (15' stale window vs. a slow 10-photo album), then
+   * /feed succeeds and Facebook is holding a post our row knows nothing about.
+   */
+  it("DOOR 3: a handoff that wins on Facebook but loses the row still refuses the re-run", async () => {
+    let repo: ReturnType<typeof makeMemoryRepo> | null = null;
+    const calls: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      const path = String(url);
+      if (path.includes("/photos")) {
+        calls.push("photos");
+        // The reaper fires mid-upload, exactly as it would at 15 minutes.
+        const current = repo?.get("job-1");
+        if (current && current.status === "publishing") {
+          repo?.force(
+            transitionPostJob(current, "failed", {
+              reason: STALE_SCHEDULED_PUBLISHING_REASON,
+              errorCode: PUBLISH_UNCONFIRMED_ERROR_CODE,
+              errorMessage: "Bài hẹn giờ bị kẹt ở trạng thái đang đăng (worker dừng giữa chừng).",
+            }),
+          );
+        }
+        return jsonResponse({ id: "photo-1" });
+      }
+      calls.push("feed");
+      // Facebook accepted the schedule. The post EXISTS from here on.
+      return jsonResponse({ id: "555000111_HELD" });
+    });
+
+    const h = harness(fetchImpl as unknown as typeof fetch);
+    repo = h.repo;
+
+    // The worker run ends loudly: it may not pretend the handoff never happened.
+    const error = await h.publish({ tenantId: TENANT, postJobId: "job-1" }).then(
+      () => null,
+      (caught: unknown) => caught as { code: string; context?: Record<string, unknown> },
+    );
+    expect(error?.code).toBe("INTERNAL");
+    expect(error?.context).toMatchObject({
+      scheduled_post_id: "555000111_HELD",
+      row_status_now: "failed",
+      row_error_code_now: PUBLISH_UNCONFIRMED_ERROR_CODE,
+    });
+    expect(calls).toEqual(["photos", "feed"]);
+
+    // And the row the reaper left behind offers no way back into the queue.
+    const log = await h.listJobs({ tenantId: TENANT });
+    expect(log.items[0]).toMatchObject({ status: "failed", canRetry: false });
+    await expect(h.retry({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "DUPLICATE_POST_BLOCKED",
+      context: { reason: "PUBLISH_OUTCOME_UNKNOWN" },
+    });
+    expect(h.queue.enqueued).toHaveLength(0);
+    // Nothing more was sent: the two calls above are still the only ones.
+    expect(calls).toEqual(["photos", "feed"]);
   });
 });

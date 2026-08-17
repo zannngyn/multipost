@@ -2,6 +2,7 @@ import { AppError } from "@/core/domain/errors";
 import {
   deferredPostJobQueueId,
   HANDOFF_WINDOW_START_MS,
+  PUBLISH_UNCONFIRMED_ERROR_CODE,
   transitionPostJob,
   type PostJob,
 } from "@/core/domain/post-job";
@@ -20,9 +21,12 @@ import { PUBLISH_POST_JOB_NAME } from "./publish-post";
  *      The row is claimed, so no retry, no timeout and no operator screen will
  *      ever move it. The reaper marks it `failed` — it does NOT republish:
  *      whether Facebook got the post is unknowable from here, and a second
- *      publish is the worst bug this tool can have (business rule 4). A human
- *      presses "Chạy lại" after checking the Page; that retry goes through the
- *      stock recheck like any other.
+ *      publish is the worst bug this tool can have (business rule 4). For an
+ *      IMMEDIATE post a human presses "Chạy lại" after checking the Page (that
+ *      retry goes through the stock recheck like any other); for a SCHEDULED one
+ *      the row is marked PUBLISH_UNCONFIRMED and the button is refused, because
+ *      the post it may have created does not appear in the feed the operator
+ *      would check.
  *
  *   b) OVERDUE `queued` WITH NO QUEUE ENTRY: the schedule passed but Redis has
  *      nothing to fire — a lost/evicted entry, a failed reschedule cleanup, a
@@ -49,6 +53,20 @@ export const DEFAULT_REAP_LIMIT = 50;
 
 export const STALE_PUBLISHING_ERROR_CODE = "PUBLISH_FAILED";
 export const STALE_PUBLISHING_REASON = "PUBLISHING_STALE";
+
+/**
+ * Same accident, SCHEDULED job: the code that also refuses the "Chạy lại" button
+ * (core/domain/post-job → unconfirmedPlatformPostReason). Re-exported from the
+ * domain so the row, the retry usecase and the job log read one constant.
+ *
+ * Why a scheduled job is not the same accident at all: the typical way a
+ * scheduled job dies in `publishing` is a worker killed AFTER /feed was
+ * dispatched, so Facebook may be holding the post — and unlike an immediate
+ * post, that post is NOT in the feed. An operator told to "check the channel"
+ * sees an empty feed, presses Chạy lại, and gets the double post at the hour.
+ */
+export { PUBLISH_UNCONFIRMED_ERROR_CODE };
+export const STALE_SCHEDULED_PUBLISHING_REASON = "PUBLISHING_STALE_SCHEDULED";
 
 export interface ReapPostJobsInput {
   /** Overrides for one run (tests, manual sweep). Defaults above otherwise. */
@@ -164,12 +182,20 @@ async function failStalePublishing(
     channel: job.channelId,
   });
 
-  const userMessage =
-    "Bài kẹt ở trạng thái đang đăng quá lâu (worker dừng giữa chừng) — hãy kiểm tra trên kênh rồi bấm Chạy lại nếu bài chưa lên.";
+  // A scheduled job leaves no trace an operator can check in the feed, so it
+  // gets its own code (retry refused) and its own instruction.
+  const wasScheduled = job.scheduledAt instanceof Date;
+  const errorCode = wasScheduled ? PUBLISH_UNCONFIRMED_ERROR_CODE : STALE_PUBLISHING_ERROR_CODE;
+  const reason = wasScheduled ? STALE_SCHEDULED_PUBLISHING_REASON : STALE_PUBLISHING_REASON;
+  const userMessage = wasScheduled
+    ? "Bài hẹn giờ bị kẹt ở trạng thái đang đăng (worker dừng giữa chừng) — Facebook CÓ THỂ đã nhận bài này. " +
+      "Hệ thống KHÔNG tự đăng lại và đã khoá nút Chạy lại để tránh đăng trùng: hãy mở Trang, xem cả bài đã đăng " +
+      "lẫn mục bài đã lên lịch; nếu không thấy bài nào thì soạn lại bài mới."
+    : "Bài kẹt ở trạng thái đang đăng quá lâu (worker dừng giữa chừng) — hãy mở Trang xem bài đã lên chưa rồi mới bấm Chạy lại.";
   try {
     const next = transitionPostJob(job, "failed", {
-      reason: STALE_PUBLISHING_REASON,
-      errorCode: STALE_PUBLISHING_ERROR_CODE,
+      reason,
+      errorCode,
       errorMessage: userMessage,
     });
     const failed = await deps.postJobs.applyTransition({
@@ -177,11 +203,13 @@ async function failStalePublishing(
       postJobId: job.id,
       from: "publishing",
       next,
-      reason: STALE_PUBLISHING_REASON,
+      reason,
       auditAction: REAPER_FAILED_AUDIT_ACTION,
       auditPayload: {
         stale_after_ms: staleMs,
         attempt_count: job.attemptCount,
+        was_scheduled: wasScheduled,
+        scheduled_at: job.scheduledAt?.toISOString() ?? null,
         // Says out loud what the reaper does NOT know.
         note: "Reaper cannot tell whether the platform received this post; it never republishes.",
       },
@@ -203,14 +231,18 @@ async function failStalePublishing(
     });
 
     log.error("Reaped a job stuck in `publishing` — marked failed, NOT republished", {
-      error_code: STALE_PUBLISHING_ERROR_CODE,
-      reason: STALE_PUBLISHING_REASON,
+      error_code: errorCode,
+      reason,
       stale_after_ms: staleMs,
       attempt_count: job.attemptCount,
+      was_scheduled: wasScheduled,
+      scheduled_at: job.scheduledAt?.toISOString() ?? null,
+      // The operator screen must not offer a re-run for a scheduled one.
+      operator_retry_allowed: !wasScheduled,
       audit_action: REAPER_FAILED_AUDIT_ACTION,
       alert: "OPERATOR_ATTENTION",
     });
-    return reaped(job, "failed", STALE_PUBLISHING_REASON);
+    return reaped(job, "failed", reason);
   } catch (error) {
     // One bad row must not end the sweep: log it and let the next tick retry.
     log.error("Could not reap a stale publishing job", {

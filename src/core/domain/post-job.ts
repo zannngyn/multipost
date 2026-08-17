@@ -176,6 +176,13 @@ export interface TransitionMeta {
   /** Required when moving to `scheduled_on_facebook` (see PostJob). */
   readonly scheduledPostId?: string | null;
   /**
+   * Drops `scheduledPostId` while stopping a job. For the ONE caller that can
+   * honestly say the object is gone: a cancel the platform CONFIRMED. Everything
+   * else keeps the id, because it is the trace of a post that may still exist —
+   * and the reason a re-run of that row is refused.
+   */
+  readonly clearScheduledPostId?: boolean;
+  /**
    * Queue entry that will carry this job. Set it in the SAME transition that
    * moves a job to `queued`, so the id is stored atomically with the state —
    * a `queued` row whose queue id was never written cannot be cancelled.
@@ -216,33 +223,112 @@ export function isRetryablePostJobStatus(status: PostJobStatus): boolean {
 export const HANDOFF_FAILED_ERROR_CODE = "HANDOFF_FAILED";
 
 /**
- * True when the platform MAY already be holding a scheduled post for this job.
+ * The reconciliation sweep asked Facebook about a handed-over post until the
+ * give-up horizon and never got an answer it could believe (see
+ * core/usecases/reconcile-scheduled-posts). The row keeps `scheduledPostId`, so
+ * this is the case where a scheduled post is not merely possible: we hold its id.
+ */
+export const SCHEDULE_UNCONFIRMED_ERROR_CODE = "SCHEDULE_UNCONFIRMED";
+
+/**
+ * The reaper found a SCHEDULED job stuck in `publishing` (see
+ * core/usecases/reap-post-jobs): a worker died between the claim and the answer,
+ * with the creating request possibly already dispatched. Its own code, separate
+ * from the reaper's plain PUBLISH_FAILED, because for a scheduled job the
+ * evidence is invisible in the feed — the post, if it exists, sits in the Page's
+ * *scheduled* posts — and a plain PUBLISH_FAILED is a row an operator may re-run.
+ */
+export const PUBLISH_UNCONFIRMED_ERROR_CODE = "PUBLISH_UNCONFIRMED";
+
+/**
+ * Why a `failed` row may correspond to a post on the platform. Ordered from the
+ * strongest evidence (we hold the id) to the weakest (a request was dispatched
+ * and nobody heard back).
+ */
+export const UNCONFIRMED_PLATFORM_POST_REASONS = [
+  /** The row carries the id of an object the platform created for this job. */
+  "PLATFORM_HOLDS_SCHEDULED_POST",
+  /** The handoff call ended without a verdict (HANDOFF_FAILED). */
+  "HANDOFF_OUTCOME_UNKNOWN",
+  /** The sweep gave up confirming a handed-over post (SCHEDULE_UNCONFIRMED). */
+  "SCHEDULE_UNCONFIRMED",
+  /** A scheduled job died mid-publish and was reaped (PUBLISH_UNCONFIRMED). */
+  "PUBLISH_OUTCOME_UNKNOWN",
+] as const;
+export type UnconfirmedPlatformPostReason = (typeof UNCONFIRMED_PLATFORM_POST_REASONS)[number];
+
+/**
+ * THE row-level half of business rule 4: why this `failed` job must not go back
+ * into the publish flow — or null when nothing suggests a post exists.
  *
  * Nothing may move such a row back into the publish flow. Every road out of
  * `queued` ends on the Page: inside T-30..T-12 another handoff asks for a SECOND
  * scheduled post, between T-12 and T the job waits and then publishes at T, and
  * after T it publishes immediately — each one lands next to whatever the first
- * handoff left behind (business rule 4).
+ * attempt left behind.
  *
- * `scheduledAt` is deliberately NOT part of the condition. Only a scheduled job
- * can ever carry this code, so requiring the column would add nothing — but it
- * would silently disable the guard for a row whose hour went missing, and this
- * predicate must fail closed.
+ * FOUR ways a row gets here, and they must all answer the same, because the
+ * operator-facing difference between them is only which sentence to print:
+ *
+ *   a) `scheduledPostId` present. `transitionPostJob` keeps that column when a
+ *      job moves to `failed`, on purpose: the id is the proof the platform
+ *      created something. It is checked FIRST and needs no error code, so a code
+ *      nobody thought of still fails closed.
+ *   b) HANDOFF_FAILED — the handoff call gave no verdict.
+ *   c) SCHEDULE_UNCONFIRMED — the sweep gave up (and the row also matches (a),
+ *      which is why (a) alone would already be enough; the code stays listed so
+ *      the guard survives a row whose id was cleared by hand).
+ *   d) PUBLISH_UNCONFIRMED — a scheduled job was reaped out of `publishing`.
+ *
+ * `scheduledAt` is deliberately NOT part of any condition: it would silently
+ * disable the guard for a row whose hour went missing, and this predicate must
+ * fail closed.
+ *
+ * A successful CANCEL is not here and must not be: it leaves `blocked` (only
+ * after Facebook confirmed it no longer holds the post), so "huỷ rồi đổi ý" is
+ * still one click away.
  */
+export function unconfirmedPlatformPostReason(
+  job:
+    | Pick<PostJob, "status" | "lastErrorCode" | "scheduledPostId">
+    | null
+    | undefined,
+): UnconfirmedPlatformPostReason | null {
+  if (!job || job.status !== "failed") return null;
+  if (normaliseString(job.scheduledPostId) !== null) return "PLATFORM_HOLDS_SCHEDULED_POST";
+  switch (normaliseString(job.lastErrorCode)) {
+    case HANDOFF_FAILED_ERROR_CODE:
+      return "HANDOFF_OUTCOME_UNKNOWN";
+    case SCHEDULE_UNCONFIRMED_ERROR_CODE:
+      return "SCHEDULE_UNCONFIRMED";
+    case PUBLISH_UNCONFIRMED_ERROR_CODE:
+      return "PUBLISH_OUTCOME_UNKNOWN";
+    default:
+      return null;
+  }
+}
+
+/** True when the platform MAY already be holding a post for this job. */
 export function mayHoldUnconfirmedScheduledPost(
-  job: Pick<PostJob, "status" | "lastErrorCode"> | null | undefined,
+  job:
+    | Pick<PostJob, "status" | "lastErrorCode" | "scheduledPostId">
+    | null
+    | undefined,
 ): boolean {
-  if (!job || job.status !== "failed") return false;
-  return normaliseString(job.lastErrorCode) === HANDOFF_FAILED_ERROR_CODE;
+  return unconfirmedPlatformPostReason(job) !== null;
 }
 
 /**
  * The single answer to "may an operator press Chạy lại on this row?" — used by
  * the job log (to not draw the button) and by the retry usecase (to refuse it).
- * One function so the screen and the rule can never disagree.
+ * One function so the screen and the rule can never disagree; a new refusal
+ * belongs INSIDE it, never next to it.
  */
 export function canOperatorRetryPostJob(
-  job: Pick<PostJob, "status" | "lastErrorCode">,
+  job:
+    | Pick<PostJob, "status" | "lastErrorCode" | "scheduledPostId">
+    | null
+    | undefined,
 ): boolean {
   if (!job || !isPostJobStatus(job.status)) return false;
   return isRetryablePostJobStatus(job.status) && !mayHoldUnconfirmedScheduledPost(job);
@@ -365,6 +451,16 @@ export function transitionPostJob(
       lastErrorMessage: normaliseString(meta.errorMessage),
       // A stopped job owns no queue entry (the caller removes it).
       queueJobId: null,
+      // `scheduledPostId` is KEPT by default. A job that stops after the
+      // platform accepted a schedule still has a post on the Page, and that id
+      // is the only trace of it: clearing it would erase the very fact
+      // `unconfirmedPlatformPostReason` reads to refuse a re-run, and leave the
+      // operator with no id to search for.
+      //
+      // The exception is a CONFIRMED cancel: the object is gone, and keeping a
+      // dead id would refuse the re-run of a job that has nothing on the Page
+      // (cancel -> retry -> ordinary failure would otherwise carry it forever).
+      scheduledPostId: meta.clearScheduledPostId === true ? null : job.scheduledPostId,
     };
   }
 
