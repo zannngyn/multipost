@@ -26,4 +26,21 @@ describe("NON_RETRYABLE_CODES", () => {
       expect(NON_RETRYABLE_CODES.has(code)).toBe(false);
     },
   );
+
+  /**
+   * Its own test because this entry is what actually stops a duplicate post.
+   *
+   * When a create request is dispatched and its answer never arrives, the
+   * usecase fails the job rather than guessing — but the usecase only owns the
+   * ROW. What stops the queue from backing off and sending a second create is
+   * this code being here: without it BullMQ retries, the handler runs again,
+   * and the job that was stopped precisely because a post might already exist
+   * goes and makes another one.
+   *
+   * Deleting the entry would leave every other test in the suite green, which
+   * is why it is pinned on its own with the reason written down.
+   */
+  it("fails PUBLISH_FAILED immediately — the queue must not resend a create request", () => {
+    expect(NON_RETRYABLE_CODES.has("PUBLISH_FAILED")).toBe(true);
+  });
 });
