@@ -70,19 +70,21 @@ export function ChannelGroupPicker({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {groups.map((group) => {
         const checkedCount = group.channelIds.filter((id) => selected.has(id)).length;
         const allChecked = checkedCount === group.channelIds.length && checkedCount > 0;
 
         return (
-          <fieldset key={group.id} className="space-y-2 rounded-lg border p-3">
-            <legend className="px-1 text-sm font-medium">{group.name}</legend>
+          <fieldset key={group.id} className="flex flex-col gap-2">
+            <legend className="text-muted-foreground pb-1 text-xs">
+              {group.name} · {checkedCount}/{group.channelIds.length}
+            </legend>
 
-            <label className="flex items-center gap-2 text-sm font-medium">
+            <label className="flex cursor-pointer items-center gap-2.5 text-xs font-medium">
               <input
                 type="checkbox"
-                className="accent-primary size-4"
+                className="peer sr-only"
                 checked={allChecked}
                 // Partial selection must not look like "none" (a11y + honesty).
                 ref={(node) => {
@@ -91,21 +93,26 @@ export function ChannelGroupPicker({
                 disabled={disabled}
                 onChange={(event) => onToggleGroup(group.channelIds, event.target.checked)}
               />
-              Chọn cả nhóm ({checkedCount}/{group.channelIds.length})
+              <CheckBox />
+              Chọn cả nhóm
             </label>
 
-            <ul className="space-y-1 pl-6">
+            <ul className="flex flex-col gap-2">
               {group.channelIds.map((channelId) => (
                 <li key={channelId}>
-                  <label className="flex items-center gap-2 text-sm">
+                  <label className="bg-card border-border has-checked:border-primary has-checked:bg-accent/20 has-focus-visible:ring-ring/50 flex cursor-pointer items-center gap-2.5 rounded-xl border p-3 transition-colors has-focus-visible:ring-3">
                     <input
                       type="checkbox"
-                      className="accent-primary size-4"
+                      className="peer sr-only"
                       checked={selected.has(channelId)}
                       disabled={disabled}
                       onChange={(event) => onToggleChannel(channelId, event.target.checked)}
                     />
-                    <span className="font-mono text-xs break-all">{channelId}</span>
+                    <CheckBox />
+                    <span className="min-w-0 flex-1 font-mono text-xs break-all">{channelId}</span>
+                    <span className="bg-info/15 text-info-foreground shrink-0 rounded-full px-2 py-0.5 text-xs">
+                      Fanpage
+                    </span>
                   </label>
                 </li>
               ))}
@@ -114,5 +121,23 @@ export function ChannelGroupPicker({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * The drawn box for a `sr-only` checkbox that sits immediately before it.
+ * The native input keeps the role, the keyboard behaviour and — crucially for
+ * the group box — the indeterminate state, which no drawn box can announce.
+ */
+function CheckBox() {
+  return (
+    <span
+      aria-hidden="true"
+      className="border-input bg-card peer-checked:bg-primary peer-checked:border-primary peer-indeterminate:bg-primary/40 peer-indeterminate:border-primary text-primary-foreground peer-checked:[&>span]:inline flex size-4 shrink-0 items-center justify-center rounded-sm border-2 text-xs transition-colors"
+    >
+      {/* Written from the box's own rule: the tick is a descendant of the
+          peer's sibling, which `peer-checked:` alone would never reach. */}
+      <span className="hidden">✓</span>
+    </span>
   );
 }
