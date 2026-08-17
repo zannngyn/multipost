@@ -36,7 +36,6 @@ const EMPTY_RESULT = {
   scanned: 0,
   published: 0,
   waiting: 0,
-  blocked: 0,
   failed: 0,
   skipped: 0,
   jobs: [],

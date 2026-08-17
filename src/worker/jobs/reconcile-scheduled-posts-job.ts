@@ -75,7 +75,6 @@ export function makeReconcileScheduledPostsHandler(
         scanned: result.scanned,
         published: result.published,
         waiting: result.waiting,
-        blocked: result.blocked,
         failed: result.failed,
         skipped: result.skipped,
         duration_ms: result.durationMs,

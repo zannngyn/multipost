@@ -200,6 +200,8 @@ function harness(
     queueFails?: boolean;
     /** E8.6 — what Facebook says about the post it is holding. */
     remoteState?: RemotePostState;
+    /** The platform could not be ASKED at all (dead token, network). */
+    stateThrows?: unknown;
     deleteThrows?: unknown;
     deleteReturns?: boolean;
     channel?: ChannelConfig | null;
@@ -223,6 +225,7 @@ function harness(
         throw new Error("cancel must never schedule");
       },
       async getPostState(input) {
+        if (options.stateThrows) throw options.stateThrows;
         return (
           options.remoteState ?? { state: "scheduled" as const, postId: input.postId, publishAt: null }
         );
@@ -445,14 +448,52 @@ describe("cancelScheduledJob — a post Facebook is holding (E8.6)", () => {
 
   it("does NOT cancel the row when the platform refuses the deletion", async () => {
     const h = harness(handedOff(), {
-      deleteThrows: new AppError("META_ERROR", { message: "Graph said no" }),
+      deleteThrows: new AppError("META_ERROR", {
+        message: "Graph said no",
+        // What the Graph error map writes for a 5xx / rate limit. In a CANCEL it
+        // is a lie: nothing retries a cancel.
+        userMessage: "Máy chủ Facebook đang lỗi — hệ thống sẽ thử lại.",
+      }),
+    });
+
+    const error = await h
+      .cancelScheduledJob({ tenantId: TENANT, postJobId: JOB_ID })
+      .then(() => null)
+      .catch((thrown: unknown) => thrown as AppError);
+
+    expect(error?.code).toBe("META_ERROR");
+    // The ONE sentence this branch exists for.
+    expect(error?.userMessage).toContain("VẪN SẼ TỰ ĐĂNG");
+    expect(error?.userMessage).toContain("xoá thủ công");
+    // And never the publish-path promise of a retry that nobody makes.
+    expect(error?.userMessage).not.toContain("thử lại");
+
+    // The row still says "Facebook has it" — which is the truth.
+    expect(h.repo.transitions).toHaveLength(0);
+    expect(h.repo.get()?.status).toBe("scheduled_on_facebook");
+    // The dangerous branch must be loud, with the ids needed to find the post.
+    expect(
+      h.lines.some(
+        (line) =>
+          line.level === "error" &&
+          line.context?.alert === "OPERATOR_ATTENTION" &&
+          line.context?.reason === "PLATFORM_DELETE_FAILED",
+      ),
+    ).toBe(true);
+  });
+
+  it("does NOT cancel the row when the platform cannot even be asked", async () => {
+    const h = harness(handedOff(), {
+      stateThrows: new AppError("TOKEN_EXPIRED", { message: "token revoked" }),
     });
 
     await expect(
       h.cancelScheduledJob({ tenantId: TENANT, postJobId: JOB_ID }),
-    ).rejects.toMatchObject({ code: "META_ERROR" });
-
-    // The row still says "Facebook has it" — which is the truth.
+    ).rejects.toMatchObject({
+      code: "TOKEN_EXPIRED",
+      userMessage: expect.stringContaining("VẪN SẼ TỰ ĐĂNG"),
+    });
+    expect(h.deleted).toHaveLength(0);
     expect(h.repo.transitions).toHaveLength(0);
     expect(h.repo.get()?.status).toBe("scheduled_on_facebook");
   });
@@ -528,15 +569,59 @@ describe("cancelScheduledJob — a post Facebook is holding (E8.6)", () => {
     expect(h.queue.removedIds).toHaveLength(0);
   });
 
-  it("still cancels the row when the post was already gone from the Page", async () => {
-    const h = harness(handedOff(), { remoteState: { state: "gone" } });
+  /**
+   * BEHAVIOUR CHANGE (was: "still cancels the row when the post was already gone
+   * from the Page"). An answer we cannot read is not proof that the post
+   * disappeared — Graph gives the same 100/33 for a wrong token — so the DELETE
+   * still runs, and it is the DELETE that decides.
+   */
+  it("asks the platform to delete anyway when it gave no readable state", async () => {
+    const h = harness(handedOff(), {
+      remoteState: { state: "unknown", reason: "OBJECT_NOT_READABLE_100_33" },
+    });
 
     const result = await h.cancelScheduledJob({ tenantId: TENANT, postJobId: JOB_ID });
 
-    expect(result.status).toBe("blocked");
-    expect(result.platformPostDeleted).toBe(false);
-    // Nothing was deleted, because there was nothing left to delete.
-    expect(h.deleted).toHaveLength(0);
+    // Facebook confirmed the deletion, so the cancel is honest.
+    expect(h.deleted).toEqual(["555000111_777"]);
+    expect(result).toMatchObject({ status: "blocked", platformPostDeleted: true });
+    expect(
+      h.lines.some(
+        (line) =>
+          line.context?.reason === "OBJECT_NOT_READABLE_100_33" &&
+          line.context?.alert === "OPERATOR_ATTENTION",
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses — never reports a cancel — when the unreadable post cannot be deleted either", async () => {
+    const h = harness(handedOff(), {
+      remoteState: { state: "unknown", reason: "OBJECT_NOT_READABLE_100_33" },
+      deleteThrows: new AppError("META_ERROR", {
+        message: "Graph would not delete post 555000111_777: object not readable (100/33)",
+        userMessage:
+          "Facebook không cho đọc/gỡ bài đã hẹn này — hệ thống KHÔNG xác nhận được là bài đã biến mất.",
+      }),
+    });
+
+    await expect(
+      h.cancelScheduledJob({ tenantId: TENANT, postJobId: JOB_ID }),
+    ).rejects.toMatchObject({
+      code: "META_ERROR",
+      userMessage: expect.stringContaining("VẪN SẼ TỰ ĐĂNG"),
+    });
+    expect(h.repo.transitions).toHaveLength(0);
+    expect(h.repo.get()?.status).toBe("scheduled_on_facebook");
+  });
+
+  it("cancels with an honest sentence when the platform reports it never held the post", async () => {
+    const h = harness(handedOff(), { deleteReturns: false });
+
+    const result = await h.cancelScheduledJob({ tenantId: TENANT, postJobId: JOB_ID });
+
+    expect(result).toMatchObject({ status: "blocked", platformPostDeleted: false });
+    // Not "đã gỡ khỏi Facebook": nothing was removed, Facebook simply has none.
+    expect(result.userMessage).toContain("không còn giữ bài này");
     expect(h.repo.get()?.status).toBe("blocked");
   });
 });

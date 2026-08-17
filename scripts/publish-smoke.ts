@@ -568,7 +568,7 @@ async function main(): Promise<void> {
   await db
     .update(products)
     .set({ stockRaw: "0" })
-    .where(eq(products.code, PRODUCT_A));
+    .where(and(eq(products.tenantId, DEMO_TENANT_ID), eq(products.code, PRODUCT_A)));
   console.log("stock of MGKVX6310 set to 0 while the jobs sit in the queue");
   const callsBeforeBlock = publisher.callCount();
   await waitForBatch(db, batch4, ["blocked"], 60_000);
@@ -583,7 +583,7 @@ async function main(): Promise<void> {
     publisher_calls_for_batch4: batch4Calls.length,
     proof: batch4Calls.length === 0 ? "publisher NEVER called for this batch" : "LEAK",
   });
-  await db.update(products).set({ stockRaw: "104" }).where(eq(products.code, PRODUCT_A));
+  await db.update(products).set({ stockRaw: "104" }).where(and(eq(products.tenantId, DEMO_TENANT_ID), eq(products.code, PRODUCT_A)));
 
   // --- Case f: expired token ------------------------------------------------
   heading("f) token hết hạn (Graph code 190) -> blocked TOKEN_EXPIRED, không retry");
@@ -744,7 +744,7 @@ async function main(): Promise<void> {
 
   // Retrying a job blocked by the stock gate still goes through the recheck:
   // the product is sold out again, so it must come back `blocked`, never live.
-  await db.update(products).set({ stockRaw: "0" }).where(eq(products.code, PRODUCT_A));
+  await db.update(products).set({ stockRaw: "0" }).where(and(eq(products.tenantId, DEMO_TENANT_ID), eq(products.code, PRODUCT_A)));
   const blockedJob = (
     await db
       .select({ id: postJobs.id })
@@ -764,7 +764,7 @@ async function main(): Promise<void> {
       proof: publisher.callCount() === callsBeforeStockRetry ? "publisher NEVER called" : "LEAK",
     },
   });
-  await db.update(products).set({ stockRaw: "104" }).where(eq(products.code, PRODUCT_A));
+  await db.update(products).set({ stockRaw: "104" }).where(and(eq(products.tenantId, DEMO_TENANT_ID), eq(products.code, PRODUCT_A)));
 
   // --- Case k: retry a published job ----------------------------------------
   heading("k) retry job published -> INVALID_JOB_TRANSITION (không đăng lần hai)");
@@ -979,7 +979,7 @@ async function main(): Promise<void> {
     scheduledAt: autoDue,
   });
   // "Trong đêm hàng bán hết" (brief §9), compressed into three seconds.
-  await db.update(products).set({ stockRaw: "0" }).where(eq(products.code, PRODUCT_A));
+  await db.update(products).set({ stockRaw: "0" }).where(and(eq(products.tenantId, DEMO_TENANT_ID), eq(products.code, PRODUCT_A)));
   const callsBeforeAuto = publisher.callCount();
   await waitForBatch(db, batchAuto, ["blocked"], 60_000);
   const autoRow = await repo.findJobById(DEMO_TENANT_ID, auto.channels[0].postJobId);
@@ -1002,7 +1002,7 @@ async function main(): Promise<void> {
     publisher_calls_for_this_batch: publisher.callCount() - callsBeforeAuto,
     proof: publisher.callCount() === callsBeforeAuto ? "publisher NEVER called" : "LEAK",
   });
-  await db.update(products).set({ stockRaw: "104" }).where(eq(products.code, PRODUCT_A));
+  await db.update(products).set({ stockRaw: "104" }).where(and(eq(products.tenantId, DEMO_TENANT_ID), eq(products.code, PRODUCT_A)));
 
   heading("u) E8.4 entry cũ SỐNG SÓT sau đổi giờ -> tới giờ cũ worker bỏ qua, giờ mới mới đăng");
   const batchU = randomUUID();

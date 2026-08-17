@@ -380,7 +380,14 @@ export interface RemotePostQuery {
 /**
  * What the platform says about a post we handed over. `unknown` is a first-class
  * answer on purpose: claiming "published" without proof would put a wrong link
- * in front of an operator, and claiming "gone" would hide a live post.
+ * in front of an operator.
+ *
+ * There is deliberately NO "gone" state. "The platform will not show me this
+ * object" is not proof that the object stopped existing: Graph answers a deleted
+ * post, a token for the wrong Page and a lost permission with the SAME error
+ * (code 100 / subcode 33). An implementer that cannot tell those apart MUST
+ * report `unknown` with a reason, so no caller can turn a permission problem
+ * into "Facebook sẽ không đăng nữa".
  */
 export type RemotePostState =
   | {
@@ -391,8 +398,6 @@ export type RemotePostState =
       readonly publishedAt: Date | null;
     }
   | { readonly state: "scheduled"; readonly postId: string; readonly publishAt: Date | null }
-  /** The platform no longer has this post (deleted on the platform side). */
-  | { readonly state: "gone" }
   | { readonly state: "unknown"; readonly reason: string };
 
 /**
@@ -403,11 +408,19 @@ export type RemotePostState =
  * Contract for every implementer:
  * - `schedulePost` returns only when the platform ACCEPTED the schedule, with
  *   the id of the object it now holds; anything else throws (never a silent
- *   "probably fine").
+ *   "probably fine"). An AppError thrown by it carries
+ *   `context.platform_created_nothing = true` when the implementer KNOWS the
+ *   platform created no post (its own pre-flight guard refused, or the platform
+ *   answered with an error instead of an object). The caller may then fall back
+ *   to publishing at the hour without any risk of a double post; without the
+ *   flag it must assume a post may exist.
  * - `getPostState` never guesses: no proof means `unknown`, with a reason.
- * - `deleteScheduledPost` returns false when the post was already gone, and
- *   throws when the platform refused — the caller must be able to tell "it is
- *   not on the platform any more" from "we could not remove it".
+ * - `deleteScheduledPost` returns TRUE only when the platform confirmed it no
+ *   longer holds the post, and FALSE only when the platform positively reported
+ *   that it never held it. Anything else — including an answer the implementer
+ *   cannot interpret — throws, because "we could not confirm" must never reach
+ *   the caller as "it is gone". The Vietnamese `userMessage` of that error says
+ *   the post may still publish and must be removed by hand on the Page.
  */
 export interface ScheduledPublisher {
   schedulePost(input: SchedulePostInput): Promise<SchedulePostResult>;

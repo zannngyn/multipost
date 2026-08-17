@@ -19,11 +19,17 @@ import type {
  * It ASKS Graph and believes only a yes:
  *   is_published = true   -> `published`, with Facebook's own permalink
  *   is_published = false  -> still waiting (Meta publishes a minute or two late)
- *   object gone           -> `blocked`: somebody deleted it on the Page
  *   anything unreadable   -> left alone and logged; after `giveUpMs` the job is
  *                            marked `failed` with an instruction to check the
  *                            Page, because a post nobody can account for must
  *                            not stay invisible (business rule 5).
+ *
+ * There is deliberately no "the post was deleted on the Page" verdict. Graph
+ * answers a deleted post, a token for the wrong Page and a missing permission
+ * with the SAME error, so the platform reports `unknown` (see RemotePostState)
+ * and this sweep treats it as what it is: no answer yet. Quietly marking such a
+ * job `blocked` would tell the operator "bài sẽ không lên" while Facebook goes
+ * on to publish it.
  *
  * It NEVER publishes anything: the post either exists on the platform or it
  * does not, and re-sending it is the duplicate this whole design avoids.
@@ -36,11 +42,9 @@ export const RECONCILE_SCHEDULED_POSTS_JOB_NAME = "reconcile-scheduled-posts";
 
 /** Audit actions that name the EVENT, not just the resulting status. */
 export const RECONCILED_PUBLISHED_AUDIT_ACTION = "post_job.published_by_platform";
-export const RECONCILED_GONE_AUDIT_ACTION = "post_job.scheduled_post_gone";
 export const RECONCILED_UNCONFIRMED_AUDIT_ACTION = "post_job.schedule_unconfirmed";
 
-/** Error codes stored on the row (free text by contract, see PostJob). */
-export const SCHEDULED_POST_GONE_ERROR_CODE = "SCHEDULED_POST_GONE";
+/** Error code stored on the row (free text by contract, see PostJob). */
 export const SCHEDULE_UNCONFIRMED_ERROR_CODE = "SCHEDULE_UNCONFIRMED";
 
 /**
@@ -69,7 +73,12 @@ export interface ReconciledJob {
   readonly tenantId: string;
   readonly batchId: string;
   readonly channelId: string;
-  readonly outcome: "published" | "waiting" | "blocked" | "failed" | "skipped";
+  /**
+   * No `blocked`: this sweep never declares a post dead. Only Facebook saying
+   * "published" settles a job here; everything else waits or, past the horizon,
+   * becomes `failed` with "hãy mở Trang kiểm tra".
+   */
+  readonly outcome: "published" | "waiting" | "failed" | "skipped";
   readonly reason: string;
 }
 
@@ -77,7 +86,6 @@ export interface ReconcileScheduledPostsResult {
   readonly scanned: number;
   readonly published: number;
   readonly waiting: number;
-  readonly blocked: number;
   readonly failed: number;
   readonly skipped: number;
   readonly jobs: readonly ReconciledJob[];
@@ -119,7 +127,6 @@ export function makeReconcileScheduledPosts(deps: ReconcileScheduledPostsDeps) {
       scanned: due.length,
       published: jobs.filter((entry) => entry.outcome === "published").length,
       waiting: jobs.filter((entry) => entry.outcome === "waiting").length,
-      blocked: jobs.filter((entry) => entry.outcome === "blocked").length,
       failed: jobs.filter((entry) => entry.outcome === "failed").length,
       skipped: jobs.filter((entry) => entry.outcome === "skipped").length,
       jobs,
@@ -134,7 +141,7 @@ export function makeReconcileScheduledPosts(deps: ReconcileScheduledPostsDeps) {
       grace_ms: graceMs,
       give_up_ms: giveUpMs,
       limit,
-      ...(result.failed + result.blocked > 0 ? { alert: "OPERATOR_ATTENTION" } : {}),
+      ...(result.failed > 0 ? { alert: "OPERATOR_ATTENTION" } : {}),
     });
     return result;
   };
@@ -242,31 +249,6 @@ async function reconcileOne(
       return reconciled(job, "published", "PUBLISHED_BY_PLATFORM");
     }
 
-    if (state.state === "gone") {
-      const userMessage =
-        "Bài đã hẹn không còn trên Facebook (đã bị xoá trên Trang) — bài sẽ không lên.";
-      const blocked = await move(
-        deps,
-        job,
-        "blocked",
-        {
-          reason: "SCHEDULED_POST_GONE",
-          errorCode: SCHEDULED_POST_GONE_ERROR_CODE,
-          errorMessage: userMessage,
-        },
-        RECONCILED_GONE_AUDIT_ACTION,
-      );
-      if (!blocked) return reconciled(job, "skipped", "ROW_CHANGED_DURING_SWEEP");
-      await refreshBatch(deps, job, log);
-      log.warn("A post Facebook was holding has disappeared from the Page", {
-        outcome: "blocked",
-        error_code: SCHEDULED_POST_GONE_ERROR_CODE,
-        audit_action: RECONCILED_GONE_AUDIT_ACTION,
-        alert: "OPERATOR_ATTENTION",
-      });
-      return reconciled(job, "blocked", "SCHEDULED_POST_GONE");
-    }
-
     if (state.state === "scheduled") {
       // Normal for the first minutes after the hour.
       log.info("Facebook has not published this post yet — waiting", {
@@ -347,7 +329,7 @@ async function giveUp(
 async function move(
   deps: ReconcileScheduledPostsDeps,
   job: PostJob,
-  to: "published" | "blocked" | "failed",
+  to: "published" | "failed",
   meta: TransitionMeta & { reason: string },
   auditAction: string,
 ): Promise<PostJob | null> {

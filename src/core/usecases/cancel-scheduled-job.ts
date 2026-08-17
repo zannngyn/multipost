@@ -145,9 +145,13 @@ export function makeCancelScheduledJob(deps: CancelScheduledJobDeps) {
       : false;
 
     // --- 1. Database ---------------------------------------------------------
-    const userMessage = handedOff
-      ? "Đã gỡ bài đã hẹn khỏi Facebook và huỷ bài — Facebook sẽ không đăng nữa."
-      : "Bài đã được huỷ trước giờ đăng — không có gì được gửi lên kênh.";
+    // Only reached when the platform CONFIRMED it no longer holds the post
+    // (deleteOnPlatform throws on anything less), so this sentence is safe.
+    const userMessage = !handedOff
+      ? "Bài đã được huỷ trước giờ đăng — không có gì được gửi lên kênh."
+      : platformPostDeleted
+        ? "Đã gỡ bài đã hẹn khỏi Facebook và huỷ bài — Facebook sẽ không đăng nữa."
+        : "Facebook báo không còn giữ bài này nữa — bài đã được huỷ trong hệ thống.";
     const next = transitionPostJob(job, "blocked", {
       reason: "OPERATOR_CANCELLED",
       errorCode: CANCELLED_ERROR_CODE,
@@ -237,8 +241,13 @@ export type CancelScheduledJob = ReturnType<typeof makeCancelScheduledJob>;
  * E8.6 — removes the post Facebook is holding, BEFORE anything is written.
  *
  * Every failure throws. There is no "best effort" here: the operator asked for
- * the post not to be published, and the only honest answers are "Facebook no
- * longer has it" or an error saying it still does.
+ * the post not to be published, and the only honest answers are "Facebook
+ * confirmed it no longer holds it" or an error saying we do not know.
+ *
+ * "We do not know" is a REFUSAL, not a cancel. Graph answers a deleted post, a
+ * token for the wrong Page and a missing permission with the same error, so a
+ * failed read or a failed delete can never be turned into "Facebook sẽ không
+ * đăng nữa" (see RemotePostState in core/ports/publisher).
  *
  * A post Facebook ALREADY published is refused instead of deleted: "huỷ trước
  * giờ đăng" must never silently delete a live post. The reconciliation sweep
@@ -302,11 +311,16 @@ async function deleteOnPlatform(
   }
 
   // Already live? Then this is not a cancel, it is a deletion — refuse.
-  const state = await scheduler.getPostState({
-    tenantId: job.tenantId,
-    channel,
-    postId,
-  });
+  let state;
+  try {
+    state = await scheduler.getPostState({ tenantId: job.tenantId, channel, postId });
+  } catch (error) {
+    // Token dead, rate limit, network: we could not even ASK. Refusing keeps the
+    // row where it is; pretending would hide a post Facebook still publishes.
+    throw platformFailure(job, log, error, postId, "PLATFORM_STATE_UNKNOWN", onFacebook, {
+      operation: "cancelScheduledJob.getPostState",
+    });
+  }
   if (state.state === "published") {
     throw refusal(
       "The platform already published this post",
@@ -314,25 +328,80 @@ async function deleteOnPlatform(
       "Facebook đã đăng bài này rồi — không huỷ được nữa. Nếu cần gỡ, hãy xoá trực tiếp trên Trang.",
     );
   }
-  if (state.state === "gone") {
-    // Somebody deleted it on the Page already: the operator's wish is granted.
-    log.warn("The post Facebook was holding is already gone — cancelling the row only", {
-      reason: "ALREADY_GONE_ON_PLATFORM",
+  if (state.state === "unknown") {
+    // No verdict (unreadable answer, or Graph refusing to show the object). Not
+    // a reason to stop: the DELETE below is the only thing that can settle it,
+    // and it throws unless Facebook confirms the post is no longer scheduled.
+    log.warn("The platform gave no readable state for this post — asking it to delete anyway", {
+      reason: state.reason,
       scheduled_post_id: postId,
+      alert: "OPERATOR_ATTENTION",
     });
-    return false;
   }
 
-  const deleted = await scheduler.deleteScheduledPost({
-    tenantId: job.tenantId,
-    channel,
-    postId,
-  });
+  let deleted: boolean;
+  try {
+    deleted = await scheduler.deleteScheduledPost({ tenantId: job.tenantId, channel, postId });
+  } catch (error) {
+    // THE dangerous branch: the operator asked to cancel, Facebook still holds
+    // the post, and nothing in the row will change. The message must say so —
+    // "hệ thống sẽ thử lại" (what the Graph error map would say for a 5xx or a
+    // rate limit) is simply false here, nothing retries a cancel.
+    throw platformFailure(job, log, error, postId, "PLATFORM_DELETE_FAILED", onFacebook, {
+      operation: "cancelScheduledJob.deleteScheduledPost",
+    });
+  }
   log.info("Deleted the scheduled post on the platform", {
     scheduled_post_id: postId,
     deleted,
   });
   return deleted;
+}
+
+/**
+ * Turns a platform failure during a cancel into an error whose Vietnamese
+ * message tells the truth: the cancel did NOT happen, the post is still on
+ * Facebook and will publish, and it has to be removed by hand.
+ *
+ * The platform's own `userMessage` is deliberately dropped: the Graph error map
+ * writes it for the PUBLISH path ("hệ thống sẽ thử lại"), and repeating it here
+ * would promise a retry that does not exist. The original code, message and
+ * context stay in the log and in `cause`.
+ */
+function platformFailure(
+  job: PostJob,
+  log: Logger,
+  error: unknown,
+  postId: string,
+  reason: string,
+  userMessage: string,
+  extraContext: Record<string, unknown>,
+): AppError {
+  const appError = AppError.from(error, "META_ERROR", {
+    tenant_id: job.tenantId,
+    job_id: job.id,
+    batch_id: job.batchId,
+    product_code: job.productCode,
+    channel: job.channelId,
+    scheduled_post_id: postId || null,
+    from: job.status,
+    reason,
+    ...extraContext,
+  });
+  log.error("Cancel failed: the post is still on Facebook and will publish", {
+    err: appError,
+    error_code: appError.code,
+    reason,
+    scheduled_post_id: postId || null,
+    platform_post_deleted: false,
+    alert: "OPERATOR_ATTENTION",
+  });
+  return new AppError(appError.code, {
+    message: `Cancel could not remove the scheduled post (${reason}): ${appError.message}`,
+    userMessage,
+    context: appError.context,
+    cause: appError,
+  });
 }
 
 function refusalMessage(job: PostJob): string {

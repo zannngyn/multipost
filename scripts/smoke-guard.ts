@@ -46,8 +46,21 @@ export async function findForeignChannelIds(
 
   const foreign: string[] = [];
   for (const row of rows) {
-    const channels = (row.config as { channels?: unknown })?.channels;
-    if (!Array.isArray(channels)) continue;
+    const config: unknown = row.config;
+    // A row whose shape this guard cannot read is the exact case it exists for:
+    // seeding replaces the WHOLE row, so "I could not find channels in there"
+    // must never be reported as "there were none". Skipping here would let a
+    // future config layout walk straight past the check.
+    if (typeof config !== "object" || config === null || Array.isArray(config)) {
+      foreign.push("<unreadable tenant_integration row>");
+      continue;
+    }
+    const channels = (config as { channels?: unknown }).channels;
+    if (channels === undefined) continue; // genuinely no channels key: nothing to lose
+    if (!Array.isArray(channels)) {
+      foreign.push("<unreadable channels value>");
+      continue;
+    }
     for (const channel of channels) {
       const id = (channel as { channelId?: unknown })?.channelId;
       // An unreadable entry counts as foreign: the point is to protect data this

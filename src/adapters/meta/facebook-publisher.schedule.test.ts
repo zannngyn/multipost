@@ -112,7 +112,13 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
       }),
     ).rejects.toMatchObject({
       code: "INVALID_INPUT",
-      context: { reason: "PUBLISH_AT_TOO_SOON", min_lead_ms: HANDOFF_MIN_LEAD_MS },
+      context: {
+        reason: "PUBLISH_AT_TOO_SOON",
+        min_lead_ms: HANDOFF_MIN_LEAD_MS,
+        // Nothing reached Facebook, so the caller may publish at the hour
+        // instead of failing the job (see ScheduledPublisher's contract).
+        platform_created_nothing: true,
+      },
     });
     expect(fetchImpl).not.toHaveBeenCalled();
     // Minutes of upload saved for a call that could not have worked.
@@ -167,6 +173,58 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("marks a REFUSED /feed as 'nothing was created' — Graph returns an id or an error", async () => {
+    // Facebook answers #100 when `scheduled_publish_time` is under its ~10
+    // minute minimum, which a slow album upload can reach. No post exists after
+    // that answer, so the job must be able to publish at its hour instead of
+    // dying as `failed`.
+    const fetchImpl = vi.fn<typeof fetch>(async (url) =>
+      String(url).endsWith("/photos")
+        ? jsonResponse({ id: "photo-1" })
+        : jsonResponse(
+            { error: { code: 100, message: "scheduled publish time is invalid" } },
+            400,
+          ),
+    );
+    const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    await expect(
+      scheduled.schedulePost({
+        tenantId: "t1",
+        channel: CHANNEL,
+        caption: "x",
+        media: [photo("d1", "1.jpg")],
+        idempotencyKey: "k",
+        publishAt: IN_20_MINUTES(),
+      }),
+    ).rejects.toMatchObject({
+      code: "META_ERROR",
+      context: { graph_code: 100, retryable: false, platform_created_nothing: true },
+    });
+  });
+
+  it("does NOT mark a transport failure — after a timeout the post may exist", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      if (String(url).endsWith("/photos")) return jsonResponse({ id: "photo-1" });
+      throw new TypeError("socket hang up");
+    });
+    const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    const error = await scheduled
+      .schedulePost({
+        tenantId: "t1",
+        channel: CHANNEL,
+        caption: "x",
+        media: [photo("d1", "1.jpg")],
+        idempotencyKey: "k",
+        publishAt: IN_20_MINUTES(),
+      })
+      .then(() => null)
+      .catch((thrown: unknown) => thrown as { context: Record<string, unknown> });
+
+    expect(error?.context.platform_created_nothing).toBeUndefined();
+  });
+
   it("refuses a /feed answer without an id instead of claiming a schedule", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (url) =>
       String(url).endsWith("/photos") ? jsonResponse({ id: "photo-1" }) : jsonResponse({ ok: true }),
@@ -186,6 +244,21 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
       code: "META_ERROR",
       context: { step: "feed.scheduled", retryable: false },
     });
+    // A 200 we cannot read may hide a created post: it must NOT be marked as
+    // "nothing was created", or the caller would publish at the hour on top of
+    // a scheduled post nobody can see.
+    const error = await scheduled
+      .schedulePost({
+        tenantId: "t1",
+        channel: CHANNEL,
+        caption: "x",
+        media: [photo("d2", "2.jpg")],
+        idempotencyKey: "k",
+        publishAt: IN_20_MINUTES(),
+      })
+      .then(() => null)
+      .catch((thrown: unknown) => thrown as { context: Record<string, unknown> });
+    expect(error?.context.platform_created_nothing).toBeUndefined();
   });
 });
 
@@ -313,14 +386,20 @@ describe("getPostState — the reconciliation read", () => {
     expect(state).toEqual({ state: "unknown", reason: "NO_IS_PUBLISHED_FIELD" });
   });
 
-  it("says `gone` for Graph's deleted-object answer (code 100 / subcode 33)", async () => {
+  /**
+   * BEHAVIOUR CHANGE (was: "says `gone`"). Meta's own text for 100/33 is
+   * "Object with ID X does not exist, cannot be loaded due to missing
+   * permissions, or does not support this operation" — a wrong token and a
+   * revoked permission produce it too, so it can never mean "đã bị xoá".
+   */
+  it("says `unknown` — not `gone` — for Graph's 100/33 answer", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse(
         { error: { code: 100, error_subcode: 33, message: "Object does not exist" } },
         400,
       ),
     );
-    const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
+    const { scheduled, logger } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     const state = await scheduled.getPostState({
       tenantId: "t1",
@@ -328,7 +407,14 @@ describe("getPostState — the reconciliation read", () => {
       postId: "555000111_777",
     });
 
-    expect(state).toEqual({ state: "gone" });
+    expect(state).toEqual({ state: "unknown", reason: "OBJECT_NOT_READABLE_100_33" });
+    expect(
+      logger.lines.some(
+        (line) =>
+          line.level === "warn" &&
+          (line.context as { alert?: string } | undefined)?.alert === "OPERATOR_ATTENTION",
+      ),
+    ).toBe(true);
   });
 
   it("rethrows anything else — a dead token is not a verdict on the post", async () => {
@@ -370,7 +456,13 @@ describe("deleteScheduledPost — taking the post back", () => {
     expect((init as RequestInit).method).toBe("DELETE");
   });
 
-  it("returns false (not an error) when the post was already gone", async () => {
+  /**
+   * BEHAVIOUR CHANGE (was: "returns false when the post was already gone").
+   * 100/33 does not prove the post is gone, and a cancel that reports success
+   * on it would tell the operator "Facebook sẽ không đăng nữa" about a post a
+   * wrong token simply could not see.
+   */
+  it("THROWS on 100/33 — 'I cannot read it' is not 'it is gone'", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({ error: { code: 100, error_subcode: 33, message: "does not exist" } }, 400),
     );
@@ -382,7 +474,11 @@ describe("deleteScheduledPost — taking the post back", () => {
         channel: CHANNEL,
         postId: "555000111_777",
       }),
-    ).resolves.toBe(false);
+    ).rejects.toMatchObject({
+      code: "META_ERROR",
+      userMessage: expect.stringContaining("KHÔNG xác nhận được"),
+      context: { reason: "OBJECT_NOT_READABLE_100_33", retryable: false },
+    });
   });
 
   it("throws when Graph refuses — the caller must not report a cancel that did nothing", async () => {

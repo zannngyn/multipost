@@ -15,10 +15,8 @@ import type {
 import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import {
   DEFAULT_RECONCILE_GRACE_MS,
-  RECONCILED_GONE_AUDIT_ACTION,
   RECONCILED_PUBLISHED_AUDIT_ACTION,
   RECONCILED_UNCONFIRMED_AUDIT_ACTION,
-  SCHEDULED_POST_GONE_ERROR_CODE,
   SCHEDULE_UNCONFIRMED_ERROR_CODE,
   makeReconcileScheduledPosts,
 } from "./reconcile-scheduled-posts";
@@ -314,17 +312,46 @@ describe("reconcileScheduledPosts — closing the loop", () => {
     expect(transition.auditAction).toBe(RECONCILED_PUBLISHED_AUDIT_ACTION);
   });
 
-  it("blocks a post somebody deleted on the Page", async () => {
-    const h = harness({ state: { state: "gone" } });
+  /**
+   * BEHAVIOUR CHANGE (was: "blocks a post somebody deleted on the Page").
+   * Graph's 100/33 answer — the one that used to be read as "deleted" — is also
+   * what a wrong token or a missing permission produces. The platform now
+   * reports `unknown`, and this sweep must NOT settle the job on it: a `blocked`
+   * row says "bài sẽ không lên" while Facebook may still publish at the hour.
+   */
+  it("never blocks a post Graph refuses to show — it keeps waiting", async () => {
+    const h = harness({ state: { state: "unknown", reason: "OBJECT_NOT_READABLE_100_33" } });
 
     const result = await h.reconcile();
 
-    expect(result.blocked).toBe(1);
+    expect(result.waiting).toBe(1);
+    expect(result.published).toBe(0);
+    // Nothing was written: the row still says "Facebook đang giữ".
+    expect(h.repo.transitions).toHaveLength(0);
+    expect(
+      h.lines.some(
+        (line) =>
+          line.context?.reason === "OBJECT_NOT_READABLE_100_33" &&
+          line.context?.alert === "OPERATOR_ATTENTION",
+      ),
+    ).toBe(true);
+  });
+
+  it("fails an unreadable post only after the horizon, telling the operator to look", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: new Date(NOW - 48 * 60 * 60_000) })],
+      state: { state: "unknown", reason: "OBJECT_NOT_READABLE_100_33" },
+    });
+
+    const result = await h.reconcile({ giveUpMs: 24 * 60 * 60_000 });
+
+    expect(result.failed).toBe(1);
     const transition = h.repo.transitions[0];
-    expect(transition.next.status).toBe("blocked");
-    expect(transition.next.lastErrorCode).toBe(SCHEDULED_POST_GONE_ERROR_CODE);
-    expect(transition.next.lastErrorMessage).toContain("không còn trên Facebook");
-    expect(transition.auditAction).toBe(RECONCILED_GONE_AUDIT_ACTION);
+    expect(transition.next.status).toBe("failed");
+    expect(transition.next.lastErrorCode).toBe(SCHEDULE_UNCONFIRMED_ERROR_CODE);
+    // Never "Facebook sẽ không đăng nữa" — the operator is sent to the Page.
+    expect(transition.next.lastErrorMessage).toContain("mở Trang");
+    expect(transition.auditAction).toBe(RECONCILED_UNCONFIRMED_AUDIT_ACTION);
   });
 
   it("gives up after the horizon and tells the operator to check the Page first", async () => {

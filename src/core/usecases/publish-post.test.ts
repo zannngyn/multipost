@@ -1521,6 +1521,13 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
       (input) => input.next.status === "scheduled_on_facebook",
     );
     expect(handoff?.auditAction).toBe("post_job.scheduled_on_facebook");
+    // The audit row of the moment the post was CREATED on Facebook must carry
+    // its id: the default payload only has `published_post_id`, which is null
+    // here, so this event would otherwise leave nothing to search the Page with.
+    expect(handoff?.auditPayload).toMatchObject({
+      scheduled_post_id: "555000111_scheduled",
+      scheduled_at: scheduledAt.toISOString(),
+    });
   });
 
   it("publishes on the normal path — and says so — when the hour has already passed", async () => {
@@ -1590,6 +1597,65 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
     expect(result.deferredMs).toBe(14 * 60_000);
     expect(result.errorCode).toBe("HANDOFF_EXPIRED");
     expect(h.repo.get("job-1")?.status).toBe("queued");
+  });
+
+  /**
+   * BEHAVIOUR CHANGE: a refusal that created NOTHING on the Page no longer ends
+   * as `failed`. Facebook answers #100 to a `scheduled_publish_time` under its
+   * ~10-minute minimum, and the window between the handoff deadline (T-12) and
+   * that minimum (T-10) is about two minutes — less than a slow 10-photo album
+   * upload. Dropping the post there was wrong: the "wait for T, publish
+   * normally" path is untouched and cannot double-post, because the platform
+   * holds nothing.
+   */
+  it("publishes at the hour instead of failing when the refusal created NOTHING", async () => {
+    const scheduledAt = at(20 * 60_000);
+    const h = harness({
+      jobs: [makeJob({ scheduledAt, queueJobId: "pp.job-1" })],
+      schedulePost: async () => {
+        throw new AppError("META_ERROR", {
+          message: "Graph API error code=100 message=scheduled publish time is invalid",
+          userMessage: "Facebook từ chối dữ liệu bài đăng.",
+          context: { retryable: false, platform_created_nothing: true },
+        });
+      },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    // Wakes exactly at T and publishes on the normal path.
+    expect(result.deferredMs).toBe(20 * 60_000);
+    expect(result.errorCode).toBe("HANDOFF_REFUSED");
+    const stored = h.repo.get("job-1");
+    expect(stored?.status).toBe("queued");
+    expect(stored?.lastErrorMessage).toContain("đăng thẳng vào giờ đã hẹn");
+    expect(h.queue.enqueued[0]?.opts?.delayMs).toBe(20 * 60_000);
+  });
+
+  it("does the same for the adapter's own pre-upload refusal (giờ hẹn quá gần)", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(13 * 60_000), queueJobId: "pp.job-1" })],
+      schedulePost: async () => {
+        throw new AppError("INVALID_INPUT", {
+          message: "schedulePost needs at least 600000ms of lead",
+          userMessage: "Giờ hẹn quá gần (Facebook đòi tối thiểu ~10 phút).",
+          context: {
+            reason: "PUBLISH_AT_TOO_SOON",
+            retryable: false,
+            platform_created_nothing: true,
+          },
+        });
+      },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(13 * 60_000);
+    expect(h.repo.get("job-1")?.status).toBe("queued");
+    // The job is NOT failed: nothing was ever created on the Page.
+    expect(h.repo.get("job-1")?.lastErrorCode).toBe("HANDOFF_REFUSED");
   });
 
   it("does NOT retry a definitive refusal — a second handoff could double-post", async () => {

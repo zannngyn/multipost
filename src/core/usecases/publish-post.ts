@@ -87,6 +87,12 @@ export const LATE_PUBLISH_AUDIT_ACTION = "post_job.published_late";
 export const HANDOFF_EXPIRED_ERROR_CODE = "HANDOFF_EXPIRED";
 /** Error code stored when the handoff itself was refused for good. */
 export const HANDOFF_FAILED_ERROR_CODE = "HANDOFF_FAILED";
+/**
+ * The platform refused the SCHEDULE but created nothing (E8.6). The post is not
+ * lost: it goes out on the normal path at its hour, and this code says why the
+ * handoff did not happen.
+ */
+export const HANDOFF_REFUSED_ERROR_CODE = "HANDOFF_REFUSED";
 
 export type PublishPostOutcome =
   | "published"
@@ -1003,7 +1009,12 @@ async function deferQueuedJob(
  *   transient refusal   -> back to `queued`, next attempt inside the window, or
  *                          (window closed) a wake-up AT the hour that publishes
  *                          on the normal path.
- *   definitive refusal  -> `failed`. NOT retried: an ambiguous /feed answer may
+ *   refused, nothing
+ *   created on the Page -> back to `queued` with a wake-up AT the hour: the
+ *                          normal publish path is untouched and cannot duplicate
+ *                          anything, so the post still goes out.
+ *   definitive AND
+ *   ambiguous refusal   -> `failed`. NOT retried: an unreadable /feed answer may
  *                          mean the post exists, and a second handoff would put
  *                          two posts on the Page at the same minute.
  */
@@ -1096,6 +1107,15 @@ async function handOffToPlatform(
     "scheduled_on_facebook",
     { reason: "HANDED_OFF_TO_PLATFORM", scheduledPostId: handed.scheduledPostId },
     HANDED_OFF_AUDIT_ACTION,
+    // The default audit payload only carries `published_post_id`, which is null
+    // here — so the single most important event of a scheduled post (the moment
+    // the object was created on Facebook) would leave no id behind. The cancel
+    // and the reconciliation sweep both store it; this must too.
+    {
+      scheduled_post_id: handed.scheduledPostId,
+      scheduled_at: scheduledAt.toISOString(),
+      lead_ms: ctx.leadMs,
+    },
   );
   if (!scheduledOnPlatform) {
     // Facebook HOLDS the post but the row moved under us. Never silent: nothing
@@ -1177,10 +1197,46 @@ async function handleHandoffError(
   }
 
   const retryable = (appError.context as { retryable?: unknown }).retryable !== false;
+
+  // Refused BEFORE anything existed on the Page (port contract: the publisher
+  // sets this only when it KNOWS no post was created — its own pre-flight guard,
+  // or a platform error body instead of an object id). Facebook answers #100 to
+  // a `scheduled_publish_time` under its ~10-minute minimum, and an album upload
+  // can easily eat the ~2 minutes between the handoff deadline and that minimum.
+  // Failing the job there would drop a post while the safe path — wait for T and
+  // publish normally — was still fully available, and cannot double-post because
+  // the platform holds nothing.
+  const createdNothing =
+    (appError.context as { platform_created_nothing?: unknown }).platform_created_nothing === true;
+  if (!retryable && createdNothing) {
+    const delayMs = Math.max(0, ctx.scheduledAt.getTime() - deps.clock.nowMs());
+    const userMessage = `Facebook không nhận lịch đăng của bài này (${appError.userMessage}) — chưa có bài nào được tạo trên Trang, hệ thống sẽ đăng thẳng vào giờ đã hẹn.`;
+    const requeued = await requeueForLater(deps, log, job, {
+      delayMs,
+      reason: "HANDOFF_REFUSED_NOTHING_CREATED",
+      errorCode: HANDOFF_REFUSED_ERROR_CODE,
+      errorMessage: userMessage,
+      settings: ctx.settings,
+      attempt: ctx.attempt,
+    });
+    log.error("Facebook refused the schedule but created nothing — publishing at the hour instead", {
+      err: appError,
+      error_code: HANDOFF_REFUSED_ERROR_CODE,
+      original_code: appError.code,
+      attempt: ctx.attempt,
+      duration_ms: ctx.durationMs,
+      publish_in_ms: delayMs,
+      scheduled_at: ctx.scheduledAt.toISOString(),
+      platform_created_nothing: true,
+      alert: "OPERATOR_ATTENTION",
+    });
+    return requeued;
+  }
+
   if (!retryable) {
-    // Definitive. Not retried on purpose: /feed may have created the scheduled
-    // post before the answer became unreadable, and a second handoff would put
-    // two posts on the Page at the same minute (business rule 4).
+    // Definitive AND ambiguous. Not retried on purpose: /feed may have created
+    // the scheduled post before the answer became unreadable, and a second
+    // handoff would put two posts on the Page at the same minute (rule 4).
     const userMessage = `Facebook từ chối lịch đăng của bài này (${appError.userMessage}) — kiểm tra trên Page trước khi hẹn lại.`;
     await move(
       deps,
@@ -1440,6 +1496,7 @@ async function move(
   to: PostJobStatus,
   meta: TransitionMeta & { reason: string },
   auditAction?: string,
+  auditPayload?: Readonly<Record<string, unknown>>,
 ): Promise<PostJob | null> {
   const next = transitionPostJob(job, to, meta);
   return deps.postJobs.applyTransition({
@@ -1449,6 +1506,7 @@ async function move(
     next,
     reason: meta.reason,
     ...(auditAction ? { auditAction } : {}),
+    ...(auditPayload ? { auditPayload } : {}),
   });
 }
 

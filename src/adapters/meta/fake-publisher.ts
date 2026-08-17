@@ -221,15 +221,18 @@ export function makeFakeChannelPublisher(options: {
 
       async getPostState(input: RemotePostQuery): Promise<RemotePostState> {
         const postId = typeof input?.postId === "string" ? input.postId.trim() : "";
-        // Unknown id = the platform never heard of it, like a deleted object.
-        return remoteStates.get(postId) ?? { state: "gone" };
+        // An id this fake never issued is NOT a verdict on the post: the real
+        // adapter cannot tell a deleted post from a token problem either.
+        return remoteStates.get(postId) ?? { state: "unknown", reason: "UNKNOWN_POST_ID" };
       },
 
       async deleteScheduledPost(input: RemotePostQuery): Promise<boolean> {
         const postId = typeof input?.postId === "string" ? input.postId.trim() : "";
         deletedPostIds.push(postId);
-        const existed = remoteStates.has(postId);
-        remoteStates.set(postId, { state: "gone" });
+        // This fake IS the platform, so it can positively report absence:
+        // false = it never held that post (the port allows that answer only
+        // with proof, which the real Graph adapter never has).
+        const existed = remoteStates.delete(postId);
         return existed;
       },
     },

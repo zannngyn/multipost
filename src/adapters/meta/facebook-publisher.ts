@@ -92,8 +92,19 @@ const DeleteResponseSchema = z.object({
   success: z.boolean().optional(),
 });
 
-/** Graph's "object does not exist (or is not visible to this token)". */
-const OBJECT_GONE_SUBCODE = 33;
+/**
+ * Graph's "Object with ID X does not exist, cannot be loaded due to missing
+ * permissions, or does not support this operation" — code 100 / subcode 33.
+ *
+ * Note what that sentence actually covers: a deleted post, a token for another
+ * Page, a revoked permission and a Page that was reconnected under a new token
+ * all produce it. It therefore means "we could not read the object", NEVER "the
+ * object is gone".
+ */
+const OBJECT_NOT_READABLE_SUBCODE = 33;
+
+/** Reason reported to callers for the answer above. Machine-readable, logged. */
+export const OBJECT_NOT_READABLE_REASON = "OBJECT_NOT_READABLE_100_33";
 
 /** POST /{page-id}/videos answers with the video id (and sometimes post_id). */
 const VideoResponseSchema = z.object({
@@ -353,7 +364,13 @@ function makeFacebookScheduledPublisher(
         throw new AppError("INVALID_INPUT", {
           message: "schedulePost requires a publishAt date",
           userMessage: "Giờ hẹn đăng không hợp lệ — không giao lịch cho Facebook.",
-          context: { ...logContext, reason: "PUBLISH_AT_NOT_A_DATE", retryable: false },
+          context: {
+            ...logContext,
+            reason: "PUBLISH_AT_NOT_A_DATE",
+            retryable: false,
+            // Refused HERE: Facebook was never called, so no post exists.
+            platform_created_nothing: true,
+          },
         });
       }
       const leadMs = publishAt.getTime() - Date.now();
@@ -370,6 +387,9 @@ function makeFacebookScheduledPublisher(
             lead_ms: leadMs,
             min_lead_ms: HANDOFF_MIN_LEAD_MS,
             retryable: false,
+            // Nothing was uploaded and /feed was never called: the caller can
+            // safely fall back to publishing at the hour (no double post).
+            platform_created_nothing: true,
           },
         });
       }
@@ -391,17 +411,35 @@ function makeFacebookScheduledPublisher(
         params[`attached_media[${index}]`] = JSON.stringify({ media_fbid: mediaFbId });
       });
 
-      const raw = await deps.graph.post({
-        path: `${pageId}/feed`,
-        params,
-        accessToken: channel.accessToken,
-        context: {
+      let raw: Record<string, unknown>;
+      try {
+        raw = await deps.graph.post({
+          path: `${pageId}/feed`,
+          params,
+          accessToken: channel.accessToken,
+          context: {
+            ...logContext,
+            step: "feed.scheduled",
+            media_count: mediaFbIds.length,
+            scheduled_publish_time: scheduledPublishTime,
+          },
+        });
+      } catch (error) {
+        // A Graph error BODY means the schedule was REFUSED and no post was
+        // created — Graph answers with the new object's id or with an error,
+        // never both. Facebook's #100 for a `scheduled_publish_time` under the
+        // ~10-minute minimum lands here, and the caller must be able to fall
+        // back to publishing at the hour instead of failing the job for good.
+        // A transport failure (no answer at all) is NOT marked: after a timeout
+        // the post may well exist.
+        if (!isGraphRefusal(error)) throw error;
+        throw AppError.from(error, "META_ERROR", {
           ...logContext,
           step: "feed.scheduled",
-          media_count: mediaFbIds.length,
           scheduled_publish_time: scheduledPublishTime,
-        },
-      });
+          platform_created_nothing: true,
+        });
+      }
       const parsed = FeedResponseSchema.safeParse(raw);
       if (!parsed.success) throw unusableResponse(raw, parsed.error, logContext, "feed.scheduled");
 
@@ -423,6 +461,7 @@ function makeFacebookScheduledPublisher(
      */
     async getPostState(input: RemotePostQuery): Promise<RemotePostState> {
       const { channel, postId, logContext } = assertRemoteQuery(input, "getPostState");
+      const log = parentLogger.child(logContext);
 
       let raw: Record<string, unknown>;
       try {
@@ -435,7 +474,16 @@ function makeFacebookScheduledPublisher(
           context: { ...logContext, step: "post.state" },
         });
       } catch (error) {
-        if (isObjectGone(error)) return { state: "gone" };
+        if (isObjectNotReadable(error)) {
+          // NOT "deleted". Graph gives this same answer for a wrong token and a
+          // missing permission, so the honest report is "no verdict".
+          log.warn("Graph will not show this post — no verdict on whether it still exists", {
+            err: AppError.from(error, "META_ERROR", { ...logContext, step: "post.state" }),
+            reason: OBJECT_NOT_READABLE_REASON,
+            alert: "OPERATOR_ATTENTION",
+          });
+          return { state: "unknown", reason: OBJECT_NOT_READABLE_REASON };
+        }
         // Anything else (token, rate limit, transport) belongs to the caller:
         // it decides retry vs alert. Rethrown with its own code intact.
         throw AppError.from(error, "META_ERROR", { ...logContext, step: "post.state" });
@@ -469,9 +517,13 @@ function makeFacebookScheduledPublisher(
 
     /**
      * Removes a post Facebook has NOT published yet (E8.6 cancel).
-     * False = it was already gone; a refusal throws, because "the operator
-     * thinks it is cancelled while Facebook still publishes it" is the exact
-     * outcome this whole flow exists to prevent.
+     *
+     * ONLY a successful DELETE returns. Every other answer throws — including
+     * code 100/33, which reads like "already deleted" but is also what a wrong
+     * token or a missing permission produces (OBJECT_NOT_READABLE_SUBCODE).
+     * Reporting that as "it is gone" would let the caller tell the operator
+     * "Facebook sẽ không đăng nữa" about a post Facebook is still holding, which
+     * is the exact outcome this whole flow exists to prevent.
      */
     async deleteScheduledPost(input: RemotePostQuery): Promise<boolean> {
       const { channel, postId, logContext } = assertRemoteQuery(input, "deleteScheduledPost");
@@ -485,14 +537,27 @@ function makeFacebookScheduledPublisher(
           context: { ...logContext, step: "post.delete" },
         });
       } catch (error) {
-        if (isObjectGone(error)) {
-          log.warn("Scheduled post was already gone on Facebook", {
-            post_id: postId,
-            reason: "ALREADY_GONE",
+        const appError = AppError.from(error, "META_ERROR", {
+          ...logContext,
+          step: "post.delete",
+        });
+        if (isObjectNotReadable(error)) {
+          log.error("Graph refused to delete this post and gave no readable reason why", {
+            err: appError,
+            error_code: appError.code,
+            reason: OBJECT_NOT_READABLE_REASON,
+            alert: "OPERATOR_ATTENTION",
           });
-          return false;
+          throw new AppError(appError.code, {
+            message: `Graph would not delete post ${postId}: object not readable (100/33)`,
+            userMessage:
+              "Facebook không cho đọc/gỡ bài đã hẹn này (có thể bài đã bị xoá, cũng có thể do sai Trang hoặc thiếu quyền). " +
+              "Hệ thống KHÔNG xác nhận được là bài đã biến mất — hãy vào Trang, mục bài đã lên lịch, để kiểm tra và xoá thủ công nếu bài vẫn còn.",
+            context: { ...appError.context, reason: OBJECT_NOT_READABLE_REASON, retryable: false },
+            cause: appError,
+          });
         }
-        throw AppError.from(error, "META_ERROR", { ...logContext, step: "post.delete" });
+        throw appError;
       }
 
       const parsed = DeleteResponseSchema.safeParse(raw);
@@ -647,15 +712,24 @@ function assertRemoteQuery(
 }
 
 /**
- * True for Graph's "this object does not exist (any more)". Code 100 with
- * subcode 33 is the documented answer for a deleted/unreadable object — the same
- * answer a wrong token gets, which is why the CALLER never turns "gone" into a
- * destructive action: it only stops waiting for a post Facebook does not have.
+ * True for Graph's "I will not show you this object" (code 100 / subcode 33).
+ * It is NOT evidence that the post was deleted — see OBJECT_NOT_READABLE_SUBCODE
+ * — so every caller of this helper must produce an UNCERTAIN outcome.
  */
-function isObjectGone(error: unknown): boolean {
-  if (!(error instanceof AppError)) return false;
+function isObjectNotReadable(error: unknown): boolean {
+  if (!AppError.is(error)) return false;
   const context = error.context as { graph_code?: unknown; graph_subcode?: unknown };
-  return context.graph_code === 100 && context.graph_subcode === OBJECT_GONE_SUBCODE;
+  return context.graph_code === 100 && context.graph_subcode === OBJECT_NOT_READABLE_SUBCODE;
+}
+
+/**
+ * True when Graph answered with an error BODY (a code): the request was refused
+ * and no object was created. Graph returns either the new object's id or an
+ * `error` — never both — so a refusal is proof that the Page holds no new post.
+ */
+function isGraphRefusal(error: unknown): boolean {
+  if (!AppError.is(error)) return false;
+  return typeof (error.context as { graph_code?: unknown }).graph_code === "number";
 }
 
 /** ISO 8601 with an offset, e.g. "2026-08-17T12:00:00+0000". */
