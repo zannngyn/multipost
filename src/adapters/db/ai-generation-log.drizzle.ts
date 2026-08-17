@@ -43,6 +43,36 @@ function toDate(value: string): Date {
   return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
+/**
+ * Postgres cannot store U+0000 in text or jsonb ("unsupported Unicode escape
+ * sequence"), and a model CAN emit it — gpt-4.1-mini did on 15/08/2026, which
+ * made the whole insert fail and lost the very row that explained why the post
+ * was blocked (business rule 5: a failure must never go unexplained).
+ *
+ * Stage 1 now rejects such output, so this is the second line of defence: the
+ * audit row must survive even for the attempt that carried the bad payload.
+ * Only NUL is removed, and only on the way into storage — nothing is silently
+ * "cleaned up" before validation sees it.
+ */
+function stripNulls<T>(value: T): T {
+  if (typeof value === "string") return value.replaceAll("\u0000", "") as T;
+  if (Array.isArray(value)) return value.map((item) => stripNulls(item)) as T;
+  // PLAIN objects only. Rebuilding a Date/Map/Set through Object.entries would
+  // flatten it to `{}` — `output` is typed `unknown`, so that trap stays open
+  // unless this walk refuses to touch anything it does not understand.
+  if (value !== null && typeof value === "object" && isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, stripNulls(item)]),
+    ) as T;
+  }
+  return value;
+}
+
+function isPlainObject(value: object): boolean {
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 export function makeDrizzleGenerationLog(deps: DrizzleGenerationLogDeps): GenerationLog {
   return {
     async record(entry: GenerationLogEntry): Promise<void> {
@@ -86,10 +116,10 @@ export function makeDrizzleGenerationLog(deps: DrizzleGenerationLogDeps): Genera
               ? entry.validationFailures.map((failure) => ({
                   stage: failure.stage,
                   rule: failure.rule,
-                  message: failure.message,
+                  message: stripNulls(failure.message),
                 }))
               : null,
-            output: entry.output === undefined ? null : entry.output,
+            output: entry.output === undefined ? null : stripNulls(entry.output),
             postJobId: entry.postJobId ?? null,
             batchId: entry.batchId ?? null,
             productCode: entry.productCode ?? null,

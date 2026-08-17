@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
@@ -15,7 +15,10 @@ import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
+import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
+import { makeLocalMediaCache } from "@/adapters/media/local-media-cache";
 import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
+import { makeFacebookOAuthClient } from "@/adapters/meta/facebook-oauth";
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
 import { makeTikTokClient } from "@/adapters/tiktok/tiktok-client";
@@ -31,10 +34,22 @@ import {
 import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
+import type { MediaBlobStore } from "@/core/ports/media-blob-store";
+import type { MediaByteCache } from "@/core/ports/media-byte-cache";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
-import type { ChannelPlatform, ChannelPublisher } from "@/core/ports/publisher";
+import type {
+  ChannelConnectClient,
+  ChannelPlatform,
+  ChannelPublisher,
+  ScheduledPublisher,
+} from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
+import {
+  makeConnectFacebookChannels,
+  type ConnectFacebookChannels,
+} from "@/core/usecases/connect-facebook-channels";
+import { makeManageChannels, type ManageChannels } from "@/core/usecases/manage-channels";
 import { makeCreatePostBatch, type CreatePostBatch } from "@/core/usecases/create-post-batch";
 import { makeGetBatchStatus, type GetBatchStatus } from "@/core/usecases/get-batch-status";
 import { makeGetMediaContent, type GetMediaContent } from "@/core/usecases/get-media-content";
@@ -45,7 +60,18 @@ import {
 } from "@/core/usecases/manage-channel-groups";
 import type { ManagePromptTemplates } from "@/core/usecases/manage-prompt-templates";
 import { makeReapPostJobs, type ReapPostJobs } from "@/core/usecases/reap-post-jobs";
+import {
+  makeReconcileScheduledPosts,
+  type ReconcileScheduledPosts,
+} from "@/core/usecases/reconcile-scheduled-posts";
 import { makeRetryPostJob, type RetryPostJob } from "@/core/usecases/retry-post-job";
+import { makeCleanupUploads, type CleanupUploads } from "@/core/usecases/cleanup-uploads";
+import {
+  makeCleanupMediaCache,
+  type CleanupMediaCache,
+} from "@/core/usecases/cleanup-media-cache";
+import { makeReadMediaBytes, type ReadMediaBytes } from "@/core/usecases/read-media-bytes";
+import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
 import {
   makeCancelScheduledJob,
   type CancelScheduledJob,
@@ -81,7 +107,10 @@ import {
 import {
   loadConfig,
   loadMediaConfig,
+  loadMediaCacheConfig,
+  loadUploadConfig,
   loadMetaConfig,
+  loadMetaOAuthConfig,
   loadSecretsConfig,
   loadVideoConfig,
   type Config,
@@ -111,6 +140,12 @@ export interface Usecases {
   /** E2/E3 — catalog screen: products with their composable/blocked verdict. */
   listCatalogProducts: ListCatalogProducts;
   composePost: ComposePost;
+  /** E9 — mode B: register operator-supplied files as media assets. */
+  uploadMedia: UploadMedia;
+  /** E9.4 — periodic sweep of uploads nobody posted. */
+  cleanupUploads: CleanupUploads;
+  /** E3.6 — periodic sweep of the Drive byte cache (TTL-based). */
+  cleanupMediaCache: CleanupMediaCache;
   generateCaptions: GenerateCaptions;
   /** E10.7 — versioned prompt catalog (list/create/activate). */
   promptTemplates: ManagePromptTemplates;
@@ -126,6 +161,10 @@ export interface Usecases {
   retryPostJob: RetryPostJob;
   /** E7.6 — preset channel groups (list/create/update/delete). */
   channelGroups: ManageChannelGroups;
+  /** E5.1 — the channel list itself (read / switch on-off / remove). */
+  channels: ManageChannels;
+  /** E5.1 — connect Fanpages: OAuth, or by pasting a User Access Token. */
+  connectChannels: ConnectFacebookChannels;
   /** E8.4 — "bài đã hẹn": what publishes next, soonest first. */
   listScheduledJobs: ListScheduledJobs;
   /** E8.4 — move a scheduled post to another time. */
@@ -134,6 +173,8 @@ export interface Usecases {
   cancelScheduledJob: CancelScheduledJob;
   /** Periodic sweep for jobs stuck in `publishing` / overdue with no queue entry. */
   reapPostJobs: ReapPostJobs;
+  /** E8.6 — periodic sweep asking Facebook whether it published a handed-over post. */
+  reconcileScheduledPosts: ReconcileScheduledPosts;
   /** E3.6 — serve one media asset to Meta's fetcher (called by /api/media). */
   getMediaContent: GetMediaContent;
   /**
@@ -164,6 +205,10 @@ export type SignMediaUrl = (input: SignMediaUrlRequest) => SignedMediaUrl;
  */
 export interface UsecaseOverrides {
   drive?: DriveSource;
+  /** E9 — swap the upload store (tests use a temp dir, prod a Docker volume). */
+  blobs?: MediaBlobStore;
+  /** E3.6 — swap the Drive byte cache (a smoke script may want it disabled). */
+  mediaCache?: MediaByteCache;
   sheet?: SheetSource;
   /** Worker passes its own queue so one process holds ONE Redis connection. */
   queue?: JobQueue;
@@ -172,6 +217,13 @@ export interface UsecaseOverrides {
   publishers?: Partial<Record<ChannelPlatform, ChannelPublisher>>;
   /** E3 Phase 2 — tests/scripts inject a probe instead of spawning ffprobe. */
   videoProbe?: VideoAssetProbe;
+  /** E5.1 — tests/scripts connect channels without a Meta app. */
+  channelConnect?: ChannelConnectClient;
+  /**
+   * E5 — the photo bytes the publisher uploads. Overridden by the smoke script,
+   * whose media ids are fixtures that exist in neither Drive nor the snapshot.
+   */
+  readMediaBytes?: ReadMediaBytes;
 }
 
 export interface Container extends Infra {
@@ -247,7 +299,27 @@ function makeLazyPublisher(logger: Logger): ChannelPublisher {
   return {
     publishImagePost: (input) => build().publishImagePost(input),
     publishVideoPost: (input) => build().publishVideoPost(input),
+    // E8.6 — Facebook holds scheduled posts itself. Delegating instead of
+    // exposing the built object keeps the adapter lazy: reading `.scheduled`
+    // does not build a Graph client, calling one of its methods does.
+    scheduled: {
+      schedulePost: (input) => scheduledOf(build()).schedulePost(input),
+      getPostState: (input) => scheduledOf(build()).getPostState(input),
+      deleteScheduledPost: (input) => scheduledOf(build()).deleteScheduledPost(input),
+    },
   };
+}
+
+/** The scheduled half of a publisher that must have one (the Facebook adapter). */
+function scheduledOf(publisher: ChannelPublisher): ScheduledPublisher {
+  if (!publisher.scheduled) {
+    throw new AppError("INTERNAL", {
+      message: "This publisher has no scheduled half wired",
+      userMessage: "Kênh này chưa hỗ trợ hẹn giờ đăng — vui lòng báo quản trị viên.",
+      context: { reason: "SCHEDULER_NOT_WIRED" },
+    });
+  }
+  return publisher.scheduled;
 }
 
 /**
@@ -265,6 +337,38 @@ function makeLazyTikTokPublisher(logger: Logger): ChannelPublisher {
   return {
     publishImagePost: (input) => build().publishImagePost(input),
     publishVideoPost: (input) => build().publishVideoPost(input),
+  };
+}
+
+/**
+ * Facebook CONNECT client (E5.1), built on first use — the same contract as the
+ * publisher: a process that never connects a Page reads no Meta app credential.
+ *
+ * The credentials are optional here (see MetaOAuthConfigSchema): pasting a User
+ * Access Token needs none, and the OAuth door refuses with a message naming the
+ * missing variables. So a missing META_APP_SECRET must NOT stop this from being
+ * built — it only changes what the adapter can do.
+ */
+function makeLazyFacebookConnect(logger: Logger): ChannelConnectClient {
+  let real: ChannelConnectClient | null = null;
+  const build = (): ChannelConnectClient => {
+    if (!real) {
+      const oauth = loadMetaOAuthConfig();
+      real = makeFacebookOAuthClient({
+        logger,
+        appId: oauth.META_APP_ID ?? null,
+        appSecret: oauth.META_APP_SECRET ?? null,
+        redirectUri: oauth.META_OAUTH_REDIRECT_URI ?? null,
+        version: loadMetaConfig().META_GRAPH_VERSION,
+      });
+    }
+    return real;
+  };
+  return {
+    buildAuthorizeUrl: (input) => build().buildAuthorizeUrl(input),
+    exchangeCodeForUserToken: (input) => build().exchangeCodeForUserToken(input),
+    extendUserToken: (input) => build().extendUserToken(input),
+    listAccounts: (input) => build().listAccounts(input),
   };
 }
 
@@ -333,6 +437,29 @@ export function makeTenantSecretBox(logger: Logger, env?: EnvRecord): SecretBox 
   });
 }
 
+/**
+ * Drive byte cache (E3.6). TTL is configured in hours; the store thinks in ms.
+ *
+ * Returns the hours ALONGSIDE the store because the sweep needs the very same
+ * number: two readings of the config are two chances to drift, and a sweep on a
+ * different TTL either deletes entries the store still serves or keeps files
+ * long past what was configured. One parse, one number, both callers.
+ */
+function makeMediaCache(
+  logger: Logger,
+  env?: EnvRecord,
+): { cache: MediaByteCache; ttlHours: number } {
+  const config = loadMediaCacheConfig(env);
+  return {
+    cache: makeLocalMediaCache({
+      root: config.MEDIA_CACHE_ROOT,
+      ttlMs: config.MEDIA_CACHE_TTL_HOURS * 60 * 60 * 1000,
+      logger,
+    }),
+    ttlHours: config.MEDIA_CACHE_TTL_HOURS,
+  };
+}
+
 /** HMAC for signed media URLs; MEDIA_SIGNING_SECRET is read on first signature. */
 function makeLazyMediaSigner(env?: EnvRecord): SignatureFn {
   return makeMediaSigner({ readSecret: () => loadMediaConfig(env).MEDIA_SIGNING_SECRET });
@@ -361,6 +488,18 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     tiktok: overrides.publishers?.tiktok ?? makeLazyTikTokPublisher(deps.logger),
   };
   const drive = overrides.drive ?? google.drive;
+  // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
+  // Google sources it needs no lazy wrapper.
+  const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
+  // E3.6 — read-through cache in front of Drive. Cheap to build (a path and a
+  // TTL, no connection), so like the blob store it needs no lazy wrapper; both
+  // of its variables have working defaults, so no deployment must set them.
+  // The sweep below reuses `mediaCacheTtlHours` from this ONE parse. A test that
+  // overrides the store keeps these hours: the port exposes no TTL to read back,
+  // and a wrong number in a test is louder than a silently divergent sweep.
+  const builtMediaCache = makeMediaCache(deps.logger);
+  const mediaCache = overrides.mediaCache ?? builtMediaCache.cache;
+  const mediaCacheTtlHours = builtMediaCache.ttlHours;
   const mediaSign = makeLazyMediaSigner();
   /**
    * Read on FIRST USE, not here: a web/worker process must boot without
@@ -408,6 +547,27 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       logger: deps.logger,
       videoProbe: overrides.videoProbe ?? makeLazyVideoProbe(drive, deps.logger),
     }),
+    uploadMedia: makeUploadMedia({
+      blobs,
+      media,
+      logger: deps.logger,
+      // Prefixed so an id is recognisable as mode B in a log line, and hex-only
+      // so it is a safe path segment for the blob store.
+      newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
+    }),
+    cleanupUploads: makeCleanupUploads({
+      media,
+      blobs,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+    cleanupMediaCache: makeCleanupMediaCache({
+      cache: mediaCache,
+      // The SAME hours the adapter serves by — same parse, not a second read.
+      ttlHours: mediaCacheTtlHours,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
     generateCaptions: makeLazyGenerateCaptions({
       logger: deps.logger,
       clock: deps.clock,
@@ -445,6 +605,19 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // without ffprobe boots fine and only warns when a video is published.
       videoProbe: overrides.videoProbe ?? makeLazyVideoProbe(drive, deps.logger),
       mediaAssets: media,
+      // E5 — the photo path UPLOADS bytes (multipart `source`) instead of
+      // handing Graph a URL to fetch, so it needs a way to read one file at a
+      // time: cache first, then Drive / the blob store. Same store and same
+      // lookup the media route serves from; nothing here re-reads the config.
+      readMediaBytes:
+        overrides.readMediaBytes ??
+        makeReadMediaBytes({
+          cache: mediaCache,
+          drive,
+          blobs,
+          mediaAssets: media,
+          logger: deps.logger,
+        }),
     }),
     getBatchStatus: makeGetBatchStatus({ postJobs, logger: deps.logger }),
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
@@ -474,11 +647,23 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       queue,
       logger: deps.logger,
       users,
+      // E8.6 — a cancel must be able to DELETE the post Facebook is holding;
+      // without these two it can only refuse, and a refused cancel is a post
+      // that publishes anyway.
+      channels,
+      publishers,
     }),
     reapPostJobs: makeReapPostJobs({
       postJobs,
       queue,
       channels,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+    reconcileScheduledPosts: makeReconcileScheduledPosts({
+      postJobs,
+      channels,
+      publishers,
       clock: deps.clock,
       logger: deps.logger,
     }),
@@ -488,8 +673,20 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       logger: deps.logger,
       newId: () => randomUUID(),
     }),
+    channels: makeManageChannels({ channels, logger: deps.logger, users }),
+    connectChannels: makeConnectFacebookChannels({
+      channels,
+      connect: overrides.channelConnect ?? makeLazyFacebookConnect(deps.logger),
+      logger: deps.logger,
+      // 32 random bytes, hex: the CSRF nonce of the OAuth round trip. Core has
+      // no crypto of its own (docs/07 §2), so it is injected here.
+      newState: () => randomBytes(32).toString("hex"),
+      users,
+    }),
     getMediaContent: makeGetMediaContent({
       drive,
+      blobs,
+      cache: mediaCache,
       mediaAssets: media,
       sign: mediaSign,
       clock: deps.clock,
@@ -525,6 +722,27 @@ export function getContainer(): Container {
  * of truth with the signer.
  */
 export { MEDIA_QUERY_PARAMS, MEDIA_ROUTE_PREFIX } from "@/core/domain/media-url";
+
+/**
+ * E9 upload caps, re-exported for the same reason: the intake route must know
+ * them to refuse a file before buffering it, and a second copy of the numbers
+ * in the route would give one business rule two homes.
+ */
+export { MAX_UPLOADS_PER_POST, MAX_UPLOAD_BYTES } from "@/core/domain/uploaded-media";
+export type { UploadedFile } from "@/core/usecases/upload-media";
+
+/**
+ * E5.2 — sign-in with Facebook asks for the same Page scopes the channel import
+ * needs, so the two must never drift apart. Re-exported rather than retyped in
+ * `app/_auth`: a second list is a second thing to forget when a scope changes.
+ */
+export { FACEBOOK_CONNECT_SCOPES } from "@/adapters/meta/facebook-oauth";
+
+/**
+ * The seeded tenant. Re-exported for the sign-in flow, which has no user ->
+ * tenant mapping yet (PENDING: multi-tenant sign-in is a product decision).
+ */
+export { DEMO_TENANT_ID } from "@/adapters/db/seed-constants";
 
 /**
  * Drains the DB pool, any lazily built producer queue and the AI registry cache

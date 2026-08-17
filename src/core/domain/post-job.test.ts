@@ -3,13 +3,23 @@ import { describe, expect, it } from "vitest";
 import { AppError } from "./errors";
 import {
   allowedTransitionsFrom,
+  canOperatorRetryPostJob,
   canTransitionPostJob,
   deferredPostJobQueueId,
+  HANDOFF_FAILED_ERROR_CODE,
+  mayHoldUnconfirmedScheduledPost,
   deriveBatchStatus,
   evaluateScheduledAt,
+  handoffWakeDelayMs,
+  HANDOFF_DEADLINE_MS,
+  HANDOFF_RETRY_INTERVAL_MS,
+  HANDOFF_WINDOW_START_MS,
   isFinalPostJobStatus,
   isPendingSchedule,
   MAX_SCHEDULE_AHEAD_MS,
+  nextHandoffAttemptDelayMs,
+  planScheduledPublish,
+  toUnixSeconds,
   scheduleRejectionMessage,
   POST_JOB_STATUSES,
   postJobDuplicateKey,
@@ -36,6 +46,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     publishedPostId: null,
     publishedUrl: null,
     publishedAt: null,
+    scheduledPostId: null,
     captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
     media: [{ driveFileId: "d1", fileName: "MGKVX6310-Tím (1).jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
@@ -432,5 +443,235 @@ describe("transitionPostJob — queue id bookkeeping (E8.4)", () => {
     expect(
       transitionPostJob(publishing, "failed", { errorCode: "PUBLISH_FAILED" }).queueJobId,
     ).toBeNull();
+  });
+});
+
+// --- E8.6: the post Facebook holds ------------------------------------------
+
+describe("transitionPostJob — scheduled_on_facebook (E8.6)", () => {
+  const publishing = makeJob({ status: "publishing", attemptCount: 1, queueJobId: "pp.job-1" });
+
+  it("refuses the handoff state without the platform post id", () => {
+    // Without it nothing can reconcile or delete the post, and Facebook still
+    // publishes at the hour: an unidentified scheduled post cannot be stopped.
+    expect(() => transitionPostJob(publishing, "scheduled_on_facebook", {})).toThrow(AppError);
+    expect(() =>
+      transitionPostJob(publishing, "scheduled_on_facebook", { scheduledPostId: "   " }),
+    ).toThrow(AppError);
+  });
+
+  it("stores the platform post id and drops the queue entry", () => {
+    const handed = transitionPostJob(publishing, "scheduled_on_facebook", {
+      scheduledPostId: " 555_1 ",
+      reason: "HANDED_OFF_TO_PLATFORM",
+    });
+    expect(handed.status).toBe("scheduled_on_facebook");
+    expect(handed.scheduledPostId).toBe("555_1");
+    // NOT published: no post id, no timestamp, nothing to show as a live link.
+    expect(handed.publishedPostId).toBeNull();
+    expect(handed.publishedAt).toBeNull();
+    expect(handed.queueJobId).toBeNull();
+  });
+
+  it("only leaves for published, failed or blocked — never back to the queue", () => {
+    expect(allowedTransitionsFrom("scheduled_on_facebook")).toEqual([
+      "published",
+      "failed",
+      "blocked",
+    ]);
+    // Re-queueing would upload the album again and put TWO posts on the Page.
+    expect(canTransitionPostJob("scheduled_on_facebook", "queued")).toBe(false);
+    expect(canTransitionPostJob("scheduled_on_facebook", "publishing")).toBe(false);
+  });
+
+  it("becomes published only with a post id (the reconciliation sweep)", () => {
+    const handed = transitionPostJob(publishing, "scheduled_on_facebook", {
+      scheduledPostId: "555_1",
+    });
+    expect(() => transitionPostJob(handed, "published", {})).toThrow(AppError);
+    const published = transitionPostJob(handed, "published", {
+      publishedPostId: "555_1",
+      publishedUrl: "https://www.facebook.com/page/posts/1",
+    });
+    expect(published.status).toBe("published");
+    expect(published.publishedUrl).toBe("https://www.facebook.com/page/posts/1");
+    // The handoff id stays on the row as the trace of how it got there.
+    expect(published.scheduledPostId).toBe("555_1");
+  });
+
+  it("counts as RUNNING in a batch — nothing is live yet", () => {
+    expect(deriveBatchStatus(["scheduled_on_facebook"])).toBe("running");
+    expect(deriveBatchStatus(["published", "scheduled_on_facebook"])).toBe("running");
+    expect(isFinalPostJobStatus("scheduled_on_facebook")).toBe(false);
+  });
+});
+
+describe("planScheduledPublish (E8.6 window)", () => {
+  const NOW = Date.parse("2026-08-13T02:00:00.000Z");
+  const at = (offsetMs: number): Date => new Date(NOW + offsetMs);
+
+  // --- Edge cases first ------------------------------------------------------
+
+  it("treats a post with no hour as publish-now, not late", () => {
+    expect(planScheduledPublish(null, NOW)).toEqual({ action: "publish_now", lateByMs: 0 });
+    expect(planScheduledPublish(new Date("nope"), NOW)).toEqual({
+      action: "publish_now",
+      lateByMs: 0,
+    });
+  });
+
+  it("waits until the window opens when the hour is far away", () => {
+    expect(planScheduledPublish(at(2 * 60 * 60_000), NOW)).toEqual({
+      action: "wait",
+      wakeInMs: 2 * 60 * 60_000 - HANDOFF_WINDOW_START_MS,
+      reason: "BEFORE_HANDOFF_WINDOW",
+    });
+  });
+
+  it("hands over anywhere between T-30 and T-12, the two measured bounds", () => {
+    expect(planScheduledPublish(at(HANDOFF_WINDOW_START_MS), NOW)).toEqual({
+      action: "hand_off",
+      leadMs: HANDOFF_WINDOW_START_MS,
+    });
+    expect(planScheduledPublish(at(20 * 60_000), NOW)).toEqual({
+      action: "hand_off",
+      leadMs: 20 * 60_000,
+    });
+    // Exactly at the deadline still counts: the upload has 12 minutes, Facebook
+    // needs the last ~10.
+    expect(planScheduledPublish(at(HANDOFF_DEADLINE_MS), NOW)).toEqual({
+      action: "hand_off",
+      leadMs: HANDOFF_DEADLINE_MS,
+    });
+  });
+
+  it("waits for the hour once it is too late to hand over — it never publishes early", () => {
+    expect(planScheduledPublish(at(HANDOFF_DEADLINE_MS - 1), NOW)).toEqual({
+      action: "wait",
+      wakeInMs: HANDOFF_DEADLINE_MS - 1,
+      reason: "TOO_LATE_TO_HAND_OFF",
+    });
+    expect(planScheduledPublish(at(60_000), NOW)).toEqual({
+      action: "wait",
+      wakeInMs: 60_000,
+      reason: "TOO_LATE_TO_HAND_OFF",
+    });
+  });
+
+  it("publishes immediately once the hour has passed, and says how late", () => {
+    expect(planScheduledPublish(at(0), NOW)).toEqual({ action: "publish_now", lateByMs: 0 });
+    expect(planScheduledPublish(at(-3 * 60_000), NOW)).toEqual({
+      action: "publish_now",
+      lateByMs: 3 * 60_000,
+    });
+  });
+
+  it("only waits for the hour when the post cannot be handed over at all", () => {
+    expect(planScheduledPublish(at(20 * 60_000), NOW, { canHandOff: false })).toEqual({
+      action: "wait",
+      wakeInMs: 20 * 60_000,
+      reason: "HANDOFF_NOT_AVAILABLE",
+    });
+  });
+});
+
+describe("nextHandoffAttemptDelayMs (E8.6 retries inside the window)", () => {
+  const NOW = Date.parse("2026-08-13T02:00:00.000Z");
+  const at = (offsetMs: number): Date => new Date(NOW + offsetMs);
+
+  it("uses the retry interval while another attempt fits before the deadline", () => {
+    expect(nextHandoffAttemptDelayMs(at(30 * 60_000), NOW)).toBe(HANDOFF_RETRY_INTERVAL_MS);
+    // T-17: +5' lands on T-12, exactly the last possible start.
+    expect(nextHandoffAttemptDelayMs(at(17 * 60_000), NOW)).toBe(HANDOFF_RETRY_INTERVAL_MS);
+  });
+
+  it("waits for the hour itself when no attempt fits any more", () => {
+    // T-16: +5' would land at T-11, below the deadline, so it waits for T.
+    expect(nextHandoffAttemptDelayMs(at(16 * 60_000), NOW)).toBe(16 * 60_000);
+    expect(nextHandoffAttemptDelayMs(at(60_000), NOW)).toBe(60_000);
+  });
+
+  it("never returns a negative delay for an hour already gone", () => {
+    expect(nextHandoffAttemptDelayMs(at(-60_000), NOW)).toBe(0);
+  });
+});
+
+describe("handoffWakeDelayMs / toUnixSeconds", () => {
+  const NOW = Date.parse("2026-08-13T02:00:00.000Z");
+
+  it("wakes the queue entry at the START of the window", () => {
+    expect(handoffWakeDelayMs(new Date(NOW + 60 * 60_000), NOW)).toBe(
+      60 * 60_000 - HANDOFF_WINDOW_START_MS,
+    );
+  });
+
+  it("wakes immediately when the window is already open (or the hour has passed)", () => {
+    expect(handoffWakeDelayMs(new Date(NOW + 10 * 60_000), NOW)).toBe(0);
+    expect(handoffWakeDelayMs(new Date(NOW - 60_000), NOW)).toBe(0);
+    expect(handoffWakeDelayMs(null, NOW)).toBe(0);
+  });
+
+  it("converts to the unix SECONDS Meta expects", () => {
+    const at = new Date("2026-08-13T02:00:00.999Z");
+    // Floored, never rounded up: a rounded-up second could push a borderline
+    // schedule past a boundary Meta measures itself.
+    expect(toUnixSeconds(at)).toBe(Math.floor(at.getTime() / 1000));
+    expect(toUnixSeconds(at) * 1000).toBe(at.getTime() - 999);
+  });
+});
+
+/**
+ * E8.6 — the row-level half of business rule 4. `failed` alone says "an operator
+ * may re-run this"; `failed` + HANDOFF_FAILED says "Facebook may already be
+ * holding a post for it", and those two must never be confused, because every
+ * road out of `queued` ends on the Page.
+ */
+describe("mayHoldUnconfirmedScheduledPost / canOperatorRetryPostJob", () => {
+  const unconfirmed = makeJob({
+    status: "failed",
+    lastErrorCode: HANDOFF_FAILED_ERROR_CODE,
+    scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+  });
+
+  it("recognises the row failUnconfirmedHandoff leaves behind", () => {
+    expect(mayHoldUnconfirmedScheduledPost(unconfirmed)).toBe(true);
+    expect(canOperatorRetryPostJob(unconfirmed)).toBe(false);
+  });
+
+  it("fails closed when the row lost its scheduled hour", () => {
+    // The hour is not part of the condition on purpose: a guard that switches
+    // itself off on odd data is not a guard. (The signature does not even accept
+    // `scheduledAt`, which is the point — it cannot be read.)
+    expect(mayHoldUnconfirmedScheduledPost(makeJob({ ...unconfirmed, scheduledAt: null }))).toBe(
+      true,
+    );
+  });
+
+  it("stays narrow: only `failed` + that one code", () => {
+    expect(mayHoldUnconfirmedScheduledPost({ ...unconfirmed, status: "blocked" })).toBe(false);
+    expect(
+      mayHoldUnconfirmedScheduledPost({ ...unconfirmed, lastErrorCode: "PUBLISH_FAILED" }),
+    ).toBe(false);
+    expect(mayHoldUnconfirmedScheduledPost({ ...unconfirmed, lastErrorCode: null })).toBe(false);
+    expect(mayHoldUnconfirmedScheduledPost(null)).toBe(false);
+  });
+
+  it("keeps every ordinary failed/blocked job retryable", () => {
+    expect(
+      canOperatorRetryPostJob(makeJob({ status: "failed", lastErrorCode: "PUBLISH_FAILED" })),
+    ).toBe(true);
+    expect(
+      canOperatorRetryPostJob(makeJob({ status: "blocked", lastErrorCode: "OUT_OF_STOCK" })),
+    ).toBe(true);
+  });
+
+  it.each([
+    "draft",
+    "queued",
+    "publishing",
+    "scheduled_on_facebook",
+    "published",
+  ] as PostJobStatus[])("refuses %s", (status) => {
+    expect(canOperatorRetryPostJob(makeJob({ status }))).toBe(false);
   });
 });

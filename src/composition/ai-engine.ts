@@ -9,7 +9,10 @@ import {
   BUILT_IN_TEMPLATES,
   makeStaticPromptStore,
 } from "@/adapters/ai/prompt-store/static-prompt-store";
-import { makeCachedModelPolicyStore } from "@/adapters/ai/registry-store/cached-model-policy-store";
+import {
+  makeCachedModelPolicyStore,
+  type CachedModelPolicyStore,
+} from "@/adapters/ai/registry-store/cached-model-policy-store";
 import { makeYamlModelPolicyStore } from "@/adapters/ai/registry-store/yaml-model-policy-store";
 import { DrizzleAiModelPolicyOverrideRepo } from "@/adapters/db/ai-model-policy-override-repo.drizzle";
 import { makeDrizzleGenerationLog } from "@/adapters/db/ai-generation-log.drizzle";
@@ -17,7 +20,15 @@ import { DrizzleAiPromptTemplateRepo } from "@/adapters/db/ai-prompt-template-re
 import type { Database } from "@/adapters/db/client";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
 import { makeContentEngine } from "@/core/ai/content-engine";
-import type { GenerationLog, ModelPolicyStore, PromptStore } from "@/core/ports/ai";
+import type {
+  AIProviderAdapter,
+  AIProviderName,
+  AITier,
+  GenerationLog,
+  ModelPolicyOverrideRepo,
+  ModelPolicyStore,
+  PromptStore,
+} from "@/core/ports/ai";
 import type { Clock, Logger } from "@/core/ports/infra";
 import {
   makeGenerateCaptions,
@@ -29,7 +40,7 @@ import {
   type ManagePromptTemplates,
 } from "@/core/usecases/manage-prompt-templates";
 
-import { loadAiConfig, type EnvRecord } from "./config";
+import { loadAiConfig, type AiConfig, type EnvRecord } from "./config";
 
 export type GenerateCaptions = (input: GenerateCaptionsInput) => Promise<GenerateCaptionsResult>;
 
@@ -70,6 +81,62 @@ function makeAiCache(deps: AiWiringDeps): { cache: AiCache | undefined; close: (
   };
 }
 
+/**
+ * Short, stable label for the env tier swap, used as the Redis cache variant.
+ * "default" when nothing is overridden, so the common deployment keeps a
+ * readable key. Order is fixed, not insertion order, so the same settings always
+ * produce the same label.
+ */
+export function tierModelsVariant(tierModels: Partial<Record<AITier, string>>): string {
+  const parts = (["cheap", "mid", "top"] as const)
+    .map((tier) => [tier, tierModels[tier]?.trim()] as const)
+    .filter((entry): entry is readonly [AITier, string] => Boolean(entry[1]))
+    // ":" is the cache key separator; a model key like "openai:gpt-4.1" would
+    // otherwise add segments and make the tenant-wide invalidation pattern
+    // depend on tenant ids never containing a variant-shaped substring.
+    .map(([tier, key]) => `${tier}=${key.replaceAll(":", "_")}`);
+
+  return parts.length > 0 ? parts.join(",") : "default";
+}
+
+/**
+ * YAML store + tenant overlay + Redis cache, built together.
+ *
+ * One function rather than two call sites on purpose: the tier swap has to reach
+ * BOTH — the YAML store (which model each tier resolves to) and the cache key
+ * (so another process's routing is never served back). Passing it to one and
+ * forgetting the other is precisely the bug that shipped on 15/08/2026, and
+ * splitting them again would let it return.
+ */
+export function makeAiPolicyStore(input: {
+  config: AiConfig;
+  clock: Clock;
+  logger: Logger;
+  cache?: AiCache;
+  overrides?: ModelPolicyOverrideRepo;
+}): CachedModelPolicyStore {
+  const tierModels: Partial<Record<AITier, string>> = {
+    cheap: input.config.AI_MODEL_CHEAP,
+    mid: input.config.AI_MODEL_MID,
+    top: input.config.AI_MODEL_TOP,
+  };
+
+  return makeCachedModelPolicyStore({
+    base: makeYamlModelPolicyStore({
+      filePath: input.config.AI_MODELS_CONFIG_PATH,
+      clock: input.clock,
+      logger: input.logger,
+      ttlMs: input.config.AI_REGISTRY_CACHE_TTL_MS,
+      tierModels,
+    }),
+    overrides: input.overrides,
+    cache: input.cache,
+    variant: tierModelsVariant(tierModels),
+    logger: input.logger,
+    ttlMs: input.config.AI_REGISTRY_CACHE_TTL_MS,
+  });
+}
+
 export interface AiStores {
   policies: ModelPolicyStore;
   prompts: PromptStore;
@@ -89,17 +156,12 @@ export function makeAiStores(deps: AiWiringDeps): AiStores {
   const promptRepo = new DrizzleAiPromptTemplateRepo(deps.db, deps.logger);
 
   return {
-    policies: makeCachedModelPolicyStore({
-      base: makeYamlModelPolicyStore({
-        filePath: config.AI_MODELS_CONFIG_PATH,
-        clock: deps.clock,
-        logger: deps.logger,
-        ttlMs: config.AI_REGISTRY_CACHE_TTL_MS,
-      }),
-      overrides: new DrizzleAiModelPolicyOverrideRepo(deps.db, deps.logger),
-      cache,
+    policies: makeAiPolicyStore({
+      config,
+      clock: deps.clock,
       logger: deps.logger,
-      ttlMs: config.AI_REGISTRY_CACHE_TTL_MS,
+      cache,
+      overrides: new DrizzleAiModelPolicyOverrideRepo(deps.db, deps.logger),
     }),
     prompts: makeDbPromptStore({
       repo: promptRepo,
@@ -147,6 +209,39 @@ export function makeLazyPromptTemplates(deps: AiWiringDeps): ManagePromptTemplat
 }
 
 /**
+ * Provider adapters actually wired for this process.
+ *
+ * OpenAI is the only provider guaranteed to be present (owner decision
+ * 15/08/2026, single-provider mode). Google is wired only when a key exists, so
+ * a deployment without GOOGLE_AI_API_KEY generates content instead of refusing
+ * to start. The registry decides which of them is ever REACHED — a tier naming
+ * an unwired provider still fails loudly in the engine, it is not silently
+ * skipped.
+ */
+export function buildProviders(
+  config: AiConfig,
+  logger: Logger,
+): Partial<Record<AIProviderName, AIProviderAdapter>> {
+  const providers: Partial<Record<AIProviderName, AIProviderAdapter>> = {
+    openai: makeOpenAIProviderAdapter({ apiKey: config.OPENAI_API_KEY, logger }),
+  };
+
+  if (config.GOOGLE_AI_API_KEY) {
+    providers.google = makeGoogleProviderAdapter({
+      apiKey: config.GOOGLE_AI_API_KEY,
+      logger,
+    });
+  } else {
+    logger.warn("Google AI provider not wired: GOOGLE_AI_API_KEY is unset", {
+      component: "ai-engine",
+      wired_providers: Object.keys(providers),
+    });
+  }
+
+  return providers;
+}
+
+/**
  * Lazy AI wiring, same contract as `google-sources.ts`: provider keys, the
  * registry file and the Redis connection are touched on the FIRST generation
  * call, not at container build, so web/worker boot and `next build` succeed
@@ -163,10 +258,7 @@ export function makeLazyGenerateCaptions(deps: AiWiringDeps): GenerateCaptions {
     aiStoreClosers.add(stores.close);
 
     const contentEngine = makeContentEngine({
-      providers: {
-        google: makeGoogleProviderAdapter({ apiKey: config.GOOGLE_AI_API_KEY, logger: deps.logger }),
-        openai: makeOpenAIProviderAdapter({ apiKey: config.OPENAI_API_KEY, logger: deps.logger }),
-      },
+      providers: buildProviders(config, deps.logger),
       policies: stores.policies,
       prompts: stores.prompts,
       generationLog: stores.generationLog,

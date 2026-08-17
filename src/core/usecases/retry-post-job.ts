@@ -1,8 +1,10 @@
 import { AppError } from "@/core/domain/errors";
 import {
+  HANDOFF_FAILED_ERROR_CODE,
   RETRYABLE_POST_JOB_STATUSES,
   deferredPostJobQueueId,
   isRetryablePostJobStatus,
+  mayHoldUnconfirmedScheduledPost,
   transitionPostJob,
   type PostJob,
   type PostJobStatus,
@@ -35,6 +37,11 @@ import { resolveActorUserId } from "./resolve-actor";
  *                 run does) and we cannot know whether the platform got the post.
  *   draft      -> INVALID_JOB_TRANSITION. Nothing failed yet; the batch flow
  *                 owns the first enqueue.
+ *
+ * And one refusal the STATUS cannot express (E8.6): a `failed` job whose last
+ * error is HANDOFF_FAILED may already have a scheduled post on the Page, so it
+ * is DUPLICATE_POST_BLOCKED — see the guard below for the three ways a retry of
+ * such a row ends with two posts.
  */
 
 export interface RetryPostJobInput {
@@ -128,6 +135,46 @@ export function makeRetryPostJob(deps: RetryPostJobDeps) {
         error_code: appError.code,
         job_status: job.status,
         user_message: appError.userMessage,
+      });
+      throw appError;
+    }
+
+    // --- The status is not enough (E8.6) ------------------------------------
+    // `failed` + HANDOFF_FAILED means the handoff ended without a verdict:
+    // Facebook may be holding a scheduled post for this exact job. Re-queueing
+    // it opens THREE roads to a second post, and the status guard above sees
+    // none of them, because all three start from a perfectly legal `queued`:
+    //   pressed in T-30..T-12 -> hand_off  -> a SECOND scheduled post;
+    //   pressed in T-12..T    -> wait      -> publish_now at T, live post next
+    //                                         to the one Facebook holds;
+    //   pressed after T       -> publish_now right away, same result.
+    // So the refusal has to happen here, on the row, before anything is queued.
+    // Recovery is a human one and the message says exactly what it is.
+    if (mayHoldUnconfirmedScheduledPost(job)) {
+      const appError = new AppError("DUPLICATE_POST_BLOCKED", {
+        message: "Refusing to retry a job whose handoff outcome is unknown",
+        userMessage:
+          "Bài này đã được giao lịch cho Facebook nhưng hệ thống không nhận được xác nhận — " +
+          "Trang CÓ THỂ đang giữ một bài hẹn của bài này. Chạy lại sẽ đăng trùng. " +
+          "Hãy mở Trang, vào mục bài đã lên lịch, xoá bài nếu thấy, rồi soạn lại bài mới.",
+        context: {
+          tenant_id: tenantId,
+          job_id: job.id,
+          batch_id: job.batchId,
+          channel: job.channelId,
+          from: job.status,
+          last_error_code: job.lastErrorCode,
+          scheduled_at: job.scheduledAt?.toISOString() ?? null,
+          reason: "HANDOFF_OUTCOME_UNKNOWN",
+        },
+      });
+      log.warn("Retry refused: the platform may already hold a scheduled post for this job", {
+        err: appError,
+        error_code: appError.code,
+        job_status: job.status,
+        last_error_code: HANDOFF_FAILED_ERROR_CODE,
+        user_message: appError.userMessage,
+        alert: "OPERATOR_ATTENTION",
       });
       throw appError;
     }

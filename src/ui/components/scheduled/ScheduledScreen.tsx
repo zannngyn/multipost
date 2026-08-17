@@ -146,7 +146,10 @@ export function ScheduledScreen() {
     cancel.mutate(params, {
       onSuccess: (result) => {
         setNotice(result.userMessage);
-        if (!result.queueEntryRemoved) {
+        // A post FACEBOOK was holding owns no queue entry (the handoff cleared
+        // it), so `queueEntryRemoved` is false by design there — warning about a
+        // leftover entry that never existed would be a false alarm.
+        if (!result.queueEntryRemoved && !result.platformPostDeleted) {
           setWarning(
             "Đã huỷ trong hệ thống, nhưng không xoá được lịch cũ trong hàng đợi. Bài vẫn sẽ KHÔNG lên (trạng thái đã là “Bị chặn”), chỉ là hàng đợi còn một mục thừa.",
           );
@@ -165,7 +168,8 @@ export function ScheduledScreen() {
         <p className="text-muted-foreground max-w-prose text-sm">
           Những bài đang chờ tới giờ đăng, sớm nhất ở trên. Giờ hiển thị theo múi giờ máy bạn (
           {timeZoneLabel()}). Đổi giờ hoặc huỷ chỉ được trước khi tới giờ — tồn kho vẫn được kiểm
-          tra lại ngay trước khi đăng.
+          tra lại ngay trước khi đăng. Bài mang nhãn “Facebook giữ lịch” đã nằm sẵn trên Facebook và
+          Facebook sẽ tự đăng: bài đó không đổi giờ được nữa, muốn đổi thì bấm Huỷ rồi soạn lại.
         </p>
       </header>
 

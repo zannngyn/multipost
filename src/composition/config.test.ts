@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import { AppError } from "@/core/domain/errors";
 
 import {
+  loadAiConfig,
   loadAuthConfig,
   loadConfig,
   loadGoogleConfig,
   loadMediaConfig,
+  loadMetaOAuthConfig,
   loadSecretsConfig,
   type EnvRecord,
 } from "./config";
@@ -178,6 +180,66 @@ describe("loadGoogleConfig — Service Account (E2)", () => {
   });
 });
 
+const OPENAI_ONLY_ENV = { OPENAI_API_KEY: "sk-openai" } satisfies EnvRecord;
+
+describe("loadAiConfig — single provider (E4, owner decision 15/08/2026)", () => {
+  it("accepts an env with OPENAI_API_KEY and no Google key at all", () => {
+    const config = loadAiConfig({ OPENAI_API_KEY: "sk-openai" });
+
+    expect(config).toMatchObject({
+      OPENAI_API_KEY: "sk-openai",
+      AI_MODELS_CONFIG_PATH: "./config/ai-models.yaml",
+    });
+    expect(config.GOOGLE_AI_API_KEY).toBeUndefined();
+  });
+
+  // `GOOGLE_AI_API_KEY=` is how a .env leaves an optional key out; it must read
+  // as "provider disabled", not as a validation error — that exact line is what
+  // used to stop the whole system from starting.
+  it.each(["", "   "])("treats a blank Google key (%j) as disabled, not as an error", (blank) => {
+    const config = loadAiConfig({ OPENAI_API_KEY: "sk-openai", GOOGLE_AI_API_KEY: blank });
+
+    expect(config.GOOGLE_AI_API_KEY).toBeUndefined();
+    expect(config.OPENAI_API_KEY).toBe("sk-openai");
+  });
+
+  it("trims a real key rather than passing surrounding whitespace to the SDK", () => {
+    expect(
+      loadAiConfig({ OPENAI_API_KEY: "sk-openai", GOOGLE_AI_API_KEY: "  AIza-paid  " })
+        .GOOGLE_AI_API_KEY,
+    ).toBe("AIza-paid");
+  });
+
+  it("requires OPENAI_API_KEY — without it nothing can be generated", () => {
+    expect(issuePaths(catchError(() => loadAiConfig({})))).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("leaves the tier model knobs undefined when nothing is set", () => {
+    const config = loadAiConfig(OPENAI_ONLY_ENV);
+
+    expect(config.AI_MODEL_CHEAP).toBeUndefined();
+    expect(config.AI_MODEL_MID).toBeUndefined();
+    expect(config.AI_MODEL_TOP).toBeUndefined();
+  });
+
+  it("passes a tier model through verbatim — the registry validates the key, not zod", () => {
+    const config = loadAiConfig({
+      ...OPENAI_ONLY_ENV,
+      AI_MODEL_CHEAP: " openai:gpt-4o-mini ",
+      AI_MODEL_TOP: "",
+    });
+
+    expect(config.AI_MODEL_CHEAP).toBe("openai:gpt-4o-mini");
+    expect(config.AI_MODEL_TOP).toBeUndefined();
+  });
+
+  it("keeps the Google key when it IS set, so re-enabling needs no code change", () => {
+    expect(
+      loadAiConfig({ OPENAI_API_KEY: "sk-openai", GOOGLE_AI_API_KEY: "AIza-paid" }),
+    ).toMatchObject({ GOOGLE_AI_API_KEY: "AIza-paid" });
+  });
+});
+
 describe("loadMediaConfig / loadSecretsConfig (E3 hardening)", () => {
   const KEY_32_BYTES = Buffer.alloc(32, 7).toString("base64");
 
@@ -243,6 +305,41 @@ describe("loadMediaConfig / loadSecretsConfig (E3 hardening)", () => {
   it("never echoes the value back in the error (only the variable name)", () => {
     const error = catchError(() => loadSecretsConfig({ TENANT_SECRETS_ENC_KEY: "super-secret!!" }));
     expect(JSON.stringify(error)).not.toContain("super-secret!!");
+  });
+});
+
+describe("loadMetaOAuthConfig — Facebook connect (E5.1)", () => {
+  it("accepts a deployment with NO Meta app at all (pasting a token still works)", () => {
+    expect(loadMetaOAuthConfig({})).toEqual({});
+  });
+
+  it("treats a BLANK variable as not set, not as an empty value", () => {
+    // `META_APP_SECRET=` in a .env means "not yet", and must not fail a process
+    // that never opens the OAuth door.
+    expect(
+      loadMetaOAuthConfig({ META_APP_ID: "1640548543911378", META_APP_SECRET: "  " }),
+    ).toEqual({ META_APP_ID: "1640548543911378" });
+  });
+
+  it("refuses a redirect URI that is not an http(s) URL", () => {
+    const error = catchError(() =>
+      loadMetaOAuthConfig({ META_OAUTH_REDIRECT_URI: "/api/channels/callback" }),
+    );
+    expect(issuePaths(error)).toEqual(["META_OAUTH_REDIRECT_URI"]);
+  });
+
+  it("reads a fully configured app", () => {
+    expect(
+      loadMetaOAuthConfig({
+        META_APP_ID: "1640548543911378",
+        META_APP_SECRET: "app-secret",
+        META_OAUTH_REDIRECT_URI: "https://mysp.example.com/api/channels/callback",
+      }),
+    ).toEqual({
+      META_APP_ID: "1640548543911378",
+      META_APP_SECRET: "app-secret",
+      META_OAUTH_REDIRECT_URI: "https://mysp.example.com/api/channels/callback",
+    });
   });
 });
 

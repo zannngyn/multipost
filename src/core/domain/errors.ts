@@ -34,6 +34,8 @@ export const ERROR_CODES = [
   // Publishing (E5/E7)
   "META_ERROR",
   "TOKEN_EXPIRED",
+  /** An upload URL the platform handed us points somewhere we will not send a token. */
+  "UPLOAD_HOST_NOT_ALLOWED",
   "CHANNEL_NOT_CONFIGURED",
   "DUPLICATE_POST_BLOCKED",
   "PUBLISH_FAILED",
@@ -75,6 +77,8 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   PROMPT_NOT_FOUND: "Không tìm thấy prompt template cho tác vụ này.",
   META_ERROR: "Facebook trả về lỗi khi đăng bài. Xem chi tiết trong nhật ký đăng.",
   TOKEN_EXPIRED: "Token của kênh đã hết hạn hoặc bị thu hồi. Cần kết nối lại kênh.",
+  UPLOAD_HOST_NOT_ALLOWED:
+    "Facebook trả về địa chỉ tải lên không hợp lệ — đã dừng để không gửi token đi nơi khác.",
   CHANNEL_NOT_CONFIGURED: "Kênh chưa được cấu hình cho đơn vị này. Kiểm tra phần quản lý kênh.",
   DUPLICATE_POST_BLOCKED: "Bài này đã được đăng (hoặc đang đăng) lên kênh này — đã chặn đăng trùng.",
   PUBLISH_FAILED: "Đăng bài thất bại sau số lần thử cho phép. Xem nhật ký để biết nguyên nhân.",
@@ -110,6 +114,7 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   PROMPT_NOT_FOUND: "Prompt template not found for task",
   META_ERROR: "Graph API call failed",
   TOKEN_EXPIRED: "Channel access token expired or revoked",
+  UPLOAD_HOST_NOT_ALLOWED: "Upload URL host is not in the allowlist",
   CHANNEL_NOT_CONFIGURED: "Channel not configured for tenant",
   DUPLICATE_POST_BLOCKED: "Duplicate publish blocked by idempotency lock",
   PUBLISH_FAILED: "Publish failed after allowed retries",

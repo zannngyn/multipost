@@ -49,6 +49,7 @@ function item(overrides: Partial<PostJobListItem> = {}): PostJobListItem {
     publishedPostId: null,
     publishedUrl: null,
     publishedAt: null,
+    scheduledPostId: null,
     captionText: "  Giannal – NẮNG   THÁNG TÁM GỌI TÊN  ",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: new Date(NOW + 3_600_000),
@@ -203,6 +204,23 @@ describe("listScheduledJobs — rows", () => {
       canCancel: false,
     });
     expect(result.items[0].userMessage).toContain("quá giờ hẹn");
+  });
+
+  it("keeps a post Facebook is holding on the list — cancellable, not reschedulable (E8.6)", async () => {
+    const { listScheduledJobs } = harness([
+      item({ status: "scheduled_on_facebook", scheduledPostId: "555_777", queueJobId: null }),
+    ]);
+
+    const result = await listScheduledJobs({ tenantId: TENANT });
+
+    expect(result.items[0]).toMatchObject({
+      status: "scheduled_on_facebook",
+      overdue: false,
+      // Cancelling reaches Facebook; rescheduling our row would change nothing.
+      canReschedule: false,
+      canCancel: true,
+    });
+    expect(result.items[0].userMessage).toContain("Facebook đã nhận lịch");
   });
 
   it("truncates a long caption preview", async () => {

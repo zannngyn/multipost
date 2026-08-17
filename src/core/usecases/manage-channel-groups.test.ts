@@ -5,6 +5,7 @@ import { AppError } from "@/core/domain/errors";
 import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { ChannelConfig, ChannelConfigRepo, ChannelGroupRepo } from "@/core/ports/publisher";
 
+import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import { makeManageChannelGroups } from "./manage-channel-groups";
 
 /**
@@ -26,14 +27,14 @@ function silentLogger(): Logger {
   return logger;
 }
 
-function channel(channelId: string): ChannelConfig {
+function channel(channelId: string, status: ChannelConfig["status"] = "active"): ChannelConfig {
   return {
     channelId,
     platform: "facebook",
     name: channelId,
     externalId: `page-${channelId}`,
     accessToken: "secret",
-    status: "active",
+    status,
     tokenExpiresAt: null,
   };
 }
@@ -88,13 +89,19 @@ function makeGroupRepo(seed: ChannelGroup[] = []) {
   return repo;
 }
 
-function harness(options: { channels?: string[]; groups?: ChannelGroup[] } = {}) {
-  const known = (options.channels ?? ["fbpage-a", "fbpage-b", "fbpage-c"]).map(channel);
+function harness(
+  options: { channels?: string[]; disabled?: string[]; groups?: ChannelGroup[] } = {},
+) {
+  const off = new Set(options.disabled ?? []);
+  const known = (options.channels ?? ["fbpage-a", "fbpage-b", "fbpage-c"]).map((channelId) =>
+    channel(channelId, off.has(channelId) ? "disabled" : "active"),
+  );
   const channels: ChannelConfigRepo = {
     findChannel: async (_tenantId, channelId) =>
       known.find((entry) => entry.channelId === channelId) ?? null,
     listChannels: async () => known,
     getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 0, maxAttempts: 3 }),
+    ...channelWriteStubs(),
   };
   const groups = makeGroupRepo(options.groups);
   let counter = 0;
@@ -154,6 +161,60 @@ describe("channel groups — rejected writes", () => {
       context: { reason: "UNKNOWN_CHANNEL_ID", unknown_channels: ["fbpage-zzz"] },
     });
     expect(usecases.groups.store.size).toBe(0);
+  });
+
+  it("refuses a channel that is switched OFF — and says so, not 'không tồn tại'", async () => {
+    const usecases = harness({ disabled: ["fbpage-b"] });
+
+    const error = await usecases
+      .createChannelGroup({
+        tenantId: TENANT,
+        name: "Nhóm có kênh tắt",
+        channelIds: ["fbpage-a", "fbpage-b"],
+      })
+      .catch((e: unknown) => e as AppError);
+
+    expect(error).toMatchObject({
+      code: "INVALID_INPUT",
+      context: { reason: "CHANNEL_DISABLED", disabled_channels: ["fbpage-b"] },
+    });
+    // The two situations must never share a message: "không tồn tại" sends the
+    // operator looking for a data problem that is not there.
+    expect((error as AppError).userMessage).toContain("đang tắt");
+    expect((error as AppError).userMessage).not.toContain("không tồn tại");
+    expect(usecases.groups.store.size).toBe(0);
+  });
+
+  it("still reports an unknown channel as unknown, even next to a disabled one", async () => {
+    const usecases = harness({ disabled: ["fbpage-b"] });
+    await expect(
+      usecases.createChannelGroup({
+        tenantId: TENANT,
+        name: "Nhóm lẫn lộn",
+        channelIds: ["fbpage-b", "fbpage-zzz"],
+      }),
+    ).rejects.toMatchObject({
+      context: { reason: "UNKNOWN_CHANNEL_ID", unknown_channels: ["fbpage-zzz"] },
+    });
+  });
+
+  it("refuses a disabled channel on UPDATE too (a Page can be switched off later)", async () => {
+    const usecases = harness({ disabled: ["fbpage-c"] });
+    const created = await usecases.createChannelGroup({
+      tenantId: TENANT,
+      name: "Nhóm A",
+      channelIds: ["fbpage-a"],
+    });
+
+    await expect(
+      usecases.updateChannelGroup({
+        tenantId: TENANT,
+        groupId: created.id,
+        name: "Nhóm A",
+        channelIds: ["fbpage-a", "fbpage-c"],
+      }),
+    ).rejects.toMatchObject({ context: { reason: "CHANNEL_DISABLED" } });
+    expect(usecases.groups.store.get(created.id)?.channelIds).toEqual(["fbpage-a"]);
   });
 
   it("refuses a duplicate name (the unique index decides, not a pre-read)", async () => {

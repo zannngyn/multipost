@@ -33,6 +33,18 @@ const DEFAULT_TTL_MS = 60_000;
 export interface CachedModelPolicyStoreOptions {
   /** YAML-backed store: the reviewed default for every tenant. */
   base: ModelPolicyStore;
+  /**
+   * Fingerprint of ANY process-level setting that changes what `base` resolves
+   * — today the AI_MODEL_CHEAP/MID/TOP tier swap.
+   *
+   * It belongs in the cache key because Redis is shared by web and worker: two
+   * processes started with different tier models would otherwise serve each
+   * other stale routing, and a cache hit would skip the load-time validation
+   * that rejects an unknown model key. Measured on 15/08/2026, before this
+   * existed: a process started with a deliberately invalid AI_MODEL_MID
+   * happily generated captions from another process's cached policy.
+   */
+  variant?: string;
   /** Absent = this deployment runs YAML only (tests, scripts). */
   overrides?: ModelPolicyOverrideRepo;
   /** Absent = no hot cache; the in-memory TTL of the YAML store still applies. */
@@ -55,14 +67,21 @@ export interface CachedModelPolicyStore extends ModelPolicyStore {
   stats(): CacheStats;
 }
 
-function cacheKey(tenantId: string, task: AITask): string {
-  return `${CACHE_NAMESPACE}:${tenantId}:${task}`;
+/** `default` keeps the key readable for the common "no env override" case. */
+function normaliseVariant(variant: string | undefined): string {
+  const trimmed = variant?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "default";
+}
+
+function cacheKey(variant: string, tenantId: string, task: AITask): string {
+  return `${CACHE_NAMESPACE}:${variant}:${tenantId}:${task}`;
 }
 
 export function makeCachedModelPolicyStore(
   options: CachedModelPolicyStoreOptions,
 ): CachedModelPolicyStore {
   const ttlMs = options.ttlMs && options.ttlMs > 0 ? options.ttlMs : DEFAULT_TTL_MS;
+  const variant = normaliseVariant(options.variant);
   const stats: CacheStats = { hits: 0, misses: 0, corrupt: 0 };
 
   async function readCache(key: string, tenantId: string, task: AITask) {
@@ -99,7 +118,7 @@ export function makeCachedModelPolicyStore(
         });
       }
 
-      const key = cacheKey(tenant, task);
+      const key = cacheKey(variant, tenant, task);
       const cached = await readCache(key, tenant, task);
       if (cached) {
         stats.hits += 1;
@@ -157,9 +176,13 @@ export function makeCachedModelPolicyStore(
       }
 
       await options.cache.invalidate(
+        // Across EVERY variant, not just this process's: the caller changed a
+        // tenant override row, and leaving the web process's entry stale while
+        // the worker's is fresh is exactly the bug the variant key exists to
+        // prevent.
         task
-          ? { key: cacheKey(tenant, task) }
-          : { pattern: `${CACHE_NAMESPACE}:${tenant}:*` },
+          ? { pattern: `${CACHE_NAMESPACE}:*:${tenant}:${task}` }
+          : { pattern: `${CACHE_NAMESPACE}:*:${tenant}:*` },
       );
       options.logger.info("Model policy cache invalidated", {
         tenant_id: tenant,

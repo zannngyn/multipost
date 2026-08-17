@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 
+import { JobStatusBadge } from "@/ui/components/post/PostStatusBadge";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import {
   formatCountdown,
   formatScheduledTime,
+  rescheduleBlockedReason,
   timeZoneLabel,
   type ScheduledJobEntry,
 } from "@/ui/schemas/scheduled.schema";
@@ -21,6 +23,12 @@ import {
  * `canReschedule` / `canCancel` are decided by the SERVER. A row past its hour
  * shows the "Quá giờ" badge and NO action: a worker may already be publishing
  * it, so a button here could only ever produce a 409.
+ *
+ * Every row also shows WHO is holding the post (E8.6): "Chờ đăng" = our queue,
+ * "Facebook giữ lịch" = the post already sits on Facebook and Facebook will
+ * publish it. The second one cannot be rescheduled — the row keeps a disabled
+ * "Đổi giờ" with the reason next to it rather than letting the operator find out
+ * through an error dialog.
  *
  * Business rule 2: the caption preview is the only content shown. No stock, no
  * price, no note — those never travel with a post job.
@@ -88,6 +96,8 @@ export function ScheduledJobTable({
             const deltaMs =
               nowMs > 0 ? new Date(job.scheduledAt).getTime() - nowMs : job.startsInMs;
             const isBusy = busyJobId === job.postJobId;
+            const blockedReason = rescheduleBlockedReason(job);
+            const reasonId = `reschedule-blocked-${job.postJobId}`;
 
             return (
               <tr key={job.postJobId} className="border-t align-top">
@@ -96,11 +106,10 @@ export function ScheduledJobTable({
                   <span className="text-muted-foreground block text-xs font-normal">
                     {formatCountdown(deltaMs)}
                   </span>
-                  {job.overdue ? (
-                    <Badge tone="warning" className="mt-1">
-                      Quá giờ
-                    </Badge>
-                  ) : null}
+                  <span className="mt-1 flex flex-wrap gap-1 font-normal">
+                    <JobStatusBadge status={job.status} />
+                    {job.overdue ? <Badge tone="warning">Quá giờ</Badge> : null}
+                  </span>
                 </th>
                 <td className="px-3 py-2 break-all">
                   {job.productCode}
@@ -138,28 +147,53 @@ export function ScheduledJobTable({
                 </td>
                 <td className="px-3 py-2">
                   {job.canReschedule || job.canCancel ? (
-                    <div className="flex flex-wrap gap-2">
-                      {job.canReschedule ? (
-                        <Button asChild size="sm" variant="outline" disabled={isBusy}>
-                          <Link href={hrefFor("reschedule", job.postJobId)} scroll={false}>
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap gap-2">
+                        {job.canReschedule ? (
+                          <Button asChild size="sm" variant="outline" disabled={isBusy}>
+                            <Link href={hrefFor("reschedule", job.postJobId)} scroll={false}>
+                              Đổi giờ
+                              <span className="sr-only">
+                                {" "}
+                                bài {job.productCode} trên kênh {job.channelId}
+                              </span>
+                            </Link>
+                          </Button>
+                        ) : blockedReason ? (
+                          // Shown and disabled WITH the reason, not hidden: the
+                          // operator asks "vì sao không đổi giờ được?" and the
+                          // answer must be on the row, not behind a click that
+                          // 409s (core-auth-session decision tree).
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled
+                            aria-describedby={reasonId}
+                          >
                             Đổi giờ
                             <span className="sr-only">
                               {" "}
                               bài {job.productCode} trên kênh {job.channelId}
                             </span>
-                          </Link>
-                        </Button>
-                      ) : null}
-                      {job.canCancel ? (
-                        <Button asChild size="sm" variant="destructive" disabled={isBusy}>
-                          <Link href={hrefFor("cancel", job.postJobId)} scroll={false}>
-                            Huỷ
-                            <span className="sr-only">
-                              {" "}
-                              bài {job.productCode} trên kênh {job.channelId}
-                            </span>
-                          </Link>
-                        </Button>
+                          </Button>
+                        ) : null}
+                        {job.canCancel ? (
+                          <Button asChild size="sm" variant="destructive" disabled={isBusy}>
+                            <Link href={hrefFor("cancel", job.postJobId)} scroll={false}>
+                              Huỷ
+                              <span className="sr-only">
+                                {" "}
+                                bài {job.productCode} trên kênh {job.channelId}
+                              </span>
+                            </Link>
+                          </Button>
+                        ) : null}
+                      </div>
+                      {blockedReason ? (
+                        <p id={reasonId} className="text-muted-foreground text-xs">
+                          {blockedReason}
+                        </p>
                       ) : null}
                     </div>
                   ) : (

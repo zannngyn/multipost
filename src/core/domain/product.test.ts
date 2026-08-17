@@ -118,6 +118,8 @@ describe("dedupeMediaByName (docs/05 section 1.4)", () => {
   function asset(overrides: Partial<MediaAsset>): MediaAsset {
     return {
       driveFileId: "id-1",
+      origin: "drive",
+      storageKey: null,
       fileName: "MGKVX6310-KEM (1).jpeg",
       productCode: "MGKVX6310",
       color: "KEM",

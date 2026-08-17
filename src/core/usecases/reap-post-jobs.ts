@@ -1,5 +1,10 @@
 import { AppError } from "@/core/domain/errors";
-import { deferredPostJobQueueId, transitionPostJob, type PostJob } from "@/core/domain/post-job";
+import {
+  deferredPostJobQueueId,
+  HANDOFF_WINDOW_START_MS,
+  transitionPostJob,
+  type PostJob,
+} from "@/core/domain/post-job";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
@@ -101,8 +106,13 @@ export function makeReapPostJobs(deps: ReapPostJobsDeps) {
       jobs.push(await failStalePublishing(deps, job, log, publishingStaleMs));
     }
 
+    // E8.6 — "overdue" is measured against the moment the job should have WOKEN
+    // UP (T-30, the start of the handoff window), not against T. A scheduled
+    // post whose queue entry vanished must be found while Facebook can still be
+    // given the post, not ten minutes after the hour when the only option left
+    // is publishing late.
     const overdue = await deps.postJobs.findOverdueQueued({
-      dueBefore: new Date(startedMs - overdueQueuedMs),
+      dueBefore: new Date(startedMs - overdueQueuedMs + HANDOFF_WINDOW_START_MS),
       limit,
     });
     // One settings read per tenant, not per job: a sweep touching 50 rows of one

@@ -1,10 +1,13 @@
 import {
   CaptionsResponseSchema,
   ComposeResponseSchema,
+  UploadResponseSchema,
   type CaptionsResponse,
   type ComposeResponse,
   type MediaKind,
+  type MediaSource,
   type ProductContent,
+  type UploadResponse,
   type VideoTarget,
 } from "@/ui/schemas/compose.schema";
 import {
@@ -52,6 +55,8 @@ export interface ComposeParams {
   mediaKind?: MediaKind;
   /** Only sent for a video post — the server ignores it for photos anyway. */
   videoTarget?: VideoTarget;
+  /** Absent = Drive (chế độ A). "upload" composes from the files just sent. */
+  source?: MediaSource;
 }
 
 export async function composePost(
@@ -84,11 +89,75 @@ export async function composePost(
       // A video destination is meaningless on a photo post; sending it anyway
       // would let a stale radio value travel with an album.
       ...(mediaKind === "video" && params.videoTarget ? { videoTarget: params.videoTarget } : {}),
+      ...(params.source === "upload" ? { source: "upload" as const } : {}),
     },
     schema: ComposeResponseSchema,
     signal,
     malformedMessage:
       "Dữ liệu bài đăng trả về không đúng định dạng. Hãy báo quản trị viên kiểm tra máy chủ.",
+  });
+}
+
+export interface UploadMediaParams {
+  tenantId: string;
+  productCode: string;
+  files: readonly File[];
+  /** Indexes into `files`; index 0 is the cover. */
+  order?: readonly number[];
+}
+
+/**
+ * E9.1 — send the operator's files (mode B).
+ *
+ * Multipart, so the browser sets the boundary itself; `apiRequest` passes a
+ * FormData body through without touching the headers.
+ *
+ * A 200 can still carry refusals: `rejected` names the files the server would
+ * not take, and the caller must show them. Only a call where NOTHING was usable
+ * comes back as an ApiError.
+ */
+export async function uploadMedia(
+  params: UploadMediaParams,
+  signal?: AbortSignal,
+): Promise<UploadResponse> {
+  const tenantId = params.tenantId?.trim() ?? "";
+  const productCode = params.productCode?.trim() ?? "";
+  const files = params.files ?? [];
+
+  if (tenantId.length === 0 || productCode.length === 0) {
+    throw new ApiError({
+      code: "INVALID_INPUT",
+      status: 0,
+      message: "uploadMedia requires tenantId and productCode",
+      userMessage: "Nhập mã sản phẩm trước khi tải file lên.",
+    });
+  }
+
+  if (files.length === 0) {
+    throw new ApiError({
+      code: "INVALID_INPUT",
+      status: 0,
+      message: "uploadMedia requires at least one file",
+      userMessage: "Chưa chọn file nào để tải lên.",
+    });
+  }
+
+  const form = new FormData();
+  form.set("tenantId", tenantId);
+  form.set("productCode", productCode);
+  if (params.order) form.set("order", JSON.stringify([...params.order]));
+  for (const file of files) form.append("files", file);
+
+  return apiRequest("/api/posts/uploads", {
+    method: "POST",
+    body: form,
+    schema: UploadResponseSchema,
+    signal,
+    // Uploading bytes is slower than a JSON round trip; the default 15s would
+    // abort a legitimate album on a slow connection.
+    timeoutMs: 120_000,
+    malformedMessage:
+      "Kết quả tải file lên không đúng định dạng. Hãy báo quản trị viên kiểm tra máy chủ.",
   });
 }
 

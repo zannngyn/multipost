@@ -62,9 +62,9 @@ export function makeGoogleProviderAdapter(options: GoogleProviderOptions): AIPro
     provider: "google",
 
     capabilities(_model: string): ModelCapabilities {
-      // Every Gemini model in the registry supports both; the registry holds the
-      // authoritative per-model numbers.
-      return { vision: true, structuredOutput: true, maxOutputTokens: 8192 };
+      // Conservative provider-wide floor, diagnostics only — the registry entry
+      // is what the engine actually reads.
+      return { vision: true, structuredOutput: true, maxOutputTokens: 8192, temperature: true };
     },
 
     async complete(request: NormalizedAIRequest): Promise<NormalizedAIResponse> {

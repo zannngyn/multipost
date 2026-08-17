@@ -38,6 +38,34 @@ export const ReaperEnvSchema = z.object({
     .default(600_000),
   /** Rows touched per sweep, per category. */
   WORKER_REAPER_LIMIT: z.coerce.number().int().min(1).max(500).default(50),
+
+  // --- E8.6 reconciliation of posts Facebook is holding ---------------------
+  /**
+   * How often to ask Facebook "did you publish it?". 2 minutes: the handed-over
+   * post is already safe, this only decides how fast the link appears on the
+   * operator screen.
+   */
+  WORKER_RECONCILE_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .max(24 * 60 * 60_000)
+    .default(120_000),
+  /** Grace after the hour before the first question (Meta is not punctual). */
+  WORKER_RECONCILE_GRACE_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .max(24 * 60 * 60_000)
+    .default(180_000),
+  /** After this long with no confirmation the job is marked failed. */
+  WORKER_RECONCILE_GIVE_UP_MS: z.coerce
+    .number()
+    .int()
+    .min(5 * 60_000)
+    .max(7 * 24 * 60 * 60_000)
+    .default(24 * 60 * 60_000),
+  WORKER_RECONCILE_LIMIT: z.coerce.number().int().min(1).max(500).default(50),
 });
 
 export type ReaperConfig = z.infer<typeof ReaperEnvSchema>;

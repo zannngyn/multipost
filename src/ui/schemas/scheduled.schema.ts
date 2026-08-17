@@ -60,6 +60,41 @@ export const ScheduledJobsResponseSchema = z.object({
 });
 export type ScheduledJobsResponse = z.infer<typeof ScheduledJobsResponseSchema>;
 
+// --- Row actions ------------------------------------------------------------
+
+/**
+ * True while FACEBOOK holds the post, not our queue (E8.6). Everything the two
+ * cases have in common ("chưa lên kênh") hides the one difference that decides
+ * what an operator can still do, so the screens ask this explicitly.
+ */
+export function isHeldByPlatform(status: ScheduledJobEntry["status"]): boolean {
+  return status === "scheduled_on_facebook";
+}
+
+/**
+ * Why "Đổi giờ" is off for a row that can still be cancelled — `null` when the
+ * button is available, or when the whole row is past its hour (the cell already
+ * says so on its own).
+ *
+ * `canReschedule` is still the SERVER's decision; this only turns that "no" into
+ * a sentence. Rule: hiện + vô hiệu hoá + nói rõ lý do (core-auth-session decision
+ * tree) — a disabled control with no explanation is the anti-pattern, and so is
+ * an enabled one that can only ever 409.
+ */
+export function rescheduleBlockedReason(
+  job: Pick<ScheduledJobEntry, "status" | "canReschedule" | "canCancel">,
+): string | null {
+  if (job.canReschedule) return null;
+  // Past its hour: no action at all is offered, and the cell explains that.
+  if (!job.canCancel) return null;
+  if (isHeldByPlatform(job.status)) {
+    // "sẽ cố gỡ", not "sẽ gỡ": the delete can fail, and the post then still
+    // goes out. Same promise the cancel dialog had to walk back.
+    return "Bài đã giao cho Facebook giữ nên không đổi giờ trực tiếp được. Hãy bấm Huỷ — hệ thống sẽ cố gỡ bài khỏi Facebook và báo lại nếu không gỡ được — rồi soạn lại với giờ mới.";
+  }
+  return "Bài này không đổi giờ được nữa. Nếu không muốn bài lên, hãy bấm Huỷ.";
+}
+
 // --- POST /api/posts/scheduled/:id/reschedule -------------------------------
 
 export const RescheduleJobResponseSchema = z.object({
@@ -90,6 +125,13 @@ export const CancelScheduledJobResponseSchema = z.object({
   status: z.literal("blocked"),
   scheduledAt: z.iso.datetime().nullable(),
   queueEntryRemoved: z.boolean(),
+  /**
+   * E8.6 — true when this cancel deleted the post ON Facebook. A post Facebook
+   * was holding owns no queue entry, so `queueEntryRemoved` comes back false for
+   * it; without this flag the screen would raise a "lịch cũ còn trong hàng đợi"
+   * warning about an entry that never existed.
+   */
+  platformPostDeleted: z.boolean(),
   userMessage: z.string(),
 });
 export type CancelScheduledJobResponse = z.infer<typeof CancelScheduledJobResponseSchema>;

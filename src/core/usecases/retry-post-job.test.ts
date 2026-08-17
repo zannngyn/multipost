@@ -10,6 +10,8 @@ import type {
   PostJobRepo,
 } from "@/core/ports/post-job-repo";
 import type { ChannelConfigRepo } from "@/core/ports/publisher";
+
+import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
@@ -60,6 +62,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     publishedPostId: null,
     publishedUrl: null,
     publishedAt: null,
+    scheduledPostId: null,
     captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
@@ -124,6 +127,9 @@ function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {})
     async findOverdueQueued() {
       return [];
     },
+    async findScheduledOnPlatformDue() {
+      return [];
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -136,7 +142,15 @@ function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {})
         productCode: list[0]?.productCode ?? "",
         status: deriveBatchStatus(list.map((job) => job.status)),
         total: list.length,
-        byStatus: { draft: 0, queued: 0, publishing: 0, published: 0, failed: 0, blocked: 0 },
+        byStatus: {
+          draft: 0,
+          queued: 0,
+          publishing: 0,
+          scheduled_on_facebook: 0,
+          published: 0,
+          failed: 0,
+          blocked: 0,
+        },
         startedAt: CLOCK.now(),
         finishedAt: null,
         jobs: list,
@@ -176,6 +190,7 @@ const CHANNELS: ChannelConfigRepo = {
   findChannel: async () => null,
   listChannels: async () => [],
   getPublishSettings: async () => ({ spacingMs: 60_000, retryBackoffMs: 1_000, maxAttempts: 3 }),
+  ...channelWriteStubs(),
 };
 
 /** app_user lookup: the audit trail's "who pressed chạy lại?". */
@@ -257,6 +272,97 @@ describe("retryPostJob — refusals", () => {
       expect(queue.enqueued).toHaveLength(0);
     },
   );
+
+  /**
+   * Gate note 1 (E8.6). `failed` + HANDOFF_FAILED = the handoff ended without a
+   * verdict, so Facebook may be holding a scheduled post for this job. The
+   * status alone says "retryable", and each of the three moments an operator
+   * could press the button leads somewhere different and equally bad — which is
+   * why the refusal has to sit on the ROW, not on the clock.
+   */
+  it.each([
+    ["inside the handoff window (T-30..T-12)", 20 * 60_000],
+    ["in the dead zone (T-12..T)", 5 * 60_000],
+    ["after the hour has passed", -3 * 60_000],
+  ])(
+    "refuses a job whose handoff outcome is unknown — pressed %s",
+    async (_label, offsetMs) => {
+      const job = makeJob({
+        status: "failed",
+        lastErrorCode: "HANDOFF_FAILED",
+        lastErrorMessage:
+          "Không xác nhận được kết quả giao lịch cho Facebook — bài hẹn CÓ THỂ đã được tạo trên Trang.",
+        scheduledAt: new Date(CLOCK.nowMs() + offsetMs),
+        queueJobId: null,
+      });
+      const { retryPostJob, repo, queue, lines } = harness([job]);
+
+      await expect(retryPostJob({ tenantId: TENANT, postJobId: job.id })).rejects.toMatchObject({
+        code: "DUPLICATE_POST_BLOCKED",
+        context: { reason: "HANDOFF_OUTCOME_UNKNOWN", last_error_code: "HANDOFF_FAILED" },
+      });
+
+      // Nothing moved and nothing was queued: no second handoff, no publish.
+      expect(repo.transitions).toHaveLength(0);
+      expect(repo.get(job.id)?.status).toBe("failed");
+      expect(queue.enqueued).toHaveLength(0);
+
+      const refusal = lines.find(
+        (line) =>
+          line.message ===
+          "Retry refused: the platform may already hold a scheduled post for this job",
+      );
+      expect(refusal?.level).toBe("warn");
+      expect(refusal?.context?.alert).toBe("OPERATOR_ATTENTION");
+    },
+  );
+
+  it("tells the operator to check the Page instead of pressing Chạy lại", async () => {
+    const job = makeJob({
+      status: "failed",
+      lastErrorCode: "HANDOFF_FAILED",
+      scheduledAt: new Date(CLOCK.nowMs() + 20 * 60_000),
+    });
+    const { retryPostJob } = harness([job]);
+
+    const error = await retryPostJob({ tenantId: TENANT, postJobId: job.id }).catch(
+      (caught: unknown) => caught as AppError,
+    );
+
+    expect(error.userMessage).toContain("bài đã lên lịch");
+    expect(error.userMessage).toContain("xoá bài nếu thấy");
+    expect(error.userMessage).toContain("soạn lại");
+  });
+
+  it("fails closed when the row lost its scheduled hour", async () => {
+    // The hour is NOT part of the condition on purpose: only a scheduled job can
+    // carry this code, so a row without one is already wrong — and a guard that
+    // switches itself off on odd data is not a guard.
+    const job = makeJob({ status: "failed", lastErrorCode: "HANDOFF_FAILED", scheduledAt: null });
+    const { retryPostJob, queue } = harness([job]);
+
+    await expect(retryPostJob({ tenantId: TENANT, postJobId: job.id })).rejects.toMatchObject({
+      code: "DUPLICATE_POST_BLOCKED",
+    });
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("still re-queues a scheduled job that failed for an ORDINARY reason", async () => {
+    // The guard must be narrow: a scheduled post that simply failed to publish
+    // has nothing waiting on the Page, and refusing it would strand real work.
+    const job = makeJob({
+      status: "failed",
+      lastErrorCode: "PUBLISH_FAILED",
+      scheduledAt: new Date(CLOCK.nowMs() + 20 * 60_000),
+    });
+    const { retryPostJob, repo, queue } = harness([job]);
+
+    const result = await retryPostJob({ tenantId: TENANT, postJobId: job.id });
+
+    expect(result.status).toBe("queued");
+    expect(repo.get(job.id)?.status).toBe("queued");
+    expect(queue.enqueued).toHaveLength(1);
+  });
 
   it("refuses when another writer moved the row first (no double queue entry)", async () => {
     const job = makeJob();

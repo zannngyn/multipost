@@ -14,10 +14,16 @@ import {
  * shown as its own outcome, never softened into "xong".
  */
 
+/**
+ * "Facebook giữ lịch" is its own tile even though it is already counted inside
+ * "Đang chạy": a batch that sits at 0 published for three days is alarming until
+ * you can see that Facebook is holding the posts until their hour (E8.6).
+ */
 const TOTALS_FIELDS = [
   { key: "total", label: "Tổng số kênh" },
   { key: "published", label: "Đã đăng" },
   { key: "inProgress", label: "Đang chạy" },
+  { key: "scheduledOnFacebook", label: "Facebook giữ lịch" },
   { key: "blocked", label: "Bị chặn" },
   { key: "failed", label: "Lỗi" },
 ] as const;
@@ -34,7 +40,7 @@ export function BatchSummaryCard({ batch }: { batch: BatchStatusResponse }) {
 
       <p className="text-sm">{batch.summaryMessage}</p>
 
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {TOTALS_FIELDS.map((field) => (
           <div key={field.key} className="bg-muted/40 rounded-lg border p-3">
             <dt className="text-muted-foreground text-xs">{field.label}</dt>

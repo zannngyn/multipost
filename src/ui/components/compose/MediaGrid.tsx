@@ -1,63 +1,135 @@
+"use client";
+
+import { AlbumArranger } from "@/ui/components/compose/AlbumArranger";
 import { Badge } from "@/ui/components/ui/badge";
 import type { MediaAsset } from "@/ui/schemas/compose.schema";
 
 /**
  * The album that will be posted, in publish order. Index 0 is the cover.
  *
- * There is no <img> on purpose: the browser has no access to Drive and there is
- * no thumbnail endpoint yet, so the grid shows the file identity instead of
- * pretending to show a picture. A fake placeholder would let an operator
- * "approve" photos they never saw.
+ * Arrangeable when the caller passes `onReorder` (step 1, where the operator
+ * decides), read-only otherwise (step 3, which confirms rather than edits).
+ * Both modes share `AlbumArranger`: a Drive album and an uploaded one are the
+ * same list once gathered, so they get the same gesture and the same wording.
+ *
+ * The order lives in the POST, not in `media_asset`: that table belongs to the
+ * Drive sync, which rewrites it on every run. `createPostBatch` already takes
+ * the album in caller order, so nothing downstream needs to change.
+ *
+ * There is no <img> on purpose: the browser has no access to Drive and the media
+ * bridge (`/api/media/[driveFileId]`) only answers links signed server-side for
+ * Meta's fetcher, so the tiles show file identity instead of pretending to show
+ * a picture. A fake placeholder would let an operator "approve" photos they
+ * never saw.
  */
-export function MediaGrid({ media }: { media: readonly MediaAsset[] }) {
+export function MediaGrid({
+  media,
+  onReorder,
+  disabled,
+}: {
+  media: readonly MediaAsset[];
+  /** Absent = read-only. */
+  onReorder?: (next: MediaAsset[]) => void;
+  disabled?: boolean;
+}) {
   // A video post carries exactly one clip, so "ảnh bìa"/"thứ tự đăng" would be
   // nonsense there — the words follow the kind that was actually composed.
   const isVideo = media[0]?.kind === "video";
+  // Nothing to arrange with one item, and a lone drag handle only adds noise.
+  const arrangeable = Boolean(onReorder) && !isVideo && media.length > 1;
 
   return (
-    <section aria-labelledby="media-heading" className="space-y-2">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
+    <section
+      aria-labelledby="media-heading"
+      className="bg-card border-border space-y-3.5 rounded-xl border p-5"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 id="media-heading" className="text-base font-semibold">
           {isVideo ? "Clip sẽ đăng" : "Ảnh sẽ đăng"} ({media.length})
         </h3>
         <p className="text-muted-foreground text-xs">
           {isVideo
             ? "Một bài video chỉ dùng đúng một clip."
-            : "Thứ tự bên dưới là thứ tự đăng. Ảnh đầu tiên là ảnh bìa."}
+            : arrangeable
+              ? "Kéo một ô vào ô khác để đổi thứ tự đăng, hoặc dùng ← → trên ô. Ô lớn là ảnh bìa."
+              : "Thứ tự bên dưới là thứ tự đăng. Ô lớn là ảnh bìa."}
         </p>
       </div>
 
-      <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {media.map((asset, index) => (
-          <li
-            key={asset.driveFileId}
-            className="bg-card flex flex-col gap-1.5 rounded-lg border p-3"
-          >
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-muted-foreground text-xs tabular-nums">#{index + 1}</span>
-              {index === 0 && !isVideo ? <Badge tone="success">Ảnh bìa</Badge> : null}
-              {asset.color ? <Badge tone="info">{asset.color}</Badge> : null}
-              {asset.needsReview ? <Badge tone="warning">Cần rà soát</Badge> : null}
-            </div>
+      <AlbumArranger
+        layout="grid"
+        items={media.map(toEntry)}
+        onChange={(next) => onReorder?.(next.map((entry) => entry.asset))}
+        disabled={disabled}
+        readOnly={!arrangeable}
+        coverLabel={isVideo ? "Clip" : "Ảnh bìa"}
+        coverNote={isVideo ? "chưa xem trước được clip" : "chưa tải được ảnh từ Drive"}
+        itemName={(entry) => entry.asset.fileName}
+        renderContent={(entry) => <CoverLine asset={entry.asset} />}
+        renderCompact={(entry) => <TileLine asset={entry.asset} />}
+      />
 
-            <p className="font-mono text-xs break-all">{asset.fileName}</p>
-
-            {asset.warnings.length > 0 ? (
-              <ul className="text-warning-foreground list-disc space-y-0.5 pl-4 text-xs">
-                {asset.warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
-                ))}
-              </ul>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-
-      <p className="text-muted-foreground text-xs">
+      <p className="border-border text-muted-foreground border-t pt-3 text-xs leading-relaxed">
         {isVideo
           ? "Chưa xem trước được clip trên màn hình này — chưa có đường tải video từ Drive về trình duyệt. Kiểm tra bằng tên file và bảng thông số, hoặc mở thư mục Drive tương ứng."
-          : "Chưa xem được ảnh trực tiếp trên màn hình này — Phase 1 chưa có đường tải ảnh từ Drive về trình duyệt. Kiểm tra bằng tên file, hoặc mở thư mục Drive tương ứng."}
+          : "Chưa xem được ảnh trực tiếp trên màn hình này — Phase 1 chưa có đường tải ảnh từ Drive về trình duyệt. Ô có chấm cam là file cần rà soát tên."}
       </p>
     </section>
+  );
+}
+
+/**
+ * `AlbumArranger` keys tiles by `id`; the asset's identity is its file id, which
+ * is unique per tenant and stable across a reorder.
+ */
+interface AssetEntry {
+  readonly id: string;
+  readonly asset: MediaAsset;
+}
+
+function toEntry(asset: MediaAsset): AssetEntry {
+  return { id: asset.driveFileId, asset };
+}
+
+/** Bottom bar of the cover tile — the one place with room for the full story. */
+function CoverLine({ asset }: { asset: MediaAsset }) {
+  return (
+    <>
+      <span className="truncate text-sm font-semibold" title={asset.fileName}>
+        {asset.fileName}
+      </span>
+      <span className="flex flex-wrap items-center gap-1.5">
+        {asset.color ? <Badge tone="neutral">{asset.color}</Badge> : null}
+        {asset.needsReview ? <Badge tone="warning">Cần rà soát</Badge> : null}
+      </span>
+      {asset.warnings.length > 0 ? (
+        <ul className="text-warning-foreground list-disc space-y-0.5 pl-4 text-xs">
+          {asset.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * Bottom bar of a small tile. The review state is a dot for the eye AND a
+ * sr-only sentence: colour alone must never be the only carrier of a warning
+ * (core-accessibility).
+ */
+function TileLine({ asset }: { asset: MediaAsset }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="truncate font-mono text-xs" title={asset.fileName}>
+        {asset.fileName}
+      </span>
+      {asset.needsReview ? (
+        <>
+          <span aria-hidden="true" className="bg-warning size-2 shrink-0 rounded-full" />
+          <span className="sr-only">Cần rà soát tên file</span>
+        </>
+      ) : null}
+    </span>
   );
 }

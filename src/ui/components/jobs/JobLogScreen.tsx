@@ -95,7 +95,8 @@ export function JobLogScreen() {
         </h1>
         <p className="text-muted-foreground max-w-prose text-sm">
           Mỗi dòng là một bài trên một kênh. Bài lỗi hoặc bị chặn có thể chạy lại — tồn kho vẫn được
-          kiểm tra lại ngay trước khi đăng.
+          kiểm tra lại ngay trước khi đăng. Bài ở trạng thái “Facebook giữ lịch” đã nằm trên Facebook
+          và Facebook sẽ tự đăng vào giờ đã hẹn, hệ thống chỉ theo dõi và cập nhật lại kết quả.
         </p>
       </header>
 

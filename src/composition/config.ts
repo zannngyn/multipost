@@ -16,6 +16,22 @@ export type EnvRecord = Record<string, string | undefined>;
 
 const nonEmpty = (label: string) => z.string().trim().min(1, `${label} must not be empty`);
 
+/**
+ * Optional variable where `NAME=` (the usual way to leave a line in a .env
+ * without setting it) must read as "not configured" rather than as an error.
+ * Required values keep using {@link nonEmpty}, where blank IS a mistake.
+ *
+ * Not secret-specific on purpose: it is used for API keys and for plain model
+ * names alike, and nothing here redacts anything.
+ */
+const optionalTrimmed = z
+  .string()
+  .optional()
+  .transform((value) => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : undefined;
+  });
+
 const csvList = z
   .string()
   .trim()
@@ -57,6 +73,14 @@ export const AuthConfigSchema = z.object({
   GOOGLE_CLIENT_SECRET: nonEmpty("GOOGLE_CLIENT_SECRET"),
   /** Comma-separated e-mail domains allowed to sign in. */
   AUTH_ALLOWED_DOMAINS: csvList,
+  /**
+   * Comma-separated Facebook user ids allowed to sign in (E5.2). Optional, and
+   * an ABSENT list means nobody signs in with Facebook — the safe default, not
+   * an open door. Ids rather than e-mail addresses on purpose: Facebook does
+   * not guarantee an e-mail (accounts registered with a phone number have
+   * none), so the identity key is the pair (provider, provider user id).
+   */
+  AUTH_FACEBOOK_ALLOWED_USER_IDS: csvList.optional(),
   SESSION_SECRET: nonEmpty("SESSION_SECRET").min(32, "SESSION_SECRET must be at least 32 chars"),
 });
 
@@ -92,14 +116,44 @@ export type GoogleConfig = z.infer<typeof GoogleConfigSchema>;
  * AI gateway (E4, ADR-001). Loaded on demand like auth/google: processes that
  * never generate content must boot without provider keys. Path/TTL are
  * operational knobs with documented defaults, not secrets.
+ *
+ * Owner decision 15/08/2026: SINGLE PROVIDER — OpenAI only. Google stays in the
+ * codebase (adapter, registry entries) but is off until a key is provisioned, so
+ * its variable is optional and the tiers in `config/ai-models.yaml` list no
+ * Google model. Re-enabling = set GOOGLE_AI_API_KEY + put the keys back in the
+ * YAML tiers; no code change.
  */
 export const AiConfigSchema = z.object({
-  /** Google AI Studio key — MUST be paid tier before real data flows (ADR-001). */
-  GOOGLE_AI_API_KEY: nonEmpty("GOOGLE_AI_API_KEY"),
-  /** Infrastructure fallback provider. */
+  /**
+   * Google AI Studio key. Optional while the Google provider is disabled. When
+   * set it MUST be paid tier before real data flows (ADR-001) — the free tier
+   * grants Google training rights over shop data.
+   *
+   * `GOOGLE_AI_API_KEY=` (the normal way to leave a key out of a .env) means
+   * DISABLED, not "misconfigured": blank collapses to undefined so the caller
+   * has exactly one shape to branch on. This is the opposite of the required
+   * secrets above, where blank must fail — there, blank means someone deleted a
+   * value that the system cannot run without.
+   */
+  GOOGLE_AI_API_KEY: optionalTrimmed,
+  /** The only wired provider today; a generation without it cannot run. */
   OPENAI_API_KEY: nonEmpty("OPENAI_API_KEY"),
   AI_MODELS_CONFIG_PATH: z.string().trim().min(1).default("./config/ai-models.yaml"),
   AI_REGISTRY_CACHE_TTL_MS: z.coerce.number().int().positive().default(60_000),
+
+  /**
+   * Swap the model of one tier without editing the registry file — the knob for
+   * "try another model in staging" and for an emergency swap in production.
+   *
+   * The value is a registry KEY ("openai:gpt-4.1-mini"), never a raw model
+   * string: ADR-001 keeps every model string reviewable in
+   * `config/ai-models.yaml`, and an unknown key fails at load naming the ones
+   * that exist. To use a model that is not registered yet, add it to the YAML
+   * first — that is the review step, not red tape.
+   */
+  AI_MODEL_CHEAP: optionalTrimmed,
+  AI_MODEL_MID: optionalTrimmed,
+  AI_MODEL_TOP: optionalTrimmed,
 });
 
 export type AiConfig = z.infer<typeof AiConfigSchema>;
@@ -122,6 +176,39 @@ export const MetaConfigSchema = z.object({
 });
 
 export type MetaConfig = z.infer<typeof MetaConfigSchema>;
+
+/**
+ * Facebook Login app credentials (E5.1 — "Kết nối Fanpage"). Its own lazy group:
+ * publishing needs none of it, and `next build` must not require a Meta app.
+ *
+ * ALL THREE ARE OPTIONAL here, on purpose — a Meta app hands out a usable User
+ * Access Token long before its App Secret is available, and the "paste a token"
+ * door must work meanwhile:
+ *   - paste a token : needs nothing (the token IS the credential). Without an
+ *                     App Secret the token cannot be extended to 60 days, and
+ *                     the adapter warns instead of failing.
+ *   - OAuth         : needs all three. The adapter refuses with a message
+ *                     naming the missing variables (adapters/meta/facebook-oauth).
+ * Blank values are treated as absent: `META_APP_SECRET=` in a .env is "not set
+ * yet", not "set to the empty string".
+ */
+export const MetaOAuthConfigSchema = z.object({
+  META_APP_ID: blankAsUndefined(z.string().trim().min(1)),
+  META_APP_SECRET: blankAsUndefined(z.string().trim().min(1)),
+  /** Must match the redirect URI registered in the Meta app, exactly. */
+  META_OAUTH_REDIRECT_URI: blankAsUndefined(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .refine(
+        (value) => value.startsWith("https://") || value.startsWith("http://"),
+        "META_OAUTH_REDIRECT_URI must be an http(s) URL",
+      ),
+  ),
+});
+
+export type MetaOAuthConfig = z.infer<typeof MetaOAuthConfigSchema>;
 
 /**
  * Cryptographic material (E3/E5 hardening). Its own group, loaded on demand, so
@@ -164,6 +251,48 @@ export const VideoConfigSchema = z.object({
 
 export type VideoConfig = z.infer<typeof VideoConfigSchema>;
 
+/**
+ * Operator-uploaded media (E9, mode B). Its own group with a working default so
+ * a dev box needs no setup; in Docker the path is a mounted volume, because the
+ * bytes must outlive a container restart — the post that references them can be
+ * scheduled for tomorrow.
+ */
+export const UploadConfigSchema = z.object({
+  /** Directory the blob store writes under; one sub-directory per tenant. */
+  UPLOAD_STORAGE_ROOT: z.string().trim().min(1).default("./var/uploads"),
+  /**
+   * How long an uploaded blob may stay unreferenced before the cleanup job may
+   * remove it (E9.4). Generous on purpose: it is measured from the upload, and
+   * an operator may leave a half-composed post open over a lunch break.
+   */
+  UPLOAD_ORPHAN_TTL_HOURS: z.coerce.number().int().positive().max(720).default(24),
+});
+
+export type UploadConfig = z.infer<typeof UploadConfigSchema>;
+
+/**
+ * Drive byte cache (E3.6 hardening). Its own lazy group with working defaults,
+ * like the upload group: a dev box needs no setup, and in Docker the path is a
+ * mounted volume shared by web (writes on a miss) and worker (sweeps).
+ *
+ * It exists because Graph API fetches every photo URL itself and gives up around
+ * 30s, while Drive answered in 6.7s–99.9s per file on a real 10-photo post.
+ */
+export const MediaCacheConfigSchema = z.object({
+  /** Directory the cache writes under; one sub-directory per tenant. */
+  MEDIA_CACHE_ROOT: z.string().trim().min(1).default("./var/media-cache"),
+  /**
+   * How long a cached copy may be served before it is re-read from Drive. This
+   * is the staleness budget of the whole feature: a file REPLACED on Drive under
+   * the same id keeps serving its old bytes until the entry expires. 72h is a
+   * compromise — long enough that a post re-published over a weekend still hits,
+   * short enough that a mistake fixed on Drive reaches Facebook within days.
+   */
+  MEDIA_CACHE_TTL_HOURS: z.coerce.number().int().positive().max(720).default(72),
+});
+
+export type MediaCacheConfig = z.infer<typeof MediaCacheConfigSchema>;
+
 export const SecretsConfigSchema = z.object({
   /** base64 of exactly 32 random bytes: `openssl rand -base64 32`. */
   TENANT_SECRETS_ENC_KEY: nonEmpty("TENANT_SECRETS_ENC_KEY").refine(
@@ -173,6 +302,18 @@ export const SecretsConfigSchema = z.object({
 });
 
 export type SecretsConfig = z.infer<typeof SecretsConfigSchema>;
+
+/**
+ * `KEY=` in a .env file is an EMPTY STRING, not an absent value. For an optional
+ * variable that difference is noise: both mean "not configured yet", and failing
+ * validation on the blank line would block a deployment that never uses it.
+ */
+function blankAsUndefined<T extends z.ZodType>(schema: T) {
+  return z.preprocess(
+    (value) => (typeof value === "string" && value.trim().length === 0 ? undefined : value),
+    schema.optional(),
+  );
+}
 
 /**
  * Length check without importing node:crypto: base64 of 32 bytes is 44 chars
@@ -224,6 +365,10 @@ export function loadMetaConfig(env: EnvRecord = process.env): MetaConfig {
   return parseEnv(MetaConfigSchema, env, "meta");
 }
 
+export function loadMetaOAuthConfig(env: EnvRecord = process.env): MetaOAuthConfig {
+  return parseEnv(MetaOAuthConfigSchema, env, "meta-oauth");
+}
+
 export function loadMediaConfig(env: EnvRecord = process.env): MediaConfig {
   return parseEnv(MediaConfigSchema, env, "media");
 }
@@ -234,4 +379,12 @@ export function loadSecretsConfig(env: EnvRecord = process.env): SecretsConfig {
 
 export function loadVideoConfig(env: EnvRecord = process.env): VideoConfig {
   return parseEnv(VideoConfigSchema, env, "video");
+}
+
+export function loadUploadConfig(env: EnvRecord = process.env): UploadConfig {
+  return parseEnv(UploadConfigSchema, env, "upload");
+}
+
+export function loadMediaCacheConfig(env: EnvRecord = process.env): MediaCacheConfig {
+  return parseEnv(MediaCacheConfigSchema, env, "media-cache");
 }

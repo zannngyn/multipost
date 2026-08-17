@@ -1,5 +1,6 @@
 import { AppError } from "@/core/domain/errors";
 import {
+  canOperatorRetryPostJob,
   isPostJobStatus,
   postJobOperatorMessage,
   type PostFormat,
@@ -56,7 +57,10 @@ export interface PostJobLogEntry {
   readonly scheduledAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
-  /** True when an operator may press "chạy lại" (failed/blocked only). */
+  /**
+   * True when an operator may press "chạy lại": `failed`/`blocked`, EXCEPT a
+   * job whose handoff outcome is unknown (see canOperatorRetryPostJob).
+   */
   readonly canRetry: boolean;
 }
 
@@ -128,7 +132,12 @@ export function makeListPostJobs(deps: ListPostJobsDeps) {
       scheduledAt: job.scheduledAt,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
-      canRetry: job.status === "failed" || job.status === "blocked",
+      // The SAME predicate retryPostJob refuses on: a row the usecase would
+      // reject must not be offered a button. Notably a `failed` job whose
+      // handoff outcome is unknown — its own message tells the operator the
+      // system will NOT republish it, so drawing "Chạy lại" next to that
+      // sentence invites the exact double post the message warns about.
+      canRetry: canOperatorRetryPostJob(job),
     }));
 
     deps.logger.debug("Post job log read", {

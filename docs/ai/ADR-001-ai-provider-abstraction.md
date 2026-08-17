@@ -51,6 +51,7 @@ Ba mức, đều không đụng business code: (a) đổi model trong tier — s
 
 ## Quyết định đã chốt trong quá trình duyệt
 
+- **15/08/2026 (owner): tạm rút xuống MỘT provider — OpenAI.** Chưa cấp được key Google AI Studio paid tier, mà ràng buộc paid-tier bên dưới là không thương lượng, nên hệ thống không khởi chạy được. Quyết định 12/08 vẫn là đích đến; phần bị hoãn chỉ là *tiers nào trỏ vào provider nào*. Hệ quả cần biết: **không còn đường provider fallback** (fallback theo thiết kế phải đổi sang provider KHÁC). Chi tiết + cách bật lại: `provider-strategy.md` §3.1.
 - **12/08/2026 (owner): Google AI Studio (Gemini API) làm provider chính** vì chi phí. Hệ quả kiến trúc:
   - Adapter ngày 1: **Google (primary, phủ 3 tier) + OpenAI (fallback hạ tầng)**. Anthropic → đợt 2 nếu benchmark cần.
   - **Ràng buộc kèm theo (không thương lượng): PAID TIER từ môi trường có dữ liệu thật.** Free tier của AI Studio cho Google quyền dùng dữ liệu gửi lên để training — dữ liệu sản phẩm/ảnh của shop không được đi qua đó. Paid tier không dùng data để training, giá token không đổi.

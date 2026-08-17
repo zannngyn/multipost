@@ -21,12 +21,27 @@ import {
   HEALTHCHECK_TENANT_JOB_NAME,
   makeHealthcheckTenantHandler,
 } from "./jobs/healthcheck-tenant-job";
+import {
+  CLEANUP_UPLOADS_JOB_NAME,
+  CLEANUP_UPLOADS_SCHEDULER_ID,
+  makeCleanupUploadsHandler,
+} from "./jobs/cleanup-uploads-job";
+import {
+  CLEANUP_MEDIA_CACHE_JOB_NAME,
+  CLEANUP_MEDIA_CACHE_SCHEDULER_ID,
+  makeCleanupMediaCacheHandler,
+} from "./jobs/cleanup-media-cache-job";
 import { PUBLISH_POST_JOB_NAME, makePublishPostHandler } from "./jobs/publish-post-job";
 import {
   REAP_POST_JOBS_JOB_NAME,
   REAP_POST_JOBS_SCHEDULER_ID,
   makeReapPostJobsHandler,
 } from "./jobs/reap-post-jobs-job";
+import {
+  RECONCILE_SCHEDULED_POSTS_JOB_NAME,
+  RECONCILE_SCHEDULED_POSTS_SCHEDULER_ID,
+  makeReconcileScheduledPostsHandler,
+} from "./jobs/reconcile-scheduled-posts-job";
 import { loadReaperConfig } from "./reaper-schedule";
 
 let logger: Logger | null = null;
@@ -152,6 +167,18 @@ async function main(): Promise<void> {
       logger,
       reapPostJobs: deps.usecases.reapPostJobs,
     }),
+    [RECONCILE_SCHEDULED_POSTS_JOB_NAME]: makeReconcileScheduledPostsHandler({
+      logger,
+      reconcileScheduledPosts: deps.usecases.reconcileScheduledPosts,
+    }),
+    [CLEANUP_UPLOADS_JOB_NAME]: makeCleanupUploadsHandler({
+      logger,
+      cleanupUploads: deps.usecases.cleanupUploads,
+    }),
+    [CLEANUP_MEDIA_CACHE_JOB_NAME]: makeCleanupMediaCacheHandler({
+      logger,
+      cleanupMediaCache: deps.usecases.cleanupMediaCache,
+    }),
   };
   consumer = deps.startConsumer(handlers);
 
@@ -171,6 +198,42 @@ async function main(): Promise<void> {
     attempts: 1,
   });
 
+  // E8.6 — the only thing that turns `scheduled_on_facebook` into `published`.
+  // Facebook publishes the post at its hour and tells nobody, so this sweep
+  // asks. Same idempotent scheduler: N replicas still mean ONE schedule.
+  await deps.queue.enqueueRepeatable({
+    schedulerId: RECONCILE_SCHEDULED_POSTS_SCHEDULER_ID,
+    jobName: RECONCILE_SCHEDULED_POSTS_JOB_NAME,
+    everyMs: reaperConfig.WORKER_RECONCILE_INTERVAL_MS,
+    payload: {
+      graceMs: reaperConfig.WORKER_RECONCILE_GRACE_MS,
+      giveUpMs: reaperConfig.WORKER_RECONCILE_GIVE_UP_MS,
+      limit: reaperConfig.WORKER_RECONCILE_LIMIT,
+    },
+    attempts: 1,
+  });
+
+  // E9.4 — hourly, not every 5 minutes: it only ever removes files older than a
+  // day, so a faster tick would just re-scan the same rows.
+  await deps.queue.enqueueRepeatable({
+    schedulerId: CLEANUP_UPLOADS_SCHEDULER_ID,
+    jobName: CLEANUP_UPLOADS_JOB_NAME,
+    everyMs: 60 * 60_000,
+    payload: {},
+    attempts: 1,
+  });
+
+  // E3.6 — hourly for the same reason: the cache TTL is measured in days, so a
+  // faster tick would only re-walk the same files. It needs the cache volume
+  // mounted at MEDIA_CACHE_ROOT, the same path the web process writes to.
+  await deps.queue.enqueueRepeatable({
+    schedulerId: CLEANUP_MEDIA_CACHE_SCHEDULER_ID,
+    jobName: CLEANUP_MEDIA_CACHE_JOB_NAME,
+    everyMs: 60 * 60_000,
+    payload: {},
+    attempts: 1,
+  });
+
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
@@ -180,6 +243,8 @@ async function main(): Promise<void> {
     reaper_interval_ms: reaperConfig.WORKER_REAPER_INTERVAL_MS,
     publishing_stale_ms: reaperConfig.WORKER_PUBLISHING_STALE_MS,
     overdue_queued_ms: reaperConfig.WORKER_OVERDUE_QUEUED_MS,
+    reconcile_interval_ms: reaperConfig.WORKER_RECONCILE_INTERVAL_MS,
+    reconcile_grace_ms: reaperConfig.WORKER_RECONCILE_GRACE_MS,
   });
 }
 

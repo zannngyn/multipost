@@ -35,10 +35,10 @@ export const DeleteChannelGroupResponseSchema = z.object({
 export type DeleteChannelGroupResponse = z.infer<typeof DeleteChannelGroupResponseSchema>;
 
 /**
- * Channel ids are typed in as free text (one per line / comma separated) until
- * E5.1 ships the real "connect a Page" flow. The server still refuses any id
- * the tenant does not own, so a typo is caught — this only saves a round trip
- * on the obvious mistakes.
+ * Channels are TICKED, never typed (E5.1). The form only offers ids the tenant
+ * actually owns, which is why the free-text parser this schema used to carry is
+ * gone: an id typed by hand was rejected by the server every single time, and
+ * there is no longer any screen that produces one.
  */
 export const ChannelGroupFormSchema = z.object({
   name: z
@@ -49,34 +49,28 @@ export const ChannelGroupFormSchema = z.object({
       MAX_CHANNEL_GROUP_NAME_LENGTH,
       `Tên nhóm kênh tối đa ${MAX_CHANNEL_GROUP_NAME_LENGTH} ký tự.`,
     ),
-  channelIdsText: z
-    .string()
-    .trim()
-    .min(1, "Nhóm kênh phải có ít nhất một kênh.")
-    .refine((value) => parseChannelIds(value).length > 0, {
-      message: "Nhóm kênh phải có ít nhất một kênh.",
-    })
-    .refine((value) => parseChannelIds(value).length <= MAX_CHANNELS_PER_GROUP, {
+  channelIds: z
+    .array(z.string().min(1))
+    // Deduplicated BEFORE the limits are checked: a repeated id is one channel,
+    // so it must neither count towards the maximum nor turn into a second
+    // post_job for the same Page. The ticking UI cannot produce a duplicate
+    // today, but the array shape allows one and the server would fan out twice.
+    .transform(uniqueChannelIds)
+    .refine((ids) => ids.length >= 1, { message: "Nhóm kênh phải có ít nhất một kênh." })
+    .refine((ids) => ids.length <= MAX_CHANNELS_PER_GROUP, {
       message: `Một nhóm kênh chỉ chứa tối đa ${MAX_CHANNELS_PER_GROUP} kênh.`,
     }),
 });
 export type ChannelGroupFormValues = z.infer<typeof ChannelGroupFormSchema>;
 
-/** Splits on newlines and commas, trims, drops blanks and duplicates. */
-export function parseChannelIds(raw: string): string[] {
-  if (typeof raw !== "string") return [];
+/** Keeps the first occurrence, so the order the operator ticked in survives. */
+export function uniqueChannelIds(channelIds: readonly string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const part of raw.split(/[\n,]/)) {
-    const channelId = part.trim();
-    if (channelId.length === 0 || seen.has(channelId)) continue;
+  for (const channelId of channelIds) {
+    if (seen.has(channelId)) continue;
     seen.add(channelId);
     result.push(channelId);
   }
   return result;
-}
-
-/** Inverse of `parseChannelIds`, for prefilling the edit form. */
-export function formatChannelIds(channelIds: readonly string[]): string {
-  return channelIds.join("\n");
 }

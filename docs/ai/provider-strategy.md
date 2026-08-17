@@ -53,7 +53,81 @@ Số liệu thu thập 12/08/2026. ⚠️ Giá OpenAI/Google lấy từ aggregat
 
 Nguồn: [CloudZero OpenAI pricing](https://www.cloudzero.com/blog/openai-pricing/), [Morph OpenAI pricing table](https://www.morphllm.com/openai-api-pricing), [pricepertoken GPT-5.4 mini](https://pricepertoken.com/pricing-page/model/openai-gpt-5.4-mini), [CloudZero Gemini pricing](https://www.cloudzero.com/blog/gemini-pricing/), [pricepertoken Gemini](https://pricepertoken.com/pricing-page/model/google-gemini-3.5-flash), giá Anthropic theo bảng giá chính thức hiện hành.
 
-## 3. Provider theo đợt — CẬP NHẬT theo quyết định owner 12/08/2026
+## 3. Provider theo đợt
+
+### 3.1 Hiện hành — quyết định owner 15/08/2026: MỘT PROVIDER, OpenAI
+
+Chưa cấp được key Google AI Studio paid tier, mà mục 3.2 cấm dùng free tier với
+dữ liệu thật. Thay vì để hệ thống không chạy được, **tạm rút xuống một provider
+duy nhất là OpenAI**.
+
+Giá dưới đây đọc từ trang giá chính thức OpenAI ngày 15/08/2026
+(developers.openai.com/api/docs/pricing, Standard tier), USD/1M token.
+
+| Tier | Model | In / Out | Vì sao (đo trên API thật 15/08/2026) |
+|---|---|---|---|
+| cheap | `openai:gpt-4.1-mini` | $0.40 / $1.60 | Primary. **Không phải reasoning** → không đốt output budget để "suy nghĩ", và **nhận `temperature`**. Qua validator ngay lượt đầu 3/4 lần |
+| mid | `openai:gpt-5.4-mini` | $0.75 / $4.50 | Escalation 1. Reasoning, bám feedback validator tốt hơn, và **suy nghĩ vừa phải** (~360 token) chứ không chìm trong đó |
+| top | `openai:gpt-4.1` | $2.00 / $8.00 | Escalation 2. Non-reasoning hạng nặng — **kiểu hỏng khác** với bậc trên, và về nguyên tắc không thể cụt vì nghĩ quá nhiều |
+
+Thang **lên theo KIỂU, không chỉ theo cỡ**: viết nhanh trước; validator trượt thì
+đổi sang model biết bám ràng buộc; trượt nữa thì đổi hẳn sang họ khác. Escalation
+chỉ xảy ra sau khi validate fail nên đúng là lúc đáng trả thêm.
+
+**`openai:gpt-5-mini` đã bị loại khỏi thang** dù giá rẻ nhất: trên prompt này nó
+tiêu 2944/3000 token chỉ để reasoning rồi **không phát ra JSON nào** (trước đó là
+900/900). Nó over-think một việc viết quảng cáo. Vẫn giữ đăng ký để ai muốn đo
+lại; đừng đưa vào thang khi chưa có số mới.
+
+Đăng ký nhưng cố ý ngoài thang: `openai:gpt-4o-mini` ($0.15/$0.60),
+`openai:gpt-5` ($1.25/$10), `openai:gpt-5.4` ($2.50/$15). Hai model cuối đắt tới
+mức một lần escalate ăn gần hết trần $0.05/generation — muốn dùng thì đặt
+`AI_MODEL_TOP` và nâng trần một cách có chủ ý.
+
+**Đổi model không cần sửa file:** `AI_MODEL_CHEAP` / `AI_MODEL_MID` /
+`AI_MODEL_TOP` nhận một KEY trong `models:` của `config/ai-models.yaml` và thay
+nguyên tier đó. Muốn dùng model chưa đăng ký thì thêm vào YAML trước — đó là bước
+review theo ADR-001, không phải thủ tục thừa.
+
+Sai key thì **container vẫn khởi động bình thường** (registry đọc lazy ở lần sinh
+caption đầu tiên, không phải lúc boot), nhưng mọi request sinh caption trả
+`MODEL_NOT_CONFIGURED` và log liệt kê đủ key hợp lệ. Cùng vòng đời với việc thiếu
+key provider — cố ý, để container không crash-loop vì một giá trị nó có thể không
+bao giờ cần.
+
+### ⚠️ Ba bẫy đã đo được trên API thật (15/08/2026)
+
+1. **`temperature` không phải model nào cũng nhận.** Họ GPT-5 trả
+   `400 Unsupported parameter: 'temperature' is not supported with this model`,
+   phân loại `bad_request` → terminal, không retry, chặn cả bài. Vì vậy
+   `temperature` là **capability theo từng model trong registry**; engine tự bỏ
+   tham số khi model không nhận. Task vẫn khai nhiệt độ nó muốn.
+2. **Reasoning token tính chung vào `maxOutputTokens`.** Với trần 900,
+   `gpt-5-mini` tiêu hết vào phần suy nghĩ và **không phát ra JSON nào — 4/4 lần
+   chạy thật**. Đã nâng `facebook_content` lên 3000 và `timeoutMs` lên 60s. Nâng
+   trần token cũng nâng ước tính chi phí trước khi gọi, nên thang tier giữ giá
+   output ≤ $8/M để 3 lượt vẫn lọt trần $0.05. Lưu ý nâng trần **không cứu được**
+   model over-think: gpt-5-mini vẫn tiêu 2944/3000 — phải đổi model.
+3. **Cache Redis phải tính cả lựa chọn model từ env.** Web và worker dùng chung
+   một Redis; key cache policy ban đầu chỉ có `tenant + task`, nên một tiến trình
+   khởi động với `AI_MODEL_*` khác **đọc trúng routing của tiến trình kia** — và
+   vì trúng cache nên bỏ qua luôn bước validate key lúc load. Đo được ngày
+   15/08/2026: server chạy với `AI_MODEL_MID` cố ý sai vẫn sinh caption bình
+   thường. Đã thêm `variant` (tên các tier bị override) vào key cache, và
+   `invalidate` giờ xoá mọi variant của tenant đó.
+
+**Hệ quả phải chấp nhận:** đường **provider fallback ở mục 4 tạm thời không tồn
+tại**. `selectFallbackModel` chỉ đổi sang provider KHÁC; còn một provider thì
+`AI_TIMEOUT` / `AI_RATE_LIMITED` / `AI_PROVIDER_DOWN` làm generation fail luôn,
+không có retry. Đây là đánh đổi có chủ ý, không phải bug.
+
+**Bật lại Google** (không cần sửa code):
+1. Cấp `GOOGLE_AI_API_KEY` paid tier (điều kiện mục 3.2 vẫn nguyên giá trị).
+2. Thêm lại các key `google:*` vào vị trí 1 của từng tier trong `config/ai-models.yaml`
+   (comment hướng dẫn nằm ngay trong file).
+3. Khôi phục các bước Gemini + fallback trong `scripts/ai-live-smoke.ts` từ lịch sử git.
+
+### 3.2 Định hướng gốc — quyết định owner 12/08/2026 (đang tạm hoãn)
 
 **Quyết định: Google AI Studio (Gemini API) làm provider chính** — ưu tiên chi phí.
 
@@ -74,7 +148,7 @@ Nguồn: [CloudZero OpenAI pricing](https://www.cloudzero.com/blog/openai-pricin
 
 | | Trigger | Hành động | Model đích |
 |---|---|---|---|
-| **Provider fallback** | `AI_TIMEOUT`, `AI_RATE_LIMITED`, `AI_PROVIDER_DOWN` (lỗi HẠ TẦNG) | Đổi PROVIDER, giữ nguyên hạng model, giữ nguyên prompt | Cùng tier ở provider khác (theo registry `fallback:`) |
+| **Provider fallback** ⚠️ *bất hoạt từ 15/08/2026 — xem mục 3.1* | `AI_TIMEOUT`, `AI_RATE_LIMITED`, `AI_PROVIDER_DOWN` (lỗi HẠ TẦNG) | Đổi PROVIDER, giữ nguyên hạng model, giữ nguyên prompt | Cùng tier ở provider khác (theo registry `fallback:`) |
 | **Quality escalation** | Validation FAIL sau khi sinh thành công (lỗi CHẤT LƯỢNG) | Giữ hoặc đổi provider, NÂNG hạng model, kèm feedback lỗi validation vào prompt | Tier cao hơn (theo registry `escalate:`) |
 | Không bao giờ | `AI_BAD_REQUEST` (lỗi của mình) | Không fallback, không escalate — fail nhanh, log, sửa code | — |
 | `AI_CONTENT_REFUSED` | Provider từ chối nội dung | Thử 1 provider khác cùng tier; vẫn từ chối → cần người xử lý | Cùng tier |

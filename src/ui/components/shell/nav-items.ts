@@ -6,6 +6,12 @@
 export interface NavItem {
   readonly href: string;
   readonly label: string;
+  /**
+   * Set when another nav entry lives UNDER this one. "/channels" owns
+   * "/channels/groups", which has its own entry — prefix matching would light
+   * both at once and the operator could not tell which screen they are on.
+   */
+  readonly isExact?: boolean;
 }
 
 export interface NavSection {
@@ -39,7 +45,8 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   {
     title: "Cấu hình",
     items: [
-      { href: "/channels", label: "Nhóm kênh" },
+      { href: "/channels", label: "Kênh", isExact: true },
+      { href: "/channels/groups", label: "Nhóm kênh" },
       { href: "/prompts", label: "Mẫu prompt" },
     ],
   },
@@ -52,12 +59,20 @@ export const NAV_SECTIONS: readonly NavSection[] = [
  *
  * Prefix matching is segment-aware on purpose: "/jobsomething" must not light
  * up "/jobs".
+ *
+ * `exact` turns the prefix rule off for an entry whose sub-paths belong to a
+ * different entry (see `NavItem.isExact`).
  */
-export function isNavItemActive(pathname: string, href: string): boolean {
+export function isNavItemActive(
+  pathname: string,
+  href: string,
+  options?: { exact?: boolean },
+): boolean {
   const path = normalise(pathname);
   const target = normalise(href);
 
   if (target === "/") return path === "/";
+  if (options?.exact) return path === target;
   return path === target || path.startsWith(`${target}/`);
 }
 

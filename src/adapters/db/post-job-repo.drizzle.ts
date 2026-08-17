@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, isNotNull, lt, or, type SQL } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, lt, or, type SQL } from "drizzle-orm";
 
 import { AppError } from "@/core/domain/errors";
 import {
@@ -70,6 +70,7 @@ function toDomain(row: PostJobRow): PostJob {
     publishedPostId: row.publishedPostId,
     publishedUrl: row.publishedUrl,
     publishedAt: row.publishedAt,
+    scheduledPostId: row.scheduledPostId,
     captionText: row.captionText,
     media: row.media ?? [],
     scheduledAt: row.scheduledAt,
@@ -83,7 +84,15 @@ function toListItem(row: PostJobRow): PostJobListItem {
 }
 
 function emptyCounts(): Record<PostJobStatus, number> {
-  return { draft: 0, queued: 0, publishing: 0, published: 0, failed: 0, blocked: 0 };
+  return {
+    draft: 0,
+    queued: 0,
+    publishing: 0,
+    scheduled_on_facebook: 0,
+    published: 0,
+    failed: 0,
+    blocked: 0,
+  };
 }
 
 export class DrizzlePostJobRepo implements PostJobRepo {
@@ -323,6 +332,9 @@ export class DrizzlePostJobRepo implements PostJobRepo {
             publishedPostId: next.publishedPostId,
             publishedUrl: next.publishedUrl,
             publishedAt: next.publishedAt,
+            // E8.6: the id of the post Facebook is holding travels with the
+            // status too, or a handed-over job could not be reconciled.
+            scheduledPostId: next.scheduledPostId,
             // Written in the SAME statement as the status: a `queued` row whose
             // queue id was lost cannot be cancelled or rescheduled (E8.4).
             queueJobId: next.queueJobId,
@@ -523,7 +535,9 @@ export class DrizzlePostJobRepo implements PostJobRepo {
     const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 20;
 
     const filters: Array<SQL | undefined> = [
-      eq(postJobs.status, "queued"),
+      // E8.6: a post Facebook already holds is still "bài đã hẹn" — hiding it
+      // between the handoff and the hour would make it look lost.
+      inArray(postJobs.status, ["queued", "scheduled_on_facebook"]),
       isNotNull(postJobs.scheduledAt),
     ];
     if (query?.from instanceof Date) filters.push(gte(postJobs.scheduledAt, query.from));
@@ -631,6 +645,41 @@ export class DrizzlePostJobRepo implements PostJobRepo {
     } catch (error) {
       throw wrapDbError(error, {
         operation: "postJob.findOverdueQueued",
+        due_before: dueBefore.toISOString(),
+        scope: "CROSS_TENANT",
+      });
+    }
+  }
+
+  /** CROSS-TENANT SCAN — see the note on findStalePublishing. */
+  async findScheduledOnPlatformDue(query: OverdueScanQuery): Promise<readonly PostJob[]> {
+    const dueBefore = query?.dueBefore;
+    const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 50;
+    if (!(dueBefore instanceof Date) || !Number.isFinite(dueBefore.getTime())) {
+      throw new AppError("INVALID_INPUT", {
+        message: "findScheduledOnPlatformDue requires a `dueBefore` date",
+        userMessage: "Tham số quét bài đã giao cho Facebook không hợp lệ.",
+        context: { operation: "postJob.findScheduledOnPlatformDue" },
+      });
+    }
+
+    try {
+      const rows = await this.db
+        .select()
+        .from(postJobs)
+        .where(
+          and(
+            eq(postJobs.status, "scheduled_on_facebook"),
+            isNotNull(postJobs.scheduledAt),
+            lt(postJobs.scheduledAt, dueBefore),
+          ),
+        )
+        .orderBy(postJobs.scheduledAt)
+        .limit(limit);
+      return rows.map(toDomain);
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.findScheduledOnPlatformDue",
         due_before: dueBefore.toISOString(),
         scope: "CROSS_TENANT",
       });

@@ -5,6 +5,7 @@ import {
   MAX_ALBUM_MEDIA,
   SUPPORTED_FORMATS,
   evaluateScheduledAt,
+  handoffWakeDelayMs,
   isPostFormat,
   isVideoFormat,
   scheduleRejectionMessage,
@@ -393,7 +394,14 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
         continue;
       }
 
-      const delayMs = schedule?.ok ? schedule.delayMs : 0;
+      // E8.6 — a scheduled post wakes at the START of the handoff window
+      // (T-30), not at T: the worker must have time to re-check the stock,
+      // upload the album and give Facebook the post while Facebook still
+      // accepts the time. What happens at that wake-up is publish-post's
+      // decision (planScheduledPublish), not this file's.
+      const delayMs = schedule?.ok
+        ? handoffWakeDelayMs(schedule.at, deps.clock.nowMs())
+        : 0;
       try {
         await deps.queue.enqueue(
           PUBLISH_POST_JOB_NAME,

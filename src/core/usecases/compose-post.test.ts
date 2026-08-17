@@ -12,6 +12,17 @@ import { makeComposePost, VIDEO_NOT_CHECKED_WARNING } from "./compose-post";
 const TENANT = "00000000-0000-0000-0000-000000000001";
 const CHANNEL = "fb-page-1";
 
+/** E9 additions to MediaRepo; composing never calls them. */
+const UPLOAD_STUBS = {
+  registerUpload: async () => {},
+  listOrphanedUploads: async () => [],
+  listUnreferencedUploadsForCode: async () => [],
+  deleteUploads: async () => 0,
+} satisfies Pick<
+  MediaRepo,
+  "registerUpload" | "listOrphanedUploads" | "listUnreferencedUploadsForCode" | "deleteUploads"
+>;
+
 function makeLogger(): Logger {
   const logger: Logger = {
     child: () => logger,
@@ -42,6 +53,8 @@ function product(overrides: Partial<Product> = {}): Product {
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
   return {
     driveFileId: `id-${overrides.sequence ?? 0}-${overrides.color ?? "KEM"}`,
+    origin: "drive",
+    storageKey: null,
     fileName: `MGKVX6310-KEM (${overrides.sequence ?? 0}).jpg`,
     productCode: "MGKVX6310",
     color: "KEM",
@@ -68,6 +81,7 @@ function harness(options: { product?: Product | null; media?: MediaAsset[] } = {
     listByProductCode: async () => options.media ?? [],
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    ...UPLOAD_STUBS,
   };
   return makeComposePost({ products, media, logger: makeLogger() });
 }
@@ -115,7 +129,12 @@ describe("composePost — edge cases first", () => {
       upsertMany: async () => 0,
       deleteStale: async () => 0,
     };
-    const media: MediaRepo = { listByProductCode, upsertMany: async () => 0, deleteStale: async () => 0 };
+    const media: MediaRepo = {
+      listByProductCode,
+      upsertMany: async () => 0,
+      deleteStale: async () => 0,
+      ...UPLOAD_STUBS,
+    };
     const compose = makeComposePost({ products, media, logger: makeLogger() });
 
     const result = await compose({ tenantId: TENANT, productCode: "MR0AC6080", channel: CHANNEL });
@@ -383,6 +402,7 @@ function videoHarness(options: {
     listByProductCode: async () => options.media ?? [clip(1)],
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    ...UPLOAD_STUBS,
   };
   const videoProbe = options.probe ?? { probeAsset };
   return {
@@ -413,7 +433,12 @@ describe("composePost — video spec gate", () => {
     const probeAsset = vi.fn(async () => REELS_SPEC);
     const compose = makeComposePost({
       products,
-      media: { listByProductCode: async () => [clip(1)], upsertMany: async () => 0, deleteStale: async () => 0 },
+      media: {
+        listByProductCode: async () => [clip(1)],
+        upsertMany: async () => 0,
+        deleteStale: async () => 0,
+        ...UPLOAD_STUBS,
+      },
       logger: makeLogger(),
       videoProbe: { probeAsset },
     });
@@ -572,7 +597,12 @@ describe("composePost — video spec gate", () => {
     };
     const compose = makeComposePost({
       products,
-      media: { listByProductCode: async () => [clip(1)], upsertMany: async () => 0, deleteStale: async () => 0 },
+      media: {
+        listByProductCode: async () => [clip(1)],
+        upsertMany: async () => 0,
+        deleteStale: async () => 0,
+        ...UPLOAD_STUBS,
+      },
       logger: makeLogger(),
     });
 
@@ -607,5 +637,110 @@ describe("composePost — video spec gate", () => {
     expect(result.blocked).toBeNull();
     expect(result.video).toBeNull();
     expect(probeAsset).not.toHaveBeenCalled();
+  });
+});
+
+// --- E9 (mode B): the two file modes must not bleed into each other ---------
+
+describe("composePost — media source", () => {
+  function uploaded(sequence: number): MediaAsset {
+    return asset({
+      driveFileId: `upload_${sequence}`,
+      origin: "upload",
+      storageKey: `${TENANT}/upload_${sequence}`,
+      fileName: `tai-len-${sequence}.jpg`,
+      color: null,
+      colorRaw: null,
+      sequence,
+    });
+  }
+
+  const MIXED = [asset({ sequence: 1 }), asset({ sequence: 2 }), uploaded(1), uploaded(2)];
+
+  it("defaults to Drive and ignores files uploaded for the same code", async () => {
+    const compose = harness({ product: product(), media: MIXED });
+
+    const result = await compose({ tenantId: TENANT, productCode: "MGKVX6310", channel: CHANNEL });
+
+    expect(result.blocked).toBeNull();
+    expect(result.media.every((item) => item.origin === "drive")).toBe(true);
+  });
+
+  it("uses only the uploaded files when asked for mode B", async () => {
+    const compose = harness({ product: product(), media: MIXED });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      source: "upload",
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.media.map((item) => item.fileName)).toEqual([
+      "tai-len-1.jpg",
+      "tai-len-2.jpg",
+    ]);
+  });
+
+  it("keeps the arranged order, because upload numbers the album by position", async () => {
+    const compose = harness({
+      product: product(),
+      media: [uploaded(3), uploaded(1), uploaded(2)],
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      source: "upload",
+    });
+
+    expect(result.media.map((item) => item.sequence)).toEqual([1, 2, 3]);
+  });
+
+  it("blocks with a mode-B wording when nothing was uploaded", async () => {
+    const compose = harness({ product: product(), media: [asset({ sequence: 1 })] });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      source: "upload",
+    });
+
+    expect(result.blocked?.reason).toBe("NO_MEDIA_FOR_CODE");
+    expect(result.blocked?.userMessage).toMatch(/tải lên/);
+  });
+
+  it("still runs the stock gate before looking at uploads at all", async () => {
+    // Business rule 1 is order, not mode: mode B must not become a way past it.
+    const compose = harness({
+      product: product({ operational: { stockRaw: "0", noteRaw: "", colorsRaw: "KEM" } }),
+      media: [uploaded(1)],
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      source: "upload",
+    });
+
+    expect(result.blocked?.code).toBe("OUT_OF_STOCK");
+    expect(result.media).toEqual([]);
+  });
+
+  it("does not warn about the 5-photo minimum in mode B", async () => {
+    const compose = harness({ product: product(), media: [uploaded(1), uploaded(2)] });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      source: "upload",
+    });
+
+    expect(result.warnings.some((line) => line.includes("tối thiểu"))).toBe(false);
   });
 });

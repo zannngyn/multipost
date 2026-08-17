@@ -12,6 +12,13 @@ import type {
   MediaAssetLookup,
 } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
+import type { BlobContent, GetBlobInput, MediaBlobStore } from "@/core/ports/media-blob-store";
+import type {
+  CachedMediaBytes,
+  GetCachedMediaInput,
+  MediaByteCache,
+  PutCachedMediaInput,
+} from "@/core/ports/media-byte-cache";
 
 import { makeGetMediaContent } from "./get-media-content";
 
@@ -33,6 +40,8 @@ const sign: SignatureFn = (payload) => createHmac("sha256", SECRET).update(paylo
 function asset(overrides: Partial<MediaAsset> = {}): MediaAsset {
   return {
     driveFileId: ASSET,
+    origin: "drive",
+    storageKey: null,
     fileName: "MGKVX6310-KEM (1).jpg",
     productCode: "MGKVX6310",
     color: "KEM",
@@ -70,6 +79,14 @@ interface HarnessOptions {
   content?: DriveFileContent;
   downloadError?: unknown;
   maxBytes?: number;
+  /** Bytes the blob store returns; null makes it answer "not there". */
+  blobContent?: BlobContent | null;
+  blobError?: unknown;
+  /** Bytes the byte cache returns; undefined = miss. */
+  cached?: CachedMediaBytes;
+  /** Makes the cache read/write fail the way a broken volume would. */
+  cacheGetError?: unknown;
+  cachePutError?: unknown;
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -96,12 +113,43 @@ function harness(options: HarnessOptions = {}) {
   );
   const mediaAssets: MediaAssetLookup = { findByDriveFileId };
 
+  const getBlob = vi.fn(async (_input: GetBlobInput): Promise<BlobContent | null> => {
+    if (options.blobError) throw options.blobError;
+    if (options.blobContent === null) return null;
+    return options.blobContent ?? { bytes: BYTES, mimeType: null };
+  });
+  const blobs: MediaBlobStore = {
+    put: async () => {
+      throw new Error("not used");
+    },
+    get: getBlob,
+    delete: async () => false,
+  };
+
+  const getCached = vi.fn(async (_input: GetCachedMediaInput): Promise<CachedMediaBytes | null> => {
+    if (options.cacheGetError) throw options.cacheGetError;
+    return options.cached ?? null;
+  });
+  const putCached = vi.fn(async (_input: PutCachedMediaInput): Promise<void> => {
+    if (options.cachePutError) throw options.cachePutError;
+  });
+  const cache: MediaByteCache = {
+    get: getCached,
+    put: putCached,
+    evictOlderThan: async () => ({ scanned: 0, removed: 0, failed: 0 }),
+  };
+
   return {
     logger,
     download,
+    getBlob,
+    getCached,
+    putCached,
     findByDriveFileId,
     getMediaContent: makeGetMediaContent({
       drive,
+      blobs,
+      cache,
       mediaAssets,
       sign,
       clock,
@@ -312,5 +360,228 @@ describe("getMediaContent — happy path", () => {
       content: { fileId: ASSET, bytes: BYTES, mimeType: "  ", sizeBytes: BYTES.length },
     });
     expect((await unknown.getMediaContent(link())).mimeType).toBe("application/octet-stream");
+  });
+});
+
+// --- E9: uploaded assets are served from the blob store, not Drive ----------
+
+describe("getMediaContent — mode B (uploaded assets)", () => {
+  const UPLOAD_ID = "upload_ab12cd34";
+  const UPLOAD_KEY = `${TENANT}/${UPLOAD_ID}`;
+
+  function uploaded(overrides: Partial<MediaAsset> = {}): MediaAsset {
+    return asset({
+      driveFileId: UPLOAD_ID,
+      origin: "upload",
+      storageKey: UPLOAD_KEY,
+      fileName: "anh-tu-tai-len.jpg",
+      ...overrides,
+    });
+  }
+
+  function uploadHarness(options: HarnessOptions = {}) {
+    return harness({ assets: { [`${TENANT}:${UPLOAD_ID}`]: uploaded() }, ...options });
+  }
+
+  it("reads an uploaded asset from the blob store and never touches Drive", async () => {
+    const { getMediaContent, getBlob, download } = uploadHarness();
+
+    const result = await getMediaContent(link({ assetId: UPLOAD_ID }));
+
+    expect(result.driveFileId).toBe(UPLOAD_ID);
+    expect(result.sizeBytes).toBe(BYTES.length);
+    expect(getBlob).toHaveBeenCalledTimes(1);
+    expect(getBlob.mock.calls[0][0]).toMatchObject({ tenantId: TENANT, storageKey: UPLOAD_KEY });
+    // The whole point: a mode B post must not depend on Drive being reachable.
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("still serves a Drive asset from Drive", async () => {
+    const { getMediaContent, getBlob, download } = harness();
+    await getMediaContent(link());
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(getBlob).not.toHaveBeenCalled();
+  });
+
+  it("takes the mime type from the asset row, which the blob store does not keep", async () => {
+    const { getMediaContent } = uploadHarness();
+    expect((await getMediaContent(link({ assetId: UPLOAD_ID }))).mimeType).toBe("image/jpeg");
+  });
+
+  it("reports a missing blob as MEDIA_NOT_FOUND rather than an empty body", async () => {
+    // The row survived but the bytes are gone (cleanup raced, volume lost).
+    // Facebook would otherwise receive a 0-byte body and fail opaquely.
+    const { getMediaContent } = uploadHarness({ blobContent: null });
+    await expect(getMediaContent(link({ assetId: UPLOAD_ID }))).rejects.toMatchObject({
+      code: "MEDIA_NOT_FOUND",
+    });
+  });
+
+  it("rejects an upload row whose storage key was never written", async () => {
+    const { getMediaContent, getBlob } = harness({
+      assets: { [`${TENANT}:${UPLOAD_ID}`]: uploaded({ storageKey: null }) },
+    });
+    await expect(getMediaContent(link({ assetId: UPLOAD_ID }))).rejects.toMatchObject({
+      code: "MEDIA_NOT_FOUND",
+    });
+    expect(getBlob).not.toHaveBeenCalled();
+  });
+
+  it("treats an empty blob as a failure, like an empty Drive download", async () => {
+    const { getMediaContent } = uploadHarness({
+      blobContent: { bytes: new Uint8Array(0), mimeType: null },
+    });
+    await expect(getMediaContent(link({ assetId: UPLOAD_ID }))).rejects.toBeInstanceOf(AppError);
+  });
+});
+
+// --- Read-through byte cache (the fix for the Graph 324 timeouts) -----------
+
+describe("getMediaContent — Drive byte cache", () => {
+  const CACHED = new Uint8Array([1, 2, 3, 4]);
+
+  it("keeps serving the bytes when the cache READ fails", async () => {
+    // A broken volume must degrade to the old behaviour (slow, but a picture),
+    // never to a failed request — Meta gives up after ~30s either way.
+    const { getMediaContent, download, logger } = harness({
+      cacheGetError: new Error("EACCES: permission denied"),
+    });
+
+    const result = await getMediaContent(link());
+
+    expect(result.bytes).toEqual(BYTES);
+    expect(download).toHaveBeenCalledTimes(1);
+    // Not swallowed: the failure is logged with the asset it happened on.
+    const warned = logger.lines.find((line) => line.message.includes("Media cache read failed"));
+    expect(warned).toBeDefined();
+    expect(warned?.context).toMatchObject({ tenant_id: TENANT, drive_file_id: ASSET });
+  });
+
+  it("keeps serving the bytes when the cache WRITE fails", async () => {
+    const { getMediaContent, logger } = harness({
+      cachePutError: new Error("ENOSPC: no space left on device"),
+    });
+
+    const result = await getMediaContent(link());
+
+    expect(result.bytes).toEqual(BYTES);
+    const warned = logger.lines.find((line) => line.message.includes("Media cache write failed"));
+    expect(warned).toBeDefined();
+    expect(warned?.context).toMatchObject({ tenant_id: TENANT, drive_file_id: ASSET });
+  });
+
+  it("serves a hit without touching Drive at all", async () => {
+    const { getMediaContent, download, putCached } = harness({
+      cached: { bytes: CACHED, mimeType: "image/jpeg" },
+    });
+
+    const result = await getMediaContent(link());
+
+    expect(result.bytes).toEqual(CACHED);
+    expect(result.mimeType).toBe("image/jpeg");
+    // The whole point: Drive took 6.7s-99.9s per file, Meta waits ~30s.
+    expect(download).not.toHaveBeenCalled();
+    // A hit must not rewrite what it just read.
+    expect(putCached).not.toHaveBeenCalled();
+  });
+
+  it("downloads once on a miss and stores what it served", async () => {
+    const { getMediaContent, download, getCached, putCached } = harness();
+
+    await getMediaContent(link());
+
+    expect(getCached).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: TENANT, assetId: ASSET }),
+    );
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(putCached).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: TENANT,
+        assetId: ASSET,
+        bytes: BYTES,
+        mimeType: "image/jpeg",
+      }),
+    );
+  });
+
+  it("reports hit and miss in the log line", async () => {
+    const miss = harness();
+    await miss.getMediaContent(link());
+    expect(
+      miss.logger.lines.find((line) => line.message === "Signed media request served")?.context,
+    ).toMatchObject({ cache: "miss" });
+
+    const hit = harness({ cached: { bytes: CACHED, mimeType: "image/jpeg" } });
+    await hit.getMediaContent(link());
+    expect(
+      hit.logger.lines.find((line) => line.message === "Signed media request served")?.context,
+    ).toMatchObject({ cache: "hit" });
+  });
+
+  it("falls back to the row's mime type when the cached copy has none", async () => {
+    const { getMediaContent } = harness({ cached: { bytes: CACHED, mimeType: null } });
+    expect((await getMediaContent(link())).mimeType).toBe("image/jpeg");
+  });
+
+  it("never caches a body it would refuse to serve", async () => {
+    const empty = harness({
+      content: { fileId: ASSET, bytes: new Uint8Array(), mimeType: "image/jpeg", sizeBytes: 0 },
+    });
+    await expect(empty.getMediaContent(link())).rejects.toBeInstanceOf(AppError);
+    expect(empty.putCached).not.toHaveBeenCalled();
+
+    const tooBig = harness({
+      assets: { [`${TENANT}:${ASSET}`]: asset({ sizeBytes: null }) },
+      content: {
+        fileId: ASSET,
+        bytes: new Uint8Array(4096),
+        mimeType: "image/jpeg",
+        sizeBytes: 4096,
+      },
+      maxBytes: 1024,
+    });
+    await expect(tooBig.getMediaContent(link())).rejects.toBeInstanceOf(AppError);
+    expect(tooBig.putCached).not.toHaveBeenCalled();
+  });
+
+  it("passes the byte budget down, so the cache cannot blow the memory guard", async () => {
+    const { getMediaContent, getCached } = harness({ maxBytes: 4096 });
+    await getMediaContent(link());
+    expect(getCached).toHaveBeenCalledWith(expect.objectContaining({ maxBytes: 4096 }));
+  });
+
+  it("bypasses the cache entirely for an uploaded asset — its bytes are local", async () => {
+    const UPLOAD_ID = "upload_ab12cd34";
+    const { getMediaContent, getCached, putCached, logger } = harness({
+      assets: {
+        [`${TENANT}:${UPLOAD_ID}`]: asset({
+          driveFileId: UPLOAD_ID,
+          origin: "upload",
+          storageKey: `${TENANT}/${UPLOAD_ID}`,
+        }),
+      },
+    });
+
+    await getMediaContent(link({ assetId: UPLOAD_ID }));
+
+    expect(getCached).not.toHaveBeenCalled();
+    expect(putCached).not.toHaveBeenCalled();
+    expect(
+      logger.lines.find((line) => line.message === "Signed media request served")?.context,
+    ).toMatchObject({ cache: "bypass" });
+  });
+
+  it("does not reach the cache before the signature and the tenant check pass", async () => {
+    const forged = harness();
+    await expect(
+      forged.getMediaContent({ ...link(), signature: "a".repeat(64) }),
+    ).rejects.toBeInstanceOf(AppError);
+    expect(forged.getCached).not.toHaveBeenCalled();
+
+    const foreign = harness();
+    await expect(foreign.getMediaContent(link({ assetId: "unknown-file" }))).rejects.toBeInstanceOf(
+      AppError,
+    );
+    expect(foreign.getCached).not.toHaveBeenCalled();
   });
 });
