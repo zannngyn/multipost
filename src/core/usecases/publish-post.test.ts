@@ -20,6 +20,8 @@ import type {
   ChannelPublisher,
   PublishImagePostInput,
   PublishSettings,
+  SchedulePostInput,
+  SchedulePostResult,
   SignMediaUrlFn,
 } from "@/core/ports/publisher";
 
@@ -74,6 +76,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     publishedPostId: null,
     publishedUrl: null,
     publishedAt: null,
+    scheduledPostId: null,
     captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
@@ -137,6 +140,9 @@ function makeMemoryRepo(jobs: PostJob[]) {
     async findOverdueQueued() {
       return [];
     },
+    async findScheduledOnPlatformDue() {
+      return [];
+    },
     async findLastPublishedAt(_tenantId: string, channelId: string) {
       const published = [...store.values()]
         .filter((job) => job.channelId === channelId && job.publishedAt)
@@ -153,7 +159,15 @@ function makeMemoryRepo(jobs: PostJob[]) {
         productCode: list[0]?.productCode ?? "",
         status: deriveBatchStatus(list.map((job) => job.status)),
         total: list.length,
-        byStatus: { draft: 0, queued: 0, publishing: 0, published: 0, failed: 0, blocked: 0 },
+        byStatus: {
+          draft: 0,
+          queued: 0,
+          publishing: 0,
+          scheduled_on_facebook: 0,
+          published: 0,
+          failed: 0,
+          blocked: 0,
+        },
         startedAt: new Date("2026-08-13T02:00:00.000Z"),
         finishedAt: null,
         jobs: list,
@@ -239,6 +253,12 @@ interface Harness {
   publisher: {
     publishImagePost: ReturnType<typeof vi.fn>;
     publishVideoPost: ReturnType<typeof vi.fn>;
+    /** E8.6 — absent when the harness builds a platform without a scheduler. */
+    scheduled?: {
+      schedulePost: ReturnType<typeof vi.fn>;
+      getPostState: ReturnType<typeof vi.fn>;
+      deleteScheduledPost: ReturnType<typeof vi.fn>;
+    };
   };
   clock: ReturnType<typeof fixedClock>;
   signer: ReturnType<typeof fakeSigner>;
@@ -279,6 +299,10 @@ function harness(options: {
   signMediaUrl?: SignMediaUrlFn;
   mediaBaseUrl?: () => string;
   readMediaBytes?: ReadMediaBytes;
+  /** E8.6 — what the platform answers when the post is handed over. */
+  schedulePost?: (input: SchedulePostInput) => Promise<SchedulePostResult>;
+  /** E8.6 — build a publisher that cannot hold a post (TikTok-like). */
+  withoutScheduler?: boolean;
 } = {}): Harness {
   const repo = makeMemoryRepo(options.jobs ?? [makeJob()]);
   const queue = makeQueue();
@@ -293,6 +317,21 @@ function harness(options: {
     publishVideoPost: vi.fn(
       options.publishVideo ?? (async () => ({ postId: "555000111_2", url: "https://fb/555000111_2" })),
     ),
+    ...(options.withoutScheduler
+      ? {}
+      : {
+          scheduled: {
+            schedulePost: vi.fn(
+              options.schedulePost ??
+                (async (input: SchedulePostInput) => ({
+                  scheduledPostId: "555000111_scheduled",
+                  publishAt: input.publishAt,
+                })),
+            ),
+            getPostState: vi.fn(async () => ({ state: "scheduled" as const, postId: "555000111_scheduled", publishAt: null })),
+            deleteScheduledPost: vi.fn(async () => true),
+          },
+        }),
   };
   const signer = fakeSigner(clock);
   const readMediaBytes = vi.fn<ReadMediaBytes>(
@@ -1373,5 +1412,277 @@ describe("publishPost — platform routing (E6)", () => {
 
     expect(result).toMatchObject({ outcome: "blocked", errorCode: "CHANNEL_NOT_CONFIGURED" });
     expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * E8.6 — the handoff. The clock is fixed at 02:00Z, so every hour below is
+ * written as an offset from it: T-20 is inside the window, T-40 is before it,
+ * T-5 is past the deadline.
+ */
+describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
+  const NOW = Date.parse("2026-08-13T02:00:00.000Z");
+  const at = (offsetMs: number): Date => new Date(NOW + offsetMs);
+
+  // --- Edge cases first ------------------------------------------------------
+
+  it("does NOT hand over before the window opens — it comes back at T-30", async () => {
+    const h = harness({ jobs: [makeJob({ scheduledAt: at(40 * 60_000), queueJobId: "pp.job-1" })] });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(10 * 60_000);
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    // Nothing was claimed: the row is exactly where it was.
+    expect(h.repo.get("job-1")?.status).toBe("queued");
+    expect(h.queue.enqueued[0]?.opts?.delayMs).toBe(10 * 60_000);
+  });
+
+  it("does NOT hand over inside the last 12 minutes — it waits for the hour", async () => {
+    // Facebook needs ~10 minutes of lead and an album upload can take minutes,
+    // so a handoff here would be refused; publishing early would surprise the
+    // operator. Waiting for T is the only honest answer.
+    const h = harness({ jobs: [makeJob({ scheduledAt: at(5 * 60_000), queueJobId: "pp.job-1" })] });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(5 * 60_000);
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(h.repo.get("job-1")?.status).toBe("queued");
+  });
+
+  it("checks the stock BEFORE the handoff — a sold-out post never reaches Facebook", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(20 * 60_000) })],
+      product: makeProduct("0"),
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.errorCode).toBe("OUT_OF_STOCK");
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(h.repo.get("job-1")?.status).toBe("blocked");
+  });
+
+  it("re-running a job Facebook already holds sends NOTHING (crash between handoff and status)", async () => {
+    const h = harness({
+      jobs: [
+        makeJob({
+          status: "scheduled_on_facebook",
+          scheduledAt: at(20 * 60_000),
+          scheduledPostId: "555000111_scheduled",
+        }),
+      ],
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("skipped");
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(h.repo.get("job-1")?.status).toBe("scheduled_on_facebook");
+  });
+
+  // --- Happy path ------------------------------------------------------------
+
+  it("hands the post over inside the window and lands in `scheduled_on_facebook`, NOT `published`", async () => {
+    const scheduledAt = at(20 * 60_000);
+    const h = harness({ jobs: [makeJob({ scheduledAt })] });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("scheduled_on_facebook");
+    expect(result.scheduledPostId).toBe("555000111_scheduled");
+    expect(result.publishedPostId).toBeNull();
+    // The album travelled, but nothing was PUBLISHED.
+    expect(h.publisher.scheduled?.schedulePost).toHaveBeenCalledTimes(1);
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+
+    const handed = h.publisher.scheduled?.schedulePost.mock.calls[0]?.[0] as SchedulePostInput;
+    expect(handed.publishAt).toEqual(scheduledAt);
+    expect(handed.media).toHaveLength(1);
+    expect(handed.caption).toBe("Giannal – MỘT NGÀY DỊU DÀNG");
+
+    const stored = h.repo.get("job-1");
+    expect(stored?.status).toBe("scheduled_on_facebook");
+    expect(stored?.scheduledPostId).toBe("555000111_scheduled");
+    expect(stored?.publishedPostId).toBeNull();
+    expect(stored?.publishedAt).toBeNull();
+    // The queue is done with this job: Facebook owns the hour now.
+    expect(stored?.queueJobId).toBeNull();
+
+    const handoff = h.repo.transitionInputs.find(
+      (input) => input.next.status === "scheduled_on_facebook",
+    );
+    expect(handoff?.auditAction).toBe("post_job.scheduled_on_facebook");
+  });
+
+  it("publishes on the normal path — and says so — when the hour has already passed", async () => {
+    const h = harness({ jobs: [makeJob({ scheduledAt: at(-90_000) })] });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    const published = h.repo.transitionInputs.find((input) => input.next.status === "published");
+    expect(published?.auditAction).toBe("post_job.published_late");
+    expect(published?.reason).toBe("PUBLISHED_LATE");
+  });
+
+  it("keeps an immediate post on the normal path with no late marker (regression)", async () => {
+    const h = harness({ jobs: [makeJob({ scheduledAt: null })] });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(h.publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    const published = h.repo.transitionInputs.find((input) => input.next.status === "published");
+    expect(published?.auditAction).toBeUndefined();
+  });
+
+  // --- Failed handoffs -------------------------------------------------------
+
+  it("tries again inside the window after a transient refusal", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(30 * 60_000), queueJobId: "pp.job-1" })],
+      schedulePost: async () => {
+        throw new AppError("META_ERROR", {
+          message: "Graph is having a moment",
+          context: { retryable: true },
+        });
+      },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    // 5 minutes later, which still leaves more than the 12-minute deadline.
+    expect(result.deferredMs).toBe(5 * 60_000);
+    expect(h.queue.enqueued[0]?.opts?.delayMs).toBe(5 * 60_000);
+    const stored = h.repo.get("job-1");
+    expect(stored?.status).toBe("queued");
+    expect(stored?.lastErrorMessage).toContain("thử lại trước giờ đăng");
+  });
+
+  it("falls back to publishing AT the hour when no attempt fits any more", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(14 * 60_000), queueJobId: "pp.job-1" })],
+      schedulePost: async () => {
+        throw new AppError("META_ERROR", {
+          message: "Graph is having a moment",
+          context: { retryable: true },
+        });
+      },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    // Wakes exactly at T and publishes there, instead of dropping the post.
+    expect(result.deferredMs).toBe(14 * 60_000);
+    expect(result.errorCode).toBe("HANDOFF_EXPIRED");
+    expect(h.repo.get("job-1")?.status).toBe("queued");
+  });
+
+  it("does NOT retry a definitive refusal — a second handoff could double-post", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(20 * 60_000) })],
+      schedulePost: async () => {
+        throw new AppError("META_ERROR", {
+          message: "Graph answered feed.scheduled without a usable id",
+          context: { retryable: false },
+        });
+      },
+    });
+
+    await expect(h.publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "META_ERROR",
+    });
+
+    const stored = h.repo.get("job-1");
+    expect(stored?.status).toBe("failed");
+    expect(stored?.lastErrorCode).toBe("HANDOFF_FAILED");
+    expect(stored?.lastErrorMessage).toContain("kiểm tra trên Page");
+    expect(h.queue.enqueued).toHaveLength(0);
+  });
+
+  it("gives the job back to the queue when the window closes while it is prepared", async () => {
+    // The stock recheck and the channel read take real time; a handoff that
+    // drifted past T-12 must not be attempted (Facebook would refuse it after a
+    // full album upload).
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(13 * 60_000), queueJobId: "pp.job-1" })],
+    });
+    h.publisher.scheduled?.schedulePost.mockImplementation(async () => {
+      throw new Error("the handoff must not be attempted once the window closed");
+    });
+    // The claim succeeds at T-13 (inside the window), then two minutes of stock
+    // and channel lookups pass: by the call it would be T-11, below the deadline.
+    const applyTransition = h.repo.applyTransition.bind(h.repo);
+    h.repo.applyTransition = async (input) => {
+      const next = await applyTransition(input);
+      if (input.next.status === "publishing") h.clock.advance(2 * 60_000);
+      return next;
+    };
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    // Back to `queued`, so the next wake-up publishes it at the hour.
+    expect(h.repo.get("job-1")?.status).toBe("queued");
+    expect(h.repo.transitions.map((entry) => entry.to)).toEqual(["publishing", "queued"]);
+  });
+
+  it("blocks on a dead token instead of retrying the handoff", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(20 * 60_000) })],
+      schedulePost: async () => {
+        throw new AppError("TOKEN_EXPIRED", { message: "token gone" });
+      },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.errorCode).toBe("TOKEN_EXPIRED");
+    expect(h.repo.get("job-1")?.status).toBe("blocked");
+  });
+
+  it("waits for the hour on a platform that cannot hold a post (no scheduler)", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(20 * 60_000), queueJobId: "pp.job-1" })],
+      withoutScheduler: true,
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(20 * 60_000);
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(h.repo.get("job-1")?.status).toBe("queued");
+  });
+
+  it("never hands a VIDEO over — it waits for the hour like before E8.6", async () => {
+    const h = harness({
+      jobs: [
+        makeJob({ format: "video_post", scheduledAt: at(20 * 60_000), queueJobId: "pp.job-1" }),
+      ],
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(20 * 60_000);
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
   });
 });

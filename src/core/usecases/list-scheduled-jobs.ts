@@ -138,7 +138,12 @@ export function makeListScheduledJobs(deps: ListScheduledJobsDeps) {
           : postJobOperatorMessage(job),
         // Once the time has passed a worker may already be publishing it; the
         // repo's optimistic guard has the final say, this only shapes the UI.
-        canReschedule: !overdue,
+        //
+        // E8.6: a post FACEBOOK is holding can still be cancelled (the cancel
+        // deletes it there) but NOT rescheduled — our row does not decide its
+        // hour any more. Offering a button that always fails would be worse
+        // than not offering it.
+        canReschedule: !overdue && job.status === "queued",
         canCancel: !overdue,
         createdAt: job.createdAt,
       });

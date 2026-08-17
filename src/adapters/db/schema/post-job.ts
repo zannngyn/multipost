@@ -11,6 +11,8 @@ export const postJobStatusEnum = pgEnum("post_job_status", [
   "draft",
   "queued",
   "publishing",
+  /** E8.6 — Facebook holds the post and will publish it at `scheduled_at`. */
+  "scheduled_on_facebook",
   "published",
   "failed",
   "blocked",
@@ -54,6 +56,12 @@ export const postJobs = pgTable(
     publishedPostId: text("published_post_id"),
     publishedUrl: text("published_url"),
     publishedAt: timestamp("published_at", { withTimezone: true, mode: "date" }),
+    /**
+     * E8.6 — id of the UNPUBLISHED post the platform is holding. Deliberately
+     * not `published_post_id`: that column's presence is what every screen and
+     * query reads as "this post is live".
+     */
+    scheduledPostId: text("scheduled_post_id"),
     captionText: text("caption_text").notNull(),
     /** Ordered album; index 0 is the cover. */
     media: jsonb("media").$type<PostJobMedia[]>().notNull().default([]),
@@ -87,6 +95,9 @@ export const postJobs = pgTable(
     ),
     // E8.4 "bài đã hẹn": status + time is the exact shape of that screen's query.
     index("post_job_tenant_scheduled_idx").on(table.tenantId, table.status, table.scheduledAt),
+    // E8.6 reconciliation: "which handed-over posts are due?" — a CROSS-TENANT
+    // sweep, so the tenant must NOT lead this index.
+    index("post_job_status_scheduled_idx").on(table.status, table.scheduledAt),
   ],
 );
 

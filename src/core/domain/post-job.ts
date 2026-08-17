@@ -13,7 +13,13 @@
  *     │         │            │
  *     │         │            ├──► queued      (transient Graph error, retry left)
  *     │         │            ├──► failed      (retries exhausted)
- *     │         │            └──► blocked     (out of stock / token / channel)
+ *     │         │            ├──► blocked     (out of stock / token / channel)
+ *     │         │            │
+ *     │         │            └──► scheduled_on_facebook ──► published
+ *     │         │                        (E8.6 handoff)   ├──► blocked (cancelled
+ *     │         │                                         │    / gone from Meta)
+ *     │         │                                         └──► failed  (never
+ *     │         │                                              confirmed)
  *     │         └──► blocked | failed
  *     └──► blocked | failed
  *
@@ -21,6 +27,11 @@
  *   blocked ──► queued       (operator fixed the cause and re-queues)
  *   published = FINAL. Nothing leaves it: the post exists on the platform, and
  *   a second publish is the worst bug this tool can have.
+ *
+ * `scheduled_on_facebook` is a state of its OWN (E8.6, PM decision): a queue job
+ * that finished must never be read as "the platform accepted the schedule". The
+ * post exists on Meta as an unpublished, scheduled object; only the
+ * reconciliation sweep — which asks Graph — may move it to `published`.
  *
  * `blocked` vs `failed`:
  *   blocked — a rule said no (stock gate, token expired, channel missing). We
@@ -36,6 +47,8 @@ export const POST_JOB_STATUSES = [
   "draft",
   "queued",
   "publishing",
+  /** E8.6 — handed over to the platform's own scheduler; not published yet. */
+  "scheduled_on_facebook",
   "published",
   "failed",
   "blocked",
@@ -74,7 +87,14 @@ const ALLOWED_TRANSITIONS: Readonly<Record<PostJobStatus, readonly PostJobStatus
   draft: ["queued", "blocked", "failed"],
   // `failed` here = the enqueue itself broke, so no worker ever saw the job.
   queued: ["publishing", "blocked", "failed"],
-  publishing: ["published", "queued", "failed", "blocked"],
+  publishing: ["published", "scheduled_on_facebook", "queued", "failed", "blocked"],
+  /**
+   * The post sits on Meta waiting for its hour. It NEVER goes back to `queued`:
+   * re-queueing would upload the album a second time and Meta would publish two
+   * posts at the same minute. An operator who changes their mind cancels (which
+   * deletes the post on Meta first) and creates a new one.
+   */
+  scheduled_on_facebook: ["published", "failed", "blocked"],
   published: [],
   failed: ["queued"],
   blocked: ["queued"],
@@ -124,6 +144,14 @@ export interface PostJob {
   readonly publishedPostId: string | null;
   readonly publishedUrl: string | null;
   readonly publishedAt: Date | null;
+  /**
+   * E8.6 — id of the UNPUBLISHED post the platform is holding for us. Its own
+   * column and NOT `publishedPostId` on purpose: that field's presence is what
+   * the whole system reads as "this post is live", and a scheduled object is
+   * exactly the case where an id exists and the post does not.
+   * Needed to reconcile it (did Meta publish it?), and to delete it on a cancel.
+   */
+  readonly scheduledPostId: string | null;
   readonly captionText: string;
   readonly media: readonly PostJobMedia[];
   /** When this job should publish. Null = as soon as the worker picks it up. */
@@ -145,6 +173,8 @@ export interface TransitionMeta {
   readonly publishedPostId?: string | null;
   readonly publishedUrl?: string | null;
   readonly publishedAt?: Date | null;
+  /** Required when moving to `scheduled_on_facebook` (see PostJob). */
+  readonly scheduledPostId?: string | null;
   /**
    * Queue entry that will carry this job. Set it in the SAME transition that
    * moves a job to `queued`, so the id is stored atomically with the state —
@@ -225,6 +255,32 @@ export function transitionPostJob(
         reason: meta.reason ?? null,
       },
     });
+  }
+
+  if (to === "scheduled_on_facebook") {
+    // Without the remote id nothing can reconcile or delete this post, and Meta
+    // will publish it at its hour anyway: an unidentified scheduled object is a
+    // post nobody can stop.
+    const scheduledPostId = normaliseString(meta.scheduledPostId);
+    if (!scheduledPostId) {
+      throw new AppError("INVALID_JOB_TRANSITION", {
+        message: "A scheduled_on_facebook post job requires the platform post id",
+        userMessage:
+          "Không ghi nhận được mã bài đã hẹn trên kênh — không thể đánh dấu đã giao lịch.",
+        context: { job_id: job.id, tenant_id: job.tenantId, channel: job.channelId },
+      });
+    }
+    return {
+      ...job,
+      status: "scheduled_on_facebook",
+      scheduledPostId,
+      // The handoff succeeded: an earlier attempt's error is history.
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      // The platform holds the post now; no queue entry represents it any more.
+      // Keeping a stale id would let a cancel drop someone else's entry.
+      queueJobId: null,
+    };
   }
 
   if (to === "published") {
@@ -353,9 +409,160 @@ export function isPendingSchedule(
   job: Pick<PostJob, "status" | "scheduledAt">,
   nowMs: number,
 ): boolean {
-  if (job.status !== "queued") return false;
+  if (job.status !== "queued" && job.status !== "scheduled_on_facebook") return false;
   if (!(job.scheduledAt instanceof Date)) return false;
   return job.scheduledAt.getTime() > nowMs;
+}
+
+// --- Handoff to the platform's own scheduler (E8.6) --------------------------
+
+/**
+ * MEASURED on a real Page (unpublished probe posts, deleted afterwards):
+ *
+ *   +5m +6m +7m +8m                        -> Graph #100 "scheduled publish
+ *                                             time is invalid"
+ *   +9m +10m +11m +12m +15m +1d ... +29d   -> accepted
+ *   +30d +75d +200d                        -> refused
+ *
+ * So Meta wants at least ~9-10 minutes of lead and less than 30 days. Do not
+ * "round" these numbers without re-running the probe.
+ */
+export const HANDOFF_MIN_LEAD_MS = 10 * 60 * 1000;
+
+/** First attempt: the worker wakes up 30' before the hour. */
+export const HANDOFF_WINDOW_START_MS = 30 * 60 * 1000;
+
+/**
+ * LAST attempt, and it is T-12 rather than T-10 on purpose: a 10-photo album
+ * took 41.8s to upload on a fast link and can take minutes on a slow Drive. A
+ * handoff started at T-10 would call /feed with less than the measured minimum
+ * lead and Meta would refuse the whole post.
+ */
+export const HANDOFF_DEADLINE_MS = 12 * 60 * 1000;
+
+/** Gap between two attempts inside the window (30' - 12' = ~3 more chances). */
+export const HANDOFF_RETRY_INTERVAL_MS = 5 * 60 * 1000;
+
+export type ScheduledPublishPlan =
+  /** Nothing to do yet; come back in `wakeInMs`. */
+  | {
+      readonly action: "wait";
+      readonly wakeInMs: number;
+      readonly reason:
+        | "BEFORE_HANDOFF_WINDOW"
+        | "TOO_LATE_TO_HAND_OFF"
+        /** This post cannot be handed over at all (video, or a platform without a scheduler). */
+        | "HANDOFF_NOT_AVAILABLE";
+    }
+  /** Inside the window: upload and hand the post to the platform. */
+  | { readonly action: "hand_off"; readonly leadMs: number }
+  /** The hour has come (or gone): publish through the normal path, right now. */
+  | { readonly action: "publish_now"; readonly lateByMs: number };
+
+/**
+ * What should happen to a scheduled job at this instant. Pure, so the worker,
+ * the tests and any future screen read the SAME window.
+ *
+ *      T-30 ────────────── T-12 ────── T ──────►
+ *        │   hand off       │  wait     │ publish now (late)
+ *   wait │                  │           │
+ *
+ * Two deliberate choices:
+ *   - between T-12 and T we WAIT for T instead of publishing early. The operator
+ *     picked that hour; a post going out 11 minutes early is a surprise, and the
+ *     queue only has to hold it for minutes (the reaper covers a lost entry).
+ *   - after T we publish immediately and the caller records that the post went
+ *     out LATE. Not publishing at all would be the worse answer (business rule
+ *     5: nothing is silently dropped).
+ *
+ * A job with no scheduled time is an immediate post: `publish_now`, 0ms late.
+ */
+export function planScheduledPublish(
+  scheduledAt: Date | null | undefined,
+  nowMs: number,
+  options: {
+    readonly windowStartMs?: number;
+    readonly deadlineMs?: number;
+    /**
+     * False for a post this system cannot hand over (a video, or a platform
+     * with no scheduler of its own): it then simply waits for its hour, which is
+     * the pre-E8.6 behaviour.
+     */
+    readonly canHandOff?: boolean;
+  } = {},
+): ScheduledPublishPlan {
+  // --- Edge cases first -----------------------------------------------------
+  if (!(scheduledAt instanceof Date) || !Number.isFinite(scheduledAt.getTime())) {
+    return { action: "publish_now", lateByMs: 0 };
+  }
+  if (!Number.isFinite(nowMs)) {
+    return { action: "publish_now", lateByMs: 0 };
+  }
+  const windowStartMs = positiveMsOr(options.windowStartMs, HANDOFF_WINDOW_START_MS);
+  const deadlineMs = positiveMsOr(options.deadlineMs, HANDOFF_DEADLINE_MS);
+
+  const remainingMs = scheduledAt.getTime() - nowMs;
+  // Math.max keeps "exactly on time" at +0 instead of -0, which a strict
+  // comparison in a test (or a JSON log) would show as "-0".
+  if (remainingMs <= 0) return { action: "publish_now", lateByMs: Math.max(0, -remainingMs) };
+  if (options.canHandOff === false) {
+    return { action: "wait", wakeInMs: remainingMs, reason: "HANDOFF_NOT_AVAILABLE" };
+  }
+  if (remainingMs > windowStartMs) {
+    return {
+      action: "wait",
+      wakeInMs: remainingMs - windowStartMs,
+      reason: "BEFORE_HANDOFF_WINDOW",
+    };
+  }
+  if (remainingMs >= deadlineMs) return { action: "hand_off", leadMs: remainingMs };
+  return { action: "wait", wakeInMs: remainingMs, reason: "TOO_LATE_TO_HAND_OFF" };
+}
+
+/**
+ * When to try the handoff again after a failed attempt.
+ *
+ * `intervalMs` while another full attempt still fits before the deadline;
+ * otherwise the wait until T itself, so the fallback publish happens AT the
+ * requested hour instead of minutes early.
+ */
+export function nextHandoffAttemptDelayMs(
+  scheduledAt: Date,
+  nowMs: number,
+  options: {
+    readonly intervalMs?: number;
+    readonly deadlineMs?: number;
+  } = {},
+): number {
+  if (!(scheduledAt instanceof Date) || !Number.isFinite(scheduledAt.getTime())) return 0;
+  const intervalMs = positiveMsOr(options.intervalMs, HANDOFF_RETRY_INTERVAL_MS);
+  const deadlineMs = positiveMsOr(options.deadlineMs, HANDOFF_DEADLINE_MS);
+
+  const lastPossibleStartMs = scheduledAt.getTime() - deadlineMs;
+  if (nowMs + intervalMs <= lastPossibleStartMs) return intervalMs;
+  return Math.max(0, scheduledAt.getTime() - nowMs);
+}
+
+/**
+ * Delay of the FIRST queue entry of a scheduled job: it wakes at the start of
+ * the handoff window, not at the hour itself.
+ */
+export function handoffWakeDelayMs(
+  scheduledAt: Date | null | undefined,
+  nowMs: number,
+  windowStartMs: number = HANDOFF_WINDOW_START_MS,
+): number {
+  if (!(scheduledAt instanceof Date) || !Number.isFinite(scheduledAt.getTime())) return 0;
+  return Math.max(0, scheduledAt.getTime() - nowMs - positiveMsOr(windowStartMs, HANDOFF_WINDOW_START_MS));
+}
+
+/** Unix SECONDS, which is what Meta's `scheduled_publish_time` expects. */
+export function toUnixSeconds(at: Date): number {
+  return Math.floor(at.getTime() / 1000);
+}
+
+function positiveMsOr(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function toDate(value: unknown): Date | null {
@@ -480,7 +687,16 @@ export type PostBatchStatus = (typeof POST_BATCH_STATUSES)[number];
 export function deriveBatchStatus(statuses: readonly PostJobStatus[]): PostBatchStatus {
   if (!Array.isArray(statuses) || statuses.length === 0) return "pending";
   if (statuses.every((status) => status === "draft")) return "pending";
-  if (statuses.some((status) => status === "draft" || status === "queued" || status === "publishing")) {
+  if (
+    statuses.some(
+      (status) =>
+        status === "draft" ||
+        status === "queued" ||
+        status === "publishing" ||
+        // Meta holds it but nothing is live yet — the batch is NOT finished.
+        status === "scheduled_on_facebook",
+    )
+  ) {
     return "running";
   }
   const published = statuses.filter((status) => status === "published").length;
@@ -499,7 +715,16 @@ export function deriveBatchStatus(statuses: readonly PostJobStatus[]): PostBatch
  * real cause (stock gate, Graph error map, queue failure).
  */
 export function postJobOperatorMessage(
-  job: Pick<PostJob, "status" | "lastErrorCode" | "lastErrorMessage" | "publishedPostId" | "attemptCount">,
+  job: Pick<
+    PostJob,
+    | "status"
+    | "lastErrorCode"
+    | "lastErrorMessage"
+    | "publishedPostId"
+    | "attemptCount"
+    | "scheduledAt"
+    | "scheduledPostId"
+  >,
 ): string {
   const stored = normaliseString(job.lastErrorMessage);
   switch (job.status) {
@@ -511,6 +736,10 @@ export function postJobOperatorMessage(
       return "Đang chờ trong hàng đợi để đăng";
     case "publishing":
       return `Đang gửi lên kênh (lần thử ${job.attemptCount})`;
+    case "scheduled_on_facebook":
+      return `Facebook đã nhận lịch và sẽ tự đăng lúc ${
+        job.scheduledAt instanceof Date ? job.scheduledAt.toISOString() : "giờ đã hẹn"
+      } (mã bài ${job.scheduledPostId ?? "?"})`;
     case "blocked":
       return (
         stored ??

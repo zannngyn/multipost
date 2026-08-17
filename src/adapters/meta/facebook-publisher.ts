@@ -1,14 +1,20 @@
 import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
-import { MAX_ALBUM_MEDIA } from "@/core/domain/post-job";
+import { HANDOFF_MIN_LEAD_MS, MAX_ALBUM_MEDIA, toUnixSeconds } from "@/core/domain/post-job";
 import type { Logger } from "@/core/ports/infra";
 import type {
+  ChannelConfig,
   ChannelPublisher,
   PublishImagePostInput,
   PublishMediaItem,
   PublishResult,
   PublishVideoPostInput,
+  RemotePostQuery,
+  RemotePostState,
+  SchedulePostInput,
+  SchedulePostResult,
+  ScheduledPublisher,
 } from "@/core/ports/publisher";
 
 import type { GraphClient, GraphFilePart } from "./graph-client";
@@ -59,6 +65,36 @@ const FeedResponseSchema = z.object({
   id: z.string().min(1),
 });
 
+/**
+ * GET /{post-id}?fields=... for the reconciliation sweep (E8.6).
+ *
+ * Every field is optional but `id`: Meta returns a field only when the token may
+ * read it, and a missing `is_published` must become "unknown", never "published"
+ * (see the port contract on RemotePostState).
+ *
+ * PENDING(graph-reconcile-verify): the field NAMES follow Meta's Page Post
+ * reference (`is_published`, `permalink_url`, `created_time`,
+ * `scheduled_publish_time`). They have not been read back from a real scheduled
+ * post from this machine — confirm on the first live schedule before trusting
+ * the sweep to settle jobs unattended.
+ */
+const PostStateSchema = z.object({
+  id: z.string().min(1),
+  is_published: z.boolean().optional(),
+  permalink_url: z.string().min(1).optional(),
+  created_time: z.string().min(1).optional(),
+  /** Unix SECONDS on an unpublished post. */
+  scheduled_publish_time: z.union([z.number(), z.string()]).optional(),
+});
+
+/** DELETE /{post-id} answers { success: true }. */
+const DeleteResponseSchema = z.object({
+  success: z.boolean().optional(),
+});
+
+/** Graph's "object does not exist (or is not visible to this token)". */
+const OBJECT_GONE_SUBCODE = 33;
+
 /** POST /{page-id}/videos answers with the video id (and sometimes post_id). */
 const VideoResponseSchema = z.object({
   id: z.string().min(1),
@@ -88,42 +124,7 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
   return {
     async publishImagePost(input: PublishImagePostInput): Promise<PublishResult> {
       // --- Edge cases first --------------------------------------------------
-      const channel = input?.channel;
-      const media = input?.media ?? [];
-      const caption = typeof input?.caption === "string" ? input.caption.trim() : "";
-
-      if (!channel || channel.platform !== "facebook" || !channel.externalId?.trim()) {
-        throw new AppError("CHANNEL_NOT_CONFIGURED", {
-          message: "Facebook publisher needs a facebook channel with a Page id",
-          context: {
-            tenant_id: input?.tenantId ?? null,
-            channel: channel?.channelId ?? null,
-            platform: channel?.platform ?? null,
-          },
-        });
-      }
-      if (media.length === 0 || media.length > MAX_ALBUM_MEDIA) {
-        throw new AppError("INVALID_INPUT", {
-          message: `An album needs 1..${MAX_ALBUM_MEDIA} photos, got ${media.length}`,
-          userMessage: `Bài ảnh phải có từ 1 đến ${MAX_ALBUM_MEDIA} ảnh.`,
-          context: { tenant_id: input.tenantId, channel: channel.channelId, media_count: media.length },
-        });
-      }
-      if (caption.length === 0) {
-        throw new AppError("INVALID_INPUT", {
-          message: "Refusing to publish a post without a caption",
-          userMessage: "Bài đăng chưa có nội dung — không đăng.",
-          context: { tenant_id: input.tenantId, channel: channel.channelId },
-        });
-      }
-
-      const pageId = channel.externalId.trim();
-      const logContext = {
-        tenant_id: input.tenantId,
-        channel: channel.channelId,
-        page_id: pageId,
-        idempotency_key: input.idempotencyKey,
-      };
+      const { channel, media, caption, pageId, logContext } = assertImagePost(input);
       const log = logger.child(logContext);
 
       // --- Single photo: one call, published immediately ---------------------
@@ -152,31 +153,7 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       }
 
       // --- Album: upload unpublished photos, then one feed post -------------
-      // Sequential on purpose: the album order IS the order of these calls, and
-      // one file at a time is what keeps a 10-photo job at one buffer, not ten.
-      const mediaFbIds: string[] = [];
-      for (const [index, item] of media.entries()) {
-        const file = await readPart(item, index, logContext);
-        const raw = await deps.graph.postMultipart({
-          path: `${pageId}/photos`,
-          params: { published: "false", temporary: "true" },
-          files: [file],
-          accessToken: channel.accessToken,
-          context: {
-            ...logContext,
-            step: "photos.album",
-            media_index: index,
-            drive_file_id: item.driveFileId,
-            file_name: file.fileName,
-            bytes: file.bytes.length,
-          },
-        });
-        const parsed = PhotoResponseSchema.safeParse(raw);
-        if (!parsed.success) {
-          throw unusableResponse(raw, parsed.error, logContext, `photos.album[${index}]`);
-        }
-        mediaFbIds.push(parsed.data.id);
-      }
+      const mediaFbIds = await uploadAlbumPhotos(deps, channel, media, logContext);
 
       const params: Record<string, string> = { message: caption };
       mediaFbIds.forEach((mediaFbId, index) => {
@@ -199,6 +176,8 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       });
       return { postId: parsed.data.id, url: permalink(parsed.data.id) };
     },
+
+    scheduled: makeFacebookScheduledPublisher(deps, logger),
 
     /**
      * E5.3/E5.4 — one video, either into the feed or as a Reel.
@@ -339,6 +318,357 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       return { postId, url: permalink(postId) };
     },
   };
+}
+
+/**
+ * E8.6 — the half of this adapter that lets FACEBOOK hold the post until its
+ * hour, instead of the queue holding it here.
+ *
+ *   for each photo   POST /{page-id}/photos   source=<bytes> published=false
+ *   then             POST /{page-id}/feed     message=<caption>
+ *                                             attached_media[i]=...
+ *                                             published=false
+ *                                             scheduled_publish_time=<unix s>
+ *   -> { id }        the post Facebook now holds
+ *
+ * The upload half is the SAME code the immediate path runs (uploadAlbumPhotos):
+ * the only difference between "đăng ngay" and "hẹn giờ" is two extra fields on
+ * the /feed call.
+ *
+ * Timing (measured on a real Page, see HANDOFF_* in core/domain/post-job):
+ * Meta refuses a `scheduled_publish_time` less than ~9-10 minutes ahead, and
+ * more than 30 days ahead. The lead is the CALLER's business rule; the guard
+ * here only refuses what would certainly be wasted upload time.
+ */
+function makeFacebookScheduledPublisher(
+  deps: FacebookPublisherDeps,
+  parentLogger: Logger,
+): ScheduledPublisher {
+  return {
+    async schedulePost(input: SchedulePostInput): Promise<SchedulePostResult> {
+      // --- Edge cases first --------------------------------------------------
+      const { channel, media, caption, pageId, logContext } = assertImagePost(input);
+      const publishAt = input?.publishAt;
+      if (!(publishAt instanceof Date) || !Number.isFinite(publishAt.getTime())) {
+        throw new AppError("INVALID_INPUT", {
+          message: "schedulePost requires a publishAt date",
+          userMessage: "Giờ hẹn đăng không hợp lệ — không giao lịch cho Facebook.",
+          context: { ...logContext, reason: "PUBLISH_AT_NOT_A_DATE", retryable: false },
+        });
+      }
+      const leadMs = publishAt.getTime() - Date.now();
+      if (leadMs < HANDOFF_MIN_LEAD_MS) {
+        // Refused BEFORE the album upload: Facebook would reject the /feed call
+        // with #100 anyway, after we spent minutes pushing the photos.
+        throw new AppError("INVALID_INPUT", {
+          message: `schedulePost needs at least ${HANDOFF_MIN_LEAD_MS}ms of lead, got ${leadMs}ms`,
+          userMessage:
+            "Giờ hẹn quá gần (Facebook đòi tối thiểu ~10 phút) — không giao lịch, sẽ đăng theo đường thường.",
+          context: {
+            ...logContext,
+            reason: "PUBLISH_AT_TOO_SOON",
+            lead_ms: leadMs,
+            min_lead_ms: HANDOFF_MIN_LEAD_MS,
+            retryable: false,
+          },
+        });
+      }
+
+      const log = parentLogger.child(logContext);
+      const scheduledPublishTime = toUnixSeconds(publishAt);
+
+      const mediaFbIds = await uploadAlbumPhotos(deps, channel, media, {
+        ...logContext,
+        scheduled_publish_time: scheduledPublishTime,
+      });
+
+      const params: Record<string, string> = {
+        message: caption,
+        published: "false",
+        scheduled_publish_time: String(scheduledPublishTime),
+      };
+      mediaFbIds.forEach((mediaFbId, index) => {
+        params[`attached_media[${index}]`] = JSON.stringify({ media_fbid: mediaFbId });
+      });
+
+      const raw = await deps.graph.post({
+        path: `${pageId}/feed`,
+        params,
+        accessToken: channel.accessToken,
+        context: {
+          ...logContext,
+          step: "feed.scheduled",
+          media_count: mediaFbIds.length,
+          scheduled_publish_time: scheduledPublishTime,
+        },
+      });
+      const parsed = FeedResponseSchema.safeParse(raw);
+      if (!parsed.success) throw unusableResponse(raw, parsed.error, logContext, "feed.scheduled");
+
+      log.info("Post handed over to Facebook's scheduler", {
+        post_id: parsed.data.id,
+        media_count: mediaFbIds.length,
+        photo_ids: mediaFbIds,
+        scheduled_publish_time: scheduledPublishTime,
+        publish_at: publishAt.toISOString(),
+        lead_ms: leadMs,
+      });
+      return { scheduledPostId: parsed.data.id, publishAt };
+    },
+
+    /**
+     * "Did Facebook publish it?" — the ONLY thing allowed to move a job from
+     * `scheduled_on_facebook` to `published`. Never guesses: no `is_published`
+     * in the answer means `unknown`, and the sweep leaves the job alone.
+     */
+    async getPostState(input: RemotePostQuery): Promise<RemotePostState> {
+      const { channel, postId, logContext } = assertRemoteQuery(input, "getPostState");
+
+      let raw: Record<string, unknown>;
+      try {
+        raw = await deps.graph.get({
+          path: postId,
+          params: {
+            fields: "id,is_published,permalink_url,created_time,scheduled_publish_time",
+          },
+          accessToken: channel.accessToken,
+          context: { ...logContext, step: "post.state" },
+        });
+      } catch (error) {
+        if (isObjectGone(error)) return { state: "gone" };
+        // Anything else (token, rate limit, transport) belongs to the caller:
+        // it decides retry vs alert. Rethrown with its own code intact.
+        throw AppError.from(error, "META_ERROR", { ...logContext, step: "post.state" });
+      }
+
+      const parsed = PostStateSchema.safeParse(raw);
+      if (!parsed.success) {
+        return {
+          state: "unknown",
+          reason: `UNREADABLE_RESPONSE:${parsed.error.issues.map((i) => i.path.join(".")).join(",")}`,
+        };
+      }
+      if (parsed.data.is_published === true) {
+        return {
+          state: "published",
+          postId: parsed.data.id,
+          // Facebook's own permalink, not a string we assembled.
+          url: parsed.data.permalink_url ?? permalink(parsed.data.id),
+          publishedAt: parseGraphTime(parsed.data.created_time),
+        };
+      }
+      if (parsed.data.is_published === false) {
+        return {
+          state: "scheduled",
+          postId: parsed.data.id,
+          publishAt: parseUnixSeconds(parsed.data.scheduled_publish_time),
+        };
+      }
+      return { state: "unknown", reason: "NO_IS_PUBLISHED_FIELD" };
+    },
+
+    /**
+     * Removes a post Facebook has NOT published yet (E8.6 cancel).
+     * False = it was already gone; a refusal throws, because "the operator
+     * thinks it is cancelled while Facebook still publishes it" is the exact
+     * outcome this whole flow exists to prevent.
+     */
+    async deleteScheduledPost(input: RemotePostQuery): Promise<boolean> {
+      const { channel, postId, logContext } = assertRemoteQuery(input, "deleteScheduledPost");
+      const log = parentLogger.child(logContext);
+
+      let raw: Record<string, unknown>;
+      try {
+        raw = await deps.graph.del({
+          path: postId,
+          accessToken: channel.accessToken,
+          context: { ...logContext, step: "post.delete" },
+        });
+      } catch (error) {
+        if (isObjectGone(error)) {
+          log.warn("Scheduled post was already gone on Facebook", {
+            post_id: postId,
+            reason: "ALREADY_GONE",
+          });
+          return false;
+        }
+        throw AppError.from(error, "META_ERROR", { ...logContext, step: "post.delete" });
+      }
+
+      const parsed = DeleteResponseSchema.safeParse(raw);
+      if (parsed.success && parsed.data.success === false) {
+        throw new AppError("META_ERROR", {
+          message: "Graph answered success=false for a scheduled post deletion",
+          userMessage:
+            "Facebook không gỡ được bài đã hẹn — bài vẫn sẽ tự đăng, cần xoá trực tiếp trên Facebook.",
+          context: { ...logContext, step: "post.delete", retryable: false },
+        });
+      }
+      log.info("Scheduled post deleted on Facebook", { post_id: postId });
+      return true;
+    },
+  };
+}
+
+/**
+ * Uploads every photo of an album as an UNPUBLISHED photo object and returns the
+ * ids, in album order.
+ *
+ * Sequential on purpose: the album order IS the order of these calls, and one
+ * file at a time is what keeps a 10-photo job at one buffer, not ten.
+ *
+ * Shared by "đăng ngay" and "hẹn giờ" — the two paths must not drift apart in
+ * how the bytes reach Facebook, because that is the part that was measured.
+ */
+async function uploadAlbumPhotos(
+  deps: FacebookPublisherDeps,
+  channel: ChannelConfig,
+  media: readonly PublishMediaItem[],
+  logContext: Record<string, unknown>,
+): Promise<string[]> {
+  const pageId = channel.externalId.trim();
+  const mediaFbIds: string[] = [];
+  for (const [index, item] of media.entries()) {
+    const file = await readPart(item, index, logContext);
+    const raw = await deps.graph.postMultipart({
+      path: `${pageId}/photos`,
+      params: { published: "false", temporary: "true" },
+      files: [file],
+      accessToken: channel.accessToken,
+      context: {
+        ...logContext,
+        step: "photos.album",
+        media_index: index,
+        drive_file_id: item.driveFileId,
+        file_name: file.fileName,
+        bytes: file.bytes.length,
+      },
+    });
+    const parsed = PhotoResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw unusableResponse(raw, parsed.error, logContext, `photos.album[${index}]`);
+    }
+    mediaFbIds.push(parsed.data.id);
+  }
+  return mediaFbIds;
+}
+
+interface ValidatedImagePost {
+  readonly channel: ChannelConfig;
+  readonly media: readonly PublishMediaItem[];
+  readonly caption: string;
+  readonly pageId: string;
+  readonly logContext: Record<string, unknown>;
+}
+
+/**
+ * The gate both image paths share: a Facebook channel with a Page id, 1..10
+ * photos and a non-empty caption. Same errors as before it was extracted — the
+ * immediate path is the one that has run on a real Page and must not change.
+ */
+function assertImagePost(input: PublishImagePostInput): ValidatedImagePost {
+  const channel = input?.channel;
+  const media = input?.media ?? [];
+  const caption = typeof input?.caption === "string" ? input.caption.trim() : "";
+
+  if (!channel || channel.platform !== "facebook" || !channel.externalId?.trim()) {
+    throw new AppError("CHANNEL_NOT_CONFIGURED", {
+      message: "Facebook publisher needs a facebook channel with a Page id",
+      context: {
+        tenant_id: input?.tenantId ?? null,
+        channel: channel?.channelId ?? null,
+        platform: channel?.platform ?? null,
+      },
+    });
+  }
+  if (media.length === 0 || media.length > MAX_ALBUM_MEDIA) {
+    throw new AppError("INVALID_INPUT", {
+      message: `An album needs 1..${MAX_ALBUM_MEDIA} photos, got ${media.length}`,
+      userMessage: `Bài ảnh phải có từ 1 đến ${MAX_ALBUM_MEDIA} ảnh.`,
+      context: { tenant_id: input.tenantId, channel: channel.channelId, media_count: media.length },
+    });
+  }
+  if (caption.length === 0) {
+    throw new AppError("INVALID_INPUT", {
+      message: "Refusing to publish a post without a caption",
+      userMessage: "Bài đăng chưa có nội dung — không đăng.",
+      context: { tenant_id: input.tenantId, channel: channel.channelId },
+    });
+  }
+
+  const pageId = channel.externalId.trim();
+  return {
+    channel,
+    media,
+    caption,
+    pageId,
+    logContext: {
+      tenant_id: input.tenantId,
+      channel: channel.channelId,
+      page_id: pageId,
+      idempotency_key: input.idempotencyKey,
+    },
+  };
+}
+
+function assertRemoteQuery(
+  input: RemotePostQuery,
+  operation: string,
+): { channel: ChannelConfig; postId: string; logContext: Record<string, unknown> } {
+  const channel = input?.channel;
+  const postId = typeof input?.postId === "string" ? input.postId.trim() : "";
+  if (!channel || channel.platform !== "facebook" || !channel.accessToken?.trim()) {
+    throw new AppError("CHANNEL_NOT_CONFIGURED", {
+      message: `${operation} needs a facebook channel with a token`,
+      context: {
+        tenant_id: input?.tenantId ?? null,
+        channel: channel?.channelId ?? null,
+        platform: channel?.platform ?? null,
+      },
+    });
+  }
+  if (postId.length === 0) {
+    throw new AppError("INVALID_INPUT", {
+      message: `${operation} needs a post id`,
+      userMessage: "Thiếu mã bài trên Facebook — không kiểm tra được bài đã hẹn.",
+      context: { tenant_id: input.tenantId, channel: channel.channelId, retryable: false },
+    });
+  }
+  return {
+    channel,
+    postId,
+    logContext: {
+      tenant_id: input.tenantId,
+      channel: channel.channelId,
+      page_id: channel.externalId,
+      post_id: postId,
+    },
+  };
+}
+
+/**
+ * True for Graph's "this object does not exist (any more)". Code 100 with
+ * subcode 33 is the documented answer for a deleted/unreadable object — the same
+ * answer a wrong token gets, which is why the CALLER never turns "gone" into a
+ * destructive action: it only stops waiting for a post Facebook does not have.
+ */
+function isObjectGone(error: unknown): boolean {
+  if (!(error instanceof AppError)) return false;
+  const context = error.context as { graph_code?: unknown; graph_subcode?: unknown };
+  return context.graph_code === 100 && context.graph_subcode === OBJECT_GONE_SUBCODE;
+}
+
+/** ISO 8601 with an offset, e.g. "2026-08-17T12:00:00+0000". */
+function parseGraphTime(value: string | undefined): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const at = new Date(value);
+  return Number.isFinite(at.getTime()) ? at : null;
+}
+
+function parseUnixSeconds(value: number | string | undefined): Date | null {
+  const seconds = typeof value === "string" ? Number(value) : value;
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return null;
+  return new Date(seconds * 1000);
 }
 
 /**

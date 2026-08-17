@@ -350,6 +350,71 @@ export interface PublishVideoPostInput {
   readonly idempotencyKey: string;
 }
 
+/** Same post as `publishImagePost`, handed over for a LATER hour (E8.6). */
+export interface SchedulePostInput extends PublishImagePostInput {
+  /**
+   * When the platform must publish it. The CALLER guarantees the lead time the
+   * platform requires (core/domain/post-job: HANDOFF_* constants); the adapter
+   * only forwards it and reports what the platform answered.
+   */
+  readonly publishAt: Date;
+}
+
+export interface SchedulePostResult {
+  /**
+   * Platform id of the post the platform now HOLDS, unpublished. It is not a
+   * `publishedPostId`: nothing is live until the hour comes.
+   */
+  readonly scheduledPostId: string;
+  /** Time the platform echoed back, when it reports one. */
+  readonly publishAt: Date | null;
+}
+
+export interface RemotePostQuery {
+  readonly tenantId: string;
+  readonly channel: ChannelConfig;
+  /** The id returned by `schedulePost`. */
+  readonly postId: string;
+}
+
+/**
+ * What the platform says about a post we handed over. `unknown` is a first-class
+ * answer on purpose: claiming "published" without proof would put a wrong link
+ * in front of an operator, and claiming "gone" would hide a live post.
+ */
+export type RemotePostState =
+  | {
+      readonly state: "published";
+      readonly postId: string;
+      /** Real permalink from the platform — never a string we assembled. */
+      readonly url: string | null;
+      readonly publishedAt: Date | null;
+    }
+  | { readonly state: "scheduled"; readonly postId: string; readonly publishAt: Date | null }
+  /** The platform no longer has this post (deleted on the platform side). */
+  | { readonly state: "gone" }
+  | { readonly state: "unknown"; readonly reason: string };
+
+/**
+ * The half of a platform that can HOLD a post until its hour (E8.6). Optional
+ * on ChannelPublisher: a platform without it keeps the old behaviour (the queue
+ * holds the job and publishes at T), which is what TikTok does in Phase 2.
+ *
+ * Contract for every implementer:
+ * - `schedulePost` returns only when the platform ACCEPTED the schedule, with
+ *   the id of the object it now holds; anything else throws (never a silent
+ *   "probably fine").
+ * - `getPostState` never guesses: no proof means `unknown`, with a reason.
+ * - `deleteScheduledPost` returns false when the post was already gone, and
+ *   throws when the platform refused — the caller must be able to tell "it is
+ *   not on the platform any more" from "we could not remove it".
+ */
+export interface ScheduledPublisher {
+  schedulePost(input: SchedulePostInput): Promise<SchedulePostResult>;
+  getPostState(input: RemotePostQuery): Promise<RemotePostState>;
+  deleteScheduledPost(input: RemotePostQuery): Promise<boolean>;
+}
+
 /**
  * Contract for every implementer:
  * - Throws AppError('TOKEN_EXPIRED') when the credential is dead — the caller
@@ -362,4 +427,6 @@ export interface ChannelPublisher {
   publishImagePost(input: PublishImagePostInput): Promise<PublishResult>;
   /** Phase 2 (E5.3/E5.4). Same guarantees as publishImagePost. */
   publishVideoPost(input: PublishVideoPostInput): Promise<PublishResult>;
+  /** Present only on platforms that hold a scheduled post themselves (E8.6). */
+  readonly scheduled?: ScheduledPublisher;
 }

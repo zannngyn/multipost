@@ -158,8 +158,22 @@ export interface GraphGetInput {
   readonly context?: Record<string, unknown>;
 }
 
+/**
+ * A DELETE on the Graph host — today only "remove a post Meta has not published
+ * yet" (E8.6 cancel). Like a GET it carries no body, so the credential travels
+ * in the query string and the URL is never logged.
+ */
+export interface GraphDeleteInput {
+  /** Path without version, e.g. "1121597217877301_1370712328548997". */
+  readonly path: string;
+  readonly accessToken: string;
+  /** Log-only context (tenant, job, channel). NEVER a token. */
+  readonly context?: Record<string, unknown>;
+}
+
 export interface GraphClient {
   get(input: GraphGetInput): Promise<Record<string, unknown>>;
+  del(input: GraphDeleteInput): Promise<Record<string, unknown>>;
   post(input: GraphPostInput): Promise<Record<string, unknown>>;
   /** Same endpoint vocabulary as `post`, with the file bytes in the body. */
   postMultipart(input: GraphMultipartPostInput): Promise<Record<string, unknown>>;
@@ -337,6 +351,54 @@ export function makeGraphClient(deps: GraphClientDeps): GraphClient {
         context: { ...(input.context ?? {}), path },
         // GET puts the token (and, on the OAuth exchange, the app secret) in the
         // URL: an echoed error page must never reach the log.
+        bodyPreview: false,
+      });
+    },
+
+    async del(input: GraphDeleteInput): Promise<Record<string, unknown>> {
+      // --- Edge cases first ------------------------------------------------
+      const path = typeof input?.path === "string" ? input.path.replace(/^\/+/, "").trim() : "";
+      const token = typeof input?.accessToken === "string" ? input.accessToken.trim() : "";
+      if (path.length === 0 || token.length === 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "Graph DELETE requires a path and an access token",
+          userMessage: "Thiếu thông tin kết nối tới Facebook — không gửi được yêu cầu.",
+          context: { ...(input?.context ?? {}), path: path || null, has_token: token.length > 0 },
+        });
+      }
+
+      // A DELETE carries no body: Meta's contract puts the credential in the
+      // query string, exactly like the GET above. The URL never reaches a log.
+      const url = new URL(`${baseUrl}/${version}/${path}`);
+      url.searchParams.set("access_token", token);
+
+      const startedAt = Date.now();
+      let response: Response;
+      try {
+        response = await doFetch(url.toString(), {
+          method: "DELETE",
+          headers: { accept: "application/json" },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        const appError = mapGraphError({
+          cause: error,
+          context: { ...(input.context ?? {}), path, timeout_ms: timeoutMs },
+        });
+        logger.error("Graph delete failed before an answer", {
+          err: appError,
+          error_code: appError.code,
+          path,
+          duration_ms: Date.now() - startedAt,
+        });
+        throw appError;
+      }
+
+      return readAnswer(response, {
+        startedAt,
+        label: "Graph delete",
+        context: { ...(input.context ?? {}), path },
+        // The token is in this URL — an echoed error page must not be logged.
         bodyPreview: false,
       });
     },

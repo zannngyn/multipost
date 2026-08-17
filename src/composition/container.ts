@@ -41,6 +41,7 @@ import type {
   ChannelConnectClient,
   ChannelPlatform,
   ChannelPublisher,
+  ScheduledPublisher,
 } from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
@@ -59,6 +60,10 @@ import {
 } from "@/core/usecases/manage-channel-groups";
 import type { ManagePromptTemplates } from "@/core/usecases/manage-prompt-templates";
 import { makeReapPostJobs, type ReapPostJobs } from "@/core/usecases/reap-post-jobs";
+import {
+  makeReconcileScheduledPosts,
+  type ReconcileScheduledPosts,
+} from "@/core/usecases/reconcile-scheduled-posts";
 import { makeRetryPostJob, type RetryPostJob } from "@/core/usecases/retry-post-job";
 import { makeCleanupUploads, type CleanupUploads } from "@/core/usecases/cleanup-uploads";
 import {
@@ -168,6 +173,8 @@ export interface Usecases {
   cancelScheduledJob: CancelScheduledJob;
   /** Periodic sweep for jobs stuck in `publishing` / overdue with no queue entry. */
   reapPostJobs: ReapPostJobs;
+  /** E8.6 — periodic sweep asking Facebook whether it published a handed-over post. */
+  reconcileScheduledPosts: ReconcileScheduledPosts;
   /** E3.6 — serve one media asset to Meta's fetcher (called by /api/media). */
   getMediaContent: GetMediaContent;
   /**
@@ -292,7 +299,27 @@ function makeLazyPublisher(logger: Logger): ChannelPublisher {
   return {
     publishImagePost: (input) => build().publishImagePost(input),
     publishVideoPost: (input) => build().publishVideoPost(input),
+    // E8.6 — Facebook holds scheduled posts itself. Delegating instead of
+    // exposing the built object keeps the adapter lazy: reading `.scheduled`
+    // does not build a Graph client, calling one of its methods does.
+    scheduled: {
+      schedulePost: (input) => scheduledOf(build()).schedulePost(input),
+      getPostState: (input) => scheduledOf(build()).getPostState(input),
+      deleteScheduledPost: (input) => scheduledOf(build()).deleteScheduledPost(input),
+    },
   };
+}
+
+/** The scheduled half of a publisher that must have one (the Facebook adapter). */
+function scheduledOf(publisher: ChannelPublisher): ScheduledPublisher {
+  if (!publisher.scheduled) {
+    throw new AppError("INTERNAL", {
+      message: "This publisher has no scheduled half wired",
+      userMessage: "Kênh này chưa hỗ trợ hẹn giờ đăng — vui lòng báo quản trị viên.",
+      context: { reason: "SCHEDULER_NOT_WIRED" },
+    });
+  }
+  return publisher.scheduled;
 }
 
 /**
@@ -620,11 +647,23 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       queue,
       logger: deps.logger,
       users,
+      // E8.6 — a cancel must be able to DELETE the post Facebook is holding;
+      // without these two it can only refuse, and a refused cancel is a post
+      // that publishes anyway.
+      channels,
+      publishers,
     }),
     reapPostJobs: makeReapPostJobs({
       postJobs,
       queue,
       channels,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+    reconcileScheduledPosts: makeReconcileScheduledPosts({
+      postJobs,
+      channels,
+      publishers,
       clock: deps.clock,
       logger: deps.logger,
     }),

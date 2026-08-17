@@ -62,6 +62,7 @@ function makeJob(overrides: Partial<PostJob> = {}): PostJob {
     publishedPostId: null,
     publishedUrl: null,
     publishedAt: null,
+    scheduledPostId: null,
     captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
     media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
     scheduledAt: null,
@@ -126,6 +127,9 @@ function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {})
     async findOverdueQueued() {
       return [];
     },
+    async findScheduledOnPlatformDue() {
+      return [];
+    },
     async findLastPublishedAt() {
       return null;
     },
@@ -138,7 +142,15 @@ function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {})
         productCode: list[0]?.productCode ?? "",
         status: deriveBatchStatus(list.map((job) => job.status)),
         total: list.length,
-        byStatus: { draft: 0, queued: 0, publishing: 0, published: 0, failed: 0, blocked: 0 },
+        byStatus: {
+          draft: 0,
+          queued: 0,
+          publishing: 0,
+          scheduled_on_facebook: 0,
+          published: 0,
+          failed: 0,
+          blocked: 0,
+        },
         startedAt: CLOCK.now(),
         finishedAt: null,
         jobs: list,

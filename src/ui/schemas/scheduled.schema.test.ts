@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CancelScheduledJobResponseSchema,
   MAX_SCHEDULE_AHEAD_MS,
+  ScheduledJobEntrySchema,
   dayEndIso,
   dayStartIso,
   formatCountdown,
   groupScheduledByDay,
   hasScheduledFilter,
   isDateOnly,
+  isHeldByPlatform,
   localDayKey,
   parseScheduledFilter,
+  rescheduleBlockedReason,
   scheduleInputBounds,
   scheduledSearchParams,
   toDateTimeLocalValue,
@@ -191,5 +195,82 @@ describe("groupScheduledByDay", () => {
     expect(groups[0].dayKey).toBe(localDayKey(first));
     expect(groups[0].items.map((item) => item.postJobId)).toEqual(["a", "b"]);
     expect(groups[1].items.map((item) => item.postJobId)).toEqual(["c"]);
+  });
+});
+
+describe("a post Facebook is holding (E8.6)", () => {
+  const heldRow = {
+    postJobId: "job-1",
+    batchId: "batch-1",
+    productCode: "MGKVX6310",
+    color: "Tím",
+    channelId: "fbpage-a",
+    format: "image_post",
+    status: "scheduled_on_facebook",
+    scheduledAt: "2026-08-14T02:00:00.000Z",
+    startsInMs: 3_600_000,
+    overdue: false,
+    captionPreview: "Váy hoa mùa hè…",
+    mediaCount: 3,
+    userMessage: "Facebook đã nhận lịch và sẽ tự đăng.",
+    canReschedule: false,
+    canCancel: true,
+    createdAt: "2026-08-13T02:00:00.000Z",
+  };
+
+  it("parses instead of breaking the screen", () => {
+    // The whole point of the mirror: the first handed-over post must render, not
+    // blow the list up with a validation error.
+    expect(ScheduledJobEntrySchema.safeParse(heldRow).success).toBe(true);
+  });
+
+  it("explains why 'Đổi giờ' is off, and points at Huỷ", () => {
+    const reason = rescheduleBlockedReason(heldRow as ScheduledJobEntry);
+    expect(reason).not.toBeNull();
+    expect(reason).toContain("Facebook");
+    expect(reason).toContain("Huỷ");
+  });
+
+  it("says nothing when the button is available or the row is past its hour", () => {
+    expect(
+      rescheduleBlockedReason({
+        status: "queued",
+        canReschedule: true,
+        canCancel: true,
+      }),
+    ).toBeNull();
+    // Overdue: neither action is offered and the cell already says so.
+    expect(
+      rescheduleBlockedReason({
+        status: "queued",
+        canReschedule: false,
+        canCancel: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("tells a queue-held post apart from a Facebook-held one", () => {
+    expect(isHeldByPlatform("scheduled_on_facebook")).toBe(true);
+    expect(isHeldByPlatform("queued")).toBe(false);
+  });
+
+  it("requires the cancel response to say whether Facebook's copy was deleted", () => {
+    const withoutFlag = {
+      tenantId: "00000000-0000-0000-0000-000000000001",
+      postJobId: "job-1",
+      batchId: "batch-1",
+      channelId: "fbpage-a",
+      status: "blocked",
+      scheduledAt: "2026-08-14T02:00:00.000Z",
+      queueEntryRemoved: false,
+      userMessage: "Đã huỷ.",
+    };
+    // Without the flag the screen cannot tell "no queue entry to remove" from
+    // "failed to remove the queue entry" and would raise a false alarm.
+    expect(CancelScheduledJobResponseSchema.safeParse(withoutFlag).success).toBe(false);
+    expect(
+      CancelScheduledJobResponseSchema.safeParse({ ...withoutFlag, platformPostDeleted: true })
+        .success,
+    ).toBe(true);
   });
 });

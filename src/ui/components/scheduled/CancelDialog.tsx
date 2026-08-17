@@ -16,6 +16,7 @@ import { Textarea } from "@/ui/components/ui/textarea";
 import {
   MAX_CANCEL_NOTE_LENGTH,
   formatScheduledAt,
+  isHeldByPlatform,
   type ScheduledJobEntry,
 } from "@/ui/schemas/scheduled.schema";
 import type { ApiError } from "@/ui/services/api-error";
@@ -81,9 +82,12 @@ export function CancelDialog({
         {job ? (
           <form noValidate className="space-y-4" onSubmit={handleSubmit}>
             <p className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm">
-              Huỷ xong bài sẽ chuyển sang trạng thái “Bị chặn” và không bao giờ lên kênh này. Không
-              hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không
-              bị ảnh hưởng.
+              {isHeldByPlatform(job.status)
+                ? // E8.6: this cancel reaches OUT to Facebook and deletes the
+                  // post there first. Saying only "chuyển sang Bị chặn" would
+                  // hide the part the operator can verify on the Page.
+                  "Bài này đang được Facebook giữ. Huỷ xong hệ thống sẽ gỡ bài khỏi Facebook trước, rồi mới đánh dấu “Bị chặn” — Facebook sẽ không đăng nữa. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."
+                : "Huỷ xong bài sẽ chuyển sang trạng thái “Bị chặn” và không bao giờ lên kênh này. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."}
             </p>
 
             <div className="space-y-1.5">

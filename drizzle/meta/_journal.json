@@ -50,6 +50,13 @@
       "when": 1786763416044,
       "tag": "0006_puzzling_serpent_society",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786936207306,
+      "tag": "0007_scheduled_on_facebook",
+      "breakpoints": true
     }
   ]
 }
