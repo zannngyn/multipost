@@ -177,6 +177,9 @@ function makeRepo(options: RepoOptions = {}) {
     async getBatchSummary() {
       return null;
     },
+    // E7.5 progress milestones: not what this file is about, but the port
+    // requires the method, and a fake that throws would hide a real regression.
+    async appendJobEvent() {},
   };
   return repo;
 }

@@ -21,8 +21,15 @@ import {
   type PostJobStatus,
   type TransitionMeta,
 } from "@/core/domain/post-job";
+import {
+  waitingProgress,
+  workingProgress,
+  type PostJobProgress,
+  type PostJobStage,
+} from "@/core/domain/post-job-progress";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Clock, Logger } from "@/core/ports/infra";
+import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
@@ -35,6 +42,8 @@ import type {
   ChannelPlatform,
   ChannelPublisher,
   PublishMediaItem,
+  PublishProgressEvent,
+  PublishProgressListener,
   PublishSettings,
   SignMediaUrlFn,
   VideoTarget as PublisherVideoTarget,
@@ -172,6 +181,18 @@ export interface PublishPostDeps {
   publisher?: ChannelPublisher;
   /** Used only to re-enqueue a deferred job (spacing). */
   queue: JobQueue;
+  /**
+   * E7.5 — where "which step is this post on" is published (design §5.6).
+   *
+   * Required, not optional, on purpose: an optional dependency is one a wiring
+   * change can drop without a single test failing, and the symptom would be a
+   * tracking screen that silently shows nothing. A process that genuinely does
+   * not want progress passes a store that does nothing — visibly.
+   *
+   * Nothing in this usecase may depend on it working (design §3.1): every call
+   * goes through `bestEffort` below.
+   */
+  progress: JobProgressStore;
   clock: Clock;
   logger: Logger;
   /**
@@ -234,6 +255,9 @@ export function makePublishPost(deps: PublishPostDeps) {
       product_code: job.productCode,
       channel: job.channelId,
     });
+    // E7.5 — telemetry for this ONE run. Everything it writes is decoration
+    // (design §3.1); nothing below ever branches on whether it worked.
+    const progress = makeStageReporter(deps, log, job, attempt);
 
     // --- 1. Status guard — the anti-duplicate check at runtime ---------------
     if (job.status === "published") {
@@ -302,6 +326,16 @@ export function makePublishPost(deps: PublishPostDeps) {
       canHandOff: job.format === "image_post",
     });
     if (plan.action === "wait") {
+      // A REAL deadline: the queue will wake this job up at exactly that
+      // instant, so the screen may count down to it (design §3.2).
+      await progress.stage(
+        waitingProgress("waiting_for_schedule", {
+          attempt,
+          waitUntil: new Date(deps.clock.nowMs() + plan.wakeInMs),
+          now: deps.clock.now(),
+        }),
+        { wait_ms: plan.wakeInMs, plan: plan.reason },
+      );
       // Still `queued`, nothing claimed, nothing sent: come back later.
       return await deferQueuedJob(deps, log, job, {
         delayMs: plan.wakeInMs,
@@ -321,6 +355,15 @@ export function makePublishPost(deps: PublishPostDeps) {
     const lastPublishedAt = await deps.postJobs.findLastPublishedAt(tenantId, job.channelId);
     const waitMs = spacingWaitMs(lastPublishedAt, deps.clock.nowMs(), settings.spacingMs);
     if (waitMs > 0) {
+      // The spacing gate computed this wait; it is a fact, not an estimate.
+      await progress.stage(
+        waitingProgress("waiting_for_spacing", {
+          attempt,
+          waitUntil: new Date(deps.clock.nowMs() + waitMs),
+          now: deps.clock.now(),
+        }),
+        { wait_ms: waitMs, spacing_ms: settings.spacingMs },
+      );
       return await deferQueuedJob(deps, log, job, {
         delayMs: waitMs,
         reason: "SPACING_GATE",
@@ -347,6 +390,7 @@ export function makePublishPost(deps: PublishPostDeps) {
     }
 
     // --- 4. STOCK RECHECK, immediately before the API call (rule 3) ---------
+    await progress.stage(workingProgress("checking_stock", { attempt, now: deps.clock.now() }));
     const product = await deps.products.findByCode(tenantId, claimed.productCode);
     if (!product) {
       const userMessage = `Không tìm thấy mã ${claimed.productCode} trên Sheet — không đăng`;
@@ -411,6 +455,7 @@ export function makePublishPost(deps: PublishPostDeps) {
     }
 
     // --- 5. Channel credentials from tenant_integration ---------------------
+    await progress.stage(workingProgress("reading_channel", { attempt, now: deps.clock.now() }));
     const channel = await deps.channels.findChannel(tenantId, claimed.channelId);
     if (!channel || channel.status !== "active") {
       const userMessage = `Kênh "${claimed.channelId}" chưa được cấu hình hoặc đang tắt — không đăng được`;
@@ -468,6 +513,10 @@ export function makePublishPost(deps: PublishPostDeps) {
     // rejected AFTER a multi-megabyte upload wastes the operator's evening.
     let videoDurationSec: number | null = null;
     if (claimed.format !== "image_post") {
+      await progress.stage(
+        workingProgress("checking_video_spec", { attempt, now: deps.clock.now() }),
+        { format: claimed.format },
+      );
       const gate = await checkVideoBeforeUpload(deps, claimed, log);
       if (gate.ok) videoDurationSec = gate.durationSec;
       if (!gate.ok) {
@@ -588,6 +637,7 @@ export function makePublishPost(deps: PublishPostDeps) {
         settings,
         attempt,
         leadMs: plan.leadMs,
+        progress,
       });
     }
 
@@ -603,6 +653,7 @@ export function makePublishPost(deps: PublishPostDeps) {
               caption: claimed.captionText,
               media,
               idempotencyKey: postJobDuplicateKey(claimed),
+              onProgress: progress.onProgress,
             })
           : await publisher.publishVideoPost({
               tenantId,
@@ -615,14 +666,19 @@ export function makePublishPost(deps: PublishPostDeps) {
                 VIDEO_FORMAT_TARGETS[claimed.format === "reels" ? "reels" : "video_post"]
                   .publisher,
               idempotencyKey: postJobDuplicateKey(claimed),
+              onProgress: progress.onProgress,
             });
     } catch (error) {
+      // Drained BEFORE the job is moved: a late upload write landing after the
+      // key is cleared would resurrect "đang tải ảnh 3/10" on a dead job.
+      await progress.drain();
       return await handlePublishError(deps, log, claimed, error, {
         attempt,
         maxAttempts,
         durationMs: deps.clock.nowMs() - startedAt,
       });
     }
+    await progress.drain();
 
     // --- 7. Published -------------------------------------------------------
     // A scheduled post that reached this line went out on the NORMAL path after
@@ -1042,6 +1098,7 @@ async function handOffToPlatform(
     settings: PublishSettings;
     attempt: number;
     leadMs: number;
+    progress: StageReporter;
   },
 ): Promise<PublishPostResult> {
   const scheduledAt = job.scheduledAt;
@@ -1095,6 +1152,10 @@ async function handOffToPlatform(
   }
 
   const startedAt = deps.clock.nowMs();
+  await ctx.progress.stage(
+    workingProgress("handing_to_facebook", { attempt: ctx.attempt, now: deps.clock.now() }),
+    { scheduled_at: scheduledAt.toISOString(), lead_ms: ctx.leadMs },
+  );
   let handed: { scheduledPostId: string };
   try {
     handed = await scheduler.schedulePost({
@@ -1104,8 +1165,10 @@ async function handOffToPlatform(
       media: ctx.media,
       idempotencyKey: postJobDuplicateKey(job),
       publishAt: scheduledAt,
+      onProgress: ctx.progress.onProgress,
     });
   } catch (error) {
+    await ctx.progress.drain();
     return await handleHandoffError(deps, log, job, error, {
       attempt: ctx.attempt,
       settings: ctx.settings,
@@ -1113,6 +1176,18 @@ async function handOffToPlatform(
       scheduledAt,
     });
   }
+
+  await ctx.progress.drain();
+  // Facebook now holds the post and will publish it at the hour: a deadline the
+  // system did not invent (design §3.2), so the screen may count down to it.
+  await ctx.progress.stage(
+    waitingProgress("waiting_on_facebook", {
+      attempt: ctx.attempt,
+      waitUntil: scheduledAt,
+      now: deps.clock.now(),
+    }),
+    { scheduled_post_id: handed.scheduledPostId, scheduled_at: scheduledAt.toISOString() },
+  );
 
   const scheduledOnPlatform = await move(
     deps,
@@ -1761,7 +1836,7 @@ async function move(
   auditPayload?: Readonly<Record<string, unknown>>,
 ): Promise<PostJob | null> {
   const next = transitionPostJob(job, to, meta);
-  return deps.postJobs.applyTransition({
+  const moved = await deps.postJobs.applyTransition({
     tenantId: job.tenantId,
     postJobId: job.id,
     from: job.status,
@@ -1770,6 +1845,230 @@ async function move(
     ...(auditAction ? { auditAction } : {}),
     ...(auditPayload ? { auditPayload } : {}),
   });
+  // E7.5 — the job is over: drop the hot key so a dead job cannot keep saying
+  // "đang tải ảnh 3/10", and leave ONE closing row in the durable trail.
+  // Hooked HERE, on the only writer of these statuses, so a path added later
+  // cannot forget it. Only when the transition actually happened: a lost race
+  // means somebody else owns the row and its progress.
+  if (moved && (to === "published" || to === "blocked" || to === "failed")) {
+    await finishProgress(deps, moved, to, meta.reason);
+  }
+  return moved;
+}
+
+/**
+ * Closes the progress of a finished job: one `done`/`stopped` milestone, then
+ * the hot key goes away.
+ *
+ * The order matters. The row is written first so the trail keeps the moment the
+ * job ended even if the key removal fails; the key is dropped second because a
+ * key that outlives its job is the failure mode of design §3.1 (the screen
+ * hides it anyway once the status leaves queued/publishing, but a key that
+ * lingers for an hour is a lie waiting for a bug).
+ */
+async function finishProgress(
+  deps: PublishPostDeps,
+  job: PostJob,
+  status: PostJobStatus,
+  reason: string,
+): Promise<void> {
+  const stage: PostJobStage = status === "published" ? "done" : "stopped";
+  const log = deps.logger.child({
+    tenant_id: job.tenantId,
+    job_id: job.id,
+    batch_id: job.batchId,
+    channel: job.channelId,
+  });
+
+  await bestEffort(log, { postJobId: job.id, stage, operation: "appendJobEvent" }, () =>
+    deps.postJobs.appendJobEvent({
+      tenantId: job.tenantId,
+      postJobId: job.id,
+      batchId: job.batchId,
+      stage,
+      attempt: job.attemptCount,
+      detail: {
+        status,
+        reason,
+        error_code: job.lastErrorCode,
+        published_post_id: job.publishedPostId,
+      },
+      occurredAt: deps.clock.now(),
+    }),
+  );
+  await bestEffort(log, { postJobId: job.id, stage, operation: "progress.clear" }, () =>
+    deps.progress.clear(job.tenantId, job.id),
+  );
+}
+
+/**
+ * E7.5 — everything this usecase writes about its own progress goes through
+ * here, and NOTHING else in this file swallows an error.
+ *
+ * DELIBERATE, PM-APPROVED EXCEPTION to technical standard #5 (design §3.3 and
+ * §5.2): the error is logged as a `warn` with full context and is NOT
+ * rethrown. The reason is the same one that makes progress a decoration in the
+ * first place — a Redis blip or a failed telemetry INSERT must not turn into a
+ * post that never went out, and there is no entity to move to a failed state
+ * because this is a note ABOUT a post, not the post.
+ *
+ * `JobProgressStore.report/clear` promise never to throw; this catch is what
+ * makes that promise unnecessary to trust, and it also covers the repo's
+ * `appendJobEvent`, which throws DB_ERROR like every other repo method.
+ *
+ * The boundary is narrow ON PURPOSE: every other failure in this file is either
+ * rethrown or turned into a job status with a reason.
+ */
+async function bestEffort(
+  log: Logger,
+  context: { postJobId: string; stage: PostJobStage; operation: string },
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    log.warn("Could not record publish progress — the post itself is unaffected", {
+      err: AppError.from(error, "INTERNAL", {
+        post_job_id: context.postJobId,
+        stage: context.stage,
+        operation: context.operation,
+      }),
+      post_job_id: context.postJobId,
+      stage: context.stage,
+      operation: context.operation,
+      error_code: "PROGRESS_WRITE_FAILED",
+    });
+  }
+}
+
+/** Progress writer for ONE publish run (design §5.6). */
+interface StageReporter {
+  /**
+   * Records a stage change: always the hot key, plus ONE durable row when the
+   * stage actually changed (design §5.4 — never one row per photo).
+   */
+  stage(progress: PostJobProgress, detail?: Record<string, unknown>): Promise<void>;
+  /**
+   * The listener handed to publishers. Synchronous and fire-and-forget by the
+   * port contract, so the write is started here and awaited by `drain`.
+   */
+  onProgress: PublishProgressListener;
+  /**
+   * Waits for the writes started by `onProgress`. Called before the job's final
+   * transition: a photo update landing AFTER the key was cleared would put a
+   * finished job back on "đang tải ảnh".
+   */
+  drain(): Promise<void>;
+}
+
+function makeStageReporter(
+  deps: PublishPostDeps,
+  log: Logger,
+  job: PostJob,
+  attempt: number,
+): StageReporter {
+  // Only a CHANGE of stage earns a durable row: an album of ten photos is one
+  // `uploading_media` row, not ten (design §5.4).
+  let lastEventStage: PostJobStage | null = null;
+  const pending: Promise<void>[] = [];
+
+  const stage = async (
+    progress: PostJobProgress,
+    detail: Record<string, unknown> = {},
+  ): Promise<void> => {
+    const isNewStage = progress.stage !== lastEventStage;
+    if (isNewStage) lastEventStage = progress.stage;
+
+    await bestEffort(
+      log,
+      { postJobId: job.id, stage: progress.stage, operation: "progress.report" },
+      () => deps.progress.report({ tenantId: job.tenantId, postJobId: job.id, progress }),
+    );
+    if (!isNewStage) return;
+    await bestEffort(
+      log,
+      { postJobId: job.id, stage: progress.stage, operation: "appendJobEvent" },
+      () =>
+        deps.postJobs.appendJobEvent({
+          tenantId: job.tenantId,
+          postJobId: job.id,
+          batchId: job.batchId,
+          stage: progress.stage,
+          attempt: progress.attempt,
+          detail,
+          occurredAt: progress.updatedAt,
+        }),
+    );
+  };
+
+  return {
+    stage,
+    drain: async () => {
+      // The individual promises never reject (bestEffort owns that), so this
+      // cannot become the thing that fails a publish.
+      const started = pending.splice(0, pending.length);
+      await Promise.all(started);
+    },
+    onProgress: (event: PublishProgressEvent): void => {
+      const progress = progressOfEvent(event, attempt, deps.clock.now());
+      if (!progress) return;
+      pending.push(stage(progress, detailOfEvent(event)));
+    },
+  };
+}
+
+/**
+ * Publisher event -> the stage the operator sees.
+ *
+ * `video_upload_progress` deliberately carries NO counts: `doneCount/totalCount`
+ * mean "photo k of n" everywhere they are drawn, and rendering bytes through the
+ * same fraction would show "1048576/9437184" as a photo count. The stage alone
+ * is still true, and the bar goes indeterminate — which is exactly what design
+ * §3.2 asks for when the honest answer is "we do not know how long".
+ */
+function progressOfEvent(
+  event: PublishProgressEvent,
+  attempt: number,
+  now: Date,
+): PostJobProgress | null {
+  switch (event?.kind) {
+    case "media_upload_started":
+      return workingProgress("uploading_media", {
+        attempt,
+        now,
+        // Photo k STARTED = k finished so far. The screen reads "3/10" as
+        // "three are up, the fourth is moving".
+        doneCount: event.index,
+        totalCount: event.total,
+        currentItem: event.fileName,
+      });
+    case "media_upload_finished":
+      return workingProgress("uploading_media", {
+        attempt,
+        now,
+        doneCount: event.index + 1,
+        totalCount: event.total,
+        currentItem: event.fileName,
+      });
+    case "creating_post":
+      return workingProgress("sending_to_channel", { attempt, now });
+    case "video_upload_progress":
+      return workingProgress("uploading_media", { attempt, now });
+    default:
+      // A publisher emitting something this build does not know: ignored, never
+      // guessed at.
+      return null;
+  }
+}
+
+function detailOfEvent(event: PublishProgressEvent): Record<string, unknown> {
+  if (event?.kind === "media_upload_started" || event?.kind === "media_upload_finished") {
+    return { total: event.total };
+  }
+  if (event?.kind === "video_upload_progress") {
+    return { bytes_total: event.bytesTotal };
+  }
+  return {};
 }
 
 async function block(

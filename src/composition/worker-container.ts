@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { startBullMqJobConsumer } from "@/adapters/queue/bullmq-job-consumer";
 import { makeBullMqJobQueue } from "@/adapters/queue/bullmq-job-queue";
+import { makeRedisJobProgressStore } from "@/adapters/queue/redis-job-progress";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
 import { AppError } from "@/core/domain/errors";
 import type { Clock, Logger } from "@/core/ports/infra";
@@ -113,9 +114,13 @@ export function makeWorkerContainer(env: EnvRecord = process.env): WorkerContain
     logger,
     clock: infra.clock,
     queue,
-    // The worker passes its OWN queue so the process keeps a single Redis
-    // connection: publish-post re-enqueues itself when the spacing gate defers.
-    usecases: makeUsecases(infra, { queue }),
+    // The worker passes its OWN queue and progress store so the process keeps a
+    // SINGLE Redis connection: publish-post re-enqueues itself when the spacing
+    // gate defers, and reports every step of a publish (E7.5) on the same wire.
+    usecases: makeUsecases(infra, {
+      queue,
+      progress: makeRedisJobProgressStore({ connection: getConnection(), logger }),
+    }),
     startConsumer(handlers: JobHandlerMap): JobConsumer {
       return startBullMqJobConsumer({
         connection: getConnection(),

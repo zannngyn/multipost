@@ -26,6 +26,7 @@ import { makeFakeChannelPublisher } from "@/adapters/meta/fake-publisher";
 import { makeFakeTikTokPublisher } from "@/adapters/tiktok/fake-tiktok-publisher";
 import { startBullMqJobConsumer } from "@/adapters/queue/bullmq-job-consumer";
 import { makeBullMqJobQueue } from "@/adapters/queue/bullmq-job-queue";
+import { makeRedisJobProgressStore } from "@/adapters/queue/redis-job-progress";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
 import { loadConfig, loadMediaConfig } from "@/composition/config";
 import {
@@ -160,12 +161,15 @@ async function main(): Promise<void> {
 
   const connection = createRedisConnection({ url: config.REDIS_URL, logger });
   const queue = makeBullMqJobQueue({ connection, logger });
+  // E7.5 — the real progress store on the SAME connection, like the worker.
+  const jobProgress = makeRedisJobProgressStore({ connection, logger });
   const publisher = makeFakeChannelPublisher();
   // E6: the channel's platform decides which fake runs, exactly like production.
   const tiktokPublisher = makeFakeTikTokPublisher();
   const mediaBytes = makeSmokeMediaBytes();
   const usecases = makeUsecases(infra, {
     queue,
+    progress: jobProgress,
     publisher,
     publishers: { facebook: publisher, tiktok: tiktokPublisher },
     videoProbe: { probeAsset: async () => SMOKE_VIDEO_SPEC },
@@ -1325,6 +1329,9 @@ async function main(): Promise<void> {
       channels: channelConfig,
       publisher,
       queue,
+      // E7.5 — the smoke script runs the real usecase, so it needs the real
+      // dependency; this is the same store the worker builds.
+      progress: jobProgress,
       clock: infra.clock,
       logger,
       signMediaUrl: usecases.signMediaUrl,

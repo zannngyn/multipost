@@ -442,3 +442,59 @@ describe("TikTok publisher — did this call create a post?", () => {
     });
   });
 });
+
+// --- E7.5: progress (design §5.5) -------------------------------------------
+
+describe("TikTok publisher — progress", () => {
+  it("says creating_post exactly once, immediately before video/init/", async () => {
+    const trace: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      trace.push(`CALL:${url.split("/").slice(-3).join("/")}`);
+      if (url.endsWith("creator_info/query/")) return jsonResponse(CREATOR_OK);
+      if (url.endsWith("video/init/")) {
+        return jsonResponse({ data: { publish_id: "v_pub_1" }, error: OK });
+      }
+      return jsonResponse({ data: { status: "PUBLISH_COMPLETE" }, error: OK });
+    });
+    const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    await publisher.publishVideoPost(
+      input({ onProgress: (event) => trace.push(event.kind) }),
+    );
+
+    expect(trace.filter((entry) => entry === "creating_post")).toHaveLength(1);
+    const at = trace.indexOf("creating_post");
+    expect(trace[at + 1]).toContain("video/init/");
+    // Nothing is announced before creator_info answers: that phase creates
+    // nothing and its failures keep their retry.
+    expect(trace[0]).toContain("creator_info");
+  });
+
+  it("says nothing when the gate refuses the post before init/", async () => {
+    const kinds: string[] = [];
+    const fetchImpl = scriptedFetch({
+      creator: { data: { privacy_level_options: ["PUBLIC_TO_EVERYONE"] }, error: OK },
+    });
+    const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    await expect(
+      publisher.publishVideoPost(input({ onProgress: (event) => kinds.push(event.kind) })),
+    ).rejects.toMatchObject({ code: "PUBLISH_FAILED" });
+
+    expect(kinds).toEqual([]);
+  });
+
+  it("publishes even when the listener throws", async () => {
+    const publisher = makePublisher(scriptedFetch({}) as unknown as typeof fetch);
+
+    const result = await publisher.publishVideoPost(
+      input({
+        onProgress: () => {
+          throw new Error("the screen exploded");
+        },
+      }),
+    );
+
+    expect(result.postId).toBe("v_pub_1");
+  });
+});

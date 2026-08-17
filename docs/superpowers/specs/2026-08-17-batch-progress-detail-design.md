@@ -166,12 +166,14 @@ export function workingProgress(
 ): PostJobProgress;
 ```
 
-Kèm hai hàm thuần, cùng kỷ luật với `postJobOperatorMessage()` đang có:
+Kèm các hàm/hằng thuần, cùng kỷ luật với `postJobOperatorMessage()` đang có:
 
 - `postJobProgressMessage(progress): string` — một câu tiếng Việt, ví dụ
   `"Đang tải ảnh lên kênh 3/10 (IMG_2041.jpg)"`.
 - `progressStepIndex(stage): number` — vị trí trên stepper, để giao diện không tự
-  gán số thứ tự và lệch với domain.
+  gán số thứ tự và lệch với domain. Trả `PROGRESS_STEP_NONE` (`-1`) cho `stopped`.
+- `POST_JOB_PROGRESS_STEPS` — nhãn tiếng Việt của các bước trên stepper, export từ
+  domain để giao diện **không hardcode** chuỗi và không lệch pha khi thêm stage.
 
 **Edge case phải xử lý trước** (chuẩn #1): `doneCount > totalCount`, `totalCount = 0`,
 `waitUntil` đã trôi qua, `stageStartedAt` ở tương lai, `attempt` âm. Mỗi trường hợp có
@@ -211,9 +213,33 @@ tức là đánh đổi thứ quan trọng lấy thứ không quan trọng. Đâ
 được ghi ngay trong code tại chỗ `catch`, và `reviewer-qa` được báo trước để không đọc
 nhầm thành lỗi lọt lưới.
 
-Ranh giới của ngoại lệ: **chỉ** `report()` và `clear()`. `read()` gặp lỗi thì trả map
-rỗng và log warn (màn hình mất tiến độ, không mất trạng thái). Không có chỗ nào khác
-trong hệ thống được viện dẫn ngoại lệ này.
+Ranh giới của ngoại lệ — **ba chỗ, không hơn** (sửa 17/08/2026 sau khi triển khai phát
+hiện bản spec đầu tự mâu thuẫn: §3.3 đòi một `INSERT` sự kiện hỏng cũng không được giết
+bài đăng, trong khi mục này lại giới hạn ngoại lệ ở `report`/`clear`; và §6 đòi test với
+một store *luôn ném*, tức là một store vi phạm chính hợp đồng của nó):
+
+1. `report()` trong adapter Redis;
+2. `clear()` trong adapter Redis;
+3. hàm `bestEffort()` — **một** chỗ `catch` duy nhất trong `publish-post.ts`, bọc mọi
+   lời ghi tiến độ của usecase.
+
+`appendJobEvent` trên repo **ném `DB_ERROR` như mọi phương thức repo khác** — không nuốt
+lỗi ở tầng repo. `bestEffort` mới là chỗ chịu trách nhiệm, và nó cũng làm cho lời hứa
+"không bao giờ ném" của port trở thành thứ không cần phải tin.
+
+`read()` gặp lỗi thì trả map rỗng và log warn (màn hình mất tiến độ, không mất trạng
+thái). Không có chỗ nào khác trong hệ thống được viện dẫn ngoại lệ này.
+
+### Hàm dựng domain chuẩn hoá thay vì ném
+
+Quyết định khi triển khai: `waitingProgress`/`workingProgress` không ném với đầu vào
+lệch, mà chuẩn hoá (`attempt < 0 → 0`; `total <= 0` hoặc thiếu một trong hai count →
+cả hai thành null; `done > total` → kẹp lại; `Date` không dùng được → `waitUntil: null`).
+
+Lý do: một lớp trang trí mà hàm dựng của nó ném thì vẫn giết được bài đăng, đúng thứ
+luật 3.1 cấm. Đây **không** phải vi phạm chuẩn kỹ thuật #2 — chuẩn đó nói về validate
+tại **biên với dữ liệu ngoài**, và biên thật là lúc đọc Redis, nơi giá trị hỏng bị *loại
+bỏ kèm log warn* chứ không được thay bằng mặc định.
 
 ### 5.3. `adapters/queue/redis-job-progress.ts`
 
@@ -273,10 +299,21 @@ Hợp đồng cho mọi implementer:
 - `creating_post` phải bắn **ngay trước** lời gọi tạo bài, và chỉ một lần;
 - vắng `onProgress` là hợp lệ, adapter chạy y như cũ.
 
-Cập nhật ba implementer: `facebook-publisher` (bắn đủ, tại `uploadAlbumPhotos` và các
-pha reels), `fake-publisher` (bắn y hệt để dev và test thấy được luồng), `tiktok`
-(tối thiểu `creating_post`). Có test cho cả ba — `onProgress` là optional nên adapter
-nào quên sẽ im lặng không có tiến độ chứ không vỡ build, test là thứ bắt được việc đó.
+Cập nhật **bốn** implementer (spec đầu đếm thiếu một): `facebook-publisher` (bắn đủ, tại
+`uploadAlbumPhotos` và các pha reels), `fake-publisher`, `tiktok-publisher`,
+`fake-tiktok-publisher`. Có test — `onProgress` là optional nên adapter nào quên sẽ im
+lặng không có tiến độ chứ không vỡ build, test là thứ bắt được việc đó.
+
+Hai chi tiết chốt khi triển khai:
+
+- **Đường một ảnh của Facebook** bắn `media_upload_started` rồi `creating_post`, **không**
+  có `media_upload_finished`: ở đường đó chính lời gọi upload là lời gọi tạo bài, và một
+  sự kiện "xong tải" phát sau đó sẽ kéo màn hình quay lại "đang tải ảnh" cho một bài đã
+  lên.
+- **`video_upload_progress` được định nghĩa nhưng Phase 1 không implementer nào bắn** —
+  Facebook và TikTok đều nhận URL và tự tải về. Usecase ánh xạ nó sang `uploading_media`
+  **không kèm count**: đưa số byte vào `doneCount/totalCount` sẽ hiện "1048576/9437184"
+  như thể đó là số ảnh.
 
 ### 5.6. `publish-post.ts` — gắn vào các mốc đã có
 

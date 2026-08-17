@@ -2,6 +2,8 @@ import { AppError } from "@/core/domain/errors";
 import type {
   ChannelPublisher,
   PublishImagePostInput,
+  PublishProgressEvent,
+  PublishProgressListener,
   PublishResult,
   PublishVideoPostInput,
 } from "@/core/ports/publisher";
@@ -60,7 +62,28 @@ export interface FakeTikTokPublisher extends ChannelPublisher {
   callCount(channelId?: string): number;
   publishedCount(channelId?: string): number;
   setScenario(channelId: string, scenario: FakeTikTokScenario | null): void;
+  /** E7.5 — errors thrown BY a progress listener; swallowed, never lost. */
+  readonly progressListenerErrors: readonly unknown[];
   reset(): void;
+}
+
+
+/**
+ * Port contract (PublishProgressListener, design §5.5): synchronous,
+ * fire-and-forget, and a listener that throws never fails a publish. This fake
+ * has no logger, so the swallowed error is recorded instead of lost.
+ */
+function emitProgress(
+  onProgress: PublishProgressListener | undefined,
+  listenerErrors: unknown[],
+  event: PublishProgressEvent,
+): void {
+  if (typeof onProgress !== "function") return;
+  try {
+    onProgress(event);
+  } catch (error) {
+    listenerErrors.push({ kind: event.kind, error });
+  }
 }
 
 export function makeFakeTikTokPublisher(
@@ -69,10 +92,12 @@ export function makeFakeTikTokPublisher(
   const scenarios = new Map<string, FakeTikTokScenario>(Object.entries(options.scenarios ?? {}));
   const failuresSoFar = new Map<string, number>();
   const calls: FakeTikTokCall[] = [];
+  const listenerErrors: unknown[] = [];
   let sequence = 0;
 
   return {
     calls,
+    progressListenerErrors: listenerErrors,
     callCount(channelId?: string): number {
       return channelId ? calls.filter((call) => call.channelId === channelId).length : calls.length;
     },
@@ -89,6 +114,7 @@ export function makeFakeTikTokPublisher(
     reset(): void {
       calls.length = 0;
       failuresSoFar.clear();
+      listenerErrors.length = 0;
       sequence = 0;
     },
 
@@ -155,10 +181,22 @@ export function makeFakeTikTokPublisher(
 
       const context = { tenant_id: input.tenantId, channel: channel.channelId, fake: true };
 
+      // E7.5 — minimal progress, like the real adapter: ONE event, immediately
+      // before the phase that can create a post. Fired at most once per call,
+      // and never on the paths that fail BEFORE init/ (the rate-limit scenario
+      // below stands for creator_info, where nothing has been dispatched yet).
+      let creatingAnnounced = false;
+      const announceCreating = (): void => {
+        if (creatingAnnounced) return;
+        creatingAnnounced = true;
+        emitProgress(input.onProgress, listenerErrors, { kind: "creating_post" });
+      };
+
       // A refusal of the CREATING request (video/init/). A refusal is not proof
       // that nothing exists — an earlier attempt may have created the video and
       // lost the answer — so it carries the dispatch flag, like the real adapter.
       if (scenario.errorCode) {
+        announceCreating();
         const error = mapTikTokError({
           error: { code: scenario.errorCode, message: `Fake TikTok error ${scenario.errorCode}` },
           httpStatus: 400,
@@ -187,6 +225,9 @@ export function makeFakeTikTokPublisher(
         record("error", error.code);
         throw error;
       }
+
+      // Past every phase that fails before init/: the creating request is next.
+      announceCreating();
 
       // Accepted at init, then rejected by the status poll.
       if (scenario.failReason) {

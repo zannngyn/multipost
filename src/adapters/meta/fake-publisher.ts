@@ -2,6 +2,8 @@ import { AppError } from "@/core/domain/errors";
 import type {
   ChannelPublisher,
   PublishImagePostInput,
+  PublishProgressEvent,
+  PublishProgressListener,
   PublishResult,
   PublishVideoPostInput,
   RemotePostQuery,
@@ -89,8 +91,37 @@ export interface FakeChannelPublisher extends ChannelPublisher {
   setRemoteState(postId: string, state: RemotePostState): void;
   /** Platform post ids this fake was asked to delete, in order. */
   readonly deletedPostIds: readonly string[];
+  /**
+   * E7.5 — errors thrown BY a progress listener, which the port requires this
+   * publisher to swallow. Kept so "the screen's callback exploded" is provable
+   * instead of invisible.
+   */
+  readonly progressListenerErrors: readonly unknown[];
   readonly scheduled: ScheduledPublisher;
   reset(): void;
+}
+
+/**
+ * Same contract as the real adapter (design §5.5): synchronous, fire-and-forget,
+ * and a listener that throws never fails a publish. The fake emits the SAME
+ * events in the SAME places on purpose — a flow proven against a fake that stays
+ * silent would prove nothing about the screen.
+ *
+ * This publisher has no logger by design, so the swallowed listener error is
+ * not lost: it is recorded on `progressListenerErrors`, which a test can assert
+ * on. Nothing here disappears without a trace.
+ */
+function emitProgress(
+  onProgress: PublishProgressListener | undefined,
+  listenerErrors: unknown[],
+  event: PublishProgressEvent,
+): void {
+  if (typeof onProgress !== "function") return;
+  try {
+    onProgress(event);
+  } catch (error) {
+    listenerErrors.push({ kind: event.kind, error });
+  }
 }
 
 export function makeFakeChannelPublisher(options: {
@@ -101,6 +132,7 @@ export function makeFakeChannelPublisher(options: {
   const calls: FakePublishCall[] = [];
   const remoteStates = new Map<string, RemotePostState>();
   const deletedPostIds: string[] = [];
+  const listenerErrors: unknown[] = [];
   let sequence = 0;
 
   const nextPostId = (pageId: string): string => {
@@ -111,6 +143,7 @@ export function makeFakeChannelPublisher(options: {
   return {
     calls,
     deletedPostIds,
+    progressListenerErrors: listenerErrors,
     callCount(channelId?: string): number {
       return channelId ? calls.filter((call) => call.channelId === channelId).length : calls.length;
     },
@@ -137,6 +170,7 @@ export function makeFakeChannelPublisher(options: {
       failuresSoFar.clear();
       remoteStates.clear();
       deletedPostIds.length = 0;
+      listenerErrors.length = 0;
       sequence = 0;
     },
 
@@ -175,9 +209,21 @@ export function makeFakeChannelPublisher(options: {
         // Reads the bytes like the real adapter: a handoff uploads the album.
         const items = input.media ?? [];
         const mediaBytes: number[] = [];
-        for (const item of items) {
+        for (const [index, item] of items.entries()) {
+          emitProgress(input.onProgress, listenerErrors, {
+            kind: "media_upload_started",
+            index,
+            total: items.length,
+            fileName: item.fileName,
+          });
           const content = await item.readBytes();
           mediaBytes.push(content?.bytes?.length ?? 0);
+          emitProgress(input.onProgress, listenerErrors, {
+            kind: "media_upload_finished",
+            index,
+            total: items.length,
+            fileName: item.fileName,
+          });
         }
 
         const record = (outcome: "scheduled" | "error", errorCode?: string): void => {
@@ -233,6 +279,11 @@ export function makeFakeChannelPublisher(options: {
           throw error;
         }
 
+        // Every scripted failure above models a refusal BEFORE the creating
+        // request (they all carry platform_created_nothing), so this is the
+        // first line from which a post can exist — exactly where the real
+        // adapter fires it.
+        emitProgress(input.onProgress, listenerErrors, { kind: "creating_post" });
         const scheduledPostId = nextPostId(channel.externalId);
         remoteStates.set(scheduledPostId, {
           state: "scheduled",
@@ -281,6 +332,12 @@ export function makeFakeChannelPublisher(options: {
       // publish path that never touches Drive or the cache.
       const mediaBytes: number[] = [];
       for (const [index, item] of items.entries()) {
+        emitProgress(input.onProgress, listenerErrors, {
+          kind: "media_upload_started",
+          index,
+          total: items.length,
+          fileName: item.fileName,
+        });
         const content = await item.readBytes();
         if (!content?.bytes || content.bytes.length === 0) {
           throw new AppError("MEDIA_NOT_FOUND", {
@@ -298,6 +355,12 @@ export function makeFakeChannelPublisher(options: {
           });
         }
         mediaBytes.push(content.bytes.length);
+        emitProgress(input.onProgress, listenerErrors, {
+          kind: "media_upload_finished",
+          index,
+          total: items.length,
+          fileName: item.fileName,
+        });
       }
 
       const record = (outcome: "published" | "error", errorCode?: string): void => {
@@ -353,6 +416,9 @@ export function makeFakeChannelPublisher(options: {
         throw error;
       }
 
+      // Same boundary as the real adapter: every scripted failure above models
+      // a refusal before anything could be created.
+      emitProgress(input.onProgress, listenerErrors, { kind: "creating_post" });
       const postId = nextPostId(channel.externalId);
       remoteStates.set(postId, {
         state: "published",
@@ -436,6 +502,9 @@ export function makeFakeChannelPublisher(options: {
         throw error;
       }
 
+      // Same boundary as the real adapter: every scripted failure above models
+      // a refusal before anything could be created.
+      emitProgress(input.onProgress, listenerErrors, { kind: "creating_post" });
       const postId = nextPostId(channel.externalId);
       remoteStates.set(postId, {
         state: "published",

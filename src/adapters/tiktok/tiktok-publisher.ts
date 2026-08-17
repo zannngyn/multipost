@@ -5,6 +5,8 @@ import type { Logger } from "@/core/ports/infra";
 import type {
   ChannelPublisher,
   PublishImagePostInput,
+  PublishProgressEvent,
+  PublishProgressListener,
   PublishResult,
   PublishVideoPostInput,
 } from "@/core/ports/publisher";
@@ -97,6 +99,30 @@ export interface TikTokPublisherDeps {
   /** Injected so tests do not actually wait. */
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+}
+
+
+/**
+ * Hands ONE progress event to the caller (port contract on
+ * PublishProgressListener, design §5.5): synchronous, fire-and-forget, and a
+ * listener that throws is a broken listener — never a failed post. Logged with
+ * the event kind so it stays visible.
+ */
+function emitProgress(
+  onProgress: PublishProgressListener | undefined,
+  log: Logger,
+  event: PublishProgressEvent,
+): void {
+  if (typeof onProgress !== "function") return;
+  try {
+    onProgress(event);
+  } catch (error) {
+    log.warn("Progress listener threw — publishing continues", {
+      err: AppError.from(error, "INTERNAL", { reason: "PROGRESS_LISTENER_FAILED" }),
+      error_code: "INTERNAL",
+      progress_kind: event.kind,
+    });
+  }
 }
 
 export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher {
@@ -280,6 +306,11 @@ export function makeTikTokPublisher(deps: TikTokPublisherDeps): ChannelPublisher
       // own a publish task for this job, pull the file and finish the post
       // without us — so no answer to it, and nothing after it, can promise the
       // account is empty (port contract: feed_dispatched).
+      // E7.5 — minimal progress for this platform (design §2/§5.5): TikTok pulls
+      // the file itself, so there is no upload here to count. This ONE event is
+      // the one that matters, and it fires immediately before the request that
+      // can create a post.
+      emitProgress(input.onProgress, log, { kind: "creating_post" });
       let initRaw: TikTokResponse;
       try {
         initRaw = await deps.client.post({
