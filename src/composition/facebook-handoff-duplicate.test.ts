@@ -8,8 +8,10 @@ import type { ApplyTransitionInput, PostBatchSummary, PostJobRepo } from "@/core
 import type { ProductRepo } from "@/core/ports/product-repo";
 import type { ChannelConfig, ChannelConfigRepo, SignMediaUrlFn } from "@/core/ports/publisher";
 import { channelWriteStubs } from "@/core/usecases/__fixtures__/channel-config-repo";
+import { makeListPostJobs } from "@/core/usecases/list-post-jobs";
 import { makePublishPost } from "@/core/usecases/publish-post";
 import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
+import { makeRetryPostJob } from "@/core/usecases/retry-post-job";
 
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
@@ -109,7 +111,16 @@ function makeMemoryRepo(job: PostJob) {
       return [...store.values()].filter((entry) => entry.batchId === batchId);
     },
     async listJobs() {
-      return { items: [], nextCursor: null };
+      // Enough for the job log to render this one row: the "Chạy lại" button is
+      // decided here, and it is half of the fix under test.
+      return {
+        items: [...store.values()].map((entry) => ({
+          ...entry,
+          createdAt: new Date(NOW),
+          updatedAt: new Date(NOW),
+        })),
+        nextCursor: null,
+      };
     },
     async applyTransition(input: ApplyTransitionInput) {
       const current = store.get(input.postJobId);
@@ -231,19 +242,25 @@ function harness(fetchImpl: typeof fetch, job: PostJob = makeJob()) {
     graph: makeGraphClient({ logger, fetchImpl, version: "v23.0" }),
     logger,
   });
+  const channels = makeChannels();
+  const clock = fixedClock();
   const publish = makePublishPost({
     postJobs: repo,
     products: makeProducts(),
-    channels: makeChannels(),
+    channels,
     publishers: { facebook },
     queue,
-    clock: fixedClock(),
+    clock,
     logger,
     signMediaUrl,
     mediaBaseUrl: () => "https://mysp.example.com",
     readMediaBytes,
   });
-  return { publish, repo, queue };
+  // The operator's button and the screen that draws it, on the SAME repo the
+  // worker uses: the whole point of note 1 is that these three must agree.
+  const retry = makeRetryPostJob({ postJobs: repo, channels, queue, clock, logger });
+  const listJobs = makeListPostJobs({ postJobs: repo, logger });
+  return { publish, retry, listJobs, repo, queue };
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -358,5 +375,127 @@ describe("handoff — a job that may already have a scheduled post never publish
     // usecase's clock is fixed at NOW, so the delay is the full 20 minutes.
     expect(h.queue.enqueued).toHaveLength(1);
     expect(h.queue.enqueued[0]?.opts?.delayMs).toBe(SCHEDULED_AT.getTime() - NOW);
+  });
+});
+
+/**
+ * Gate note 1 — the other half of the same invariant, and the one the previous
+ * round left open: the WORKER stops such a job, but the operator's "Chạy lại"
+ * button put it straight back into the queue, and from `queued` the clock alone
+ * decided which kind of double post came out:
+ *
+ *      T-30 ──────────── T-12 ──────── T ────────►
+ *        │  hand_off      │   wait      │  publish_now
+ *        │  2nd SCHEDULED │   publish   │  live post next to the
+ *        │  post          │   at T      │  one Facebook holds
+ *
+ * All three start from a legal `queued` row, so no status guard downstream can
+ * see them coming. The refusal therefore lives on the row itself, and this file
+ * checks it with the REAL Graph adapter behind it: the proof is that the mocked
+ * `fetch` is never touched, i.e. not one byte reached Facebook.
+ */
+describe("operator retry — a job that may hold a scheduled post is refused at every hour", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The row exactly as failUnconfirmedHandoff leaves it. */
+  function unconfirmedHandoff(scheduledAt: Date): PostJob {
+    return makeJob({
+      status: "failed",
+      attemptCount: 1,
+      lastErrorCode: "HANDOFF_FAILED",
+      lastErrorMessage:
+        "Không xác nhận được kết quả giao lịch cho Facebook (Không kết nối được tới Facebook) — " +
+        "bài hẹn CÓ THỂ đã được tạo trên Trang. Hệ thống dừng lại và KHÔNG tự đăng lại để tránh đăng trùng: " +
+        "hãy mở Trang, mục bài đã lên lịch, xoá bài nếu thấy rồi hẹn lại.",
+      scheduledAt,
+      queueJobId: null,
+    });
+  }
+
+  /**
+   * A Facebook that would happily take a SECOND schedule (a real Page does: the
+   * album is re-uploaded, so #506 is not guaranteed) and would happily publish.
+   * If any call reaches it, the Page ends up with two posts.
+   */
+  function willingFacebook(calls: string[]) {
+    return vi.fn<typeof fetch>(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/photos")) {
+        calls.push("photos");
+        return jsonResponse({ id: "photo-second" });
+      }
+      calls.push("feed");
+      return jsonResponse({ id: "555000111_SECOND" });
+    });
+  }
+
+  it.each([
+    ["inside the handoff window (T-30..T-12) — would create a SECOND scheduled post", 20 * 60_000],
+    ["in the dead zone (T-12..T) — would wake at T and publish next to it", 5 * 60_000],
+    ["after the hour — would publish immediately next to it", -3 * 60_000],
+  ])("refuses the retry pressed %s", async (_label, offsetMs) => {
+    const calls: string[] = [];
+    const fetchImpl = willingFacebook(calls);
+    const h = harness(
+      fetchImpl as unknown as typeof fetch,
+      unconfirmedHandoff(new Date(NOW + offsetMs)),
+    );
+
+    // 1. The screen does not offer the action in the first place.
+    const log = await h.listJobs({ tenantId: TENANT });
+    expect(log.items[0]).toMatchObject({ status: "failed", canRetry: false });
+    expect(log.items[0].userMessage).toContain("CÓ THỂ đã được tạo trên Trang");
+
+    // 2. And the usecase refuses it anyway — the API route is reachable without
+    //    the screen, and a stale page still has the old button.
+    await expect(h.retry({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "DUPLICATE_POST_BLOCKED",
+      context: { reason: "HANDOFF_OUTCOME_UNKNOWN" },
+    });
+
+    // 3. Nothing was queued, so no worker run can follow.
+    expect(h.queue.enqueued).toHaveLength(0);
+    expect(h.repo.get("job-1")?.status).toBe("failed");
+    expect(h.repo.get("job-1")?.queueJobId).toBeNull();
+
+    // 4. And if a worker did wake on this row anyway (a stale entry from before
+    //    the failure), the status guard sends it home without a call.
+    const afterWorker = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(afterWorker.outcome).toBe("skipped");
+
+    // THE assertion: not one request reached Facebook on any of the three paths.
+    expect(calls).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(h.repo.get("job-1")?.publishedPostId).toBeNull();
+    expect(h.repo.get("job-1")?.scheduledPostId).toBeNull();
+  });
+
+  it("still lets an ORDINARY failure of a scheduled post be retried", async () => {
+    // The guard must not swallow real work: this job's handoff never happened,
+    // nothing is waiting on the Page, and the operator must be able to re-run it.
+    const calls: string[] = [];
+    const h = harness(
+      willingFacebook(calls) as unknown as typeof fetch,
+      makeJob({
+        status: "failed",
+        lastErrorCode: "PUBLISH_FAILED",
+        lastErrorMessage: "Đăng bài thất bại sau số lần thử cho phép.",
+        queueJobId: null,
+      }),
+    );
+
+    const log = await h.listJobs({ tenantId: TENANT });
+    expect(log.items[0].canRetry).toBe(true);
+
+    const result = await h.retry({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.status).toBe("queued");
+    expect(h.queue.enqueued).toHaveLength(1);
   });
 });

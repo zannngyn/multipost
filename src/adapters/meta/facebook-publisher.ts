@@ -740,6 +740,15 @@ interface ValidatedImagePost {
  * The gate both image paths share: a Facebook channel with a Page id, 1..10
  * photos and a non-empty caption. Same errors as before it was extracted — the
  * immediate path is the one that has run on a real Page and must not change.
+ *
+ * These are THE pre-flight guards the scheduled path's contract names (see
+ * makeFacebookScheduledPublisher): they run before a single byte leaves this
+ * process, so every one of them carries `platform_created_nothing: true`. Left
+ * off, the caller has to assume a scheduled post may exist and tells the
+ * operator to go hunt for one on the Page — for a post that provably was never
+ * sent anywhere, while dropping a job that could still have gone out at its
+ * hour. `retryable: false` for the same reason in the other direction: no
+ * backoff invents a caption, a Page id, or the 11th photo out of an album.
  */
 function assertImagePost(input: PublishImagePostInput): ValidatedImagePost {
   const channel = input?.channel;
@@ -753,6 +762,8 @@ function assertImagePost(input: PublishImagePostInput): ValidatedImagePost {
         tenant_id: input?.tenantId ?? null,
         channel: channel?.channelId ?? null,
         platform: channel?.platform ?? null,
+        retryable: false,
+        platform_created_nothing: true,
       },
     });
   }
@@ -760,14 +771,25 @@ function assertImagePost(input: PublishImagePostInput): ValidatedImagePost {
     throw new AppError("INVALID_INPUT", {
       message: `An album needs 1..${MAX_ALBUM_MEDIA} photos, got ${media.length}`,
       userMessage: `Bài ảnh phải có từ 1 đến ${MAX_ALBUM_MEDIA} ảnh.`,
-      context: { tenant_id: input.tenantId, channel: channel.channelId, media_count: media.length },
+      context: {
+        tenant_id: input.tenantId,
+        channel: channel.channelId,
+        media_count: media.length,
+        retryable: false,
+        platform_created_nothing: true,
+      },
     });
   }
   if (caption.length === 0) {
     throw new AppError("INVALID_INPUT", {
       message: "Refusing to publish a post without a caption",
       userMessage: "Bài đăng chưa có nội dung — không đăng.",
-      context: { tenant_id: input.tenantId, channel: channel.channelId },
+      context: {
+        tenant_id: input.tenantId,
+        channel: channel.channelId,
+        retryable: false,
+        platform_created_nothing: true,
+      },
     });
   }
 

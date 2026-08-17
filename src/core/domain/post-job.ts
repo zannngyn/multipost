@@ -206,6 +206,48 @@ export function isRetryablePostJobStatus(status: PostJobStatus): boolean {
   return RETRYABLE_POST_JOB_STATUSES.includes(status);
 }
 
+/**
+ * E8.6 — the code a job carries when its handoff to the platform's scheduler
+ * ended WITHOUT a verdict: the request that creates the post was dispatched (or
+ * the publisher could not promise it was not), and nobody knows whether a
+ * scheduled post now exists. Lives here, not in the usecase, because it is the
+ * one thing on the ROW that later readers (retry, job log) must recognise.
+ */
+export const HANDOFF_FAILED_ERROR_CODE = "HANDOFF_FAILED";
+
+/**
+ * True when the platform MAY already be holding a scheduled post for this job.
+ *
+ * Nothing may move such a row back into the publish flow. Every road out of
+ * `queued` ends on the Page: inside T-30..T-12 another handoff asks for a SECOND
+ * scheduled post, between T-12 and T the job waits and then publishes at T, and
+ * after T it publishes immediately — each one lands next to whatever the first
+ * handoff left behind (business rule 4).
+ *
+ * `scheduledAt` is deliberately NOT part of the condition. Only a scheduled job
+ * can ever carry this code, so requiring the column would add nothing — but it
+ * would silently disable the guard for a row whose hour went missing, and this
+ * predicate must fail closed.
+ */
+export function mayHoldUnconfirmedScheduledPost(
+  job: Pick<PostJob, "status" | "lastErrorCode"> | null | undefined,
+): boolean {
+  if (!job || job.status !== "failed") return false;
+  return normaliseString(job.lastErrorCode) === HANDOFF_FAILED_ERROR_CODE;
+}
+
+/**
+ * The single answer to "may an operator press Chạy lại on this row?" — used by
+ * the job log (to not draw the button) and by the retry usecase (to refuse it).
+ * One function so the screen and the rule can never disagree.
+ */
+export function canOperatorRetryPostJob(
+  job: Pick<PostJob, "status" | "lastErrorCode">,
+): boolean {
+  if (!job || !isPostJobStatus(job.status)) return false;
+  return isRetryablePostJobStatus(job.status) && !mayHoldUnconfirmedScheduledPost(job);
+}
+
 export function canTransitionPostJob(from: PostJobStatus, to: PostJobStatus): boolean {
   if (!isPostJobStatus(from) || !isPostJobStatus(to)) return false;
   return ALLOWED_TRANSITIONS[from].includes(to);

@@ -174,6 +174,44 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
   });
 
   /**
+   * Gate note 2. The contract above makeFacebookScheduledPublisher lists "the
+   * pre-flight guards" as a place where `platform_created_nothing` MAY be set —
+   * and these three are those guards. Without the flag the caller has to assume
+   * a scheduled post may exist: the job dies telling the operator to go look for
+   * a post on the Page that was never sent anywhere, and a job that could still
+   * have gone out at its hour is dropped. `retryable: false` belongs with it: no
+   * backoff invents a caption, a Page id, or the 11th photo of an album.
+   */
+  it.each([
+    [
+      "a channel that is not a Facebook Page",
+      { channel: { ...CHANNEL, platform: "tiktok" as const } },
+      "CHANNEL_NOT_CONFIGURED",
+    ],
+    ["an empty album", { media: [] }, "INVALID_INPUT"],
+    ["a blank caption", { caption: "   " }, "INVALID_INPUT"],
+  ])("says NOTHING was created when it refuses %s", async (_label, overrides, code) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    await expect(
+      scheduled.schedulePost({
+        tenantId: "t1",
+        channel: CHANNEL,
+        caption: "x",
+        media: [photo("d1", "1.jpg")],
+        idempotencyKey: "k",
+        publishAt: IN_20_MINUTES(),
+        ...overrides,
+      }),
+    ).rejects.toMatchObject({
+      code,
+      context: { retryable: false, platform_created_nothing: true },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  /**
    * REGRESSION (the reason `platform_created_nothing` left this branch): a Graph
    * error body proves nothing about the JOB, only about this request. #506
    * DUPLICATE_POST is the proof: Facebook answers it when a post like this one

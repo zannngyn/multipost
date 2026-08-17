@@ -221,6 +221,46 @@ describe("listPostJobs — entries", () => {
     expect(result.items[0].canRetry).toBe(canRetry);
   });
 
+  /**
+   * Gate note 1. The row's own message says the system will NOT republish it and
+   * that the operator must check the Page first; a "Chạy lại" button drawn next
+   * to that sentence is an invitation to the double post it warns about. The
+   * usecase refuses it anyway (DUPLICATE_POST_BLOCKED) — the button simply must
+   * not be there to press (core-workflow-approval: only offer valid actions).
+   */
+  it("marks canRetry=false for a `failed` job whose handoff outcome is unknown", async () => {
+    const { listPostJobs } = harness([
+      item({
+        status: "failed",
+        lastErrorCode: "HANDOFF_FAILED",
+        lastErrorMessage:
+          "Không xác nhận được kết quả giao lịch cho Facebook — bài hẹn CÓ THỂ đã được tạo trên Trang.",
+        scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+        publishedPostId: null,
+        publishedUrl: null,
+        publishedAt: null,
+      }),
+    ]);
+
+    const result = await listPostJobs({ tenantId: TENANT });
+
+    expect(result.items[0].canRetry).toBe(false);
+    // The row still explains itself — only the action is withheld.
+    expect(result.items[0].userMessage).toContain("CÓ THỂ đã được tạo trên Trang");
+  });
+
+  it("keeps canRetry=true for every OTHER failure of a scheduled job", async () => {
+    const { listPostJobs } = harness([
+      item({
+        status: "failed",
+        lastErrorCode: "PUBLISH_FAILED",
+        lastErrorMessage: "lỗi",
+        scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+      }),
+    ]);
+    expect((await listPostJobs({ tenantId: TENANT })).items[0].canRetry).toBe(true);
+  });
+
   it("keeps the row timestamps so the log can be read chronologically", async () => {
     const { listPostJobs } = harness([item()]);
     const result = await listPostJobs({ tenantId: TENANT });

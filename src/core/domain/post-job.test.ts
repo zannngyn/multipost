@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import { AppError } from "./errors";
 import {
   allowedTransitionsFrom,
+  canOperatorRetryPostJob,
   canTransitionPostJob,
   deferredPostJobQueueId,
+  HANDOFF_FAILED_ERROR_CODE,
+  mayHoldUnconfirmedScheduledPost,
   deriveBatchStatus,
   evaluateScheduledAt,
   handoffWakeDelayMs,
@@ -614,5 +617,61 @@ describe("handoffWakeDelayMs / toUnixSeconds", () => {
     // schedule past a boundary Meta measures itself.
     expect(toUnixSeconds(at)).toBe(Math.floor(at.getTime() / 1000));
     expect(toUnixSeconds(at) * 1000).toBe(at.getTime() - 999);
+  });
+});
+
+/**
+ * E8.6 — the row-level half of business rule 4. `failed` alone says "an operator
+ * may re-run this"; `failed` + HANDOFF_FAILED says "Facebook may already be
+ * holding a post for it", and those two must never be confused, because every
+ * road out of `queued` ends on the Page.
+ */
+describe("mayHoldUnconfirmedScheduledPost / canOperatorRetryPostJob", () => {
+  const unconfirmed = makeJob({
+    status: "failed",
+    lastErrorCode: HANDOFF_FAILED_ERROR_CODE,
+    scheduledAt: new Date("2026-08-13T03:00:00.000Z"),
+  });
+
+  it("recognises the row failUnconfirmedHandoff leaves behind", () => {
+    expect(mayHoldUnconfirmedScheduledPost(unconfirmed)).toBe(true);
+    expect(canOperatorRetryPostJob(unconfirmed)).toBe(false);
+  });
+
+  it("fails closed when the row lost its scheduled hour", () => {
+    // The hour is not part of the condition on purpose: a guard that switches
+    // itself off on odd data is not a guard. (The signature does not even accept
+    // `scheduledAt`, which is the point — it cannot be read.)
+    expect(mayHoldUnconfirmedScheduledPost(makeJob({ ...unconfirmed, scheduledAt: null }))).toBe(
+      true,
+    );
+  });
+
+  it("stays narrow: only `failed` + that one code", () => {
+    expect(mayHoldUnconfirmedScheduledPost({ ...unconfirmed, status: "blocked" })).toBe(false);
+    expect(
+      mayHoldUnconfirmedScheduledPost({ ...unconfirmed, lastErrorCode: "PUBLISH_FAILED" }),
+    ).toBe(false);
+    expect(mayHoldUnconfirmedScheduledPost({ ...unconfirmed, lastErrorCode: null })).toBe(false);
+    expect(mayHoldUnconfirmedScheduledPost(null)).toBe(false);
+  });
+
+  it("keeps every ordinary failed/blocked job retryable", () => {
+    expect(
+      canOperatorRetryPostJob(makeJob({ status: "failed", lastErrorCode: "PUBLISH_FAILED" })),
+    ).toBe(true);
+    expect(
+      canOperatorRetryPostJob(makeJob({ status: "blocked", lastErrorCode: "OUT_OF_STOCK" })),
+    ).toBe(true);
+  });
+
+  it.each([
+    "draft",
+    "queued",
+    "publishing",
+    "scheduled_on_facebook",
+    "published",
+  ] as PostJobStatus[])("refuses %s", (status) => {
+    expect(canOperatorRetryPostJob(makeJob({ status }))).toBe(false);
   });
 });

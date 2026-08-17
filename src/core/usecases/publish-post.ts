@@ -9,6 +9,7 @@ import {
 import {
   deferredPostJobQueueId,
   HANDOFF_DEADLINE_MS,
+  HANDOFF_FAILED_ERROR_CODE,
   nextHandoffAttemptDelayMs,
   planScheduledPublish,
   postJobDuplicateKey,
@@ -90,8 +91,12 @@ export const HANDOFF_EXPIRED_ERROR_CODE = "HANDOFF_EXPIRED";
  * may not be holding a scheduled post for this job. The job stops there — see
  * failUnconfirmedHandoff for why neither a retry nor a publish at the hour is
  * allowed afterwards.
+ *
+ * Defined in the DOMAIN and re-exported here: this usecase writes the code, the
+ * retry usecase and the job log read it back off the row, and a second copy of
+ * the string would let those two drift apart without a test noticing.
  */
-export const HANDOFF_FAILED_ERROR_CODE = "HANDOFF_FAILED";
+export { HANDOFF_FAILED_ERROR_CODE };
 /**
  * The platform refused the SCHEDULE but created nothing (E8.6). The post is not
  * lost: it goes out on the normal path at its hour, and this code says why the
@@ -1010,7 +1015,10 @@ async function deferQueuedJob(
  *   accepted            -> `scheduled_on_facebook` + the remote post id. The
  *                          queue is done with this job; only the reconciliation
  *                          sweep may declare it published.
- *   token dead          -> `blocked`, like the immediate path.
+ *   token dead, proven
+ *   before the dispatch -> `blocked`, like the immediate path. A token error
+ *                          answered TO the dispatch is an unknown outcome, not
+ *                          a block — see handleHandoffError.
  *   failed BEFORE the
  *   creating request    -> back to `queued`: another attempt inside the window,
  *                          or a wake-up AT the hour that publishes on the normal
@@ -1159,16 +1167,23 @@ async function handOffToPlatform(
 }
 
 /**
- * A failed handoff. TOKEN_EXPIRED blocks, exactly like handlePublishError.
+ * A failed handoff. ONE question decides everything, and it is asked FIRST, of
+ * every error whatever its code: does the platform provably hold nothing for
+ * this job? Without that proof the job stops (see failUnconfirmedHandoff) — no
+ * retry, no publish at the hour, no `blocked` either, because `blocked` is a
+ * status an operator may re-queue from.
  *
- * Everything else is decided by ONE question, and deliberately not by
- * `retryable`: does the platform provably hold nothing for this job? Only then
- * may the job move again — another attempt inside the window (transient), or a
- * wake-up AT the hour on the normal publish path (definitive). "Another attempt"
- * means the NEXT slot of the handoff window, not a BullMQ backoff: the window is
- * minutes wide and the queue's backoff knows nothing about the hour.
+ * Only once the answer is yes does the code matter:
+ *   TOKEN_EXPIRED         -> blocked; a retry cannot mint a token.
+ *   not retryable         -> back to `queued`, publish at the hour.
+ *   transient             -> another attempt inside the window, or a wake-up AT
+ *                            the hour on the normal path. "Another attempt"
+ *                            means the NEXT slot of the handoff window, not a
+ *                            BullMQ backoff: the window is minutes wide and the
+ *                            queue's backoff knows nothing about the hour.
  *
- * Without that proof the job stops (see failUnconfirmedHandoff).
+ * `retryable` never decides the first question: it describes whether the
+ * platform CALL could succeed later, not whether repeating it is safe.
  */
 async function handleHandoffError(
   deps: PublishPostDeps,
@@ -1188,24 +1203,6 @@ async function handleHandoffError(
     scheduled_at: ctx.scheduledAt.toISOString(),
   });
 
-  if (appError.code === "TOKEN_EXPIRED") {
-    const blocked = await block(deps, job, "TOKEN_EXPIRED", appError.userMessage, "TOKEN_EXPIRED");
-    log.error("Handoff blocked: channel token expired or revoked", {
-      err: appError,
-      outcome: "blocked",
-      error_code: "TOKEN_EXPIRED",
-      attempt: ctx.attempt,
-      duration_ms: ctx.durationMs,
-      alert: "OPERATOR_ATTENTION",
-    });
-    return result(blocked ?? job, "blocked", {
-      deferredMs: null,
-      errorCode: "TOKEN_EXPIRED",
-      userMessage: appError.userMessage,
-    });
-  }
-
-  const retryable = (appError.context as { retryable?: unknown }).retryable !== false;
   const flags = appError.context as {
     platform_created_nothing?: unknown;
     feed_dispatched?: unknown;
@@ -1232,10 +1229,38 @@ async function handleHandoffError(
   // Note this ignores `retryable`: it describes whether the PLATFORM CALL could
   // succeed later, not whether repeating it is safe. Only the flag above can say
   // that, and it wins over `retryable` in both directions.
+  //
+  // This gate runs BEFORE any routing by error code, TOKEN_EXPIRED included. A
+  // 190/OAuthException coming back from a dispatched /feed is still an answer to
+  // that ONE request: it says the token is dead, it does not say the Page holds
+  // nothing — an earlier attempt may have created the scheduled post before the
+  // token was revoked. Blocking on the code would put the job in `blocked` (a
+  // retryable status) with a message that never mentions the post that may be
+  // sitting on the Page. A dead token found BEFORE the dispatch still blocks:
+  // that path carries platform_created_nothing and falls through below.
   if (!createdNothing || flags.feed_dispatched === true) {
     return await failUnconfirmedHandoff(deps, log, job, appError, ctx);
   }
 
+  if (appError.code === "TOKEN_EXPIRED") {
+    const blocked = await block(deps, job, "TOKEN_EXPIRED", appError.userMessage, "TOKEN_EXPIRED");
+    log.error("Handoff blocked: channel token expired or revoked", {
+      err: appError,
+      outcome: "blocked",
+      error_code: "TOKEN_EXPIRED",
+      attempt: ctx.attempt,
+      duration_ms: ctx.durationMs,
+      platform_created_nothing: true,
+      alert: "OPERATOR_ATTENTION",
+    });
+    return result(blocked ?? job, "blocked", {
+      deferredMs: null,
+      errorCode: "TOKEN_EXPIRED",
+      userMessage: appError.userMessage,
+    });
+  }
+
+  const retryable = (appError.context as { retryable?: unknown }).retryable !== false;
   if (!retryable) {
     const delayMs = Math.max(0, ctx.scheduledAt.getTime() - deps.clock.nowMs());
     const userMessage = `Facebook không nhận lịch đăng của bài này (${appError.userMessage}) — chưa có bài nào được tạo trên Trang, hệ thống sẽ đăng thẳng vào giờ đã hẹn.`;

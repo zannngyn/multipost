@@ -316,7 +316,10 @@ export function presentApiError(
         kind: "business",
         title: "Bài này đã được tạo trước đó",
         description: error.userMessage,
-        hint: "Khoá chống đăng trùng đã chặn lần tạo thứ hai. Mở nhật ký đăng bài để xem lô đã có.",
+        // No hint on purpose. Two situations raise this code and they need
+        // opposite instructions — a second batch points at the job log, a
+        // refused retry points at the Page's scheduled posts — so the server's
+        // userMessage is the only text that knows which one happened.
         canRetry: false,
       };
 

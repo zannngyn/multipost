@@ -1762,11 +1762,16 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
     expect(h.repo.transitions.map((entry) => entry.to)).toEqual(["publishing", "queued"]);
   });
 
-  it("blocks on a dead token instead of retrying the handoff", async () => {
+  it("blocks on a dead token found BEFORE anything was dispatched", async () => {
     const h = harness({
       jobs: [makeJob({ scheduledAt: at(20 * 60_000) })],
       schedulePost: async () => {
-        throw new AppError("TOKEN_EXPIRED", { message: "token gone" });
+        // The album upload got the 190: /feed was never called, so the Page
+        // provably holds nothing and `blocked` is the honest answer.
+        throw new AppError("TOKEN_EXPIRED", {
+          message: "token gone",
+          context: { step: "photos.album", platform_created_nothing: true },
+        });
       },
     });
 
@@ -1775,6 +1780,56 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
     expect(result.outcome).toBe("blocked");
     expect(result.errorCode).toBe("TOKEN_EXPIRED");
     expect(h.repo.get("job-1")?.status).toBe("blocked");
+  });
+
+  /**
+   * Gate note 3. TOKEN_EXPIRED used to be routed by CODE, before the "does the
+   * platform hold anything?" gate. A 190/OAuthException answered to a /feed that
+   * HAS left this process says the token is dead; it says nothing about whether
+   * an earlier attempt of this job already created the scheduled post. Blocking
+   * there parked the row in `blocked` — a status "Chạy lại" accepts — behind a
+   * message that never mentioned the Page. That is the same inference from a
+   * Graph error body that #506 already taught us not to make.
+   */
+  it("does NOT block on a dead token reported by the DISPATCHED /feed", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(20 * 60_000), queueJobId: "pp.job-1" })],
+      schedulePost: async () => {
+        throw new AppError("TOKEN_EXPIRED", {
+          message: "Graph API error code=190",
+          context: { step: "feed.scheduled", feed_dispatched: true },
+        });
+      },
+    });
+
+    await expect(h.publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "TOKEN_EXPIRED",
+    });
+
+    const stored = h.repo.get("job-1");
+    expect(stored?.status).toBe("failed");
+    expect(stored?.lastErrorCode).toBe("HANDOFF_FAILED");
+    // The operator is told about BOTH facts: the dead token and the post that
+    // may be waiting on the Page.
+    expect(stored?.lastErrorMessage).toContain("CÓ THỂ đã được tạo trên Trang");
+    expect(stored?.lastErrorMessage).toContain("Token");
+    expect(h.queue.enqueued).toHaveLength(0);
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on a dead token with no proof either way", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(20 * 60_000), queueJobId: "pp.job-1" })],
+      schedulePost: async () => {
+        throw new AppError("TOKEN_EXPIRED", { message: "token gone" });
+      },
+    });
+
+    await expect(h.publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "TOKEN_EXPIRED",
+    });
+    expect(h.repo.get("job-1")?.status).toBe("failed");
+    expect(h.repo.get("job-1")?.lastErrorCode).toBe("HANDOFF_FAILED");
   });
 
   it("waits for the hour on a platform that cannot hold a post (no scheduler)", async () => {
