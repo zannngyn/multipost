@@ -131,6 +131,71 @@ describe("presentApiError", () => {
   });
 });
 
+/**
+ * E8.6 — a cancel that fails leaves the post SCHEDULED on Facebook: it will
+ * publish itself. The copy around the server's reason must never send the
+ * operator to "Chạy lại" (the publish flow's next step) or to the sign-in page.
+ */
+describe("presentApiError — cancelling a scheduled post", () => {
+  const STILL_ON_FACEBOOK =
+    "Bài này đã được giao cho Facebook giữ. Hệ thống chưa gỡ được nó, nên bài VẪN SẼ TỰ ĐĂNG — hãy vào Trang, mục bài đã lên lịch, để xoá thủ công.";
+
+  it.each(["META_ERROR", "PUBLISH_FAILED", "TOKEN_EXPIRED"])(
+    "never tells the operator to re-run the post when %s breaks the cancel",
+    (code) => {
+      const view = presentApiError(
+        makeError({ code, status: 502, userMessage: STILL_ON_FACEBOOK }),
+        { operation: "cancel" },
+      );
+      expect(view.title).not.toMatch(/từ chối/i);
+      expect(`${view.title} ${view.hint ?? ""}`).not.toMatch(/chạy lại/i);
+      expect(view.kind).not.toBe("auth");
+      expect(view.canRetry).toBe(false);
+      // The reason itself stays the server's sentence, word for word.
+      expect(view.description).toBe(STILL_ON_FACEBOOK);
+      expect(view.hint).toBeTruthy();
+    },
+  );
+
+  it("keeps the publish wording when no operation is given", () => {
+    const view = presentApiError(makeError({ code: "META_ERROR", status: 502 }));
+    expect(view.title).toBe("Facebook từ chối bài đăng");
+    expect(view.hint).toMatch(/chạy lại/i);
+    expect(view.canRetry).toBe(true);
+  });
+
+  it("drops the retry-flow hint when a cancel is refused", () => {
+    const refusal = "Bài này đang được đăng — không huỷ được nữa.";
+    const view = presentApiError(
+      makeError({ code: "INVALID_JOB_TRANSITION", status: 409, userMessage: refusal }),
+      { operation: "cancel" },
+    );
+    expect(view.description).toBe(refusal);
+    expect(view.hint).not.toMatch(/chạy lại/i);
+    expect(view.canRetry).toBe(false);
+  });
+
+  it("leaves codes with no cancel-specific meaning on the shared branch", () => {
+    const view = presentApiError(makeError({ code: "DB_ERROR", status: 503 }), {
+      operation: "cancel",
+    });
+    expect(view.title).toBe("Không truy cập được cơ sở dữ liệu");
+  });
+
+  it("still reports a missing env var as a config gap during a cancel", () => {
+    const view = presentApiError(
+      makeError({
+        code: "INVALID_INPUT",
+        status: 400,
+        issues: [{ path: "META_APP_SECRET", message: "required" }],
+      }),
+      { operation: "cancel" },
+    );
+    expect(view.kind).toBe("config");
+    expect(view.hint).toContain("META_APP_SECRET");
+  });
+});
+
 describe("presentApiError — video posts (E10.1 Phase 2)", () => {
   const SPEC_MESSAGE =
     'Video "MGKVX6310 TRẮNG 1.mp4" chưa đạt thông số để đăng: Video dài 2,0 giây — Reels Facebook yêu cầu tối thiểu 3,0 giây; Tỷ lệ khung hình 16:9 (1920x1080) không hợp lệ — Reels Facebook cần tỷ lệ 9:16';

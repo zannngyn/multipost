@@ -8,6 +8,7 @@ import type {
   ChannelConfigRepo,
   ChannelPlatform,
   ChannelPublisher,
+  RemotePostState,
 } from "@/core/ports/publisher";
 import type { UserRepo } from "@/core/ports/user-repo";
 
@@ -311,7 +312,9 @@ async function deleteOnPlatform(
   }
 
   // Already live? Then this is not a cancel, it is a deletion — refuse.
-  let state;
+  // Annotated: if the port's union gains a variant, the branches below must stop
+  // compiling instead of falling through to "delete it anyway".
+  let state: RemotePostState;
   try {
     state = await scheduler.getPostState({ tenantId: job.tenantId, channel, postId });
   } catch (error) {

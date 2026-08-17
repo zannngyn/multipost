@@ -1,0 +1,362 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { deriveBatchStatus, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
+import type { Product } from "@/core/domain/product";
+import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
+import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
+import type { ApplyTransitionInput, PostBatchSummary, PostJobRepo } from "@/core/ports/post-job-repo";
+import type { ProductRepo } from "@/core/ports/product-repo";
+import type { ChannelConfig, ChannelConfigRepo, SignMediaUrlFn } from "@/core/ports/publisher";
+import { channelWriteStubs } from "@/core/usecases/__fixtures__/channel-config-repo";
+import { makePublishPost } from "@/core/usecases/publish-post";
+import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
+
+import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
+import { makeGraphClient } from "@/adapters/meta/graph-client";
+
+/**
+ * B1 REGRESSION — the REAL Graph adapter wired into the REAL publish usecase,
+ * with only the HTTP layer mocked. Unit tests on either side alone cannot catch
+ * this bug: it lives exactly in the seam, in what the adapter promises about a
+ * Graph answer and what the usecase reads that promise as. It therefore lives in
+ * `composition/`, the only layer allowed to know both sides.
+ *
+ * The scenario, end to end:
+ *
+ *   1. /feed times out AFTER Facebook committed the scheduled post. The job may
+ *      now have a post on the Page and nobody knows it.
+ *   2. The job runs again (here: an operator "Chạy lại", which is the only
+ *      route left — the worker no longer retries this by itself).
+ *   3. The album is re-uploaded and /feed answers #506 DUPLICATE_POST, i.e.
+ *      "a post like this already exists". Read as "the schedule was refused, so
+ *      nothing was created", it sends the job to the publish-at-the-hour path —
+ *      and the Page gets the scheduled post AND a live post in the same minute.
+ *
+ * The invariant under test: a job that may already have a scheduled post on
+ * Facebook never reaches the normal publish path (business rule 4).
+ */
+
+const TENANT = "00000000-0000-0000-0000-000000000001";
+const NOW = Date.parse("2026-08-13T02:00:00.000Z");
+/** Inside the handoff window (T-30..T-12), so a handoff is what runs. */
+const SCHEDULED_AT = new Date(NOW + 20 * 60_000);
+
+const CHANNEL: ChannelConfig = {
+  channelId: "fbpage-a",
+  platform: "facebook",
+  name: "Page A",
+  externalId: "555000111",
+  accessToken: "EAAsecret-token",
+  status: "active",
+  tokenExpiresAt: null,
+};
+
+const PHOTO_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+
+function silentLogger(): Logger {
+  const logger: Logger = {
+    child: (_bindings: LogBindings) => logger,
+    debug: (_message: string, _context?: LogContext) => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  };
+  return logger;
+}
+
+function fixedClock(): Clock {
+  return { now: () => new Date(NOW), nowMs: () => NOW };
+}
+
+function makeJob(overrides: Partial<PostJob> = {}): PostJob {
+  return {
+    id: "job-1",
+    tenantId: TENANT,
+    batchId: "batch-1",
+    productCode: "MGKVX6310",
+    color: "TÍM",
+    channelId: "fbpage-a",
+    format: "image_post",
+    status: "queued",
+    attemptCount: 0,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    publishedPostId: null,
+    publishedUrl: null,
+    publishedAt: null,
+    scheduledPostId: null,
+    captionText: "Giannal – MỘT NGÀY DỊU DÀNG",
+    media: [{ driveFileId: "d1", fileName: "1.jpg", url: "https://cdn/1.jpg" }],
+    scheduledAt: SCHEDULED_AT,
+    queueJobId: "pp.job-1",
+    ...overrides,
+  };
+}
+
+/** Same optimistic guard as the Drizzle repo: an UPDATE ... WHERE status = from. */
+function makeMemoryRepo(job: PostJob) {
+  const store = new Map<string, PostJob>([[job.id, job]]);
+  const repo: PostJobRepo & { get(id: string): PostJob | undefined; force(next: PostJob): void } = {
+    get: (id) => store.get(id),
+    force: (next) => store.set(next.id, next),
+    async createBatchWithJobs() {
+      throw new Error("not used in this test");
+    },
+    async findJobById(_tenantId: string, postJobId: string) {
+      return store.get(postJobId) ?? null;
+    },
+    async listJobsByBatch(_tenantId: string, batchId: string) {
+      return [...store.values()].filter((entry) => entry.batchId === batchId);
+    },
+    async listJobs() {
+      return { items: [], nextCursor: null };
+    },
+    async applyTransition(input: ApplyTransitionInput) {
+      const current = store.get(input.postJobId);
+      if (!current || current.status !== input.from) return null;
+      store.set(input.postJobId, input.next);
+      return input.next;
+    },
+    async setQueueJobId(input) {
+      const current = store.get(input.postJobId);
+      if (!current || current.status !== "queued") return false;
+      store.set(input.postJobId, { ...current, queueJobId: input.queueJobId });
+      return true;
+    },
+    async rescheduleJob() {
+      return null;
+    },
+    async listScheduledJobs() {
+      return { items: [], nextCursor: null };
+    },
+    async findStalePublishing() {
+      return [];
+    },
+    async findOverdueQueued() {
+      return [];
+    },
+    async findScheduledOnPlatformDue() {
+      return [];
+    },
+    async findLastPublishedAt() {
+      return null;
+    },
+    async refreshBatchStatus(_tenantId: string, batchId: string): Promise<PostBatchSummary> {
+      const list = [...store.values()].filter((entry) => entry.batchId === batchId);
+      const byStatus = {
+        draft: 0,
+        queued: 0,
+        publishing: 0,
+        scheduled_on_facebook: 0,
+        published: 0,
+        failed: 0,
+        blocked: 0,
+      } as Record<PostJobStatus, number>;
+      return {
+        batchId,
+        tenantId: TENANT,
+        productCode: list[0]?.productCode ?? "",
+        status: deriveBatchStatus(list.map((entry) => entry.status)),
+        total: list.length,
+        byStatus,
+        startedAt: new Date(NOW),
+        finishedAt: null,
+        jobs: list,
+      };
+    },
+    async getBatchSummary() {
+      return null;
+    },
+  };
+  return repo;
+}
+
+function makeProducts(): ProductRepo {
+  const product: Product = {
+    content: { code: "MGKVX6310", name: "Giannal", description: null, category: null, season: null },
+    operational: { stockRaw: "104", noteRaw: "", colorsRaw: "TÍM" },
+    hasConflict: false,
+    sourceRows: [2],
+  };
+  return { findByCode: async () => product, upsertMany: async () => 0, deleteStale: async () => 0 };
+}
+
+function makeChannels(): ChannelConfigRepo {
+  return {
+    findChannel: async () => CHANNEL,
+    listChannels: async () => [CHANNEL],
+    getPublishSettings: async () => ({ spacingMs: 0, retryBackoffMs: 1_000, maxAttempts: 3 }),
+    ...channelWriteStubs(),
+  };
+}
+
+function makeQueue() {
+  const enqueued: Array<{ name: string; payload: unknown; opts?: EnqueueOptions }> = [];
+  const queue: JobQueue & { enqueued: typeof enqueued } = {
+    enqueued,
+    async enqueue(name, payload, opts) {
+      enqueued.push({ name, payload, opts });
+      return { jobId: opts?.jobId ?? "generated" };
+    },
+    async remove() {
+      return true;
+    },
+    async has() {
+      return true;
+    },
+    async enqueueRepeatable() {
+      return { jobId: "repeatable" };
+    },
+    async close() {},
+  };
+  return queue;
+}
+
+const signMediaUrl: SignMediaUrlFn = (input) => ({
+  url: `${input.baseUrl}/api/media/${input.assetId}`,
+  path: `/api/media/${input.assetId}`,
+  expiresAtMs: NOW + 6 * 60 * 60 * 1000,
+  signature: "deadbeef",
+});
+
+function harness(fetchImpl: typeof fetch, job: PostJob = makeJob()) {
+  const logger = silentLogger();
+  const repo = makeMemoryRepo(job);
+  const queue = makeQueue();
+  const readMediaBytes = vi.fn<ReadMediaBytes>(async () => ({
+    bytes: PHOTO_BYTES,
+    mimeType: "image/jpeg",
+  }));
+  const facebook = makeFacebookPublisher({
+    graph: makeGraphClient({ logger, fetchImpl, version: "v23.0" }),
+    logger,
+  });
+  const publish = makePublishPost({
+    postJobs: repo,
+    products: makeProducts(),
+    channels: makeChannels(),
+    publishers: { facebook },
+    queue,
+    clock: fixedClock(),
+    logger,
+    signMediaUrl,
+    mediaBaseUrl: () => "https://mysp.example.com",
+    readMediaBytes,
+  });
+  return { publish, repo, queue };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+describe("handoff — a job that may already have a scheduled post never publishes normally", () => {
+  // Only Date is faked: the adapter measures the remaining lead with the wall
+  // clock (it has no Clock port), while the usecase uses the injected one. They
+  // are the same clock in production and must be the same clock here.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stops at the timeout, and #506 on a later attempt does NOT open the straight-publish path", async () => {
+    // --- Attempt 1: Facebook commits the post, the answer never arrives -------
+    const calls: string[] = [];
+    const timingOut = vi.fn<typeof fetch>(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/photos")) {
+        calls.push("photos");
+        return jsonResponse({ id: "photo-1" });
+      }
+      calls.push("feed");
+      throw new TypeError("socket hang up");
+    });
+    const first = harness(timingOut as unknown as typeof fetch);
+
+    await expect(first.publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "META_ERROR",
+    });
+
+    expect(calls).toEqual(["photos", "feed"]);
+    const afterTimeout = first.repo.get("job-1");
+    // NOT re-queued: another handoff could ask for a SECOND scheduled post, and
+    // a wake-up at the hour would publish next to the first one.
+    expect(afterTimeout?.status).toBe("failed");
+    expect(afterTimeout?.lastErrorCode).toBe("HANDOFF_FAILED");
+    expect(afterTimeout?.lastErrorMessage).toContain("CÓ THỂ đã được tạo trên Trang");
+    expect(first.queue.enqueued).toHaveLength(0);
+
+    // --- Attempt 2: an operator runs it again; Facebook answers #506 ----------
+    const paths: string[] = [];
+    const duplicate = vi.fn<typeof fetch>(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/photos")) {
+        paths.push("photos");
+        return jsonResponse({ id: "photo-2" });
+      }
+      paths.push("feed");
+      return jsonResponse(
+        {
+          error: {
+            code: 506,
+            message: "Duplicate status message",
+            type: "OAuthException",
+            fbtrace_id: "trace-506",
+          },
+        },
+        400,
+      );
+    });
+    const second = harness(
+      duplicate as unknown as typeof fetch,
+      // The row as the operator's retry leaves it: queued again, same hour.
+      makeJob({ status: "queued", attemptCount: 1, lastErrorCode: "HANDOFF_FAILED" }),
+    );
+
+    await expect(second.publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "META_ERROR",
+      context: { graph_code: 506 },
+    });
+
+    expect(paths).toEqual(["photos", "feed"]);
+    const afterDuplicate = second.repo.get("job-1");
+    // THE assertion this file exists for. Before the fix the job went back to
+    // `queued` with a wake-up at T, which published a second post next to the
+    // one Facebook had been holding since attempt 1.
+    expect(afterDuplicate?.status).toBe("failed");
+    expect(afterDuplicate?.publishedPostId).toBeNull();
+    expect(second.queue.enqueued).toHaveLength(0);
+    // No /photos + /feed pair with `published=true` anywhere: the normal publish
+    // path was never entered.
+    expect(paths.filter((entry) => entry === "feed")).toHaveLength(1);
+  });
+
+  it("still falls back to the hour when the refusal happened BEFORE any /feed", async () => {
+    // The case the flag exists for: the album upload ate the lead, so the
+    // adapter refuses before dispatching anything. Nothing can exist on the
+    // Page, so publishing at the hour is safe — and the post is not lost.
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      if (!String(url).endsWith("/photos")) throw new Error("/feed must not be called");
+      // The upload drags on past Facebook's ~10 minute minimum lead.
+      vi.setSystemTime(Date.now() + 11 * 60_000);
+      return jsonResponse({ id: "photo-1" });
+    });
+    const h = harness(fetchImpl as unknown as typeof fetch);
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.errorCode).toBe("HANDOFF_REFUSED");
+    expect(h.repo.get("job-1")?.status).toBe("queued");
+    // One wake-up, exactly at the hour, to publish on the normal path. The
+    // usecase's clock is fixed at NOW, so the delay is the full 20 minutes.
+    expect(h.queue.enqueued).toHaveLength(1);
+    expect(h.queue.enqueued[0]?.opts?.delayMs).toBe(SCHEDULED_AT.getTime() - NOW);
+  });
+});

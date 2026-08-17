@@ -409,11 +409,22 @@ export type RemotePostState =
  * - `schedulePost` returns only when the platform ACCEPTED the schedule, with
  *   the id of the object it now holds; anything else throws (never a silent
  *   "probably fine"). An AppError thrown by it carries
- *   `context.platform_created_nothing = true` when the implementer KNOWS the
- *   platform created no post (its own pre-flight guard refused, or the platform
- *   answered with an error instead of an object). The caller may then fall back
- *   to publishing at the hour without any risk of a double post; without the
- *   flag it must assume a post may exist.
+ *   `context.platform_created_nothing = true` ONLY when the implementer knows
+ *   that NO REQUEST CAPABLE OF CREATING THE POST HAS EVER BEEN DISPATCHED for
+ *   this job — in practice: its own pre-flight guards, and preparation steps
+ *   (uploading media as unpublished objects) that cannot produce a post. The
+ *   caller may then fall back to publishing at the hour without any risk of a
+ *   double post.
+ *
+ *   A platform error answer to the CREATING request does NOT qualify, however
+ *   clearly it says "refused". It only describes that one request, while the
+ *   flag is a claim about the job: an earlier attempt may have created the post
+ *   and lost the answer (timeout, killed worker), and the platform may then
+ *   refuse the retry precisely BECAUSE the post exists (Facebook #506
+ *   DUPLICATE_POST). Errors from a dispatched creating request carry
+ *   `context.feed_dispatched = true` for the log; the caller must treat their
+ *   outcome as unknown and must never publish that job on the normal path.
+ *   Without either flag the caller also assumes a post may exist.
  * - `getPostState` never guesses: no proof means `unknown`, with a reason.
  * - `deleteScheduledPost` returns TRUE only when the platform confirmed it no
  *   longer holds the post, and FALSE only when the platform positively reported

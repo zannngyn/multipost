@@ -1524,9 +1524,11 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
     // The audit row of the moment the post was CREATED on Facebook must carry
     // its id: the default payload only has `published_post_id`, which is null
     // here, so this event would otherwise leave nothing to search the Page with.
-    expect(handoff?.auditPayload).toMatchObject({
+    // `scheduled_at` is the repo's own field (it merges this payload UNDER its
+    // own), so it is deliberately not passed from here.
+    expect(handoff?.auditPayload).toEqual({
       scheduled_post_id: "555000111_scheduled",
-      scheduled_at: scheduledAt.toISOString(),
+      lead_ms: 20 * 60_000,
     });
   });
 
@@ -1557,13 +1559,15 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
 
   // --- Failed handoffs -------------------------------------------------------
 
-  it("tries again inside the window after a transient refusal", async () => {
+  it("tries again inside the window after a transient failure that created nothing", async () => {
     const h = harness({
       jobs: [makeJob({ scheduledAt: at(30 * 60_000), queueJobId: "pp.job-1" })],
       schedulePost: async () => {
+        // A rate limit WHILE UPLOADING the album: the creating call never went
+        // out, so repeating the handoff cannot duplicate anything.
         throw new AppError("META_ERROR", {
           message: "Graph is having a moment",
-          context: { retryable: true },
+          context: { retryable: true, platform_created_nothing: true },
         });
       },
     });
@@ -1585,7 +1589,7 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
       schedulePost: async () => {
         throw new AppError("META_ERROR", {
           message: "Graph is having a moment",
-          context: { retryable: true },
+          context: { retryable: true, platform_created_nothing: true },
         });
       },
     });
@@ -1658,13 +1662,13 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
     expect(h.repo.get("job-1")?.lastErrorCode).toBe("HANDOFF_REFUSED");
   });
 
-  it("does NOT retry a definitive refusal — a second handoff could double-post", async () => {
+  it("does NOT retry an unreadable answer — a second handoff could double-post", async () => {
     const h = harness({
       jobs: [makeJob({ scheduledAt: at(20 * 60_000) })],
       schedulePost: async () => {
         throw new AppError("META_ERROR", {
           message: "Graph answered feed.scheduled without a usable id",
-          context: { retryable: false },
+          context: { retryable: false, feed_dispatched: true },
         });
       },
     });
@@ -1676,7 +1680,57 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
     const stored = h.repo.get("job-1");
     expect(stored?.status).toBe("failed");
     expect(stored?.lastErrorCode).toBe("HANDOFF_FAILED");
-    expect(stored?.lastErrorMessage).toContain("kiểm tra trên Page");
+    expect(stored?.lastErrorMessage).toContain("bài đã lên lịch");
+    expect(h.queue.enqueued).toHaveLength(0);
+  });
+
+  /**
+   * B1 REGRESSION (gate on 28916c6). `retryable` says whether the CALL could
+   * work later; it never says whether repeating it is safe. A timeout on the
+   * creating request is retryable AND may have left a scheduled post on the
+   * Page — retrying it, or waking up at the hour to publish normally, is how a
+   * job ends up posting twice in the same minute.
+   */
+  it("stops the job when a RETRYABLE failure left the outcome unknown", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(30 * 60_000), queueJobId: "pp.job-1" })],
+      schedulePost: async () => {
+        throw new AppError("META_ERROR", {
+          message: "Graph API error http=504",
+          userMessage: "Không kết nối được tới Facebook — hệ thống sẽ thử lại.",
+          context: { retryable: true, feed_dispatched: true },
+        });
+      },
+    });
+
+    await expect(h.publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "META_ERROR",
+    });
+
+    const stored = h.repo.get("job-1");
+    expect(stored?.status).toBe("failed");
+    expect(stored?.lastErrorCode).toBe("HANDOFF_FAILED");
+    expect(stored?.lastErrorMessage).toContain("CÓ THỂ đã được tạo trên Trang");
+    // Neither another handoff nor a wake-up at the hour was scheduled.
+    expect(h.queue.enqueued).toHaveLength(0);
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("stops the job when the publisher promises nothing at all", async () => {
+    // No flag either way: the port says the caller must then assume a post may
+    // exist. A TikTok-style publisher that has not adopted the flags must not
+    // silently get the old "retry it" behaviour.
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(30 * 60_000), queueJobId: "pp.job-1" })],
+      schedulePost: async () => {
+        throw new AppError("META_ERROR", { message: "who knows", context: { retryable: true } });
+      },
+    });
+
+    await expect(h.publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "META_ERROR",
+    });
+    expect(h.repo.get("job-1")?.status).toBe("failed");
     expect(h.queue.enqueued).toHaveLength(0);
   });
 

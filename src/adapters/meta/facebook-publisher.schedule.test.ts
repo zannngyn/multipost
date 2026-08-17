@@ -173,18 +173,88 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("marks a REFUSED /feed as 'nothing was created' — Graph returns an id or an error", async () => {
-    // Facebook answers #100 when `scheduled_publish_time` is under its ~10
-    // minute minimum, which a slow album upload can reach. No post exists after
-    // that answer, so the job must be able to publish at its hour instead of
-    // dying as `failed`.
+  /**
+   * REGRESSION (the reason `platform_created_nothing` left this branch): a Graph
+   * error body proves nothing about the JOB, only about this request. #506
+   * DUPLICATE_POST is the proof: Facebook answers it when a post like this one
+   * ALREADY EXISTS — which is exactly what a retry after a lost /feed answer
+   * hits. Marking it would send the job to the publish-at-the-hour path on top
+   * of a scheduled post nobody can see.
+   */
+  it("never marks a refused /feed as 'nothing was created' — not even #506", async () => {
+    for (const graphCode of [100, 506, 200, 368]) {
+      const fetchImpl = vi.fn<typeof fetch>(async (url) =>
+        String(url).endsWith("/photos")
+          ? jsonResponse({ id: "photo-1" })
+          : jsonResponse({ error: { code: graphCode, message: "refused" } }, 400),
+      );
+      const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
+
+      const error = await scheduled
+        .schedulePost({
+          tenantId: "t1",
+          channel: CHANNEL,
+          caption: "x",
+          media: [photo("d1", "1.jpg")],
+          idempotencyKey: "k",
+          publishAt: IN_20_MINUTES(),
+        })
+        .then(() => null)
+        .catch((thrown: unknown) => thrown as { context: Record<string, unknown> });
+
+      expect(error?.context.graph_code).toBe(graphCode);
+      expect(error?.context.platform_created_nothing).toBeUndefined();
+      // The one thing the caller may rely on: the creating call went out.
+      expect(error?.context.feed_dispatched).toBe(true);
+    }
+  });
+
+  /**
+   * What the #100-after-a-slow-upload case became: the lead is re-measured
+   * BEFORE the dispatch, so the refusal happens here — where "no post exists" is
+   * a fact about this adapter, not a reading of Facebook's answer.
+   */
+  it("refuses AFTER the upload when the album ate the lead, before /feed", async () => {
+    let now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+        if (!String(url).endsWith("/photos")) throw new Error("/feed must not be called");
+        // Each photo takes four minutes: two photos eat more than the lead.
+        now += 4 * 60_000;
+        return jsonResponse({ id: "photo-1" });
+      });
+      const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
+
+      await expect(
+        scheduled.schedulePost({
+          tenantId: "t1",
+          channel: CHANNEL,
+          caption: "x",
+          media: [photo("d1", "1.jpg"), photo("d2", "2.jpg")],
+          idempotencyKey: "k",
+          publishAt: new Date(now + 15 * 60_000),
+        }),
+      ).rejects.toMatchObject({
+        code: "INVALID_INPUT",
+        context: {
+          reason: "PUBLISH_AT_TOO_SOON_AFTER_UPLOAD",
+          retryable: false,
+          platform_created_nothing: true,
+        },
+      });
+      // Two photo uploads and NO /feed call.
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("marks an upload failure as 'nothing was created' — photos are not posts", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (url) =>
       String(url).endsWith("/photos")
-        ? jsonResponse({ id: "photo-1" })
-        : jsonResponse(
-            { error: { code: 100, message: "scheduled publish time is invalid" } },
-            400,
-          ),
+        ? jsonResponse({ error: { code: 100, message: "Missing or invalid image file" } }, 400)
+        : jsonResponse({ id: "555000111_777" }),
     );
     const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
 
@@ -199,8 +269,10 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
       }),
     ).rejects.toMatchObject({
       code: "META_ERROR",
-      context: { graph_code: 100, retryable: false, platform_created_nothing: true },
+      context: { step: "photos.album", platform_created_nothing: true },
     });
+    // /feed was never reached: only the photo call went out.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT mark a transport failure — after a timeout the post may exist", async () => {
@@ -223,6 +295,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
       .catch((thrown: unknown) => thrown as { context: Record<string, unknown> });
 
     expect(error?.context.platform_created_nothing).toBeUndefined();
+    expect(error?.context.feed_dispatched).toBe(true);
   });
 
   it("refuses a /feed answer without an id instead of claiming a schedule", async () => {
@@ -506,6 +579,44 @@ describe("deleteScheduledPost — taking the post back", () => {
         channel: CHANNEL,
         postId: "555000111_777",
       }),
-    ).rejects.toMatchObject({ code: "META_ERROR", context: { retryable: false } });
+    ).rejects.toMatchObject({
+      code: "META_ERROR",
+      context: { reason: "DELETE_REFUSED", retryable: false },
+    });
+  });
+
+  /**
+   * REGRESSION: a 200 body without a confirmation used to fall through to
+   * `return true`. The port contract is explicit — "an answer the implementer
+   * cannot interpret" throws, because "we could not confirm" must never reach
+   * the caller as "it is gone".
+   */
+  it.each([
+    ["a 200 with no `success` key at all", {}],
+    ["a 200 carrying an error shape this client cannot read", { error: ["weird"] }],
+    ["a 200 whose success is not a boolean", { success: "true" }],
+  ])("THROWS on %s", async (_name, body) => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(body));
+    const { scheduled, logger } = makePublisher(fetchImpl as unknown as typeof fetch);
+
+    await expect(
+      scheduled.deleteScheduledPost({
+        tenantId: "t1",
+        channel: CHANNEL,
+        postId: "555000111_777",
+      }),
+    ).rejects.toMatchObject({
+      code: "META_ERROR",
+      // The operator must be told the post may still be on the Page.
+      userMessage: expect.stringContaining("VẪN có thể còn trên Trang"),
+      context: { reason: "UNCONFIRMED_DELETE_RESPONSE", retryable: false },
+    });
+    expect(
+      logger.lines.some(
+        (line) =>
+          line.level === "error" &&
+          (line.context as { alert?: string } | undefined)?.alert === "OPERATOR_ATTENTION",
+      ),
+    ).toBe(true);
   });
 });

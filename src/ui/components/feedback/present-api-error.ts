@@ -21,6 +21,23 @@ export type ApiErrorKind =
   /** Server/transport problem — retrying is reasonable. */
   | "server";
 
+/**
+ * WHICH action the operator just took. The same error code means opposite
+ * things depending on it: META_ERROR raised while PUBLISHING is "Facebook từ
+ * chối bài đăng, chạy lại bài đó"; the same code raised while CANCELLING a post
+ * Facebook already holds means the removal did NOT happen and the post will
+ * publish itself at its hour. Telling the operator to "chạy lại" there is the
+ * exact opposite of what has to be done.
+ *
+ * Left out (`undefined`) keeps the publishing/reading wording every other screen
+ * uses today.
+ */
+export type ApiErrorOperation = "cancel";
+
+export interface PresentApiErrorOptions {
+  readonly operation?: ApiErrorOperation;
+}
+
 export interface ApiErrorView {
   kind: ApiErrorKind;
   title: string;
@@ -89,7 +106,53 @@ export function toApiError(error: unknown): ApiError {
  */
 const MEDIA_CONFIG_KEYS = ["MEDIA_PUBLIC_BASE_URL", "MEDIA_SIGNING_SECRET"];
 
-export function presentApiError(error: ApiError): ApiErrorView {
+/**
+ * Copy for errors raised by the CANCEL action (E8.4/E8.6).
+ *
+ * Only the codes whose shared copy would point the operator the wrong way are
+ * listed; everything else falls through to the branch below, which stays the
+ * single owner of config/validation/session wording.
+ *
+ * The reason sentence is NOT written here: it stays `error.userMessage`, built
+ * by the usecase, which is the only layer that knows whether Facebook confirmed
+ * the removal. This function owns the title and the next step around it.
+ */
+function presentCancelError(error: ApiError): ApiErrorView | null {
+  switch (error.code) {
+    // The dangerous branch: the post is still scheduled on the Page and nothing
+    // in the system retries a cancel. TOKEN_EXPIRED belongs here too — during a
+    // cancel it is the PAGE token, not the operator's session, so the sign-in
+    // link of the shared branch would send them nowhere useful.
+    case "META_ERROR":
+    case "PUBLISH_FAILED":
+    case "TOKEN_EXPIRED":
+      return {
+        kind: "business",
+        title: "Chưa gỡ được bài khỏi Facebook",
+        description: error.userMessage,
+        hint: "Hệ thống không tự huỷ lại lần nữa. Sau khi xoá tay trên Trang, hãy tải lại danh sách bài đã hẹn để đối chiếu; bài ở đây vẫn giữ nguyên trạng thái cũ.",
+        canRetry: false,
+      };
+
+    // Refused, or the hour arrived mid-click. Nothing about "chạy lại" applies.
+    case "INVALID_JOB_TRANSITION":
+      return {
+        kind: "business",
+        title: "Không huỷ được bài này",
+        description: error.userMessage,
+        hint: "Tải lại danh sách bài đã hẹn để xem trạng thái mới nhất trước khi làm tiếp.",
+        canRetry: false,
+      };
+
+    default:
+      return null;
+  }
+}
+
+export function presentApiError(
+  error: ApiError,
+  options?: PresentApiErrorOptions,
+): ApiErrorView {
   if (isSystemConfigError(error)) {
     const keys = missingConfigKeys(error);
     const isMediaConfig = keys.some((key) => MEDIA_CONFIG_KEYS.includes(key));
@@ -107,6 +170,13 @@ export function presentApiError(error: ApiError): ApiErrorView {
           : undefined,
       canRetry: false,
     };
+  }
+
+  // A missing env var is a missing env var whatever the operator clicked, so the
+  // config guard stays first; from here on the action decides the wording.
+  if (options?.operation === "cancel") {
+    const cancelView = presentCancelError(error);
+    if (cancelView) return cancelView;
   }
 
   switch (error.code) {
@@ -267,6 +337,8 @@ export function presentApiError(error: ApiError): ApiErrorView {
         canRetry: true,
       };
 
+    // PUBLISHING path only — a cancel that fails is handled above, because
+    // "Chạy lại" is the last thing to do with a post that is still scheduled.
     case "META_ERROR":
     case "PUBLISH_FAILED":
       return {

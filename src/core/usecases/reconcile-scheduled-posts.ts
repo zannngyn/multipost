@@ -258,12 +258,19 @@ async function reconcileOne(
       return await giveUpIfTooOld(deps, job, log, ctx, "STILL_SCHEDULED");
     }
 
-    log.warn("The platform gave no readable state for this post", {
-      outcome: "waiting",
-      reason: state.reason,
-      alert: "OPERATOR_ATTENTION",
-    });
-    return await giveUpIfTooOld(deps, job, log, ctx, `UNKNOWN_STATE:${state.reason}`);
+    if (state.state === "unknown") {
+      log.warn("The platform gave no readable state for this post", {
+        outcome: "waiting",
+        reason: state.reason,
+        alert: "OPERATOR_ATTENTION",
+      });
+      return await giveUpIfTooOld(deps, job, log, ctx, `UNKNOWN_STATE:${state.reason}`);
+    }
+
+    // Every RemotePostState variant is handled above. A NEW variant must break
+    // the build here instead of quietly becoming "waiting" — the sweep is the
+    // only thing allowed to declare a scheduled post published.
+    return assertHandledState(state);
   } catch (error) {
     // One bad row must not end the sweep; the next tick tries again.
     log.error("Could not reconcile a scheduled post", {
@@ -273,6 +280,18 @@ async function reconcileOne(
     });
     return reconciled(job, "skipped", "RECONCILE_FAILED");
   }
+}
+
+/**
+ * Compile-time exhaustiveness guard for RemotePostState. Reachable only if a
+ * variant is added to the port without a branch here, in which case it also
+ * fails loudly at runtime instead of guessing what the platform meant.
+ */
+function assertHandledState(state: never): never {
+  throw new AppError("INTERNAL", {
+    message: `Unhandled remote post state: ${JSON.stringify(state)}`,
+    context: { state, reason: "UNHANDLED_REMOTE_POST_STATE" },
+  });
 }
 
 /**

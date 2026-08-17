@@ -20,10 +20,8 @@ import { AppError } from "@/core/domain/errors";
  * bài này không lên" (business rule 5) when the reason is a human decision
  * rather than a system rule.
  *
- * NOTE (reported to the orchestrator): the usecase currently writes the note to
- * the STRUCTURED LOG only — `audit_log.payload` of `post_job.cancelled` does not
- * carry it. The dialog says so instead of promising an audit trail that is not
- * there; persisting it belongs to the usecase owner, not to this route.
+ * The note reaches `audit_log.payload` of `post_job.cancelled` as well as the
+ * structured log, so the dialog may promise it is kept.
  */
 
 const ROUTE = "POST /api/posts/scheduled/[postJobId]/cancel";

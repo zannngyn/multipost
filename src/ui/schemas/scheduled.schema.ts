@@ -88,7 +88,9 @@ export function rescheduleBlockedReason(
   // Past its hour: no action at all is offered, and the cell explains that.
   if (!job.canCancel) return null;
   if (isHeldByPlatform(job.status)) {
-    return "Bài đã giao cho Facebook giữ nên không đổi giờ trực tiếp được. Hãy bấm Huỷ — hệ thống sẽ gỡ bài khỏi Facebook — rồi soạn lại với giờ mới.";
+    // "sẽ cố gỡ", not "sẽ gỡ": the delete can fail, and the post then still
+    // goes out. Same promise the cancel dialog had to walk back.
+    return "Bài đã giao cho Facebook giữ nên không đổi giờ trực tiếp được. Hãy bấm Huỷ — hệ thống sẽ cố gỡ bài khỏi Facebook và báo lại nếu không gỡ được — rồi soạn lại với giờ mới.";
   }
   return "Bài này không đổi giờ được nữa. Nếu không muốn bài lên, hãy bấm Huỷ.";
 }

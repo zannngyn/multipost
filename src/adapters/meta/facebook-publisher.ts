@@ -87,9 +87,18 @@ const PostStateSchema = z.object({
   scheduled_publish_time: z.union([z.number(), z.string()]).optional(),
 });
 
-/** DELETE /{post-id} answers { success: true }. */
+/**
+ * DELETE /{post-id} answers `{ "success": true }`.
+ *
+ * `success` is REQUIRED here on purpose: this schema is the only thing standing
+ * between "Facebook confirmed the post is gone" and "Facebook answered 200 with
+ * something we did not understand". With an optional flag, every 200 JSON object
+ * without the key — an error envelope shape this client cannot read included —
+ * would have passed as a confirmed deletion (port contract on
+ * ScheduledPublisher.deleteScheduledPost).
+ */
 const DeleteResponseSchema = z.object({
-  success: z.boolean().optional(),
+  success: z.boolean(),
 });
 
 /**
@@ -350,6 +359,17 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
  * Meta refuses a `scheduled_publish_time` less than ~9-10 minutes ahead, and
  * more than 30 days ahead. The lead is the CALLER's business rule; the guard
  * here only refuses what would certainly be wasted upload time.
+ *
+ * WHERE `platform_created_nothing` MAY BE SET (port contract, and the reason
+ * this adapter is split the way it is): only BEFORE the /feed request leaves
+ * this process — the pre-flight guards, the album upload (photos are created
+ * `published=false`, they are not posts) and the second lead check that runs
+ * after the upload. Once /feed is dispatched the outcome belongs to the JOB, not
+ * to this call: a previous attempt may have created the scheduled post and died
+ * before the answer, and Facebook would then answer this attempt with #506
+ * DUPLICATE_POST — an error body that means "a post like this already exists",
+ * the exact opposite of "nothing was created". Errors from the dispatch carry
+ * `feed_dispatched: true` instead, and the caller treats them as unknown.
  */
 function makeFacebookScheduledPublisher(
   deps: FacebookPublisherDeps,
@@ -397,10 +417,49 @@ function makeFacebookScheduledPublisher(
       const log = parentLogger.child(logContext);
       const scheduledPublishTime = toUnixSeconds(publishAt);
 
-      const mediaFbIds = await uploadAlbumPhotos(deps, channel, media, {
-        ...logContext,
-        scheduled_publish_time: scheduledPublishTime,
-      });
+      let mediaFbIds: string[];
+      try {
+        mediaFbIds = await uploadAlbumPhotos(deps, channel, media, {
+          ...logContext,
+          scheduled_publish_time: scheduledPublishTime,
+        });
+      } catch (error) {
+        // Nothing that creates a POST has been sent yet: these calls only make
+        // UNPUBLISHED photo objects (`published=false`), and /feed below is what
+        // turns them into something Facebook will publish. Whatever failed here
+        // — Graph refusal, timeout, unreadable file — the Page holds no post for
+        // this job, so the caller may still publish at the hour.
+        throw AppError.from(error, "META_ERROR", {
+          ...logContext,
+          step: "photos.album",
+          platform_created_nothing: true,
+        });
+      }
+
+      // The lead is measured AGAIN, right before the only call that creates
+      // anything: an album of ten ~9MB photos can take minutes, and Facebook
+      // refuses a `scheduled_publish_time` under ~10 minutes with #100. Catching
+      // that here — BEFORE the request — is what lets the caller fall back to
+      // publishing at the hour, because a refusal we never sent cannot have
+      // created a post. After the dispatch we can no longer promise that.
+      const leadAtDispatchMs = publishAt.getTime() - Date.now();
+      if (leadAtDispatchMs < HANDOFF_MIN_LEAD_MS) {
+        throw new AppError("INVALID_INPUT", {
+          message: `Album upload consumed the lead: ${leadAtDispatchMs}ms left, ${HANDOFF_MIN_LEAD_MS}ms required`,
+          userMessage:
+            "Tải ảnh xong thì giờ hẹn đã quá gần (Facebook đòi tối thiểu ~10 phút) — không giao lịch, sẽ đăng thẳng vào giờ đã hẹn.",
+          context: {
+            ...logContext,
+            step: "feed.scheduled",
+            reason: "PUBLISH_AT_TOO_SOON_AFTER_UPLOAD",
+            lead_ms: leadAtDispatchMs,
+            min_lead_ms: HANDOFF_MIN_LEAD_MS,
+            uploaded_media_count: mediaFbIds.length,
+            retryable: false,
+            platform_created_nothing: true,
+          },
+        });
+      }
 
       const params: Record<string, string> = {
         message: caption,
@@ -425,23 +484,35 @@ function makeFacebookScheduledPublisher(
           },
         });
       } catch (error) {
-        // A Graph error BODY means the schedule was REFUSED and no post was
-        // created — Graph answers with the new object's id or with an error,
-        // never both. Facebook's #100 for a `scheduled_publish_time` under the
-        // ~10-minute minimum lands here, and the caller must be able to fall
-        // back to publishing at the hour instead of failing the job for good.
-        // A transport failure (no answer at all) is NOT marked: after a timeout
-        // the post may well exist.
-        if (!isGraphRefusal(error)) throw error;
+        // The request that CREATES the post has left this process. NOTHING that
+        // comes back is allowed to be reported as "the Page holds no post for
+        // this job".
+        //
+        // A Graph error body proves that THIS request created nothing — but the
+        // caller's question is about the JOB, not the request. An earlier
+        // attempt of the same job may have dispatched a /feed whose answer never
+        // arrived (timeout, killed worker) while Facebook committed the post;
+        // the retry then re-uploads and Facebook answers #506 DUPLICATE_POST, an
+        // error body that means the exact opposite of "nothing exists". Marking
+        // it would send the job down the publish-at-the-hour path on top of a
+        // scheduled post — two posts in the same minute (business rule 4).
+        //
+        // So: `feed_dispatched` only, and the caller must treat the outcome as
+        // unknown. The refusal that this flow really needs to survive (#100 for
+        // a lead the upload ate) is caught ABOVE, before the dispatch.
         throw AppError.from(error, "META_ERROR", {
           ...logContext,
           step: "feed.scheduled",
           scheduled_publish_time: scheduledPublishTime,
-          platform_created_nothing: true,
+          feed_dispatched: true,
         });
       }
       const parsed = FeedResponseSchema.safeParse(raw);
-      if (!parsed.success) throw unusableResponse(raw, parsed.error, logContext, "feed.scheduled");
+      if (!parsed.success) {
+        throw unusableResponse(raw, parsed.error, logContext, "feed.scheduled", {
+          feed_dispatched: true,
+        });
+      }
 
       log.info("Post handed over to Facebook's scheduler", {
         post_id: parsed.data.id,
@@ -561,13 +632,52 @@ function makeFacebookScheduledPublisher(
       }
 
       const parsed = DeleteResponseSchema.safeParse(raw);
-      if (parsed.success && parsed.data.success === false) {
-        throw new AppError("META_ERROR", {
+      if (!parsed.success) {
+        // A 200 whose body we cannot read is NOT a confirmation: Graph can
+        // answer 200 with an envelope shape this client does not model, and
+        // returning true here would tell the operator "Facebook sẽ không đăng
+        // nữa" about a post the Page may still be holding.
+        const appError = new AppError("META_ERROR", {
+          message: "Graph answered the delete with a body that carries no confirmation",
+          userMessage:
+            "Facebook trả lời không rõ khi gỡ bài đã hẹn — hệ thống KHÔNG xác nhận được là bài đã bị gỡ. " +
+            "Bài VẪN có thể còn trên Trang và tự đăng: hãy vào Trang, mục bài đã lên lịch, kiểm tra và xoá thủ công.",
+          context: {
+            ...logContext,
+            step: "post.delete",
+            reason: "UNCONFIRMED_DELETE_RESPONSE",
+            issues: parsed.error.issues.map((issue) => issue.path.join(".")),
+            response_keys: typeof raw === "object" && raw !== null ? Object.keys(raw) : null,
+            retryable: false,
+          },
+        });
+        log.error("Graph gave no readable confirmation for a scheduled post deletion", {
+          err: appError,
+          error_code: appError.code,
+          reason: "UNCONFIRMED_DELETE_RESPONSE",
+          alert: "OPERATOR_ATTENTION",
+        });
+        throw appError;
+      }
+      if (!parsed.data.success) {
+        const appError = new AppError("META_ERROR", {
           message: "Graph answered success=false for a scheduled post deletion",
           userMessage:
             "Facebook không gỡ được bài đã hẹn — bài vẫn sẽ tự đăng, cần xoá trực tiếp trên Facebook.",
-          context: { ...logContext, step: "post.delete", retryable: false },
+          context: {
+            ...logContext,
+            step: "post.delete",
+            reason: "DELETE_REFUSED",
+            retryable: false,
+          },
         });
+        log.error("Graph refused to delete a scheduled post", {
+          err: appError,
+          error_code: appError.code,
+          reason: "DELETE_REFUSED",
+          alert: "OPERATOR_ATTENTION",
+        });
+        throw appError;
       }
       log.info("Scheduled post deleted on Facebook", { post_id: postId });
       return true;
@@ -722,16 +832,6 @@ function isObjectNotReadable(error: unknown): boolean {
   return context.graph_code === 100 && context.graph_subcode === OBJECT_NOT_READABLE_SUBCODE;
 }
 
-/**
- * True when Graph answered with an error BODY (a code): the request was refused
- * and no object was created. Graph returns either the new object's id or an
- * `error` — never both — so a refusal is proof that the Page holds no new post.
- */
-function isGraphRefusal(error: unknown): boolean {
-  if (!AppError.is(error)) return false;
-  return typeof (error.context as { graph_code?: unknown }).graph_code === "number";
-}
-
 /** ISO 8601 with an offset, e.g. "2026-08-17T12:00:00+0000". */
 function parseGraphTime(value: string | undefined): Date | null {
   if (typeof value !== "string" || value.trim().length === 0) return null;
@@ -828,6 +928,8 @@ function unusableResponse(
   error: z.ZodError,
   context: Record<string, unknown>,
   step: string,
+  /** Extra flags for the caller, e.g. that the creating request was dispatched. */
+  extra: Record<string, unknown> = {},
 ): AppError {
   return new AppError("META_ERROR", {
     message: `Graph answered ${step} without a usable id`,
@@ -835,6 +937,7 @@ function unusableResponse(
       "Facebook không trả về mã bài đăng — cần kiểm tra thủ công trên Page trước khi đăng lại.",
     context: {
       ...context,
+      ...extra,
       step,
       issues: error.issues.map((issue) => issue.path.join(".")),
       response_keys: typeof raw === "object" && raw !== null ? Object.keys(raw) : null,

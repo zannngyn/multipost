@@ -85,7 +85,12 @@ export const LATE_PUBLISH_AUDIT_ACTION = "post_job.published_late";
 
 /** Error code stored on a job that could not be handed over in time. */
 export const HANDOFF_EXPIRED_ERROR_CODE = "HANDOFF_EXPIRED";
-/** Error code stored when the handoff itself was refused for good. */
+/**
+ * Error code stored when a handoff ended WITHOUT a verdict: the platform may or
+ * may not be holding a scheduled post for this job. The job stops there — see
+ * failUnconfirmedHandoff for why neither a retry nor a publish at the hour is
+ * allowed afterwards.
+ */
 export const HANDOFF_FAILED_ERROR_CODE = "HANDOFF_FAILED";
 /**
  * The platform refused the SCHEDULE but created nothing (E8.6). The post is not
@@ -1006,17 +1011,15 @@ async function deferQueuedJob(
  *                          queue is done with this job; only the reconciliation
  *                          sweep may declare it published.
  *   token dead          -> `blocked`, like the immediate path.
- *   transient refusal   -> back to `queued`, next attempt inside the window, or
- *                          (window closed) a wake-up AT the hour that publishes
- *                          on the normal path.
- *   refused, nothing
- *   created on the Page -> back to `queued` with a wake-up AT the hour: the
- *                          normal publish path is untouched and cannot duplicate
- *                          anything, so the post still goes out.
- *   definitive AND
- *   ambiguous refusal   -> `failed`. NOT retried: an unreadable /feed answer may
- *                          mean the post exists, and a second handoff would put
- *                          two posts on the Page at the same minute.
+ *   failed BEFORE the
+ *   creating request    -> back to `queued`: another attempt inside the window,
+ *                          or a wake-up AT the hour that publishes on the normal
+ *                          path. Safe only because the platform provably holds
+ *                          nothing (port contract: platform_created_nothing).
+ *   outcome unknown     -> `failed`. NOT retried and NOT published at the hour:
+ *                          the platform may already hold a scheduled post for
+ *                          this job, and either move would put two posts on the
+ *                          Page at the same minute.
  */
 async function handOffToPlatform(
   deps: PublishPostDeps,
@@ -1111,9 +1114,10 @@ async function handOffToPlatform(
     // here — so the single most important event of a scheduled post (the moment
     // the object was created on Facebook) would leave no id behind. The cancel
     // and the reconciliation sweep both store it; this must too.
+    // `scheduled_at` is NOT repeated here: the repo writes its own and merges
+    // this payload UNDER it, so the copy would be silently dropped anyway.
     {
       scheduled_post_id: handed.scheduledPostId,
-      scheduled_at: scheduledAt.toISOString(),
       lead_ms: ctx.leadMs,
     },
   );
@@ -1155,11 +1159,16 @@ async function handOffToPlatform(
 }
 
 /**
- * A refused handoff. Same vocabulary as handlePublishError: TOKEN_EXPIRED
- * blocks, `retryable === false` is final, everything else gets another attempt
- * — but here "another attempt" means the NEXT slot of the handoff window, not a
- * BullMQ backoff, because the window is minutes wide and the queue's backoff
- * knows nothing about the hour.
+ * A failed handoff. TOKEN_EXPIRED blocks, exactly like handlePublishError.
+ *
+ * Everything else is decided by ONE question, and deliberately not by
+ * `retryable`: does the platform provably hold nothing for this job? Only then
+ * may the job move again — another attempt inside the window (transient), or a
+ * wake-up AT the hour on the normal publish path (definitive). "Another attempt"
+ * means the NEXT slot of the handoff window, not a BullMQ backoff: the window is
+ * minutes wide and the queue's backoff knows nothing about the hour.
+ *
+ * Without that proof the job stops (see failUnconfirmedHandoff).
  */
 async function handleHandoffError(
   deps: PublishPostDeps,
@@ -1197,18 +1206,37 @@ async function handleHandoffError(
   }
 
   const retryable = (appError.context as { retryable?: unknown }).retryable !== false;
-
-  // Refused BEFORE anything existed on the Page (port contract: the publisher
-  // sets this only when it KNOWS no post was created — its own pre-flight guard,
-  // or a platform error body instead of an object id). Facebook answers #100 to
-  // a `scheduled_publish_time` under its ~10-minute minimum, and an album upload
+  const flags = appError.context as {
+    platform_created_nothing?: unknown;
+    feed_dispatched?: unknown;
+  };
+  // Refused BEFORE anything that could create a post was ever sent (port
+  // contract: the publisher's own pre-flight guards and the media upload, which
+  // only makes unpublished objects). Facebook answers #100 to a
+  // `scheduled_publish_time` under its ~10-minute minimum, and an album upload
   // can easily eat the ~2 minutes between the handoff deadline and that minimum.
   // Failing the job there would drop a post while the safe path — wait for T and
   // publish normally — was still fully available, and cannot double-post because
   // the platform holds nothing.
-  const createdNothing =
-    (appError.context as { platform_created_nothing?: unknown }).platform_created_nothing === true;
-  if (!retryable && createdNothing) {
+  const createdNothing = flags.platform_created_nothing === true;
+
+  // ANYTHING ELSE is an unknown outcome — the creating request was dispatched
+  // (`feed_dispatched`), or the publisher gave no proof at all. This branch must
+  // never lead anywhere near the normal publish path and is never retried: the
+  // platform may be holding a scheduled post for this job right now, and the
+  // most misleading evidence looks exactly like a refusal (#506 DUPLICATE_POST
+  // answered to a retry after a lost answer). A second handoff would ask for a
+  // second scheduled post at the same minute; publishing at the hour would put a
+  // live post next to the one the platform is holding. Both are business rule 4.
+  //
+  // Note this ignores `retryable`: it describes whether the PLATFORM CALL could
+  // succeed later, not whether repeating it is safe. Only the flag above can say
+  // that, and it wins over `retryable` in both directions.
+  if (!createdNothing || flags.feed_dispatched === true) {
+    return await failUnconfirmedHandoff(deps, log, job, appError, ctx);
+  }
+
+  if (!retryable) {
     const delayMs = Math.max(0, ctx.scheduledAt.getTime() - deps.clock.nowMs());
     const userMessage = `Facebook không nhận lịch đăng của bài này (${appError.userMessage}) — chưa có bài nào được tạo trên Trang, hệ thống sẽ đăng thẳng vào giờ đã hẹn.`;
     const requeued = await requeueForLater(deps, log, job, {
@@ -1231,37 +1259,6 @@ async function handleHandoffError(
       alert: "OPERATOR_ATTENTION",
     });
     return requeued;
-  }
-
-  if (!retryable) {
-    // Definitive AND ambiguous. Not retried on purpose: /feed may have created
-    // the scheduled post before the answer became unreadable, and a second
-    // handoff would put two posts on the Page at the same minute (rule 4).
-    const userMessage = `Facebook từ chối lịch đăng của bài này (${appError.userMessage}) — kiểm tra trên Page trước khi hẹn lại.`;
-    await move(
-      deps,
-      job,
-      "failed",
-      {
-        reason: "HANDOFF_REFUSED",
-        errorCode: HANDOFF_FAILED_ERROR_CODE,
-        errorMessage: userMessage,
-      },
-      SCHEDULED_FAILED_AUDIT_ACTION,
-    );
-    await deps.postJobs.refreshBatchStatus(job.tenantId, job.batchId);
-    log.error("Handoff refused for good — post NOT scheduled", {
-      err: appError,
-      outcome: "failed",
-      error_code: HANDOFF_FAILED_ERROR_CODE,
-      original_code: appError.code,
-      attempt: ctx.attempt,
-      duration_ms: ctx.durationMs,
-      audit_action: SCHEDULED_FAILED_AUDIT_ACTION,
-      alert: "OPERATOR_ATTENTION",
-    });
-    // Rethrown so the queue records a failure; the row already carries the why.
-    throw appError;
   }
 
   // Transient: try again inside the window, or wake up AT the hour and publish
@@ -1298,6 +1295,64 @@ async function handleHandoffError(
     },
   );
   return requeued;
+}
+
+/**
+ * The handoff ended without a verdict: the request that creates the post on the
+ * platform was dispatched (or the publisher could not promise it was not), and
+ * nobody knows whether a scheduled post now exists.
+ *
+ * The job stops here — `failed`, no retry, no publish at the hour — because both
+ * ways forward can put a second post on the Page in the same minute:
+ *   - another handoff  -> a second scheduled post;
+ *   - publishing at T  -> a live post next to the one the platform holds.
+ * A post that does not go out is a bad day; two posts on a customer's Page is
+ * the failure this whole flow exists to prevent (business rule 4).
+ *
+ * The Vietnamese message therefore says the ONE thing an operator can act on:
+ * look at the Page's scheduled posts before doing anything with this job.
+ */
+async function failUnconfirmedHandoff(
+  deps: PublishPostDeps,
+  log: Logger,
+  job: PostJob,
+  appError: AppError,
+  ctx: { attempt: number; durationMs: number; scheduledAt: Date },
+): Promise<never> {
+  const feedDispatched = (appError.context as { feed_dispatched?: unknown }).feed_dispatched === true;
+  const userMessage =
+    `Không xác nhận được kết quả giao lịch cho Facebook (${appError.userMessage}) — ` +
+    "bài hẹn CÓ THỂ đã được tạo trên Trang. Hệ thống dừng lại và KHÔNG tự đăng lại để tránh đăng trùng: " +
+    "hãy mở Trang, mục bài đã lên lịch, xoá bài nếu thấy rồi hẹn lại.";
+
+  await move(
+    deps,
+    job,
+    "failed",
+    {
+      reason: "HANDOFF_OUTCOME_UNKNOWN",
+      errorCode: HANDOFF_FAILED_ERROR_CODE,
+      errorMessage: userMessage,
+    },
+    SCHEDULED_FAILED_AUDIT_ACTION,
+  );
+  await deps.postJobs.refreshBatchStatus(job.tenantId, job.batchId);
+  log.error("Handoff outcome unknown — job stopped so nothing can double-post", {
+    err: appError,
+    outcome: "failed",
+    error_code: HANDOFF_FAILED_ERROR_CODE,
+    original_code: appError.code,
+    // The two facts that answer "vì sao bài này không lên" without a debugger.
+    feed_dispatched: feedDispatched,
+    platform_created_nothing: false,
+    attempt: ctx.attempt,
+    duration_ms: ctx.durationMs,
+    scheduled_at: ctx.scheduledAt.toISOString(),
+    audit_action: SCHEDULED_FAILED_AUDIT_ACTION,
+    alert: "OPERATOR_ATTENTION",
+  });
+  // Rethrown so the queue records a failure; the row already carries the why.
+  throw appError;
 }
 
 /**
