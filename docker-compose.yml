@@ -84,6 +84,30 @@ services:
       # cache the sweep cannot see is a disk leak.
       MEDIA_CACHE_ROOT: /var/lib/mysp/media-cache
       MEDIA_CACHE_TTL_HOURS: ${MEDIA_CACHE_TTL_HOURS:-72}
+      # --- Credentials -------------------------------------------------------
+      # Passed through explicitly rather than via env_file: each service should
+      # carry only the secrets it actually uses, and the list doubles as the
+      # answer to "what does this container need to work?". All are read on
+      # demand, so a missing one lets the container boot and fails at the first
+      # request that needs it — with a message naming the variable.
+      #
+      # Reads the Drive files a post is made of.
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+      # Opens the sealed Page tokens in tenant_integration. Without it there is
+      # no way to talk to Facebook at all.
+      TENANT_SECRETS_ENC_KEY: ${TENANT_SECRETS_ENC_KEY:-}
+      # Signs the media links. Image posts upload their bytes and need neither,
+      # but video posts still hand Meta a URL to fetch, and the preview bridge
+      # serves the compose screen.
+      MEDIA_SIGNING_SECRET: ${MEDIA_SIGNING_SECRET:-}
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
+      # Caption generation (E4). OpenAI is the only wired provider today.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
+      # Connecting Fanpages (E5.1). Only the web process runs that flow.
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_OAUTH_REDIRECT_URI: ${META_OAUTH_REDIRECT_URI:-}
     volumes:
       - mediacachedata:/var/lib/mysp/media-cache
     expose:
@@ -158,6 +182,23 @@ services:
       # volume mounted at the same path as the web process.
       MEDIA_CACHE_ROOT: /var/lib/mysp/media-cache
       MEDIA_CACHE_TTL_HOURS: ${MEDIA_CACHE_TTL_HOURS:-72}
+      # --- Credentials -------------------------------------------------------
+      # Passed through explicitly rather than via env_file: each service should
+      # carry only the secrets it actually uses, and the list doubles as the
+      # answer to "what does this container need to work?". All are read on
+      # demand, so a missing one lets the container boot and fails at the first
+      # request that needs it — with a message naming the variable.
+      #
+      # Reads the Drive files a post is made of.
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+      # Opens the sealed Page tokens in tenant_integration. Without it there is
+      # no way to talk to Facebook at all.
+      TENANT_SECRETS_ENC_KEY: ${TENANT_SECRETS_ENC_KEY:-}
+      # Signs the media links. Image posts upload their bytes and need neither,
+      # but video posts still hand Meta a URL to fetch, and the preview bridge
+      # serves the compose screen.
+      MEDIA_SIGNING_SECRET: ${MEDIA_SIGNING_SECRET:-}
+      MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
     volumes:
       - uploaddata:/var/lib/mysp/uploads
       - mediacachedata:/var/lib/mysp/media-cache

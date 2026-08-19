@@ -8,10 +8,13 @@ import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { JobLogSkeleton } from "@/ui/components/jobs/JobLogSkeleton";
 import { JobLogTable } from "@/ui/components/jobs/JobLogTable";
+import { WorkerHealthBanner } from "@/ui/components/jobs/WorkerHealthBanner";
+import { presentWorkerHealth } from "@/ui/components/jobs/present-worker-health";
 import { Button } from "@/ui/components/ui/button";
 import { Select } from "@/ui/components/ui/select";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { usePostJobLog, useRetryPostJob } from "@/ui/hooks/usePostJobs";
+import { useWorkerHealth } from "@/ui/hooks/useWorkerHealth";
 import {
   POST_JOB_STATUSES,
   POST_JOB_STATUS_LABELS,
@@ -36,6 +39,12 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  *             trạng thái này" (a filter is on) — the same box for both would
  *             make an operator think the data was lost
  *   error   — 4xx (sửa bộ lọc) vs 5xx (thử lại), via `presentApiError`
+ *
+ * On top of those sits a fifth thing the log cannot express by itself: a job
+ * that is `queued` with no attempt and no error looks identical whether a
+ * worker is about to take it or no worker exists at all. `WorkerHealthBanner`
+ * answers that from a SEPARATE query, so a dead queue changes nothing about
+ * the four states above — it only adds a sentence on top of them.
  */
 export function JobLogScreen() {
   // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
@@ -52,6 +61,15 @@ export function JobLogScreen() {
 
   const log = usePostJobLog(tenantId, filter);
   const retry = useRetryPostJob(tenantId);
+
+  // Separate query, separate failure: a job log that renders must not depend on
+  // the health probe, and a dead queue must not blank the log (Partial state,
+  // core-feedback-states §6).
+  const workerHealth = useWorkerHealth(tenantId);
+  const healthNotice = presentWorkerHealth({
+    health: workerHealth.data,
+    hasError: workerHealth.isError,
+  });
   const [retryNotice, setRetryNotice] = useState<string | null>(null);
 
   const isFirstLoad = log.isPending && log.fetchStatus === "fetching";
@@ -100,6 +118,12 @@ export function JobLogScreen() {
         </p>
       </header>
 
+      <WorkerHealthBanner
+        notice={healthNotice}
+        onRecheck={() => void workerHealth.refetch()}
+        isChecking={workerHealth.isFetching}
+      />
+
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-0 basis-64 space-y-1.5">
           <label htmlFor={statusFilterId} className="text-sm font-medium">
@@ -141,7 +165,12 @@ export function JobLogScreen() {
         <Button
           type="button"
           variant="outline"
-          onClick={() => void log.refetch()}
+          onClick={() => {
+            // One button, both readings: an operator who just restarted the
+            // publish worker expects "Tải lại" to clear the banner too.
+            void log.refetch();
+            void workerHealth.refetch();
+          }}
           disabled={log.isFetching}
         >
           {log.isFetching ? "Đang tải…" : "Tải lại"}

@@ -19,6 +19,12 @@ import { DrizzleSyncRunRepo } from "./sync-run-repo.drizzle";
 
 const url = process.env.TEST_DATABASE_URL;
 const NOT_A_UUID = "not-a-uuid";
+/**
+ * A tenant that owns no rows. Used wherever an assertion calls something whose
+ * failure mode is "deletes the whole catalogue" — the destructive shape stays
+ * covered without a real tenant's data standing under it.
+ */
+const EMPTY_TENANT_ID = "00000000-0000-0000-0000-0000000000ff";
 
 describe.skipIf(!url)("repos map Postgres 22P02 to INVALID_INPUT (real database)", () => {
   const handle = makeDbHandle({ url: url ?? "postgres://unused", maxPoolSize: 2 });
@@ -139,8 +145,13 @@ describe.skipIf(!url)("repos map Postgres 22P02 to INVALID_INPUT (real database)
   });
 
   it("a well-formed uuid that matches nothing is NOT an error", async () => {
+    // NOT the demo tenant. `deleteStale` removes every row whose sync run is
+    // NOT the one given, so a fresh uuid matches nothing to KEEP — it deletes
+    // the tenant's entire catalogue. Pointed at the demo tenant this assertion
+    // wiped 359 real products off the development database once; the empty
+    // tenant below exercises the same code path and owns nothing to lose.
     await expect(
-      products.deleteStale(DEMO_TENANT_ID, "00000000-0000-0000-0000-0000000000aa"),
+      products.deleteStale(EMPTY_TENANT_ID, "00000000-0000-0000-0000-0000000000aa"),
     ).resolves.toBeTypeOf("number");
   });
 

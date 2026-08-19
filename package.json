@@ -14,10 +14,10 @@
     "verify": "pnpm typecheck && pnpm lint && pnpm depcruise && pnpm test && pnpm build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:seed": "tsx src/adapters/db/seed.ts",
-    "worker": "tsx src/worker/index.ts",
-    "worker:dev": "tsx watch src/worker/index.ts",
-    "queue:demo": "tsx src/worker/enqueue-demo.ts"
+    "db:seed": "tsx --env-file-if-exists=.env src/adapters/db/seed.ts",
+    "worker": "tsx --env-file-if-exists=.env src/worker/index.ts",
+    "worker:dev": "tsx watch --env-file-if-exists=.env src/worker/index.ts",
+    "queue:demo": "tsx --env-file-if-exists=.env src/worker/enqueue-demo.ts"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.4.0",
