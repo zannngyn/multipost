@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
 import { DrizzleAccessRequestRepo } from "@/adapters/db/access-request-repo.drizzle";
+import { DrizzleAccountRepo } from "@/adapters/db/account-repo.drizzle";
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
@@ -54,6 +55,17 @@ import {
   makeCheckOperatorAccess,
   type CheckOperatorAccess,
 } from "@/core/usecases/check-operator-access";
+import {
+  makeGetOperatorOverview,
+  type GetOperatorOverview,
+} from "@/core/usecases/get-operator-overview";
+import {
+  makeResolveOperatorAccount,
+} from "@/core/usecases/resolve-operator-account";
+import {
+  makeSelectActiveTenant,
+  type SelectActiveTenant,
+} from "@/core/usecases/select-active-tenant";
 import {
   makeManageAccessRequests,
   type AccessDecisionResult,
@@ -143,6 +155,8 @@ import {
 } from "./config";
 import { makeLazyGoogleSources } from "./google-sources";
 import { makeOperatorAccessGate, type OperatorAccessGate } from "./operator-access-gate";
+import { makeOperatorAccountGate, type OperatorAccountGate } from "./operator-account-gate";
+import { makeRequireTenant, type RequireTenant } from "./require-tenant";
 
 /**
  * Composition root — the ONLY place that knows both core and adapters.
@@ -204,6 +218,20 @@ export interface Usecases {
   operatorAccess: OperatorAccessGate;
   /** E1.4 — the approval screen: list who is waiting, approve with a role, block. */
   accessRequests: ManageAccessRequests;
+  /**
+   * M1.2 — identity → account → membership, the session's source of truth
+   * (short-cached; a suspension is felt within ACCOUNT_CACHE_TTL_MS).
+   */
+  operatorAccounts: OperatorAccountGate;
+  /** M1.2 — `GET /api/me`: account + companies + active tenant. */
+  getOperatorOverview: GetOperatorOverview;
+  /** M1.2 — `POST /api/me/active-tenant`: fresh membership check (tier S). */
+  selectActiveTenant: SelectActiveTenant;
+  /**
+   * M1.2 — THE tenant authoriser (docs/09 §3.3). Routes adopt it in M1.3;
+   * until then only /api/me* and tests touch it.
+   */
+  requireTenant: RequireTenant;
   /** E11.1 — operator job log. */
   listPostJobs: ListPostJobs;
   /** E11.1 — re-queue a failed/blocked job (stock recheck still applies). */
@@ -676,6 +704,23 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     logger: deps.logger,
     users,
   });
+  // M1.2 — global identity (docs/09 §3.1): the session and the tenant
+  // authoriser both read these tables, each behind its own short cache.
+  const accountRepo = new DrizzleAccountRepo(deps.db, { logger: deps.logger });
+  const resolveOperatorAccount = makeResolveOperatorAccount({
+    accounts: accountRepo,
+    logger: deps.logger,
+  });
+  const operatorAccounts = makeOperatorAccountGate({
+    resolveAccount: resolveOperatorAccount,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  const tenantGate = makeRequireTenant({
+    accounts: accountRepo,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
   /**
    * The cache is dropped the instant a decision is written — wired HERE rather
    * than inside the usecase so core stays free of caching, and so nobody can
@@ -690,6 +735,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     ): Promise<AccessDecisionResult> => {
       const result = await manageAccessRequests.decideAccessRequest(input);
       operatorAccess.invalidateAll();
+      // The decision also wrote account/membership rows (M1.2) — every cache
+      // over them is stale the same instant.
+      operatorAccounts.invalidateAll();
+      tenantGate.invalidateAll();
       return result;
     },
   };
@@ -813,6 +862,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       users.findUserIdByEmail(tenantId, email),
     operatorAccess,
     accessRequests,
+    operatorAccounts,
+    getOperatorOverview: makeGetOperatorOverview({ accounts: accountRepo, logger: deps.logger }),
+    selectActiveTenant: makeSelectActiveTenant({ accounts: accountRepo, logger: deps.logger }),
+    requireTenant: tenantGate.requireTenant,
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
     retryPostJob: makeRetryPostJob({
       postJobs,
@@ -985,6 +1038,19 @@ export type {
   AccessRequestView,
 } from "@/core/usecases/manage-access-requests";
 export type { OperatorAccessState } from "@/core/usecases/check-operator-access";
+
+/**
+ * M1.2 vocabulary the app layer needs (it may not import core/usecases or
+ * core/domain/* except errors — docs/07 §2): session shape, overview DTO and
+ * the tenant-context types the routes will consume from M1.3.
+ */
+export type {
+  OperatorAccountState as OperatorAccountSessionState,
+} from "@/core/usecases/resolve-operator-account";
+export type { OperatorOverview } from "@/core/usecases/get-operator-overview";
+export type { PlatformRole } from "@/core/domain/account";
+export type { TenantContext, TenantId } from "@/core/domain/tenant-context";
+export { legacyTenantIdFromRequest } from "./legacy-tenant-id";
 
 /**
  * Drains the DB pool, any lazily built producer queue and the AI registry cache

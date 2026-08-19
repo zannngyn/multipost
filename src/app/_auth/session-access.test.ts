@@ -3,33 +3,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canManageAccess } from "./operator-session";
 
 /**
- * THE regression guard of E1.4: blocking someone must end their access.
- *
- * The session is a stateless JWT, so `auth()` keeps returning a perfectly valid
- * user for a blocked operator until the token expires. The only thing that can
- * stop them is this per-request status read — if it is ever removed or bypassed
- * these tests fail, and "Chặn" goes back to being a button that lies.
+ * THE revocation guard, M1.2 edition: the session is a stateless JWT, so the
+ * only thing that can end a banned operator's access is this per-request read
+ * of the ACCOUNT tables (identity → account → membership). If it is ever
+ * removed or bypassed these tests fail, and "Chặn" goes back to being a button
+ * that lies.
  */
+
+const DEMO_TENANT = "00000000-0000-0000-0000-000000000001";
 
 const authMock = vi.fn();
-/**
- * Mirrors `OperatorAccessState` structurally. The app layer (tests included)
- * may not import `core/usecases` — docs/07 §2, enforced by eslint.
- */
-type AccessStateLike = {
-  status: "approved" | "pending" | "blocked" | "unknown";
-  role: "owner" | "admin" | "editor" | "viewer" | null;
+
+/** Structural mirror of OperatorAccountState (app tests may not import core). */
+type AccountLike = {
+  accountId: string;
+  status: "active" | "suspended";
+  platformRole: "support" | "super_admin" | null;
   displayName: string | null;
+  activeMemberships: { tenantId: string; role: "owner" | "admin" | "editor" | "viewer"; version: number }[];
 };
 
-const readStateMock = vi.fn<(tenantId: string, email: string) => Promise<AccessStateLike>>();
+const resolveMock = vi.fn<(email: string) => Promise<AccountLike | null>>();
 
 vi.mock("./auth", () => ({ auth: () => authMock() }));
 
 vi.mock("@/composition/container", () => ({
-  ACCESS_REGISTRY_TENANT_ID: "00000000-0000-0000-0000-000000000001",
+  ACCESS_REGISTRY_TENANT_ID: DEMO_TENANT,
   getContainer: () => ({
-    usecases: { operatorAccess: { readState: readStateMock } },
+    usecases: { operatorAccounts: { resolve: resolveMock } },
   }),
 }));
 
@@ -41,6 +42,17 @@ const ENV = {
   AUTH_FACEBOOK_ALLOWED_USER_IDS: "992710700450296",
   SESSION_SECRET: "x".repeat(40),
 };
+
+function member(overrides: Partial<AccountLike> = {}): AccountLike {
+  return {
+    accountId: "acc-1",
+    status: "active",
+    platformRole: null,
+    displayName: "Worker",
+    activeMemberships: [{ tenantId: DEMO_TENANT, role: "editor", version: 1 }],
+    ...overrides,
+  };
+}
 
 async function loadSession() {
   // Imported fresh per test: auth.config caches the parsed env per module load.
@@ -54,7 +66,8 @@ beforeEach(() => {
   vi.stubEnv("NODE_ENV", "test");
   vi.stubEnv("DEV_FAKE_SESSION", "");
   authMock.mockReset();
-  readStateMock.mockReset();
+  resolveMock.mockReset();
+  resolveMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -68,7 +81,7 @@ describe("getOperatorSession — no usable session", () => {
     authMock.mockResolvedValue(null);
     const getOperatorSession = await loadSession();
     await expect(getOperatorSession("test")).resolves.toBeNull();
-    expect(readStateMock).not.toHaveBeenCalled();
+    expect(resolveMock).not.toHaveBeenCalled();
   });
 
   it("answers null when the session carries no e-mail", async () => {
@@ -78,34 +91,32 @@ describe("getOperatorSession — no usable session", () => {
   });
 });
 
-describe("getOperatorSession — the registry decides", () => {
-  it("ends the session of an operator who was blocked while signed in", async () => {
+describe("getOperatorSession — the account tables decide", () => {
+  it("ends the session of an operator whose account was suspended while signed in", async () => {
     authMock.mockResolvedValue({ user: { email: "worker@gmail.com", name: "Worker" } });
-    readStateMock.mockResolvedValue({ status: "blocked", role: null, displayName: "Worker" });
+    resolveMock.mockResolvedValue(member({ status: "suspended" }));
 
     const getOperatorSession = await loadSession();
 
     await expect(getOperatorSession("layout:(app)")).resolves.toBeNull();
-    expect(readStateMock).toHaveBeenCalledWith(
-      "00000000-0000-0000-0000-000000000001",
-      "worker@gmail.com",
-    );
+    expect(resolveMock).toHaveBeenCalledWith("worker@gmail.com");
   });
 
-  it("treats pending and unknown as no session too", async () => {
+  it("treats an unknown address and a membership-less account as no session", async () => {
     authMock.mockResolvedValue({ user: { email: "worker@gmail.com", name: null } });
     const getOperatorSession = await loadSession();
 
-    readStateMock.mockResolvedValue({ status: "pending", role: null, displayName: null });
+    resolveMock.mockResolvedValue(null);
     await expect(getOperatorSession("test")).resolves.toBeNull();
 
-    readStateMock.mockResolvedValue({ status: "unknown", role: null, displayName: null });
+    // PENDING(M2-nomembership): becomes a real signed-in state at M2.
+    resolveMock.mockResolvedValue(member({ activeMemberships: [] }));
     await expect(getOperatorSession("test")).resolves.toBeNull();
   });
 
-  it("lets an approved operator in, carrying the role", async () => {
+  it("lets a member in, carrying the demo-tenant role and the account id", async () => {
     authMock.mockResolvedValue({ user: { email: "worker@gmail.com", name: "Worker" } });
-    readStateMock.mockResolvedValue({ status: "approved", role: "editor", displayName: "Worker" });
+    resolveMock.mockResolvedValue(member());
 
     const getOperatorSession = await loadSession();
 
@@ -115,19 +126,55 @@ describe("getOperatorSession — the registry decides", () => {
       isDevFake: false,
       role: "editor",
       isBootstrapAdmin: false,
+      accountId: "acc-1",
+      platformRole: null,
     });
+  });
+
+  it("carries a null legacy role for a member of ANOTHER tenant only", async () => {
+    authMock.mockResolvedValue({ user: { email: "worker@gmail.com", name: "Worker" } });
+    resolveMock.mockResolvedValue(
+      member({
+        activeMemberships: [
+          { tenantId: "00000000-0000-0000-0000-0000000000ff", role: "owner", version: 1 },
+        ],
+      }),
+    );
+
+    const getOperatorSession = await loadSession();
+    const session = await getOperatorSession("test");
+
+    expect(session).toMatchObject({ role: null, accountId: "acc-1" });
+    expect(canManageAccess(session)).toBe(false);
   });
 });
 
 describe("getOperatorSession — env bootstrap admins", () => {
-  it("lets an address from AUTH_BOOTSTRAP_ADMINS in with an EMPTY registry, without a query", async () => {
+  it("lets an address from AUTH_BOOTSTRAP_ADMINS in even when no account row exists", async () => {
     authMock.mockResolvedValue({ user: { email: "boss@mysp.vn", name: "Boss" } });
+    resolveMock.mockResolvedValue(null);
     const getOperatorSession = await loadSession();
 
     const session = await getOperatorSession("test");
-    expect(session).toMatchObject({ email: "boss@mysp.vn", isBootstrapAdmin: true, role: null });
+    expect(session).toMatchObject({
+      email: "boss@mysp.vn",
+      isBootstrapAdmin: true,
+      role: null,
+      accountId: null,
+    });
     expect(canManageAccess(session)).toBe(true);
-    expect(readStateMock).not.toHaveBeenCalled();
+  });
+
+  it("attaches the account id when the bootstrap admin does have an account row", async () => {
+    authMock.mockResolvedValue({ user: { email: "boss@mysp.vn", name: "Boss" } });
+    resolveMock.mockResolvedValue(member({ accountId: "acc-boss", platformRole: "super_admin" }));
+    const getOperatorSession = await loadSession();
+
+    await expect(getOperatorSession("test")).resolves.toMatchObject({
+      isBootstrapAdmin: true,
+      accountId: "acc-boss",
+      platformRole: "super_admin",
+    });
   });
 
   it("lets an allow-listed Facebook id in through its synthetic address", async () => {
@@ -137,43 +184,36 @@ describe("getOperatorSession — env bootstrap admins", () => {
     const getOperatorSession = await loadSession();
 
     await expect(getOperatorSession("test")).resolves.toMatchObject({ isBootstrapAdmin: true });
-    expect(readStateMock).not.toHaveBeenCalled();
   });
 
   it("does not mistake another Facebook id for the allow-listed one", async () => {
     authMock.mockResolvedValue({ user: { email: "fb-111@facebook.local", name: "Stranger" } });
-    readStateMock.mockResolvedValue({ status: "pending", role: null, displayName: null });
+    resolveMock.mockResolvedValue(null);
 
     const getOperatorSession = await loadSession();
 
     await expect(getOperatorSession("test")).resolves.toBeNull();
-    expect(readStateMock).toHaveBeenCalled();
+    expect(resolveMock).toHaveBeenCalled();
   });
 });
 
 /**
- * The B1 regression guard. AUTH_ALLOWED_DOMAINS covers an open-ended set of
- * people ("anyone with a company address"), so it must never produce a session
- * that is both admin and unblockable. Reading it as a grant is what these three
- * tests exist to prevent.
+ * The B1 regression guard, unchanged in spirit: AUTH_ALLOWED_DOMAINS covers an
+ * open-ended set of people, so it must never produce a session that is both
+ * admin and unblockable.
  */
 describe("getOperatorSession — a domain match is not a grant", () => {
-  it("sends a domain match through the registry, and refuses it while pending", async () => {
+  it("refuses a domain match with no membership", async () => {
     authMock.mockResolvedValue({ user: { email: "colleague@mysp.vn", name: "Colleague" } });
-    readStateMock.mockResolvedValue({ status: "pending", role: null, displayName: null });
+    resolveMock.mockResolvedValue(member({ activeMemberships: [] }));
 
     const getOperatorSession = await loadSession();
-
     await expect(getOperatorSession("test")).resolves.toBeNull();
-    expect(readStateMock).toHaveBeenCalledWith(
-      "00000000-0000-0000-0000-000000000001",
-      "colleague@mysp.vn",
-    );
   });
 
-  it("gives an approved domain match the role from the registry — and no admin rights", async () => {
+  it("gives an approved domain match the membership role — and no admin rights", async () => {
     authMock.mockResolvedValue({ user: { email: "colleague@mysp.vn", name: "Colleague" } });
-    readStateMock.mockResolvedValue({ status: "approved", role: "editor", displayName: null });
+    resolveMock.mockResolvedValue(member());
 
     const getOperatorSession = await loadSession();
     const session = await getOperatorSession("test");
@@ -182,9 +222,9 @@ describe("getOperatorSession — a domain match is not a grant", () => {
     expect(canManageAccess(session)).toBe(false);
   });
 
-  it("can block a domain match — the whole point of B1", async () => {
+  it("can suspend a domain match — the whole point of B1", async () => {
     authMock.mockResolvedValue({ user: { email: "colleague@mysp.vn", name: "Colleague" } });
-    readStateMock.mockResolvedValue({ status: "blocked", role: null, displayName: null });
+    resolveMock.mockResolvedValue(member({ status: "suspended" }));
 
     const getOperatorSession = await loadSession();
     await expect(getOperatorSession("test")).resolves.toBeNull();

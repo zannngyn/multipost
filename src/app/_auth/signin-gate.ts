@@ -10,16 +10,20 @@ import { evaluateEnvAllowList, PENDING_APPROVAL_REDIRECT } from "./auth.config";
  *
  * Order, and why each step exists:
  *   1. env verdict (pure, see auth.config):
- *        reject           -> out; nothing in the registry can rescue it;
+ *        reject           -> out; nothing in the database can rescue it;
  *        allow            -> a BOOTSTRAP admin (exact address / exact Facebook
  *                            id): in, with no database call on the critical
- *                            path, so an unreachable registry can never close
+ *                            path, so an unreachable database can never close
  *                            the escape hatch;
  *        consult_registry -> everyone else, INCLUDING operators who merely
  *                            matched AUTH_ALLOWED_DOMAINS. That filter says who
  *                            MAY TRY; it grants nothing.
- *   2. the registry decides: approved -> in, blocked -> out, and an unknown
- *      identity is RECORDED as `pending` and sent back with
+ *   2. the ACCOUNT tables decide "được vào" (M1.2, docs/09 §3.1): an active
+ *      account holding an active membership is in — and this same lookup is
+ *      where a `legacy-app-user:*` placeholder sub gets patched with the real
+ *      one (the M1.1 obligation). A suspended account is out, full stop.
+ *   3. everyone else falls through to the legacy PENDING flow (retires at
+ *      M2.4): an unknown identity is RECORDED as `pending` and sent back with
  *      `?error=pending_approval`, so an admin has a row to act on instead of
  *      fishing an app-scoped id out of a log line.
  *
@@ -61,8 +65,22 @@ export interface RegisterIdentityInput {
   readonly displayName: string | null;
 }
 
+/**
+ * Structural mirror of `SignInAccountVerdict` (core/usecases) — the app layer
+ * may not import core/usecases (docs/07 §2), so the shape is restated here and
+ * the container's gate satisfies it structurally.
+ */
+export interface AccountSignInAnswer {
+  readonly kind: "unknown" | "suspended" | "no_membership" | "member";
+}
+
 export interface SignInGateDeps {
   readonly tenantId: string;
+  /**
+   * `usecases.operatorAccounts.signIn` — identity → account → membership, and
+   * the placeholder-sub patch as a side effect (M1.1 obligation).
+   */
+  signInAccount(input: RegisterIdentityInput): Promise<AccountSignInAnswer>;
   /** `usecases.operatorAccess.register` — files an unknown identity as pending. */
   register(input: RegisterIdentityInput): Promise<{ status: string }>;
   readonly logger: SignInGateLogger;
@@ -109,9 +127,47 @@ export async function decideSignIn(
   }
 
   try {
+    /**
+     * The account tables answer FIRST (M1.2). This call also patches a
+     * placeholder provider sub in place — it must run before any refusal so
+     * the first real sign-in of a backfilled operator repairs their identity
+     * even when they are then held at the door.
+     */
+    const account = await deps.signInAccount(identity);
+
+    if (account.kind === "member") return true;
+    if (account.kind === "suspended") {
+      deps.logger.warn("Sign-in refused: this account is suspended", {
+        error_code: "UNAUTHORIZED",
+        tenant_id: deps.tenantId,
+        provider: identity.provider,
+        account_verdict: account.kind,
+      });
+      return false;
+    }
+
+    // `unknown` / `no_membership` — the legacy pending flow decides (and files
+    // a row for a first-time identity). Retires at M2.4.
     const access = await deps.register(identity);
 
-    if (access.status === "approved") return true;
+    if (access.status === "approved") {
+      /**
+       * The registry says approved but the account tables hold no membership:
+       * the M1.2 decide-wiring should have created one, so this is drift
+       * (pre-M1.2 approval the backfill missed, or a failed provision). Letting
+       * them in would mint a session `getOperatorSession` immediately refuses —
+       * a redirect loop. Hold them at the door, loudly, as "đang chờ duyệt":
+       * re-approving on /access is the repair path.
+       */
+      deps.logger.error("Registry says approved but no active membership exists — holding at the door", {
+        error_code: "INTERNAL",
+        tenant_id: deps.tenantId,
+        provider: identity.provider,
+        account_verdict: account.kind,
+        alert: "OPERATOR_ATTENTION",
+      });
+      return PENDING_APPROVAL_REDIRECT;
+    }
     if (access.status === "blocked") {
       deps.logger.warn("Sign-in refused: this identity is blocked", {
         error_code: "UNAUTHORIZED",

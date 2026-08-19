@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { makeDbHandle, type Database, type DbExecutor } from "./client";
 import { findPgError } from "./db-errors";
@@ -16,6 +16,7 @@ import {
   tenants,
   users,
 } from "./schema";
+import { makeGlobalIdentityTestLock } from "./__fixtures__/global-identity-lock";
 
 /**
  * The M1.1 backfill (drizzle/0013) — the migration that decides who can still
@@ -83,7 +84,14 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
   const handle = makeDbHandle({ url: url ?? "postgres://unused", maxPoolSize: 3 });
   const statements = loadBackfillStatements();
 
+  // The replayed SQL scans the WHOLE access_request table; since M1.2 other
+  // files write global identity rows concurrently — serialise or race (see the
+  // lock's module doc).
+  const globalLock = makeGlobalIdentityTestLock(url ?? "postgres://unused");
+  beforeAll(() => globalLock.acquire());
+
   afterAll(async () => {
+    await globalLock.release();
     await handle.close();
   });
 

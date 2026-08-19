@@ -18,6 +18,19 @@ export const ERROR_CODES = [
   "ACCESS_FORBIDDEN",
   /** No access request with that id in this tenant. */
   "ACCESS_REQUEST_NOT_FOUND",
+  // Multi-tenant session (M1.2, doc 10 §3)
+  /**
+   * Signed in, but no tenant is selected (no cookie and more than one — or
+   * zero — membership). NOT an error of the operator: the UI answers with the
+   * tenant picker (state NoMembership / chưa chọn, docs/09 §3.8).
+   */
+  "TENANT_NOT_SELECTED",
+  /**
+   * Has a membership in the tenant but lacks the required role. Deliberately
+   * distinct from 404 (no membership = resource does not exist for you) and
+   * from ACCESS_FORBIDDEN (the legacy /access screen gate, retiring at M2.4).
+   */
+  "FORBIDDEN",
   "JOB_PAYLOAD_INVALID",
   // Data pipeline (E2/E3)
   "DRIVE_ERROR",
@@ -90,6 +103,8 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   QUEUE_ERROR: "Hàng đợi công việc gặp sự cố. Vui lòng thử lại sau ít phút.",
   ACCESS_FORBIDDEN: "Tài khoản của bạn không có quyền thực hiện thao tác này.",
   ACCESS_REQUEST_NOT_FOUND: "Không tìm thấy yêu cầu truy cập tương ứng.",
+  TENANT_NOT_SELECTED: "Bạn chưa chọn công ty làm việc. Hãy chọn một công ty để tiếp tục.",
+  FORBIDDEN: "Vai trò của bạn trong công ty này không đủ quyền thực hiện thao tác.",
   JOB_PAYLOAD_INVALID: "Dữ liệu công việc nền không hợp lệ — công việc đã bị từ chối.",
   DRIVE_ERROR: "Không truy cập được Google Drive. Kiểm tra quyền Service Account hoặc thử lại sau.",
   SHEET_ERROR: "Không đọc được Google Sheet. Kiểm tra quyền Service Account hoặc thử lại sau.",
@@ -142,6 +157,8 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   QUEUE_ERROR: "Job queue operation failed",
   ACCESS_FORBIDDEN: "Operator is not allowed to perform this administrative action",
   ACCESS_REQUEST_NOT_FOUND: "Access request not found in this tenant",
+  TENANT_NOT_SELECTED: "Signed-in account has not selected an active tenant",
+  FORBIDDEN: "Membership role is below the required role for this action",
   JOB_PAYLOAD_INVALID: "Job payload failed schema validation",
   DRIVE_ERROR: "Google Drive operation failed",
   SHEET_ERROR: "Google Sheets operation failed",

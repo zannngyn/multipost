@@ -12,13 +12,22 @@ import {
   isAccessStatus,
   isOperatorProvider,
   isOperatorRole,
+  isPlaceholderProviderAccountId,
   type AccessStatus,
   type OperatorProvider,
 } from "@/shared/operator-access";
 
 import type { Database, DbExecutor } from "./client";
 import { findPgError, wrapDbError } from "./db-errors";
-import { accessRequests, auditLogs, users, type AccessRequestRow } from "./schema";
+import {
+  accessRequests,
+  accounts,
+  auditLogs,
+  identities,
+  memberships,
+  users,
+  type AccessRequestRow,
+} from "./schema";
 import { forTenant, type TenantScopedDb } from "./tenant-scope";
 
 /**
@@ -309,7 +318,18 @@ export class DrizzleAccessRequestRepo implements AccessRequestRepo {
         if (!updated) return null;
 
         if (input.status === "approved" && isOperatorRole(input.role)) {
-          await this.upsertOperator(txScope, current, input.role);
+          // M1.2: the decision provisions the WHOLE identity chain — account,
+          // identity, membership and app_user — in this same transaction, or
+          // the approved person cannot sign in at all (session resolution reads
+          // account+membership, not the registry, from M1.2 on).
+          const accountId = await this.provisionAccount(txScope, current, input.role);
+          await this.upsertOperator(txScope, current, input.role, accountId);
+        }
+        if (input.status === "blocked") {
+          // Blocked wins ACROSS tenants (M1.1 backfill semantics): the account
+          // is suspended and every active membership anywhere is removed, so a
+          // block here cannot be dodged by switching company.
+          await this.suspendAccount(txScope, current);
         }
 
         await txScope.db.insert(auditLogs).values(
@@ -377,6 +397,7 @@ export class DrizzleAccessRequestRepo implements AccessRequestRepo {
     scope: TenantScopedDb<DbExecutor>,
     request: AccessRequest,
     role: NonNullable<AccessRequest["role"]>,
+    accountId: string | null,
   ): Promise<void> {
     await scope.db
       .insert(users)
@@ -385,11 +406,189 @@ export class DrizzleAccessRequestRepo implements AccessRequestRepo {
           email: request.sessionEmail,
           name: request.displayName ?? request.sessionEmail,
           role,
+          accountId,
         }),
       )
       .onConflictDoUpdate({
         target: [users.tenantId, users.email],
-        set: { role, updatedAt: new Date() },
+        set: { role, accountId, updatedAt: new Date() },
       });
+  }
+
+  /**
+   * Approve → the person exists in the account tables (M1.2). Mirrors the M1.1
+   * backfill, case-fold included:
+   * - the identity is looked up by SESSION ADDRESS first; a placeholder or
+   *   stale `provider_account_id` is PATCHED in place (never a second insert —
+   *   `identity_session_email_uq` forbids it);
+   * - a fresh identity gets a fresh account;
+   * - membership is upserted on (tenant, account); any role/status change bumps
+   *   `version`, which is what invalidates caches across processes;
+   * - the account is re-activated ONLY if no OTHER tenant still blocks one of
+   *   its identities — "blocked wins across tenants".
+   */
+  private async provisionAccount(
+    scope: TenantScopedDb<DbExecutor>,
+    request: AccessRequest,
+    role: NonNullable<AccessRequest["role"]>,
+  ): Promise<string> {
+    const sessionEmail = request.sessionEmail.toLowerCase();
+
+    const identityRows = await scope.db
+      .select({
+        id: identities.id,
+        accountId: identities.accountId,
+        provider: identities.provider,
+        providerAccountId: identities.providerAccountId,
+      })
+      .from(identities)
+      .where(eq(sql`lower(${identities.sessionEmail})`, sessionEmail))
+      .limit(1);
+    const existing = identityRows[0];
+
+    let accountId: string;
+    if (existing) {
+      // --- Edge case first: the address is owned by ANOTHER provider --------
+      // (structurally impossible for Facebook synthetics; for Google it would
+      // mean corruption). Adopting it would be the account-linking hijack, so
+      // the whole decision fails loudly instead of approving the wrong person.
+      if (existing.provider !== request.provider) {
+        throw new AppError("INTERNAL", {
+          message: "Identity under this session address belongs to another provider",
+          userMessage: "Dữ liệu định danh không nhất quán — vui lòng báo quản trị hệ thống.",
+          context: {
+            tenant_id: scope.tenantId,
+            session_email: sessionEmail,
+            stored_provider: existing.provider,
+            request_provider: request.provider,
+          },
+        });
+      }
+      accountId = existing.accountId;
+      if (existing.providerAccountId !== request.providerAccountId) {
+        /**
+         * Same guard as the sign-in path (shared rule, docs/09 §3.1): only a
+         * PLACEHOLDER may be overwritten. A stored REAL sub that differs means
+         * the address was recycled to a different person — approving would
+         * graft the newcomer onto the old owner's account, memberships and
+         * all. The decision fails loudly; the repair is deleting/deciding the
+         * conflicting rows deliberately, not an implicit takeover.
+         */
+        if (!isPlaceholderProviderAccountId(existing.providerAccountId)) {
+          throw new AppError("INTERNAL", {
+            message: "Approval sub differs from the stored REAL sub of this address",
+            userMessage:
+              "Địa chỉ này đang thuộc về một định danh khác — vui lòng báo quản trị hệ thống.",
+            context: {
+              tenant_id: scope.tenantId,
+              session_email: sessionEmail,
+              reason: "PROVIDER_SUB_MISMATCH",
+            },
+          });
+        }
+        // The registry row carries the REAL sub — patch the backfill placeholder.
+        await scope.db
+          .update(identities)
+          .set({ providerAccountId: request.providerAccountId })
+          .where(eq(identities.id, existing.id));
+      }
+    } else {
+      const accountRows = await scope.db
+        .insert(accounts)
+        .values({ displayName: request.displayName ?? null })
+        .returning({ id: accounts.id });
+      accountId = accountRows[0].id;
+      await scope.db.insert(identities).values({
+        accountId,
+        provider: request.provider,
+        providerAccountId: request.providerAccountId,
+        sessionEmail,
+        email: request.email,
+      });
+    }
+
+    /**
+     * Re-activate unless another tenant still BLOCKS one of this account's
+     * identities: approved-in-A + blocked-in-B stays one suspended account with
+     * no usable sign-in (backfill step 1a semantics).
+     */
+    const otherBlocks = await scope.db
+      .select({ id: accessRequests.id })
+      .from(accessRequests)
+      .innerJoin(
+        identities,
+        and(
+          eq(identities.provider, accessRequests.provider),
+          eq(identities.providerAccountId, accessRequests.providerAccountId),
+        ),
+      )
+      .where(
+        and(
+          eq(identities.accountId, accountId),
+          eq(accessRequests.status, "blocked"),
+          sql`${accessRequests.id} <> ${request.id}`,
+        ),
+      )
+      .limit(1);
+    if (otherBlocks.length === 0) {
+      await scope.db.update(accounts).set({ status: "active" }).where(eq(accounts.id, accountId));
+    } else {
+      this.deps.logger.warn("Approved here, still blocked elsewhere — account stays suspended", {
+        tenant_id: scope.tenantId,
+        session_email: sessionEmail,
+        alert: "OPERATOR_ATTENTION",
+      });
+    }
+
+    await scope.db
+      .insert(memberships)
+      .values({ tenantId: scope.tenantId, accountId, role, status: "active" })
+      .onConflictDoUpdate({
+        target: [memberships.tenantId, memberships.accountId],
+        set: {
+          role,
+          status: "active",
+          // Bump ONLY on real change: a repeated identical approval must not
+          // invalidate every cache in the fleet for nothing.
+          version: sql`CASE WHEN ${memberships.role} IS DISTINCT FROM excluded.role OR ${memberships.status} <> 'active' THEN ${memberships.version} + 1 ELSE ${memberships.version} END`,
+          updatedAt: new Date(),
+        },
+      });
+
+    return accountId;
+  }
+
+  /** Block → platform-wide: suspended account, every membership removed. */
+  private async suspendAccount(
+    scope: TenantScopedDb<DbExecutor>,
+    request: AccessRequest,
+  ): Promise<void> {
+    const sessionEmail = request.sessionEmail.toLowerCase();
+    // Provider in the key, symmetric with provisionAccount: an address that
+    // somehow belongs to ANOTHER provider's identity must not get that
+    // stranger's account suspended by this tenant's decision.
+    const identityRows = await scope.db
+      .select({ accountId: identities.accountId })
+      .from(identities)
+      .where(
+        and(
+          eq(identities.provider, request.provider),
+          eq(sql`lower(${identities.sessionEmail})`, sessionEmail),
+        ),
+      )
+      .limit(1);
+    const existing = identityRows[0];
+    // Never approved → no account to suspend; the blocked registry row alone
+    // already keeps them out of the sign-in gate.
+    if (!existing) return;
+
+    await scope.db
+      .update(accounts)
+      .set({ status: "suspended" })
+      .where(eq(accounts.id, existing.accountId));
+    await scope.db
+      .update(memberships)
+      .set({ status: "removed", version: sql`${memberships.version} + 1` })
+      .where(and(eq(memberships.accountId, existing.accountId), eq(memberships.status, "active")));
   }
 }
