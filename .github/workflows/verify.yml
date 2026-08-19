@@ -16,6 +16,12 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 20
+    env:
+      # `tsc --noEmit` over this project needs more than Node's default ~2 GB
+      # old-space cap and aborts with SIGABRT (exit 134) — a stack trace about
+      # mark-compacts, not a type error, so it reads like a runner fault. Same
+      # ceiling the Dockerfile sets for `next build`, which type-checks too.
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v4
 
