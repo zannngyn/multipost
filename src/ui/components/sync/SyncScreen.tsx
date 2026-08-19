@@ -364,6 +364,7 @@ function SyncStatusResult({
       <SyncFunnel counts={run.counts} finishedAt={run.finishedAt} />
       <SyncIssuesTable
         issues={run.issues}
+        issueGroups={run.issueGroups}
         total={run.counts.issuesTotal}
         truncated={run.counts.issuesTruncated}
       />

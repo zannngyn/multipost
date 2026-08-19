@@ -16,6 +16,7 @@ import type {
   MediaRepo,
   ProductRepo,
   SyncIssue,
+  SyncIssueGroup,
   SyncRunCounts,
   SyncRunRepo,
   SyncRunStatus,
@@ -34,6 +35,26 @@ import type { SheetSource } from "@/core/ports/sheet-source";
 /** A run must not write thousands of JSON rows; counts stay exact regardless. */
 export const MAX_STORED_ISSUES = 200;
 
+/** Examples kept per error code. Three is what the screen shows. */
+export const MAX_ISSUE_EXAMPLES = 3;
+
+/**
+ * Issue codes written by this usecase. They are the operator's severity signal,
+ * so three DIFFERENT situations must not share one code:
+ *   FILE_NAME_INVALID  — file dropped, somebody has to rename it on Drive
+ *   FILE_DUPLICATE     — same name twice, newest kept; nothing to fix
+ *   FILE_NEEDS_REVIEW  — file WAS imported, but its name is ambiguous
+ */
+export const SYNC_ISSUE_CODES = {
+  fileNameInvalid: "FILE_NAME_INVALID",
+  fileDuplicate: "FILE_DUPLICATE",
+  fileNeedsReview: "FILE_NEEDS_REVIEW",
+  sheetError: "SHEET_ERROR",
+  sheetRowInvalid: "SHEET_ROW_INVALID",
+  productNotFound: "PRODUCT_NOT_FOUND",
+  mediaNotFound: "MEDIA_NOT_FOUND",
+} as const;
+
 export interface SyncCatalogInput {
   readonly tenantId: string;
 }
@@ -44,6 +65,8 @@ export interface SyncCatalogResult {
   readonly counts: SyncRunCounts;
   /** Truncated to MAX_STORED_ISSUES — `counts` keeps the full picture. */
   readonly issues: readonly SyncIssue[];
+  /** One row per error code with EXACT counts — never truncated. */
+  readonly issueGroups: readonly SyncIssueGroup[];
   /** Expected columns that are missing/renamed in the sheet. */
   readonly schemaDrift: readonly string[];
 }
@@ -103,11 +126,32 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
     // Counted even when not stored: the operator must see that 250 files were
     // rejected, not just the 200 the run kept (business rule 5).
     let issuesTotal = 0;
+    // Grouping happens BEFORE the cap, so "4.812 file sai tên" stays true even
+    // though only 200 rows are stored. Bounded by the code vocabulary above.
+    const groupByCode = new Map<string, { errorCode: string; count: number; examples: SyncIssue[] }>();
     const addIssue = (issue: SyncIssue) => {
       issuesTotal += 1;
       if (issues.length < MAX_STORED_ISSUES) issues.push(issue);
+
+      const group = groupByCode.get(issue.errorCode);
+      if (!group) {
+        groupByCode.set(issue.errorCode, {
+          errorCode: issue.errorCode,
+          count: 1,
+          examples: [issue],
+        });
+        return;
+      }
+      group.count += 1;
+      if (group.examples.length < MAX_ISSUE_EXAMPLES) group.examples.push(issue);
     };
     const issueCounters = () => ({ issuesTotal, issuesTruncated: issuesTotal > issues.length });
+    // Biggest group first: the fix on top removes the most rows. Ties break on
+    // the code so two runs of the same data write the same order.
+    const issueGroups = (): SyncIssueGroup[] =>
+      [...groupByCode.values()].sort(
+        (a, b) => b.count - a.count || a.errorCode.localeCompare(b.errorCode),
+      );
 
     try {
       // --- Sheet ----------------------------------------------------------
@@ -128,19 +172,19 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
         });
         for (const column of schemaDrift) {
           addIssue({
-            errorCode: "SHEET_ERROR",
+            errorCode: SYNC_ISSUE_CODES.sheetError,
             reason: "COLUMN_MISSING",
             ref: column,
-            detail: `Column '${column}' is missing from tab '${config.sheetName}'`,
+            detail: `Tab '${config.sheetName}' không có cột '${column}' — thêm lại đúng tên cột rồi đồng bộ lại.`,
           });
         }
       }
       for (const column of snapshot.duplicateColumns) {
         addIssue({
-          errorCode: "SHEET_ERROR",
+          errorCode: SYNC_ISSUE_CODES.sheetError,
           reason: "COLUMN_DUPLICATED",
           ref: column,
-          detail: `Column '${column}' appears more than once; the first one was used`,
+          detail: `Cột '${column}' xuất hiện nhiều lần trên Sheet — hệ thống lấy cột đầu tiên. Xoá cột thừa để chắc chắn đọc đúng.`,
         });
       }
 
@@ -166,7 +210,7 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
           if (!hasAnyValue) continue;
           sheetRowsRejected += 1;
           addIssue({
-            errorCode: "SHEET_ROW_INVALID",
+            errorCode: SYNC_ISSUE_CODES.sheetRowInvalid,
             reason: parsedRow.issue,
             ref: `row ${parsedRow.rowNumber}`,
             detail: parsedRow.detail,
@@ -182,10 +226,10 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
       for (const product of productByCode.values()) {
         if (!product.hasConflict) continue;
         addIssue({
-          errorCode: "SHEET_ROW_INVALID",
+          errorCode: SYNC_ISSUE_CODES.sheetRowInvalid,
           reason: "DUPLICATE_CODE_CONFLICT",
           ref: product.content.code,
-          detail: `Code appears on rows ${product.sourceRows.join(", ")} with conflicting data — posting is blocked`,
+          detail: `Mã này nằm ở các dòng ${product.sourceRows.join(", ")} nhưng dữ liệu khác nhau — đã chặn đăng. Gộp về một dòng rồi đồng bộ lại.`,
         });
       }
 
@@ -201,9 +245,11 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
       for (const file of driveFiles) {
         const asset = toMediaAsset(file);
         if (!asset.ok) {
+          // The file is DROPPED — this is the only media issue an operator must
+          // act on, so it keeps the error-shaped code.
           mediaRejected += 1;
           addIssue({
-            errorCode: "FILE_NAME_INVALID",
+            errorCode: SYNC_ISSUE_CODES.fileNameInvalid,
             reason: asset.issue,
             ref: file.name,
             detail: asset.detail,
@@ -211,8 +257,9 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
           continue;
         }
         if (asset.note) {
+          // The file WAS imported; the note is a "please look", not a rejection.
           addIssue({
-            errorCode: "FILE_NAME_INVALID",
+            errorCode: SYNC_ISSUE_CODES.fileNeedsReview,
             reason: asset.note.reason,
             ref: file.name,
             detail: asset.note.detail,
@@ -223,11 +270,12 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
 
       const { kept, dropped } = dedupeMediaByName(parsedAssets);
       for (const duplicate of dropped) {
+        // Nothing to fix on Drive: the run picked the newest copy on purpose.
         addIssue({
-          errorCode: "FILE_NAME_INVALID",
+          errorCode: SYNC_ISSUE_CODES.fileDuplicate,
           reason: "DUPLICATE_FILE_NAME",
           ref: duplicate.fileName,
-          detail: `Older copy skipped (file id ${duplicate.driveFileId}); the newest modifiedTime wins`,
+          detail: `Có nhiều file trùng tên; hệ thống giữ bản sửa gần nhất và bỏ bản cũ (file id ${duplicate.driveFileId}). Không cần sửa gì.`,
         });
       }
 
@@ -240,18 +288,20 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
 
       for (const code of codesWithoutProduct) {
         addIssue({
-          errorCode: "PRODUCT_NOT_FOUND",
+          errorCode: SYNC_ISSUE_CODES.productNotFound,
           reason: "MEDIA_WITHOUT_SHEET_ROW",
           ref: code,
-          detail: "Drive has photos for this code but the sheet has no row — cannot post it",
+          detail:
+            "Drive có ảnh cho mã này nhưng Sheet chưa có dòng nào — thêm dòng vào Sheet (hoặc sửa mã trong tên file) rồi đồng bộ lại. Chưa đăng được.",
         });
       }
       for (const code of codesWithoutMedia) {
         addIssue({
-          errorCode: "MEDIA_NOT_FOUND",
+          errorCode: SYNC_ISSUE_CODES.mediaNotFound,
           reason: "SHEET_ROW_WITHOUT_MEDIA",
           ref: code,
-          detail: "Sheet has a row for this code but the Drive folder has no matching file",
+          detail:
+            "Sheet có mã này nhưng thư mục Drive chưa có file nào khớp — tải ảnh lên (đặt tên MÃSP-Màu (số)) rồi đồng bộ lại. Chưa đăng được.",
         });
       }
 
@@ -286,6 +336,7 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
           ? "partial"
           : "succeeded";
 
+      const groups = issueGroups();
       await deps.syncRuns.finish({
         tenantId,
         syncRunId,
@@ -293,10 +344,16 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
         finishedAt: deps.clock.now(),
         counts,
         issues,
+        issueGroups: groups,
       });
 
-      runLog.info("Catalog sync finished", { status, ...counts, issues_stored: issues.length });
-      return { syncRunId, status, counts, issues, schemaDrift };
+      runLog.info("Catalog sync finished", {
+        status,
+        ...counts,
+        issues_stored: issues.length,
+        issue_groups: groups.map((group) => `${group.errorCode}=${group.count}`),
+      });
+      return { syncRunId, status, counts, issues, issueGroups: groups, schemaDrift };
     } catch (error) {
       // Mark the run failed with a reason, then rethrow: never swallow, never
       // leave a `running` row behind (CLAUDE.md technical rules 4 + 5).
@@ -319,6 +376,7 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
           // The run produced no numbers, but the issues it did detect stay visible.
           counts: { ...emptyCounts(), ...issueCounters() },
           issues,
+          issueGroups: issueGroups(),
           errorCode: appError.code,
           errorMessage: appError.message,
         });
@@ -363,7 +421,7 @@ function toMediaAsset(file: DriveFile): MediaAssetResult {
       name.otherProductCodes.length > 0
         ? {
             reason: "MULTIPLE_PRODUCT_CODES",
-            detail: `Attributed to ${name.productCode}; the name also carries ${name.otherProductCodes.join(", ")}`,
+            detail: `Tên file có nhiều mã sản phẩm; hệ thống gán file này cho ${name.productCode} (mã đứng đầu tên). Các mã còn lại: ${name.otherProductCodes.join(", ")}. Kiểm tra lại nếu ảnh thuộc mã khác.`,
           }
         : undefined,
     value: {

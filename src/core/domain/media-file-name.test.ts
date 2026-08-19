@@ -48,7 +48,12 @@ describe("parseMediaFileName — edge cases first", () => {
   it("rejects a code that appears but does not open the name", () => {
     const result = parseMediaFileName("DV Huyền Thạch MGAC513 MMQD554.jpg");
     expect(result).toMatchObject({ ok: false, issue: "NO_PRODUCT_CODE" });
-    if (!result.ok) expect(result.detail).toContain("does not start");
+    // The detail is read by an operator, so it is Vietnamese — and it still
+    // names the code that was found, which is how the file gets renamed.
+    if (!result.ok) {
+      expect(result.detail).toContain("MGAC513");
+      expect(result.detail).toContain("không đứng đầu");
+    }
   });
 
   it("attributes an outfit-set photo to the leading code and flags it", () => {

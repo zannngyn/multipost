@@ -5,21 +5,28 @@ import { useId, useState } from "react";
 import { cn } from "@/shared/utils";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { formatCount, percentOf, segmentWidth } from "@/ui/components/sync/sync-format";
-import { groupSyncIssues, type IssueGroup } from "@/ui/components/sync/sync-issue-groups";
-import type { SyncIssue, SyncIssueSeverity } from "@/ui/schemas/sync.schema";
+import {
+  fromIssueGroups,
+  groupSyncIssues,
+  totalOfGroups,
+  type IssueGroup,
+} from "@/ui/components/sync/sync-issue-groups";
+import type { SyncIssue, SyncIssueGroup, SyncIssueSeverity } from "@/ui/schemas/sync.schema";
 
 /**
  * "Cần xử lý" — the block that answers "vì sao tấm ảnh này không có trong bài?"
  * without opening a log (business rule 5).
  *
- * Grouped by `errorCode`, because a run produces thousands of rows and four
- * reasons: a flat list is unreadable, and the operator fixes a REASON, not a
+ * Grouped by `errorCode`, because a run produces thousands of rows and a handful
+ * of reasons: a flat list is unreadable, and the operator fixes a REASON, not a
  * row.
  *
- * The honesty problem this block must not hide: `issues[]` is capped server-side
- * (200 rows) while `counts.issuesTotal` is exact. Every number below is
- * therefore computed on the CAPPED list, and when the cap was hit the header
- * says so before any number is read.
+ * Two paths, and the difference is visible on screen:
+ * - `issueGroups` present — the server counted every issue before capping the
+ *   list, so the numbers here are the real ones and no warning is needed.
+ * - `issueGroups === null` (a run stored before that existed) — the only rows
+ *   available are the capped `issues[]`, so every number is computed on THAT
+ *   list and the header says so before any number is read.
  */
 
 const SEVERITY_DOT: Record<SyncIssueSeverity, string> = {
@@ -43,20 +50,29 @@ const SEVERITY_LABEL: Record<SyncIssueSeverity, string> = {
 
 export function SyncIssuesTable({
   issues,
+  issueGroups,
   total,
   truncated,
 }: {
-  /** The stored (possibly capped) list — the only rows we can show. */
+  /** The stored (possibly capped) list — the rows the examples come from. */
   issues: readonly SyncIssue[];
+  /** Exact per-code counts, or null for a run stored before they existed. */
+  issueGroups: readonly SyncIssueGroup[] | null;
   /** Uncapped number detected by the run (`counts.issuesTotal`). */
   total: number;
   truncated: boolean;
 }) {
   const headingId = `${useId()}-issues`;
-  const groups = groupSyncIssues(issues);
-  // Share is computed on what is DISPLAYED, never on `total`: mixing the two
-  // would produce percentages that do not add up to the bar they sit in.
-  const shown = issues.length;
+  const hasExactGroups = issueGroups !== null;
+  const groups = hasExactGroups ? fromIssueGroups(issueGroups) : groupSyncIssues(issues);
+  // Denominator of the share bar. With exact groups it is the run's own total;
+  // without them it is the number of rows on screen, because mixing the two
+  // produces percentages that do not add up to the bar they sit in.
+  const shown = hasExactGroups ? total : issues.length;
+  // Exact counts that do not add up to the run's own total mean one of the two
+  // numbers is wrong. Saying so is the only honest option (business rule 5).
+  const groupSum = totalOfGroups(groups);
+  const countsDisagree = hasExactGroups && groups.length > 0 && groupSum !== total;
 
   return (
     <section aria-labelledby={headingId} className="@container space-y-2.5">
@@ -69,7 +85,9 @@ export function SyncIssuesTable({
         </p>
       </div>
 
-      {truncated ? (
+      {/* Only the old path needs the warning: with exact groups the numbers
+          below already cover every issue, and the cap affects examples only. */}
+      {truncated && !hasExactGroups ? (
         <p
           role="status"
           className="border-warning/40 bg-warning/10 text-warning-foreground rounded-xl border px-3.5 py-2.5 text-sm"
@@ -78,6 +96,17 @@ export function SyncIssuesTable({
           Số theo từng lý do bên dưới{" "}
           <span className="font-medium">chỉ tính trên {formatCount(shown)} vấn đề đó</span> — không
           phải toàn bộ. Xử lý xong rồi chạy đồng bộ lại để xem phần còn lại.
+        </p>
+      ) : null}
+
+      {countsDisagree ? (
+        <p
+          role="status"
+          className="border-warning/40 bg-warning/10 text-warning-foreground rounded-xl border px-3.5 py-2.5 text-sm"
+        >
+          Cộng số theo từng lý do được {formatCount(groupSum)}, khác với tổng {formatCount(total)}{" "}
+          mà lần chạy ghi nhận. Lấy con số theo từng lý do làm chuẩn và báo quản trị viên kiểm tra
+          lần chạy này.
         </p>
       ) : null}
 
@@ -128,8 +157,10 @@ export function SyncIssuesTable({
                             arbitrary `appError.code` of a crashed run
                             (sync-catalog.ts) whose length nothing bounds.
                   Tỉ trọng  w-24 =  96px — bar + " 61%"
-                  Số        w-16 =  64px — the count is bounded by the 200-row
-                            server cap, so at most 3 digits (~24px)
+                  Số        w-16 =  64px — the count is no longer capped at 200
+                            (it is now the run's exact number), but it is still
+                            bounded by the folder: 5.500 real files = 5 glyphs
+                            with the thousands dot, ~40px at font-mono
                   nút       w-24 =  96px — "Xem ví dụ", no wrap
                 Fixed total 432px, leaving ~342px for the instruction at a
                 774px table (viewport 1440). Handing these columns more is what
@@ -209,7 +240,7 @@ function IssueGroupRows({ group, shown }: { group: IssueGroup; shown: number }) 
               />
             </span>
             <span className="text-muted-foreground shrink-0 font-mono text-xs tabular-nums">
-              {share !== null ? `${share}%` : "—"}
+              {share ?? "—"}
             </span>
           </span>
         </td>
