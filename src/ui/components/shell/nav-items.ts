@@ -81,3 +81,44 @@ function normalise(value: string): string {
   if (value.length > 1 && value.endsWith("/")) return value.slice(0, -1);
   return value;
 }
+
+/** One nav entry plus the section it came from, flattened for search. */
+export interface FlatNavItem {
+  readonly href: string;
+  readonly label: string;
+  readonly section: string;
+}
+
+/**
+ * The nav tree as a flat list. The section title travels with each entry so the
+ * command palette can group results the way the sidebar already groups them —
+ * one destination list, two renderings.
+ */
+export function flattenNavItems(
+  sections: readonly NavSection[] = NAV_SECTIONS,
+): readonly FlatNavItem[] {
+  return sections.flatMap((section) =>
+    section.items.map((item) => ({
+      href: item.href,
+      label: item.label,
+      section: section.title,
+    })),
+  );
+}
+
+/**
+ * Diacritic-free lower-case key. Operators type Vietnamese without tone marks
+ * far more often than with them, so "dong bo" has to find "Đồng bộ dữ liệu";
+ * substring matching on the raw label never would.
+ *
+ * NFD splits the tone marks off into the combining range, but leaves đ/Đ whole
+ * — those are separate letters, not accented d, and need their own pass.
+ */
+export function toSearchKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase();
+}
