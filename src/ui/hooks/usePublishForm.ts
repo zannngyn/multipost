@@ -93,6 +93,44 @@ export function usePublishForm(wizard: ComposeWizard) {
     setShareCaption(next);
   }, []);
 
+  /**
+   * E10 — puts the publish half of a stored draft back on screen.
+   *
+   * The schedule goes through `schedule.restore`, which re-judges the saved wall
+   * time against the clock RIGHT NOW: an hour that was in the future when the
+   * draft was saved may be in the past when it is reopened, and restoring the
+   * old verdict would show a stale sentence (or worse, none).
+   *
+   * Channel ids are restored as they were stored. A channel that has since been
+   * removed is not filtered out quietly here — the server refuses it by name
+   * when the batch is created, which is the answer that is actually true.
+   */
+  const restore = useCallback(
+    (draft: {
+      selectedChannelIds: readonly string[];
+      shareCaption: boolean;
+      captionOverrides: Record<string, string>;
+      schedule: { mode: "now" | "scheduled"; value: string };
+    }) => {
+      setFormError(null);
+      setSelected(new Set(draft.selectedChannelIds));
+      setShareCaption(draft.shareCaption);
+      setCaptionOverrides({ ...draft.captionOverrides });
+      schedule.restore(draft.schedule);
+    },
+    [schedule],
+  );
+
+  /** Back to an untouched publish form — used by "Xoá nháp". */
+  const reset = useCallback(() => {
+    setFormError(null);
+    setSelected(new Set<string>());
+    setShareCaption(true);
+    setCaptionOverrides({});
+    schedule.reset();
+    createBatch.reset();
+  }, [createBatch, schedule]);
+
   const submit = useCallback(() => {
     setFormError(null);
     createBatch.reset();
@@ -195,6 +233,9 @@ export function usePublishForm(wizard: ComposeWizard) {
     baseCaption,
     formError,
     submit,
+    /** E10 — draft restore / "Xoá nháp". */
+    restore,
+    reset,
     /**
      * The footer must be able to dim its button without re-deriving the guards.
      * It is a hint, not the gate: `submit` still checks everything and explains

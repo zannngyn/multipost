@@ -28,6 +28,8 @@ export interface ScheduleChoice {
   setMode: (mode: ScheduleMode) => void;
   setValue: (value: string) => void;
   resolve: () => ResolvedSchedule;
+  /** Puts a stored choice back on screen and re-judges it against the clock. */
+  restore: (choice: { mode: ScheduleMode; value: string }) => void;
   reset: () => void;
 }
 
@@ -60,11 +62,35 @@ export function useScheduleChoice(): ScheduleChoice {
     return { ok: true, scheduledAt: verdict.iso };
   }, [mode, value]);
 
+  /**
+   * Restores a saved choice (E10 draft) and judges it NOW, not against the clock
+   * of the day it was saved.
+   *
+   * It validates the value it is given rather than the one in state: React has
+   * not re-rendered yet at this point, so `resolve()` would still be looking at
+   * the previous value. The old verdict is never restored — an hour that was in
+   * the future yesterday is a lie today, and a stale red line under an untouched
+   * field is worse than none.
+   */
+  const restore = useCallback((choice: { mode: ScheduleMode; value: string }) => {
+    const nextMode: ScheduleMode = choice?.mode === "scheduled" ? "scheduled" : "now";
+    const nextValue = typeof choice?.value === "string" ? choice.value : "";
+    setModeState(nextMode);
+    setValueState(nextValue);
+
+    if (nextMode !== "scheduled" || nextValue.trim().length === 0) {
+      setError(null);
+      return;
+    }
+    const verdict = validateScheduleInput(nextValue, Date.now());
+    setError(verdict.ok ? null : verdict.message);
+  }, []);
+
   const reset = useCallback(() => {
     setModeState("now");
     setValueState("");
     setError(null);
   }, []);
 
-  return { mode, value, error, setMode, setValue, resolve, reset };
+  return { mode, value, error, setMode, setValue, resolve, restore, reset };
 }
