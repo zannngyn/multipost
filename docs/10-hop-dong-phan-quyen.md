@@ -1,6 +1,6 @@
 # Hợp đồng phân quyền (M0)
 
-> Trạng thái: **bản nháp chờ PM duyệt** — 19/08/2026. Là văn bản mà M1.1→M3.3 đối chiếu (doc 09 §4).
+> Trạng thái: **ĐÃ DUYỆT 19/08/2026** — PM chốt mục 8 theo đề xuất, điều chỉnh duy nhất ở 8.9 (trần theo gói subscription, tenant MYSP không trần). Là văn bản mà M1.1→M3.3 đối chiếu (doc 09 §4).
 > Nguồn: phân tích code thật của 40 file route (48 route×method) bởi 3 agent domain (data-pipeline, fb-publisher, caption-ai) + orchestrator; đã qua gate reviewer-qa. Mục 8 là các quyết định chờ PM, mỗi câu có đề xuất sẵn — chốt "theo đề xuất" hoặc ghi đè từng dòng. **Vai trò/tầng trong ma trận §4 là ĐỀ XUẤT thống nhất với §8** — PM ghi đè §8 thì sửa ma trận theo.
 
 ## 1. Thang vai trò & ranh giới
@@ -158,7 +158,7 @@ Cookie state hiện là JSON **không ký** mang `tenantId`, callback tin nguyê
 | B6 | `POST /api/posts/batches` không đọc session → hành động hệ trọng nhất có `createdBy=null` | Actor từ session |
 | B7 | `/api/posts/worker-health` + mọi route GET tenant-scoped **trừ** `/api/posts/drafts` (owner từ session) và `/api/access-requests` (có role guard): ai đăng nhập cũng đọc được tenant bất kỳ | Chính là B-8, M1.3 |
 
-## 8. Quyết định chờ PM — mỗi dòng có đề xuất, chốt "theo đề xuất" hoặc ghi đè
+## 8. Quyết định — PM ĐÃ CHỐT 19/08/2026 theo đề xuất (8.9 có điều chỉnh)
 
 | # | Câu hỏi | Đề xuất |
 |---|---|---|
@@ -170,7 +170,7 @@ Cookie state hiện là JSON **không ký** mang `tenantId`, callback tin nguyê
 | **8.6** | Link media ký sống qua revoke/suspend tới 24h (P7, P8) | Chấp nhận cho revoke membership (link do server mint, Meta là người dùng); **suspend tenant thì phải giết** → thêm `media_key_epoch` bump khi suspend/disconnect, làm ở M3.2 khi có nút suspend |
 | **8.7** | Số phận `/api/tenants/health` (P6) | Giữ, viewer, tenant từ context — hết vai trò oracle sau M1.3 |
 | **8.8** | Nháp người bị gỡ membership (R6) | **(c)** xoá khi `membership.status='removed'` — không mở API đọc nháp người khác |
-| **8.9** | Trần AI (M0-AI-5, M0-AI-8, P12) | Trần/ngày mặc định **$5/tenant/ngày** (hằng env), admin+ không tự nâng trong Phase này; thêm cột actor vào `ai_generation` ở M1.1 (đang không ghi ai bấm); rate-limit sync + captions để vé riêng |
+| **8.9** | Trần AI (M0-AI-5, M0-AI-8, P12) | **CHỐT có điều chỉnh:** trần treo theo **gói subscription** — thêm `tenant.plan` từ M1.1 (`'internal'` \| `'standard'`, mở rộng sau). Gói `internal` (tenant MYSP, người dùng chính hiện nay) **không trần**; gói khách mặc định $5/tenant/ngày (cấu hình theo plan, không phải env). Billing/thanh toán vẫn ngoài phạm vi 3 phần — plan chỉ là cột + bảng giới hạn. Thêm cột actor vào `ai_generation` ở M1.1; rate-limit sync + captions vé riêng |
 | **8.10** | Tên error code (P9) | Dùng `FORBIDDEN` mới cho thiếu vai trò (403); `ACCESS_FORBIDDEN` giữ cho màn access cũ tới khi nghỉ hưu; tạo `TENANT_NOT_SELECTED` (409), `TENANT_NOT_FOUND` (404) |
 | **8.11** | Backfill `ACCESS_REGISTRY_TENANT_ID` (P11) | M1.1: mỗi hàng `access_request.approved` → `account` + `identity` + `membership(tenant demo)`; registry ngừng là đường authorize sau M1.2, chỉ còn lịch sử |
 | **8.12** | Cửa sổ multipart uploads (R10) | `read-upload-form.ts` thuộc M1.3 (fb-publisher sở hữu, ui-web phối hợp field) |
