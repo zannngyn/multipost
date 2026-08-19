@@ -3,10 +3,16 @@ import Facebook from "next-auth/providers/facebook";
 import Google from "next-auth/providers/google";
 
 import { loadMetaOAuthConfig } from "@/composition/config";
-import { DEMO_TENANT_ID, FACEBOOK_CONNECT_SCOPES, getContainer } from "@/composition/container";
+import {
+  ACCESS_REGISTRY_TENANT_ID,
+  DEMO_TENANT_ID,
+  FACEBOOK_CONNECT_SCOPES,
+  getContainer,
+} from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
 import { buildBaseAuthConfig, loadAuthEnv } from "./auth.config";
+import { decideSignIn } from "./signin-gate";
 
 /**
  * Full Auth.js v5 instance: base config + the providers.
@@ -107,6 +113,31 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => {
 
   const config: NextAuthConfig = {
     ...base,
+    callbacks: {
+      ...base.callbacks,
+      /**
+       * Overrides the fail-closed env-only gate of auth.config: this one also
+       * consults the access registry (see ./signin-gate). The container is
+       * resolved per call, not at module load, so `next build` needs no DB.
+       */
+      signIn: ({ account, profile }) => {
+        const container = getContainer();
+        return decideSignIn(
+          {
+            tenantId: ACCESS_REGISTRY_TENANT_ID,
+            register: (input) => container.usecases.operatorAccess.register(input),
+            logger: container.logger,
+          },
+          {
+            provider: account?.provider,
+            providerAccountId: account?.providerAccountId,
+            email: profile?.email,
+            emailVerified: profile?.email_verified,
+            displayName: profile?.name,
+          },
+        );
+      },
+    },
     providers: [
       Google({
         clientId: env.GOOGLE_CLIENT_ID,

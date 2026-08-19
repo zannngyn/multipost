@@ -112,6 +112,10 @@ services:
       META_APP_ID: ${META_APP_ID:-}
       META_APP_SECRET: ${META_APP_SECRET:-}
       META_OAUTH_REDIRECT_URI: ${META_OAUTH_REDIRECT_URI:-}
+      # E2 — "Kết nối Google Drive". Reuses GOOGLE_CLIENT_ID/SECRET above; only
+      # the redirect URI is its own, and it must be registered in the same
+      # OAuth client. Empty = the connect button says which variable is missing.
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-}
     volumes:
       # E9 mode B — the web process WRITES operator uploads here. Without this
       # mount the bytes land in the container layer: gone on the next rebuild,
@@ -201,6 +205,12 @@ services:
       #
       # Reads the Drive files a post is made of.
       GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+      # E2 — a tenant that connected their OWN Google account is read with
+      # THEIR refresh token, and refreshing it needs the OAuth app itself.
+      # Without these two the worker reaches Drive only for tenants still on
+      # the Service Account.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       # Opens the sealed Page tokens in tenant_integration. Without it there is
       # no way to talk to Facebook at all.
       TENANT_SECRETS_ENC_KEY: ${TENANT_SECRETS_ENC_KEY:-}

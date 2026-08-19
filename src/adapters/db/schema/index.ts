@@ -3,6 +3,7 @@ export * from "./tenant";
 export * from "./tenant-integration";
 export * from "./user";
 export * from "./audit-log";
+export * from "./access-request";
 export * from "./sync-run";
 export * from "./product";
 export * from "./media-asset";

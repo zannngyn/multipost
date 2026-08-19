@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isAllowedEmail, isAllowedFacebookUser } from "./auth.config";
+import {
+  isAllowedEmail,
+  isAllowedFacebookUser,
+  isBootstrapAdminEmail,
+  passesDomainFilter,
+} from "./auth.config";
 import { isDevFakeSessionEnabled } from "./dev-session";
 import { DEFAULT_RETURN_URL, safeReturnUrl } from "./return-url";
 
@@ -156,5 +161,59 @@ describe("isDevFakeSessionEnabled — two independent guards", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("DEV_FAKE_SESSION", "1");
     expect(isDevFakeSessionEnabled()).toBe(true);
+  });
+});
+
+/**
+ * The B1 split, at the level of the two pure helpers: a DOMAIN filters, an
+ * exact ADDRESS grants. Mixing the two made every colleague an unblockable
+ * admin, so both halves are pinned down here.
+ */
+describe("passesDomainFilter — a filter, never a grant", () => {
+  it("passes everything when the list is empty or absent — the registry decides", () => {
+    expect(passesDomainFilter("anyone@gmail.com", [])).toBe(true);
+    expect(passesDomainFilter("anyone@gmail.com", undefined)).toBe(true);
+  });
+
+  it("passes an address inside a listed domain", () => {
+    expect(passesDomainFilter("boss@mysp.vn", ALLOWED)).toBe(true);
+  });
+
+  it("blocks an address outside every listed domain", () => {
+    expect(passesDomainFilter("boss@elsewhere.com", ALLOWED)).toBe(false);
+  });
+
+  it("blocks a non-string", () => {
+    expect(passesDomainFilter(undefined, ALLOWED)).toBe(false);
+  });
+});
+
+describe("isBootstrapAdminEmail — exact addresses only", () => {
+  const ADMINS = ["boss@mysp.vn", "owner@example.com"];
+
+  it("matches an exact address, case- and space-insensitively", () => {
+    expect(isBootstrapAdminEmail("  Boss@MYSP.VN ", ADMINS)).toBe(true);
+  });
+
+  it("does NOT match another address in the same domain", () => {
+    expect(isBootstrapAdminEmail("colleague@mysp.vn", ADMINS)).toBe(false);
+  });
+
+  it("does not treat a bare domain as a member", () => {
+    expect(isBootstrapAdminEmail("mysp.vn", ADMINS)).toBe(false);
+  });
+
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["a number", 42],
+    ["empty", ""],
+  ])("rejects %s", (_label, value) => {
+    expect(isBootstrapAdminEmail(value, ADMINS)).toBe(false);
+  });
+
+  it("rejects everyone when the list is empty or absent — fail closed", () => {
+    expect(isBootstrapAdminEmail("boss@mysp.vn", [])).toBe(false);
+    expect(isBootstrapAdminEmail("boss@mysp.vn", undefined)).toBe(false);
   });
 });

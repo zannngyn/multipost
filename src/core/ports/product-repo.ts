@@ -19,6 +19,13 @@ export interface ProductRepo {
   upsertMany(tenantId: string, products: readonly Product[], syncRunId: string): Promise<number>;
   /** Removes products not touched by `syncRunId`. Returns rows deleted. */
   deleteStale(tenantId: string, syncRunId: string): Promise<number>;
+  /**
+   * How many products this tenant currently has. Read by the sync BEFORE
+   * `deleteStale`: a sheet that suddenly parses to zero rows while the catalog
+   * holds hundreds is a permission/tab problem, not an emptied shop, and the
+   * difference is only visible by comparing the two numbers.
+   */
+  countAll(tenantId: string): Promise<number>;
 }
 
 /** One row the E9.4 sweep may remove. Carries its tenant: the sweep has none. */
@@ -39,6 +46,14 @@ export interface MediaRepo {
    * alone — they belong to no sync run (E9).
    */
   deleteStale(tenantId: string, syncRunId: string): Promise<number>;
+  /**
+   * How many Drive-origin assets this tenant currently has — the exact set
+   * `deleteStale` may remove. Uploaded rows are excluded because no sync run
+   * can delete them. Read before `deleteStale` for the same reason as
+   * `ProductRepo.countAll`: an empty Drive listing is what a lost permission
+   * looks like (files.list answers HTTP 200 with `files: []`, not 403).
+   */
+  countDriveAssets(tenantId: string): Promise<number>;
 
   // --- E9 (mode B) ---------------------------------------------------------
 

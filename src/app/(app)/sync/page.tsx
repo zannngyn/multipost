@@ -1,13 +1,19 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 
 import { getOperatorSession } from "@/app/_auth/session";
+import { SyncFallback } from "@/ui/components/sync/SyncFallback";
 import { SyncScreen } from "@/ui/components/sync/SyncScreen";
 
 /**
  * "Đồng bộ dữ liệu" (E2). Server Component: the session is resolved before
  * anything renders, so no private markup can leak and there is no "unknown"
  * flash. Only the panel itself is a client component.
+ *
+ * The screen reads the Google OAuth callback (`?google=…`) from the query
+ * string, so it must sit under a <Suspense> boundary — `useSearchParams()`
+ * suspends until the request's search params are known.
  */
 
 export const metadata: Metadata = {
@@ -30,7 +36,9 @@ export default async function SyncPage() {
   // a centred column (core-layout-shell §fixed shell).
   return (
     <div className="h-full min-h-0">
-      <SyncScreen />
+      <Suspense fallback={<SyncFallback />}>
+        <SyncScreen />
+      </Suspense>
     </div>
   );
 }

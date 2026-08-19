@@ -188,7 +188,12 @@ export function makeProducts(): ProductRepo {
     hasConflict: false,
     sourceRows: [2],
   };
-  return { findByCode: async () => product, upsertMany: async () => 0, deleteStale: async () => 0 };
+  return {
+    findByCode: async () => product,
+    upsertMany: async () => 0,
+    deleteStale: async () => 0,
+    countAll: async () => 1,
+  };
 }
 
 export function makeChannels(channel: ChannelConfig = CHANNEL): ChannelConfigRepo {

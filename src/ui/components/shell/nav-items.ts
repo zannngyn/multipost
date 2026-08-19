@@ -48,6 +48,7 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { href: "/channels", label: "Kênh", isExact: true },
       { href: "/channels/groups", label: "Nhóm kênh" },
       { href: "/prompts", label: "Mẫu prompt" },
+      { href: "/access", label: "Quyền truy cập" },
     ],
   },
 ] as const;

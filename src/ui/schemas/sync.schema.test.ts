@@ -24,6 +24,7 @@ describe("syncIssueGuide", () => {
       "SHEET_ERROR",
       "PRODUCT_NOT_FOUND",
       "MEDIA_NOT_FOUND",
+      "SOURCE_EMPTY",
     ]) {
       const guide = syncIssueGuide(code);
       expect(guide.action.length).toBeGreaterThan(20);
@@ -46,6 +47,20 @@ describe("syncIssueGuide", () => {
     expect(syncIssueGuide("FILE_NAME_INVALID").action).toContain("đổi tên");
     // The old wording covered duplicates too; that sentence must be gone.
     expect(syncIssueGuide("FILE_NAME_INVALID").action).not.toContain("trùng");
+  });
+
+  /**
+   * SOURCE_EMPTY does not skip a file — it stops the whole run to avoid wiping
+   * the catalog. Falling back would give it `warning` (its shape matches none
+   * of the inferred patterns) and a sentence that answers neither question the
+   * operator has: why it stopped, and what to do now.
+   */
+  it("treats a stopped sync as the heaviest severity and says what to do", () => {
+    const guide = syncIssueGuide("SOURCE_EMPTY");
+    expect(guide.severity).toBe("error");
+    expect(guide.action).toContain("đã dừng");
+    expect(guide.action).toContain("quyền đọc");
+    expect(guide.action).not.toContain("chưa có hướng dẫn sẵn");
   });
 
   it("keeps a blocking code away from the informational tone", () => {

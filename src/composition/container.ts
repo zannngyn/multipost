@@ -2,10 +2,12 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
+import { DrizzleAccessRequestRepo } from "@/adapters/db/access-request-repo.drizzle";
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
 import { closeDbHandle, getDbHandle, type Database } from "@/adapters/db/client";
+import { DrizzleGoogleOAuthRepo } from "@/adapters/db/google-oauth-repo.drizzle";
 import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
 import { makeSecretBox, type SecretBox } from "@/adapters/db/secret-box";
 import { DrizzlePostDraftRepo } from "@/adapters/db/post-draft-repo.drizzle";
@@ -47,11 +49,27 @@ import type {
   ScheduledPublisher,
 } from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
+import { makeBrowseGoogleDrive, type BrowseGoogleDrive } from "@/core/usecases/browse-google-drive";
+import {
+  makeCheckOperatorAccess,
+  type CheckOperatorAccess,
+} from "@/core/usecases/check-operator-access";
+import {
+  makeManageAccessRequests,
+  type AccessDecisionResult,
+  type DecideAccessRequestInput,
+  type ListAccessRequestsInput,
+  type ManageAccessRequests,
+} from "@/core/usecases/manage-access-requests";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
 import {
   makeConnectFacebookChannels,
   type ConnectFacebookChannels,
 } from "@/core/usecases/connect-facebook-channels";
+import {
+  makeConnectGoogleDrive,
+  type ConnectGoogleDrive,
+} from "@/core/usecases/connect-google-drive";
 import { makeManageChannels, type ManageChannels } from "@/core/usecases/manage-channels";
 import { makeCreatePostBatch, type CreatePostBatch } from "@/core/usecases/create-post-batch";
 import { makeGetBatchStatus, type GetBatchStatus } from "@/core/usecases/get-batch-status";
@@ -124,6 +142,7 @@ import {
   type EnvRecord,
 } from "./config";
 import { makeLazyGoogleSources } from "./google-sources";
+import { makeOperatorAccessGate, type OperatorAccessGate } from "./operator-access-gate";
 
 /**
  * Composition root — the ONLY place that knows both core and adapters.
@@ -177,6 +196,14 @@ export interface Usecases {
    * the route answers "chỉ lưu trên máy này" and the screen says so.
    */
   findOperatorUserId: (tenantId: string, email: string) => Promise<string | null>;
+  /**
+   * E1.4 — "ai được vào công cụ này", read on EVERY request (short-cached).
+   * `getOperatorSession` calls this: the session is a stateless JWT, so a block
+   * only bites if the status is re-read per request.
+   */
+  operatorAccess: OperatorAccessGate;
+  /** E1.4 — the approval screen: list who is waiting, approve with a role, block. */
+  accessRequests: ManageAccessRequests;
   /** E11.1 — operator job log. */
   listPostJobs: ListPostJobs;
   /** E11.1 — re-queue a failed/blocked job (stock recheck still applies). */
@@ -192,6 +219,10 @@ export interface Usecases {
   channels: ManageChannels;
   /** E5.1 — connect Fanpages: OAuth, or by pasting a User Access Token. */
   connectChannels: ConnectFacebookChannels;
+  /** E2 — connect the tenant's own Google account (OAuth) for Drive/Sheets. */
+  connectGoogleDrive: ConnectGoogleDrive;
+  /** E2 — browse that account's folders/spreadsheets from inside the app. */
+  browseGoogleDrive: BrowseGoogleDrive;
   /** E8.4 — "bài đã hẹn": what publishes next, soonest first. */
   listScheduledJobs: ListScheduledJobs;
   /** E8.4 — move a scheduled post to another time. */
@@ -576,7 +607,15 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const postDrafts = new DrizzlePostDraftRepo(deps.db);
   // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
   const users = new DrizzleUserRepo(deps.db);
-  const google = makeLazyGoogleSources({ logger: deps.logger });
+  // E1.4 — who may sign in. Read on every request through `operatorAccess`.
+  const accessRequestRepo = new DrizzleAccessRequestRepo(deps.db, { logger: deps.logger });
+  // E2 — the tenant's own Google connection. Same secret box as the Meta
+  // tokens: the refresh token is sealed inside tenant_integration.config.
+  const googleOAuth = new DrizzleGoogleOAuthRepo(deps.db, {
+    box: makeTenantSecretBox(deps.logger),
+    logger: deps.logger,
+  });
+  const google = makeLazyGoogleSources({ logger: deps.logger, oauth: googleOAuth });
   const lazyQueue = makeLazyJobQueue(deps.config, deps.logger);
   const queue = overrides.queue ?? lazyQueue;
   const jobProgress = overrides.progress ?? makeLazyJobProgressStore(deps.config, deps.logger);
@@ -621,6 +660,40 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       sign: mediaSign,
     });
 
+  const checkOperatorAccess: CheckOperatorAccess = makeCheckOperatorAccess({
+    requests: accessRequestRepo,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  const operatorAccess = makeOperatorAccessGate({
+    access: checkOperatorAccess,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  const manageAccessRequests = makeManageAccessRequests({
+    requests: accessRequestRepo,
+    clock: deps.clock,
+    logger: deps.logger,
+    users,
+  });
+  /**
+   * The cache is dropped the instant a decision is written — wired HERE rather
+   * than inside the usecase so core stays free of caching, and so nobody can
+   * call `decide` through a path that forgets it. Without this the operator we
+   * just blocked would keep working for up to ACCESS_CACHE_TTL_MS.
+   */
+  const accessRequests: ManageAccessRequests = {
+    listAccessRequests: (input: ListAccessRequestsInput) =>
+      manageAccessRequests.listAccessRequests(input),
+    decideAccessRequest: async (
+      input: DecideAccessRequestInput,
+    ): Promise<AccessDecisionResult> => {
+      const result = await manageAccessRequests.decideAccessRequest(input);
+      operatorAccess.invalidateAll();
+      return result;
+    },
+  };
+
   return {
     healthcheckTenant: makeHealthcheckTenant({
       tenants,
@@ -643,6 +716,11 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       catalogConfig,
       logger: deps.logger,
       users,
+      // Pointing the tenant at another folder/sheet invalidates the stored
+      // "can this account read it?" verdict — recompute it right away.
+      oauth: googleOAuth,
+      browser: google.browser,
+      clock: deps.clock,
     }),
     listCatalogProducts: makeListCatalogProducts({ catalog: products, logger: deps.logger }),
     composePost: makeComposePost({
@@ -733,6 +811,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     discardPostDraft: makeDiscardPostDraft({ drafts: postDrafts, logger: deps.logger }),
     findOperatorUserId: (tenantId: string, email: string) =>
       users.findUserIdByEmail(tenantId, email),
+    operatorAccess,
+    accessRequests,
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
     retryPostJob: makeRetryPostJob({
       postJobs,
@@ -802,6 +882,26 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       newState: () => randomBytes(32).toString("hex"),
       users,
     }),
+    connectGoogleDrive: makeConnectGoogleDrive({
+      oauth: googleOAuth,
+      client: google.oauthClient,
+      // Same object that resolves the per-tenant Drive/Sheet identity: a
+      // connect/disconnect must drop the client the next sync would reuse.
+      authCache: google.auth,
+      // Right after a connect, check whether the account that just arrived can
+      // read the source this tenant already had.
+      catalogConfig,
+      browser: google.browser,
+      clock: deps.clock,
+      logger: deps.logger,
+      newState: () => randomBytes(32).toString("hex"),
+      users,
+    }),
+    browseGoogleDrive: makeBrowseGoogleDrive({
+      browser: google.browser,
+      oauth: googleOAuth,
+      logger: deps.logger,
+    }),
     getMediaContent: makeGetMediaContent({
       drive,
       blobs,
@@ -862,6 +962,29 @@ export { FACEBOOK_CONNECT_SCOPES } from "@/adapters/meta/facebook-oauth";
  * tenant mapping yet (PENDING: multi-tenant sign-in is a product decision).
  */
 export { DEMO_TENANT_ID } from "@/adapters/db/seed-constants";
+
+/**
+ * E1.4 — which tenant a brand-new sign-in identity is filed under.
+ *
+ * PENDING(tenant-mapping): a first sign-in cannot say which tenant the person
+ * belongs to, and this deployment has exactly one (the same assumption the
+ * Facebook channel import already makes). When multi-tenant sign-in lands, this
+ * becomes a lookup, not a constant — every caller already passes it explicitly.
+ */
+export { DEMO_TENANT_ID as ACCESS_REGISTRY_TENANT_ID } from "@/adapters/db/seed-constants";
+
+/**
+ * Access-registry vocabulary the thin routes need for their zod schemas. The
+ * app layer may not import `core/usecases` (docs/07 §2), and a second copy of
+ * these literals in a route would be a second thing to update.
+ */
+export { ACCESS_DECISIONS } from "@/core/usecases/manage-access-requests";
+export type {
+  AccessDecision,
+  AccessDecisionResult,
+  AccessRequestView,
+} from "@/core/usecases/manage-access-requests";
+export type { OperatorAccessState } from "@/core/usecases/check-operator-access";
 
 /**
  * Drains the DB pool, any lazily built producer queue and the AI registry cache

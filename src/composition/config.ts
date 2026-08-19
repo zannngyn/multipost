@@ -71,14 +71,41 @@ export type Config = z.infer<typeof ConfigSchema>;
 export const AuthConfigSchema = z.object({
   GOOGLE_CLIENT_ID: nonEmpty("GOOGLE_CLIENT_ID"),
   GOOGLE_CLIENT_SECRET: nonEmpty("GOOGLE_CLIENT_SECRET"),
-  /** Comma-separated e-mail domains allowed to sign in. */
-  AUTH_ALLOWED_DOMAINS: csvList,
   /**
-   * Comma-separated Facebook user ids allowed to sign in (E5.2). Optional, and
-   * an ABSENT list means nobody signs in with Facebook — the safe default, not
-   * an open door. Ids rather than e-mail addresses on purpose: Facebook does
-   * not guarantee an e-mail (accounts registered with a phone number have
-   * none), so the identity key is the pair (provider, provider user id).
+   * DOMAIN FILTER for Google sign-in — a NECESSARY condition, never a grant.
+   *
+   * A domain names an OPEN-ENDED set of people ("anyone with a company
+   * address"), so it can say who may not sign in, but it must never hand out
+   * access or the power to approve others: with `mysp.vn` here, every employee
+   * would be an unblockable super-admin. Whoever passes this filter still has to
+   * be approved in `access_request` like anyone else, and can still be blocked.
+   * Individual grants live in AUTH_BOOTSTRAP_ADMINS / AUTH_FACEBOOK_ALLOWED_USER_IDS.
+   *
+   * BLANK/ABSENT = NO DOMAIN FILTER (changed 19/08/2026 — it used to mean "reject
+   * everyone"). Both deploy env examples ship it blank, and the old meaning made
+   * an approved Google operator unable to sign in on prod at all. It stays safe
+   * because the registry is what grants access, and a new identity starts
+   * `pending`: no filter is not an open door.
+   */
+  AUTH_ALLOWED_DOMAINS: blankAsUndefined(csvList),
+  /**
+   * THE escape hatch: comma-separated EXACT e-mail addresses (not domains) that
+   * are always allowed in, always count as access admins, and cannot be blocked
+   * from the screen. Keep it to the one or two people who must be able to fix a
+   * broken registry — every other operator belongs in `access_request`.
+   *
+   * Exact addresses on purpose: this grants administrative power, so it must
+   * name individuals, exactly as AUTH_FACEBOOK_ALLOWED_USER_IDS does.
+   */
+  AUTH_BOOTSTRAP_ADMINS: blankAsUndefined(csvList),
+  /**
+   * Comma-separated Facebook user ids with BOOTSTRAP ADMIN rights (E5.2) — the
+   * Facebook half of AUTH_BOOTSTRAP_ADMINS, and already the right shape: it
+   * names individuals, one id at a time. An absent list simply means no
+   * Facebook bootstrap admin; other Facebook accounts can still sign in and
+   * land in the registry as `pending`. Ids rather than e-mail addresses on
+   * purpose: Facebook does not guarantee an e-mail (accounts registered with a
+   * phone number have none), so the identity key is the pair (provider, id).
    *
    * Blank reads as absent, like the other optional values here: `NAME=` is how
    * a .env leaves a value unset — it is what .env.example ships and what
@@ -116,6 +143,37 @@ export const GoogleConfigSchema = z
   );
 
 export type GoogleConfig = z.infer<typeof GoogleConfigSchema>;
+
+/**
+ * Google Drive OAuth app (E2 — "Kết nối Google Drive"). Its own lazy group, and
+ * ALL THREE ARE OPTIONAL on purpose:
+ *   - a tenant that never connects keeps reading Drive through the Service
+ *     Account, exactly as before, so `next build` and every existing deployment
+ *     must boot without these;
+ *   - pressing the button without them answers GOOGLE_OAUTH_NOT_CONFIGURED
+ *     naming the missing variable, instead of a redirect into a Google 400.
+ *
+ * The client id/secret are the SAME OAuth client the operator sign-in uses
+ * (`AuthConfigSchema`); only the redirect URI differs, so it gets its own
+ * variable. Both redirect URIs must be registered in the Cloud Console client.
+ */
+export const GoogleOAuthConfigSchema = z.object({
+  GOOGLE_CLIENT_ID: blankAsUndefined(z.string().trim().min(1)),
+  GOOGLE_CLIENT_SECRET: blankAsUndefined(z.string().trim().min(1)),
+  /** Must match an "Authorized redirect URI" of the OAuth client, exactly. */
+  GOOGLE_OAUTH_REDIRECT_URI: blankAsUndefined(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .refine(
+        (value) => value.startsWith("https://") || value.startsWith("http://"),
+        "GOOGLE_OAUTH_REDIRECT_URI must be an http(s) URL",
+      ),
+  ),
+});
+
+export type GoogleOAuthConfig = z.infer<typeof GoogleOAuthConfigSchema>;
 
 /**
  * AI gateway (E4, ADR-001). Loaded on demand like auth/google: processes that
@@ -360,6 +418,10 @@ export function loadAuthConfig(env: EnvRecord = process.env): AuthConfig {
 
 export function loadGoogleConfig(env: EnvRecord = process.env): GoogleConfig {
   return parseEnv(GoogleConfigSchema, env, "google");
+}
+
+export function loadGoogleOAuthConfig(env: EnvRecord = process.env): GoogleOAuthConfig {
+  return parseEnv(GoogleOAuthConfigSchema, env, "google-oauth");
 }
 
 export function loadAiConfig(env: EnvRecord = process.env): AiConfig {

@@ -1,6 +1,7 @@
 import type { NextAuthConfig } from "next-auth";
 
 import { loadAuthConfig, type AuthConfig } from "@/composition/config";
+import { facebookIdFromSessionEmail, facebookSessionEmail } from "@/shared/operator-access";
 
 /**
  * Edge-safe half of the Auth.js v5 setup (official split pattern).
@@ -9,17 +10,31 @@ import { loadAuthConfig, type AuthConfig } from "@/composition/config";
  * no container — only zod-validated env and pure functions. The Google provider
  * (and anything else needing Node APIs) lives in `./auth.ts`.
  *
- * TECH DEBT (CLAUDE.md "Bẫy đã gặp" — session revocation):
- * `strategy: "jwt"` means the session lives entirely in a stateless cookie.
- * Deleting rows or flipping a flag in the DB does NOT end an active session —
- * the token stays valid until `SESSION_MAX_AGE_SECONDS` elapses. A real
- * "sign out everywhere" needs a per-user `sessions_valid_after` cut-off stored
- * server-side and checked in the `jwt` callback. NOT implemented in E1: the
- * mitigation for now is the short max-age below.
+ * SESSION REVOCATION (CLAUDE.md "Bẫy đã gặp"):
+ * `strategy: "jwt"` means the session lives entirely in a stateless cookie, so
+ * a decision taken HERE (in `signIn`) is frozen for the life of the token —
+ * blocking someone in the database would not end their session. That is why the
+ * access status is re-read per request in `session.ts` instead, which runs in
+ * Node and can reach the database; this file must stay edge-safe and therefore
+ * cannot. A general "sign out everywhere" (a `sessions_valid_after` cut-off)
+ * is still not built; the short max-age below bounds a stolen token.
  */
 
 /** Public sign-in page. Also the error page, so failures land where the button is. */
 export const SIGNIN_PATH = "/signin";
+
+/**
+ * `?error=` value telling the sign-in screen "you are in the queue", as opposed
+ * to Auth.js's generic `AccessDenied` ("bạn không có quyền"). Its own code
+ * because the two need different sentences: one says wait, the other says stop.
+ *
+ * snake_case deliberately: every code Auth.js itself emits is PascalCase, so
+ * this can never collide with one (`src/app/signin/page.tsx` matches on it).
+ */
+export const SIGNIN_ERROR_PENDING_APPROVAL = "pending_approval";
+
+/** Where a held-back sign-in lands. Relative on purpose — Auth.js prefixes the origin. */
+export const PENDING_APPROVAL_REDIRECT = `${SIGNIN_PATH}?error=${SIGNIN_ERROR_PENDING_APPROVAL}`;
 
 /** 8h: one working day. Bounds the blast radius of a stolen token (see debt note). */
 const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
@@ -32,14 +47,54 @@ const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
 let cachedAuthEnv: AuthConfig | null = null;
 
 export function loadAuthEnv(): AuthConfig {
-  cachedAuthEnv ??= loadAuthConfig();
+  if (!cachedAuthEnv) {
+    cachedAuthEnv = loadAuthConfig();
+    // Once per process, right where the auth env first becomes known.
+    warnWhenNoBootstrapAdmin(cachedAuthEnv);
+  }
   return cachedAuthEnv;
 }
 
 /**
- * Domain allow-list check. Pure so it can be unit-tested without Auth.js.
- * Rejects anything that is not exactly `local@domain` — no multi-@ addresses,
- * no empty domain, no case tricks (`@Example.COM` matches `example.com`).
+ * The one configuration mistake that bricks a deployment.
+ *
+ * With no bootstrap admin, EVERY sign-in lands in `access_request` as `pending`
+ * and nobody holds the power to approve it — the queue fills up and the only way
+ * out is an UPDATE straight into the database. It became reachable the moment
+ * AUTH_ALLOWED_DOMAINS stopped being mandatory (that was the schema's only
+ * guard), and both deploy env examples ship all three lists blank: deploying the
+ * sample file verbatim is exactly how someone gets here.
+ *
+ * A warning, not a throw: refusing to boot would take a running deployment down
+ * over a variable that only bites at the next sign-in, and the app must stay up
+ * for the operators whose sessions still work. `console` rather than pino —
+ * this module is imported by the edge middleware (see the file header).
+ */
+export function warnWhenNoBootstrapAdmin(env: AuthConfig): void {
+  if (env.AUTH_BOOTSTRAP_ADMINS?.length) return;
+  if (env.AUTH_FACEBOOK_ALLOWED_USER_IDS?.length) return;
+
+  warnAuth(
+    "No bootstrap admin is configured: every new sign-in will wait as `pending` and NOBODY can approve an access request. Set AUTH_BOOTSTRAP_ADMINS (exact e-mail addresses) or AUTH_FACEBOOK_ALLOWED_USER_IDS (exact Facebook user ids).",
+    {
+      error_code: "UNAUTHORIZED",
+      reason: "NO_BOOTSTRAP_ADMIN",
+      alert: "OPERATOR_ATTENTION",
+      user_message:
+        "Chưa cấu hình quản trị viên khởi tạo — sẽ không ai duyệt được yêu cầu truy cập.",
+    },
+  );
+}
+
+/**
+ * Does this address sit in one of the listed domains? Pure so it can be
+ * unit-tested without Auth.js. Rejects anything that is not exactly
+ * `local@domain` — no multi-@ addresses, no empty domain, no case tricks
+ * (`@Example.COM` matches `example.com`).
+ *
+ * MEMBERSHIP ONLY — it grants nothing. A domain names an open-ended set of
+ * people, so it may narrow who can sign in (`passesDomainFilter`) but never who
+ * is an admin. Individual grants: `isBootstrapAdminEmail` / `isAllowedFacebookUser`.
  */
 export function isAllowedEmail(email: unknown, allowedDomains: readonly string[]): boolean {
   if (typeof email !== "string") return false;
@@ -72,15 +127,138 @@ export function isAllowedFacebookUser(
   return allowedIds.includes(id);
 }
 
+/**
+ * The Google DOMAIN FILTER: a necessary condition for signing in, never a grant.
+ *
+ * An EMPTY/absent list means NO FILTER — every verified Google address may
+ * *attempt* to sign in, and the `access_request` registry decides the rest
+ * (a new identity starts `pending`, so this is not an open door). That is a
+ * deliberate change of meaning: the list used to reject everyone when empty,
+ * which locked approved operators out of both deploy env examples, where it
+ * ships blank.
+ */
+export function passesDomainFilter(email: unknown, allowedDomains: readonly string[] | undefined): boolean {
+  if (!allowedDomains || allowedDomains.length === 0) return true;
+  return isAllowedEmail(email, allowedDomains);
+}
+
+/**
+ * Is this EXACT address a bootstrap admin? The escape hatch, and the only
+ * e-mail-shaped thing in this file that grants anything — hence exact matching
+ * against a list of individuals, never a domain.
+ */
+export function isBootstrapAdminEmail(
+  email: unknown,
+  bootstrapAdmins: readonly string[] | undefined,
+): boolean {
+  if (typeof email !== "string") return false;
+  const address = email.trim().toLowerCase();
+  if (address.length === 0) return false;
+  if (!bootstrapAdmins || bootstrapAdmins.length === 0) return false;
+  return bootstrapAdmins.includes(address);
+}
+
 /** Structured warn without pulling the pino adapter into the edge/auth bundle. */
 function warnAuth(message: string, context: Record<string, unknown>): void {
   console.warn(JSON.stringify({ level: "warn", time: new Date().toISOString(), message, ...context }));
 }
 
 /**
- * Config shared by middleware (session decoding only) and the full auth handler.
- * `providers` is empty here on purpose — middleware never runs an OAuth flow.
+ * What the ENV allow-lists alone can decide about a sign-in. Pure, so it works
+ * in the edge bundle and in a unit test.
+ *
+ * ORDER OF PRECEDENCE for access, everywhere in this app:
+ *   1. `DEV_FAKE_SESSION` (local dev only, see dev-session.ts);
+ *   2. the BOOTSTRAP lists — AUTH_BOOTSTRAP_ADMINS (exact addresses) and
+ *      AUTH_FACEBOOK_ALLOWED_USER_IDS (exact ids). They always get in, even with
+ *      an empty database, so nobody can lock themselves out of the screen where
+ *      access is granted. Both name INDIVIDUALS: that is the shape a grant must
+ *      have;
+ *   3. the `access_request` registry in the database (approve/block screen).
+ *
+ * AUTH_ALLOWED_DOMAINS is deliberately absent from that list: it only filters
+ * WHO MAY TRY (see passesDomainFilter). Matching the domain gets an operator as
+ * far as `pending`, no further.
+ *
+ * A "reject" here is final: nothing in the registry can rescue an unverified
+ * e-mail, a provider we do not support, or an address outside the domain filter.
  */
+export type EnvAllowListVerdict = "allow" | "reject" | "consult_registry";
+
+export interface SignInIdentityInput {
+  readonly provider: unknown;
+  readonly providerAccountId: unknown;
+  readonly email: unknown;
+  readonly emailVerified: unknown;
+}
+
+export function evaluateEnvAllowList(input: SignInIdentityInput): EnvAllowListVerdict {
+  const env = loadAuthEnv();
+
+  // --- Edge cases first (CLAUDE.md technical rule 1) ------------------------
+  if (input?.provider !== "google" && input?.provider !== "facebook") {
+    warnAuth("Sign-in rejected: unexpected provider", {
+      error_code: "UNAUTHORIZED",
+      provider: typeof input?.provider === "string" ? input.provider : null,
+    });
+    return "reject";
+  }
+
+  /**
+   * Facebook is gated by provider user id, never by e-mail: an address can move
+   * between accounts, and matching a Google operator by it would hand this tool
+   * to whoever registered that address at Facebook (account-linking hijack).
+   */
+  if (input.provider === "facebook") {
+    return isAllowedFacebookUser(input.providerAccountId, env.AUTH_FACEBOOK_ALLOWED_USER_IDS)
+      ? "allow"
+      : "consult_registry";
+  }
+
+  if (input?.emailVerified !== true) {
+    warnAuth("Sign-in rejected: Google e-mail not verified", {
+      error_code: "UNAUTHORIZED",
+      provider: "google",
+    });
+    return "reject";
+  }
+
+  // The escape hatch, checked before the filter so a bootstrap admin stays
+  // reachable even if the domain list is later narrowed by mistake.
+  if (isBootstrapAdminEmail(input?.email, env.AUTH_BOOTSTRAP_ADMINS)) return "allow";
+
+  if (!passesDomainFilter(input?.email, env.AUTH_ALLOWED_DOMAINS)) {
+    warnAuth("Sign-in rejected: e-mail domain is outside AUTH_ALLOWED_DOMAINS", {
+      error_code: "UNAUTHORIZED",
+      provider: "google",
+      allowed_domains: env.AUTH_ALLOWED_DOMAINS ?? [],
+    });
+    return "reject";
+  }
+
+  // Passing the filter buys an entry in the queue, not access.
+  return "consult_registry";
+}
+
+/**
+ * Is the identity behind this SESSION address a bootstrap admin — i.e. allowed
+ * in without the registry, able to approve others, and impossible to block?
+ *
+ * Both lists it reads name individuals (exact address / exact Facebook id).
+ * AUTH_ALLOWED_DOMAINS is NOT consulted: a domain grants nothing, and reading it
+ * here is exactly what once made every colleague an unblockable admin.
+ *
+ * The Facebook id is recovered from the synthetic address the `jwt` callback
+ * wrote (`fb-<id>@facebook.local`), which is precisely why that address is built
+ * from the provider id and not from the profile e-mail.
+ */
+export function isBootstrapOperatorEmail(sessionEmail: unknown): boolean {
+  const env = loadAuthEnv();
+  const facebookId = facebookIdFromSessionEmail(sessionEmail);
+  if (facebookId) return isAllowedFacebookUser(facebookId, env.AUTH_FACEBOOK_ALLOWED_USER_IDS);
+  return isBootstrapAdminEmail(sessionEmail, env.AUTH_BOOTSTRAP_ADMINS);
+}
+
 export function buildBaseAuthConfig(): NextAuthConfig {
   const env = loadAuthEnv();
 
@@ -103,20 +281,26 @@ export function buildBaseAuthConfig(): NextAuthConfig {
        * user at all when it is missing — the middleware then treats a perfectly
        * valid cookie as "not signed in" and bounces the operator back to
        * /signin. Facebook does not guarantee an address (accounts registered
-       * with a phone number have none), so one is synthesised from the identity
-       * key that IS guaranteed: the provider user id.
+       * with a phone number have none), so the address is synthesised from the
+       * identity key that IS guaranteed: the provider user id.
        *
-       * It is deliberately unroutable (.local) and unmistakably internal — this
-       * is a name for the audit trail, never something to send mail to. Access
-       * is still decided by the allow-list in `signIn`, never by this address.
+       * It is deliberately unroutable (.local) and unmistakably internal — a
+       * name for the audit trail, never something to send mail to. Access is
+       * decided by the allow-list and the registry, never by this address.
        */
       jwt({ token, account, profile }) {
         if (account?.provider !== "facebook") return token;
 
-        if (!token.email) {
-          const email = typeof profile?.email === "string" ? profile.email.trim() : "";
-          token.email = email.length > 0 ? email : `fb-${account.providerAccountId}@facebook.local`;
-        }
+        /**
+         * ALWAYS the synthetic address, even when the profile does carry an
+         * e-mail: it is the registry's identity key, and reusing the provider
+         * address would file a Facebook account under a Google operator's
+         * identity (see shared/operator-access). A `null` here means an id we
+         * refuse to embed — the session then has no e-mail and is treated as no
+         * session, which is the safe reading.
+         */
+        const sessionEmail = facebookSessionEmail(account.providerAccountId);
+        if (sessionEmail) token.email = sessionEmail;
         if (!token.name && typeof profile?.name === "string") {
           token.name = profile.name;
         }
@@ -124,60 +308,23 @@ export function buildBaseAuthConfig(): NextAuthConfig {
       },
 
       /**
-       * The only authorisation gate in E1: verified Google e-mail + allow-listed
-       * domain. Returning `false` makes Auth.js redirect to `pages.error`.
+       * FAIL-CLOSED DEFAULT: only the env bootstrap admins pass here.
+       *
+       * The real gate (which also consults the `access_request` registry and
+       * can answer "đang chờ duyệt") lives in ./auth.ts, because it needs the
+       * database and this module must stay importable from the edge middleware.
+       * Middleware never runs an OAuth flow, so this callback is not reached in
+       * that bundle — but if it ever were, refusing is the safe answer.
        */
       signIn({ account, profile }) {
-        const env = loadAuthEnv();
-        const allowedDomains = env.AUTH_ALLOWED_DOMAINS;
-        const email = typeof profile?.email === "string" ? profile.email : null;
-
-        // --- Edge cases first (CLAUDE.md technical rule 1) -------------------
-        if (account?.provider !== "google" && account?.provider !== "facebook") {
-          warnAuth("Sign-in rejected: unexpected provider", {
-            error_code: "UNAUTHORIZED",
-            provider: account?.provider ?? null,
-          });
-          return false;
-        }
-
-        /**
-         * Facebook has its own gate: an allow-list of user ids. It deliberately
-         * does NOT fall through to the e-mail checks below — matching a Google
-         * account by e-mail would hand this tool to whoever registered that
-         * address at Facebook (core-auth-methods, account-linking hijack).
-         */
-        if (account.provider === "facebook") {
-          if (!isAllowedFacebookUser(account.providerAccountId, env.AUTH_FACEBOOK_ALLOWED_USER_IDS)) {
-            warnAuth("Sign-in rejected: Facebook user id not allow-listed", {
-              error_code: "UNAUTHORIZED",
-              provider: "facebook",
-              facebook_user_id: account.providerAccountId ?? null,
-              allow_list_configured: Boolean(env.AUTH_FACEBOOK_ALLOWED_USER_IDS?.length),
-            });
-            return false;
-          }
-          return true;
-        }
-
-        if (profile?.email_verified !== true) {
-          warnAuth("Sign-in rejected: Google e-mail not verified", {
-            error_code: "UNAUTHORIZED",
-            email,
-          });
-          return false;
-        }
-
-        if (!isAllowedEmail(email, allowedDomains)) {
-          warnAuth("Sign-in rejected: e-mail domain not allow-listed", {
-            error_code: "UNAUTHORIZED",
-            email,
-            allowed_domains: allowedDomains,
-          });
-          return false;
-        }
-
-        return true;
+        return (
+          evaluateEnvAllowList({
+            provider: account?.provider,
+            providerAccountId: account?.providerAccountId,
+            email: profile?.email,
+            emailVerified: profile?.email_verified,
+          }) === "allow"
+        );
       },
     },
   };

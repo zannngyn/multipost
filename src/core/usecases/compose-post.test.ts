@@ -18,9 +18,15 @@ const UPLOAD_STUBS = {
   listOrphanedUploads: async () => [],
   listUnreferencedUploadsForCode: async () => [],
   deleteUploads: async () => 0,
+  // Sync-only reader; composing a post never counts rows.
+  countDriveAssets: async () => 0,
 } satisfies Pick<
   MediaRepo,
-  "registerUpload" | "listOrphanedUploads" | "listUnreferencedUploadsForCode" | "deleteUploads"
+  | "registerUpload"
+  | "listOrphanedUploads"
+  | "listUnreferencedUploadsForCode"
+  | "deleteUploads"
+  | "countDriveAssets"
 >;
 
 function makeLogger(): Logger {
@@ -76,6 +82,7 @@ function harness(options: { product?: Product | null; media?: MediaAsset[] } = {
     findByCode: async () => (options.product === undefined ? product() : options.product),
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countAll: async () => 0,
   };
   const media: MediaRepo = {
     listByProductCode: async () => options.media ?? [],
@@ -128,6 +135,7 @@ describe("composePost — edge cases first", () => {
         product({ operational: { stockRaw: "0", noteRaw: "HẾT HÀNG", colorsRaw: "" } }),
       upsertMany: async () => 0,
       deleteStale: async () => 0,
+      countAll: async () => 0,
     };
     const media: MediaRepo = {
       listByProductCode,
@@ -397,6 +405,7 @@ function videoHarness(options: {
     findByCode: async () => product(),
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countAll: async () => 0,
   };
   const media: MediaRepo = {
     listByProductCode: async () => options.media ?? [clip(1)],
@@ -429,6 +438,7 @@ describe("composePost — video spec gate", () => {
       findByCode: async () => product({ operational: { stockRaw: "0", noteRaw: "", colorsRaw: "" } }),
       upsertMany: async () => 0,
       deleteStale: async () => 0,
+      countAll: async () => 0,
     };
     const probeAsset = vi.fn(async () => REELS_SPEC);
     const compose = makeComposePost({
@@ -594,6 +604,7 @@ describe("composePost — video spec gate", () => {
       findByCode: async () => product(),
       upsertMany: async () => 0,
       deleteStale: async () => 0,
+      countAll: async () => 0,
     };
     const compose = makeComposePost({
       products,

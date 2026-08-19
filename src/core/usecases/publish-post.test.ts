@@ -208,6 +208,7 @@ function makeProducts(product: Product | null): ProductRepo {
     findByCode: async () => product,
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countAll: async () => (product ? 1 : 0),
   };
 }
 
@@ -1033,6 +1034,7 @@ describe("publishPost — happy path", () => {
       },
       upsertMany: async () => 0,
       deleteStale: async () => 0,
+      countAll: async () => 1,
     };
     const channels: ChannelConfigRepo = {
       findChannel: async () => {
