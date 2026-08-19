@@ -97,9 +97,15 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 echo "--- reclaim disk"
-# Dangling layers only. The previous release's images are deliberately kept:
-# they are the rollback (see the runbook in deploy/bootstrap.sh).
+# Two passes. Dangling layers always; then unused images older than a week,
+# because this VPS shares its 60 GB with other services and three fresh images
+# land on it per release. A week still leaves several rollback targets — and
+# `-a` only touches images no container is using, so the other services' images
+# are never candidates.
 docker image prune -f >/dev/null
+docker image prune -af --filter "until=168h" >/dev/null
+
+df -h / | awk 'NR==2 {print "  root filesystem: " $4 " free (" $5 " used)"}'
 
 echo "--- deployed $IMAGE_TAG"
 stack ps

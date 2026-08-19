@@ -1,0 +1,44 @@
+# Site blocks for the VPS's own Caddy (systemd, not a container).
+#
+# This box already ran Caddy on :80/:443 for other sites before MYSP existed, so
+# MYSP does not bring its own proxy — it borrows that one. Each stack publishes
+# its web port on 127.0.0.1 (WEB_BIND in the stack .env) and Caddy is the only
+# thing reaching it, which is also what keeps the app off the public IP in
+# plain HTTP.
+#
+# Installed to /etc/caddy/conf.d/mysp.caddy by deploy/bootstrap.sh, which also
+# adds `import /etc/caddy/conf.d/*.caddy` to /etc/caddy/Caddyfile. Kept in its
+# own file so nothing here can disturb the site blocks that were already there.
+#
+# Ports must match WEB_PORT in the matching .env:
+#   3100 -> /srv/mysp/prod   3110 -> /srv/mysp/stg
+#
+# After editing:  caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+
+(mysp_app) {
+	encode zstd gzip
+
+	# Long enough for a Drive fetch plus a Graph upload to finish inside one
+	# request; short enough that a wedged upstream is not held open forever.
+	reverse_proxy {args[0]} {
+		health_uri /api/health
+		health_interval 30s
+		health_timeout 5s
+
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+}
+
+mysp.vannt.asia {
+	import mysp_app 127.0.0.1:3100
+}
+
+mysp-stg.vannt.asia {
+	# Staging is a real deployment holding real Page tokens — keep it out of
+	# search results.
+	header X-Robots-Tag "noindex, nofollow"
+	import mysp_app 127.0.0.1:3110
+}
