@@ -93,7 +93,11 @@ export function toApiErrorBody(status: number, payload: unknown): ApiError {
   });
 }
 
-export async function apiRequest<T>(path: string, options: ApiRequestOptions<T>): Promise<T> {
+/** Everything both entry points share: the fetch itself and its failure modes. */
+async function sendRequest(
+  path: string,
+  options: Omit<ApiRequestOptions<unknown>, "schema" | "malformedMessage">,
+): Promise<Response> {
   const method = options.method ?? "GET";
 
   let response: Response;
@@ -127,6 +131,12 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions<T>)
     });
   }
 
+  return response;
+}
+
+export async function apiRequest<T>(path: string, options: ApiRequestOptions<T>): Promise<T> {
+  const method = options.method ?? "GET";
+  const response = await sendRequest(path, options);
   const payload = await readJson(response);
 
   if (!response.ok) throw toApiErrorBody(response.status, payload);
@@ -145,4 +155,21 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions<T>)
   }
 
   return parsed.data;
+}
+
+/**
+ * Same entry point for an endpoint that answers 204 (DELETE /api/posts/drafts).
+ *
+ * A 204 has no body at all, so `apiRequest` cannot serve it: parsing an empty
+ * body would raise MALFORMED_RESPONSE on a call that succeeded. The failure path
+ * is unchanged — an error still carries a body, and it is read the same way.
+ */
+export async function apiRequestNoContent(
+  path: string,
+  options: Omit<ApiRequestOptions<unknown>, "schema" | "malformedMessage">,
+): Promise<void> {
+  const response = await sendRequest(path, options);
+  if (response.ok) return;
+
+  throw toApiErrorBody(response.status, await readJson(response));
 }

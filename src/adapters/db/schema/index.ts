@@ -9,6 +9,7 @@ export * from "./media-asset";
 export * from "./post-batch";
 export * from "./post-job";
 export * from "./channel-group";
+export * from "./post-draft";
 export * from "./ai-generation";
 export * from "./ai-prompt-template";
 export * from "./ai-model-policy-override";
