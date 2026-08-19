@@ -121,7 +121,6 @@ describe("loadAuthConfig", () => {
 
     expect((error as AppError).code).toBe("INVALID_INPUT");
     expect(issuePaths(error)).toEqual([
-      "AUTH_ALLOWED_DOMAINS",
       "GOOGLE_CLIENT_ID",
       "GOOGLE_CLIENT_SECRET",
       "SESSION_SECRET",
@@ -133,6 +132,31 @@ describe("loadAuthConfig", () => {
     expect(issuePaths(catchError(() => loadAuthConfig({ ...AUTH_ENV, SESSION_SECRET: "short" })))).toEqual(
       ["SESSION_SECRET"],
     );
+  });
+
+  /**
+   * Changed 19/08/2026: blank used to reject every Google sign-in, which locked
+   * approved operators out of both deploy env examples (they ship it blank).
+   * Blank now means "no domain filter" — the access registry decides, and a new
+   * identity still starts `pending`.
+   */
+  it("reads a blank AUTH_ALLOWED_DOMAINS as no domain filter", () => {
+    expect(
+      loadAuthConfig({ ...AUTH_ENV, AUTH_ALLOWED_DOMAINS: "" }).AUTH_ALLOWED_DOMAINS,
+    ).toBeUndefined();
+  });
+
+  it("parses AUTH_BOOTSTRAP_ADMINS csv into lower-cased exact addresses", () => {
+    expect(
+      loadAuthConfig({ ...AUTH_ENV, AUTH_BOOTSTRAP_ADMINS: " Boss@MYSP.vn , two@x.io " })
+        .AUTH_BOOTSTRAP_ADMINS,
+    ).toEqual(["boss@mysp.vn", "two@x.io"]);
+  });
+
+  it("reads a blank AUTH_BOOTSTRAP_ADMINS as not configured", () => {
+    expect(
+      loadAuthConfig({ ...AUTH_ENV, AUTH_BOOTSTRAP_ADMINS: "" }).AUTH_BOOTSTRAP_ADMINS,
+    ).toBeUndefined();
   });
 
   it("rejects AUTH_ALLOWED_DOMAINS that is only separators", () => {

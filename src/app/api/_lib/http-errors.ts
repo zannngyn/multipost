@@ -16,6 +16,10 @@ export interface ApiErrorBody {
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   INVALID_INPUT: 400,
   UNAUTHORIZED: 401,
+  // Signed in, but not allowed to decide who else gets in — 403, not 401: the
+  // session is fine, so the screen must not bounce the operator to /signin.
+  ACCESS_FORBIDDEN: 403,
+  ACCESS_REQUEST_NOT_FOUND: 404,
   TENANT_NOT_FOUND: 404,
   INTERNAL: 500,
   DB_ERROR: 503,

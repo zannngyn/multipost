@@ -51,5 +51,14 @@ export function getDevFakeSession(surface: string): OperatorSession | null {
   if (!isDevFakeSessionEnabled()) return null;
 
   warnDevFakeSession({ surface });
-  return { email: DEV_FAKE_SESSION_EMAIL, name: DEV_FAKE_SESSION_NAME, isDevFake: true };
+  // `isBootstrapAdmin` so the bypass can reach the access-approval screen too:
+  // a dev session that cannot test the admin flow is a dev session that hides
+  // bugs in it. Both guards above still confine this to local development.
+  return {
+    email: DEV_FAKE_SESSION_EMAIL,
+    name: DEV_FAKE_SESSION_NAME,
+    isDevFake: true,
+    role: null,
+    isBootstrapAdmin: true,
+  };
 }

@@ -13,6 +13,11 @@ export const ERROR_CODES = [
   "UNAUTHORIZED",
   "DB_ERROR",
   "QUEUE_ERROR",
+  // Access registry (E1.4 — allow-list in the database + approval screen)
+  /** The signed-in operator may not perform this administrative action. */
+  "ACCESS_FORBIDDEN",
+  /** No access request with that id in this tenant. */
+  "ACCESS_REQUEST_NOT_FOUND",
   "JOB_PAYLOAD_INVALID",
   // Data pipeline (E2/E3)
   "DRIVE_ERROR",
@@ -83,6 +88,8 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   UNAUTHORIZED: "Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.",
   DB_ERROR: "Không truy cập được cơ sở dữ liệu. Vui lòng thử lại sau ít phút.",
   QUEUE_ERROR: "Hàng đợi công việc gặp sự cố. Vui lòng thử lại sau ít phút.",
+  ACCESS_FORBIDDEN: "Tài khoản của bạn không có quyền thực hiện thao tác này.",
+  ACCESS_REQUEST_NOT_FOUND: "Không tìm thấy yêu cầu truy cập tương ứng.",
   JOB_PAYLOAD_INVALID: "Dữ liệu công việc nền không hợp lệ — công việc đã bị từ chối.",
   DRIVE_ERROR: "Không truy cập được Google Drive. Kiểm tra quyền Service Account hoặc thử lại sau.",
   SHEET_ERROR: "Không đọc được Google Sheet. Kiểm tra quyền Service Account hoặc thử lại sau.",
@@ -133,6 +140,8 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   UNAUTHORIZED: "Missing or invalid credentials",
   DB_ERROR: "Database operation failed",
   QUEUE_ERROR: "Job queue operation failed",
+  ACCESS_FORBIDDEN: "Operator is not allowed to perform this administrative action",
+  ACCESS_REQUEST_NOT_FOUND: "Access request not found in this tenant",
   JOB_PAYLOAD_INVALID: "Job payload failed schema validation",
   DRIVE_ERROR: "Google Drive operation failed",
   SHEET_ERROR: "Google Sheets operation failed",
