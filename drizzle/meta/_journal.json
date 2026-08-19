@@ -64,6 +64,13 @@
       "when": 1786956035076,
       "tag": "0008_eager_zarda",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787105913195,
+      "tag": "0009_cooing_luke_cage",
+      "breakpoints": true
     }
   ]
 }

@@ -14,10 +14,20 @@ export function formatCount(value: number): string {
   return COUNT_FORMAT.format(value);
 }
 
-/** Share of `value` in `total`, rounded. `total <= 0` has no answer, not 0%. */
-export function percentOf(value: number, total: number): number | null {
+/**
+ * Share of `value` in `total`, ready to print. Three distinct answers, on
+ * purpose:
+ *   null    — `total <= 0`: nothing entered, so there is no share to speak of
+ *   "0%"    — a real zero: this group/stage holds nothing
+ *   "<1%"   — some rows, but under half a percent. Rounding those to "0%" next
+ *             to a count of 30 reads as a broken cell, not as "very small".
+ */
+export function percentOf(value: number, total: number): string | null {
   if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return null;
-  return Math.round((value / total) * 100);
+
+  const rounded = Math.round((value / total) * 100);
+  if (rounded === 0 && value > 0) return "<1%";
+  return `${rounded}%`;
 }
 
 /** Width of a bar segment, clamped so a bad count cannot overflow the track. */

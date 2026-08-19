@@ -1,6 +1,6 @@
 import { index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
-import type { SyncIssue, SyncRunCounts } from "@/core/ports/product-repo";
+import type { SyncIssue, SyncIssueGroup, SyncRunCounts } from "@/core/ports/product-repo";
 
 import { timestamps } from "./_columns";
 import { tenantIdColumn } from "./_tenant-column";
@@ -30,6 +30,12 @@ export const syncRuns = pgTable(
     source: jsonb("source").$type<Record<string, string>>().notNull(),
     counts: jsonb("counts").$type<SyncRunCounts | null>(),
     issues: jsonb("issues").$type<SyncIssue[]>().notNull().default([]),
+    /**
+     * Per-error-code counts, EXACT even though `issues` above is capped.
+     * Nullable on purpose: runs written before this column exists keep NULL and
+     * are never back-filled — readers fall back to counting `issues`.
+     */
+    issueGroups: jsonb("issue_groups").$type<SyncIssueGroup[]>(),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
     ...timestamps,

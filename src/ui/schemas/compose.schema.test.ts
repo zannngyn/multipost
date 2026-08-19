@@ -279,16 +279,48 @@ describe("SyncStatusResponseSchema", () => {
           issuesTruncated: true,
         },
         issues: [
-          { errorCode: "FILE_NAME_INVALID", reason: "NO_PRODUCT_CODE", ref: "abc.jpg", detail: "x" },
+          {
+            errorCode: "FILE_NAME_INVALID",
+            reason: "NO_PRODUCT_CODE",
+            ref: "abc.jpg",
+            detail: "Tên file không chứa mã sản phẩm nào.",
+          },
+        ],
+        // Exact counts: 3.491 detected, 200 stored, 3 kept as examples.
+        issueGroups: [
+          {
+            errorCode: "FILE_NAME_INVALID",
+            count: 3491,
+            examples: [
+              {
+                errorCode: "FILE_NAME_INVALID",
+                reason: "NO_PRODUCT_CODE",
+                ref: "abc.jpg",
+                detail: "Tên file không chứa mã sản phẩm nào.",
+              },
+            ],
+          },
         ],
         errorCode: null,
         errorMessage: null,
+        recentRuns: [
+          {
+            syncRunId: "run-1",
+            status: "partial",
+            startedAt: "2026-08-12T10:00:00.000Z",
+            finishedAt: "2026-08-12T10:02:00.000Z",
+            issuesTotal: 3491,
+            errorCode: null,
+          },
+        ],
       },
     });
     expect(result.success).toBe(true);
     if (result.success && result.data.state === "has_run") {
       expect(result.data.run.counts?.issuesTruncated).toBe(true);
       expect(result.data.run.counts?.issuesTotal).toBe(3491);
+      // The group count survives the cap on `issues[]` — that is its whole job.
+      expect(result.data.run.issueGroups?.[0]?.count).toBe(3491);
     }
   });
 
@@ -303,11 +335,27 @@ describe("SyncStatusResponseSchema", () => {
         finishedAt: null,
         counts: null,
         issues: [],
+        // Nothing has been grouped yet, and the history shows the run in flight.
+        issueGroups: null,
         errorCode: null,
         errorMessage: null,
+        recentRuns: [
+          {
+            syncRunId: "run-2",
+            status: "running",
+            startedAt: "2026-08-12T10:00:00.000Z",
+            finishedAt: null,
+            issuesTotal: null,
+            errorCode: null,
+          },
+        ],
       },
     });
     expect(result.success).toBe(true);
+    if (result.success && result.data.state === "has_run") {
+      expect(result.data.run.issueGroups).toBeNull();
+      expect(result.data.run.recentRuns[0]?.issuesTotal).toBeNull();
+    }
   });
 
   it("rejects an unknown state instead of rendering nothing", () => {
