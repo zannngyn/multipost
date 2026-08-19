@@ -3,12 +3,14 @@
 import { useEffect, useRef } from "react";
 
 import { ComposeFooterNav } from "@/ui/components/compose/ComposeFooterNav";
+import { DraftStatusBar } from "@/ui/components/compose/DraftStatusBar";
 import { StepCaption } from "@/ui/components/compose/StepCaption";
 import { StepProduct } from "@/ui/components/compose/StepProduct";
 import { StepReview } from "@/ui/components/compose/StepReview";
 import { WizardStepper, type StepperStep } from "@/ui/components/compose/WizardStepper";
 import { Badge } from "@/ui/components/ui/badge";
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
+import { useComposeDraft } from "@/ui/hooks/useComposeDraft";
 import { usePublishForm } from "@/ui/hooks/usePublishForm";
 import { useComposeWizard } from "@/ui/hooks/useComposeWizard";
 import { COMPOSE_CHANNELS, INVENTORY_STATUS_LABELS } from "@/ui/schemas/compose.schema";
@@ -34,6 +36,9 @@ import { COMPOSE_CHANNELS, INVENTORY_STATUS_LABELS } from "@/ui/schemas/compose.
 export function ComposeWizard() {
   const wizard = useComposeWizard();
   const publish = usePublishForm(wizard);
+  // Owned here, like `publish`: the status line, the steps and the footer must
+  // all be looking at the same draft (E10).
+  const draft = useComposeDraft(wizard, publish);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const previousStep = useRef(wizard.step.index);
@@ -140,14 +145,22 @@ export function ComposeWizard() {
               ) : null}
             </header>
 
-            {wizard.rewound ? (
+            <DraftStatusBar draft={draft} />
+
+            {/* Only for the ONE cause this banner can actually speak for: the
+                screen was reloaded on an inner step and there was no draft to
+                bring it back. A restore that ran and failed says why itself —
+                in `draft.notices` and, for a blocked product, in the error
+                notice under step 1 with the server's real sentence. Merging the
+                two into one "hoặc / hoặc" line hides the real reason. */}
+            {wizard.rewound && draft.notices.length === 0 ? (
               <p
                 role="status"
                 className="border-warning/40 bg-warning/10 text-warning-foreground rounded-xl border px-3.5 py-2.5 text-sm"
               >
-                Đã đưa bạn về bước 1: dữ liệu bài đang soạn không còn (tải lại trang hoặc mở link ở
-                bước giữa). Hãy tra lại mã sản phẩm — nội dung không được lưu tạm ở phía máy chủ
-                trong phiên bản này.
+                Đã đưa bạn về bước 1: bài đang soạn không còn sau khi tải lại trang, và không có
+                nháp nào để khôi phục. Hãy tra lại mã sản phẩm; từ giờ mọi thứ bạn gõ được lưu tự
+                động.
               </p>
             ) : null}
 

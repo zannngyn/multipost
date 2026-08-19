@@ -28,6 +28,18 @@ export const SyncIssueSchema = z.object({
 });
 export type SyncIssue = z.infer<typeof SyncIssueSchema>;
 
+/**
+ * Per-code tally computed BEFORE the server capped `issues[]`, so `count` is the
+ * real number while `examples` is at most three rows. Mirrors `SyncIssueGroup`
+ * in `core/ports/product-repo.ts`.
+ */
+export const SyncIssueGroupSchema = z.object({
+  errorCode: z.string(),
+  count: z.number(),
+  examples: z.array(SyncIssueSchema),
+});
+export type SyncIssueGroup = z.infer<typeof SyncIssueGroupSchema>;
+
 export const SyncRunCountsSchema = z.object({
   driveFilesSeen: z.number(),
   mediaParsed: z.number(),
@@ -50,6 +62,21 @@ export const SyncRunCountsSchema = z.object({
 });
 export type SyncRunCounts = z.infer<typeof SyncRunCountsSchema>;
 
+/**
+ * One line of the "lần chạy gần đây" list. No issues, no groups: a five-row
+ * history must not carry the payload of five full runs.
+ */
+export const RecentSyncRunSchema = z.object({
+  syncRunId: z.string().min(1),
+  status: SyncRunStatusSchema,
+  startedAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime().nullable(),
+  /** Null when that run wrote no counts (still running, or crashed). */
+  issuesTotal: z.number().nullable(),
+  errorCode: z.string().nullable(),
+});
+export type RecentSyncRun = z.infer<typeof RecentSyncRunSchema>;
+
 export const SyncRunSchema = z.object({
   tenantId: z.string().min(1),
   syncRunId: z.string().min(1),
@@ -60,8 +87,15 @@ export const SyncRunSchema = z.object({
   /** Null until the run finishes — a `running` row has no counts yet. */
   counts: SyncRunCountsSchema.nullable(),
   issues: z.array(SyncIssueSchema),
+  /**
+   * NULL for runs stored before the server grouped issues. The screen must then
+   * fall back to counting the capped `issues[]` — never render 0 groups.
+   */
+  issueGroups: z.array(SyncIssueGroupSchema).nullable(),
   errorCode: z.string().nullable(),
   errorMessage: z.string().nullable(),
+  /** Newest first, including the run described above. */
+  recentRuns: z.array(RecentSyncRunSchema),
 });
 export type SyncRun = z.infer<typeof SyncRunSchema>;
 
@@ -80,6 +114,8 @@ export const RunSyncResponseSchema = z.object({
   status: SyncRunStatusSchema,
   counts: SyncRunCountsSchema,
   issues: z.array(SyncIssueSchema),
+  /** Always present on a fresh run — only stored history can be null. */
+  issueGroups: z.array(SyncIssueGroupSchema),
   /** Sheet columns that are missing or renamed — the operator must fix these. */
   schemaDrift: z.array(z.string()),
 });
@@ -140,10 +176,25 @@ export type SyncIssueGuide = {
  * `syncIssueGuide` falls back instead of indexing blindly.
  */
 const SYNC_ISSUE_GUIDES: Record<string, SyncIssueGuide> = {
+  /**
+   * Narrower than it used to be: duplicates and ambiguous names moved to their
+   * own codes below. The entry stays because runs stored BEFORE that split still
+   * carry this code for all three situations — history must remain readable.
+   */
   FILE_NAME_INVALID: {
+    severity: "error",
+    action:
+      "Tên file không theo chuẩn MÃSP-Màu (số) nên file bị bỏ qua — đổi tên trên Drive rồi chạy lại.",
+  },
+  FILE_DUPLICATE: {
+    severity: "neutral",
+    action:
+      "Có nhiều file trùng tên; hệ thống đã giữ bản sửa gần nhất và bỏ bản cũ. Không cần làm gì.",
+  },
+  FILE_NEEDS_REVIEW: {
     severity: "warning",
     action:
-      "Tên file không theo chuẩn MÃSP-Màu (số), hoặc là bản trùng đã bị bỏ — đổi tên trên Drive rồi chạy lại.",
+      "File vẫn được nhận, nhưng tên chứa nhiều mã sản phẩm — mở ví dụ để kiểm tra ảnh đã gán đúng mã chưa.",
   },
   SHEET_ROW_INVALID: {
     severity: "error",

@@ -13,7 +13,7 @@ import type {
 } from "@/core/ports/product-repo";
 import type { SheetSnapshot, SheetSource } from "@/core/ports/sheet-source";
 
-import { makeSyncCatalog, MAX_STORED_ISSUES } from "./sync-catalog";
+import { makeSyncCatalog, MAX_ISSUE_EXAMPLES, MAX_STORED_ISSUES } from "./sync-catalog";
 
 const TENANT = "00000000-0000-0000-0000-000000000001";
 
@@ -142,6 +142,11 @@ function makeHarness(options: {
       finished.push(input);
     },
     findLatest: async () => null,
+    // Same convention as `drive.download` above: a sync writes history, it never
+    // reads it. Returning [] would hide a call that should not exist.
+    listRecent: async () => {
+      throw new Error("listRecent must not be called by sync-catalog");
+    },
   };
 
   return {
@@ -282,6 +287,12 @@ describe("syncCatalog — edge cases first", () => {
     const result = await harness.run({ tenantId: TENANT });
     expect(result.counts.mediaDuplicatesDropped).toBe(1);
     expect(harness.writtenMedia.map((asset) => asset.driveFileId)).toEqual(["new"]);
+    // Its own code: nothing here needs fixing, so it must not sit next to the
+    // files that were dropped for a bad name.
+    const duplicates = result.issues.filter((issue) => issue.errorCode === "FILE_DUPLICATE");
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].reason).toBe("DUPLICATE_FILE_NAME");
+    expect(result.issues.some((issue) => issue.errorCode === "FILE_NAME_INVALID")).toBe(false);
   });
 
   it("reports codes present on only one side", async () => {
@@ -307,7 +318,11 @@ describe("syncCatalog — edge cases first", () => {
     expect(harness.writtenMedia).toHaveLength(1);
     expect(harness.writtenMedia[0].productCode).toBe("MG0AD6051");
     expect(harness.writtenMedia[0].needsReview).toBe(true);
-    expect(result.issues.some((issue) => issue.reason === "MULTIPLE_PRODUCT_CODES")).toBe(true);
+    // The file WAS imported, so it is a review note, not a rejection.
+    const review = result.issues.filter((issue) => issue.errorCode === "FILE_NEEDS_REVIEW");
+    expect(review).toHaveLength(1);
+    expect(review[0].reason).toBe("MULTIPLE_PRODUCT_CODES");
+    expect(result.counts.mediaRejected).toBe(0);
   });
 
   it("caps the stored issues but still counts every one of them", async () => {
@@ -350,6 +365,224 @@ describe("syncCatalog — edge cases first", () => {
       issuesTruncated: false,
       driveFilesSeen: 0,
     });
+  });
+});
+
+describe("syncCatalog — issue codes carry the severity", () => {
+  /**
+   * Three different situations used to share FILE_NAME_INVALID, which told the
+   * operator that a duplicate (nothing to do) was as bad as a dropped file.
+   */
+  it("splits dropped / duplicate / imported-but-odd into three codes", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow({ "Mã sản phẩm": "MG0AD6051" })]),
+      files: [
+        driveFile("IMG_1664.JPG"),
+        driveFile("MG0AD6051-KEM (1).jpg", { id: "old", modifiedTime: "2026-01-01T00:00:00Z" }),
+        driveFile("MG0AD6051-KEM (1).jpg", { id: "new", modifiedTime: "2026-08-01T00:00:00Z" }),
+        driveFile("MG0AD6051-MR0CV6068-AI (1).png"),
+      ],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    const codes = new Map(result.issueGroups.map((group) => [group.errorCode, group.count]));
+
+    expect(codes.get("FILE_NAME_INVALID")).toBe(1);
+    expect(codes.get("FILE_DUPLICATE")).toBe(1);
+    expect(codes.get("FILE_NEEDS_REVIEW")).toBe(1);
+  });
+
+  it("counts FILE_DUPLICATE exactly as many times as mediaDuplicatesDropped", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: [
+        driveFile("MGKVX6310-KEM (1).jpg", { id: "a1", modifiedTime: "2026-01-01T00:00:00Z" }),
+        driveFile("MGKVX6310-KEM (1).jpg", { id: "a2", modifiedTime: "2026-02-01T00:00:00Z" }),
+        driveFile("MGKVX6310-KEM (1).jpg", { id: "a3", modifiedTime: "2026-03-01T00:00:00Z" }),
+        driveFile("MGKVX6310-HỒNG (2).jpg", { id: "b1", modifiedTime: "2026-01-01T00:00:00Z" }),
+        driveFile("MGKVX6310-HỒNG (2).jpg", { id: "b2", modifiedTime: "2026-02-01T00:00:00Z" }),
+      ],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    const group = result.issueGroups.find((item) => item.errorCode === "FILE_DUPLICATE");
+
+    expect(result.counts.mediaDuplicatesDropped).toBe(3);
+    expect(group?.count).toBe(result.counts.mediaDuplicatesDropped);
+  });
+
+  /**
+   * KNOWN GAP, pinned rather than papered over: `mediaNeedingReview` counts every
+   * kept asset whose name is not strictly compliant (missing sequence, unknown
+   * colour, no extension...), while FILE_NEEDS_REVIEW is only raised for names
+   * carrying several product codes. The two numbers are therefore NOT equal, and
+   * the screen must not present them as the same thing.
+   */
+  it("does NOT equate mediaNeedingReview with the FILE_NEEDS_REVIEW group", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow({ "Mã sản phẩm": "MG0AD6051" })]),
+      files: [
+        // Non-strict (no sequence number) but perfectly attributable.
+        driveFile("MG0AD6051-KEM.jpg"),
+        // Non-strict AND ambiguous -> the only one that raises an issue.
+        driveFile("MG0AD6051-MR0CV6068-AI (1).png"),
+      ],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    const group = result.issueGroups.find((item) => item.errorCode === "FILE_NEEDS_REVIEW");
+
+    expect(result.counts.mediaNeedingReview).toBe(2);
+    expect(group?.count).toBe(1);
+  });
+});
+
+describe("syncCatalog — issue groups survive the cap", () => {
+  it("counts every issue per code even when only 200 rows are stored", async () => {
+    // 250 unparseable names + the sheet row left with no media = 251 issues.
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: Array.from({ length: 250 }, (_, index) => driveFile(`IMG_${index}.JPG`)),
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    const groups = new Map(result.issueGroups.map((group) => [group.errorCode, group]));
+
+    expect(result.issues).toHaveLength(MAX_STORED_ISSUES);
+    expect(groups.get("FILE_NAME_INVALID")?.count).toBe(250);
+    expect(groups.get("MEDIA_NOT_FOUND")?.count).toBe(1);
+    // The sum is the exact total, not the stored one.
+    expect(result.issueGroups.reduce((sum, group) => sum + group.count, 0)).toBe(
+      result.counts.issuesTotal,
+    );
+    // ...and the groups are what gets persisted, not a derivative of `issues`.
+    expect(harness.finished[0].issueGroups).toEqual(result.issueGroups);
+  });
+
+  it("keeps at most three examples per code", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: Array.from({ length: 10 }, (_, index) => driveFile(`IMG_${index}.JPG`)),
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    const group = result.issueGroups.find((item) => item.errorCode === "FILE_NAME_INVALID");
+
+    expect(group?.count).toBe(10);
+    expect(group?.examples).toHaveLength(MAX_ISSUE_EXAMPLES);
+    expect(group?.examples[0].ref).toBe("IMG_0.JPG");
+  });
+
+  it("puts the biggest group first so the most valuable fix is on top", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow(), productRow({ "Mã sản phẩm": "MR0AC6080" })]),
+      files: [driveFile("IMG_1.JPG"), driveFile("IMG_2.JPG"), driveFile("IMG_3.JPG")],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    expect(result.issueGroups[0]).toMatchObject({ errorCode: "FILE_NAME_INVALID", count: 3 });
+  });
+
+  it("returns no groups at all for a clean run", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: [driveFile("MGKVX6310-KEM (1).jpg")],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    expect(result.issueGroups).toEqual([]);
+    expect(harness.finished[0].issueGroups).toEqual([]);
+  });
+
+  it("still writes the groups it had when the run fails", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow({ "Tên sản phẩm": "" })]),
+      driveError: new AppError("DRIVE_ERROR", { message: "permission denied" }),
+    });
+
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({ code: "DRIVE_ERROR" });
+    expect(harness.finished[0].issueGroups).toEqual([
+      expect.objectContaining({ errorCode: "SHEET_ROW_INVALID", count: 1 }),
+    ]);
+  });
+});
+
+describe("syncCatalog — details are written for the operator", () => {
+  /** CLAUDE.md rule 6: logs are English, what the operator reads is Vietnamese. */
+  const hasVietnamese = (value: string) => /[ăâđêôơưàáảãạèéẻẽẹìíỉĩịòóỏõọùúủũụỳýỷỹỵ]/i.test(value);
+
+  it("writes every detail in Vietnamese while codes stay machine-readable", async () => {
+    const harness = makeHarness({
+      snapshot: sheet(
+        [
+          productRow(),
+          productRow({ "Mã sản phẩm": "MG0VS6111", "Tên sản phẩm": "" }),
+          productRow({ "Mã sản phẩm": "??" }),
+          productRow({ "Mã sản phẩm": "MR0AC6080" }),
+          productRow({ "Mã sản phẩm": "" }),
+        ],
+        [
+          "Mã sản phẩm",
+          "Tên sản phẩm",
+          "Mô tả sản phẩm",
+          "Chủng loại",
+          "Mùa vụ",
+          "Tồn",
+          "Màu sắc",
+        ],
+      ),
+      files: [
+        driveFile("IMG_1664.JPG"),
+        driveFile("DV Huyền Thạch MGAC513 MMQD554.jpg"),
+        driveFile("MG0AD6051-MR0CV6068-AI (1).png"),
+        driveFile("MGKVX6310-KEM (1).jpg", { id: "old", modifiedTime: "2026-01-01T00:00:00Z" }),
+        driveFile("MGKVX6310-KEM (1).jpg", { id: "new", modifiedTime: "2026-08-01T00:00:00Z" }),
+      ],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+
+    expect(result.issues.length).toBeGreaterThan(5);
+    for (const issue of result.issues) {
+      expect(hasVietnamese(issue.detail), `${issue.errorCode}/${issue.reason}: ${issue.detail}`).toBe(
+        true,
+      );
+      // The machine side stays ASCII upper-case English.
+      expect(issue.errorCode).toMatch(/^[A-Z_]+$/);
+      expect(issue.reason).toMatch(/^[A-Z_]+$/);
+    }
+  });
+
+  it("keeps the parameters an operator needs to find the row or the file", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow(), productRow({ "Tên sản phẩm": "Fioraé" })]),
+      files: [driveFile("MG0AD6051-MR0CV6068-AI (1).png")],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    const byReason = new Map(result.issues.map((issue) => [issue.reason, issue.detail]));
+
+    // Conflicting rows: the row numbers are the whole point of the message.
+    expect(byReason.get("DUPLICATE_CODE_CONFLICT")).toContain("2");
+    expect(byReason.get("DUPLICATE_CODE_CONFLICT")).toContain("3");
+    // Outfit set: both codes must appear, or the operator cannot judge it.
+    expect(byReason.get("MULTIPLE_PRODUCT_CODES")).toContain("MG0AD6051");
+    expect(byReason.get("MULTIPLE_PRODUCT_CODES")).toContain("MR0CV6068");
+  });
+
+  it("names the missing column in the detail of a schema drift", async () => {
+    const harness = makeHarness({
+      snapshot: sheet(
+        [{ "Mã sản phẩm": "MGKVX6310", "Tên sản phẩm": "Giannal", Tồn: "5" }],
+        ["Mã sản phẩm", "Tên sản phẩm", "Tồn"],
+      ),
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    const drift = result.issues.find((issue) => issue.reason === "COLUMN_MISSING");
+
+    expect(drift?.detail).toContain("Mẫu 2026");
+    expect(drift?.detail).toContain(drift?.ref ?? "");
   });
 });
 

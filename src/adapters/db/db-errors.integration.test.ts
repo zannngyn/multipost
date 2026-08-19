@@ -88,6 +88,7 @@ describe.skipIf(!url)("repos map Postgres 22P02 to INVALID_INPUT (real database)
           issuesTruncated: false,
         },
         issues: [],
+        issueGroups: [],
       })
       .catch((e: unknown) => e);
 
@@ -97,6 +98,43 @@ describe.skipIf(!url)("repos map Postgres 22P02 to INVALID_INPUT (real database)
       field: "syncRunId",
       pg_code: "22P02",
     });
+  });
+
+  it("syncRun.listRecent refuses a malformed limit before touching the driver", async () => {
+    const error = await syncRuns
+      .listRecent(DEMO_TENANT_ID, 0)
+      .catch((e: unknown) => e);
+
+    expect((error as AppError).code).toBe("INVALID_INPUT");
+    expect((error as AppError).context).toMatchObject({ operation: "syncRun.listRecent" });
+  });
+
+  it("syncRun.listRecent returns the newest runs first, without their issues", async () => {
+    const rows = await syncRuns.listRecent(DEMO_TENANT_ID, 5);
+
+    expect(rows.length).toBeLessThanOrEqual(5);
+    for (const row of rows) expect(row.startedAt).toBeInstanceOf(Date);
+    // Descending by startedAt is what the rail relies on to say "gần nhất".
+    const times = rows.map((row) => row.startedAt.getTime());
+    expect([...times].sort((a, b) => b - a)).toEqual(times);
+
+    // "Without their issues" is half the contract: a five-row history must not
+    // drag `issues` (up to 200 objects) or `issue_groups` across the wire. The
+    // exact key set is asserted, so a widened SELECT fails here rather than
+    // quietly making this list heavy again.
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual([
+        "errorCode",
+        "finishedAt",
+        "id",
+        "issuesTotal",
+        "startedAt",
+        "status",
+      ]);
+      expect(row).not.toHaveProperty("issues");
+      expect(row).not.toHaveProperty("issueGroups");
+      expect(row).not.toHaveProperty("counts");
+    }
   });
 
   it("a malformed TENANT id is still refused before any SQL is built", async () => {

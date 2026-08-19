@@ -8,6 +8,7 @@ import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzl
 import { closeDbHandle, getDbHandle, type Database } from "@/adapters/db/client";
 import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
 import { makeSecretBox, type SecretBox } from "@/adapters/db/secret-box";
+import { DrizzlePostDraftRepo } from "@/adapters/db/post-draft-repo.drizzle";
 import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
 import { DrizzleProductRepo } from "@/adapters/db/product-repo.drizzle";
 import { DrizzleSyncRunRepo } from "@/adapters/db/sync-run-repo.drizzle";
@@ -95,6 +96,9 @@ import {
 } from "@/core/usecases/update-catalog-source";
 import { makeGetSyncStatus, type GetSyncStatus } from "@/core/usecases/get-sync-status";
 import { makeGetWorkerHealth, type GetWorkerHealth } from "@/core/usecases/get-worker-health";
+import { makeSavePostDraft, type SavePostDraft } from "@/core/usecases/save-post-draft";
+import { makeLoadPostDraft, type LoadPostDraft } from "@/core/usecases/load-post-draft";
+import { makeDiscardPostDraft, type DiscardPostDraft } from "@/core/usecases/discard-post-draft";
 import { makeHealthcheckTenant, type HealthcheckTenant } from "@/core/usecases/healthcheck-tenant";
 import { makePublishPost, type PublishPost } from "@/core/usecases/publish-post";
 import { makeSyncCatalog, type SyncCatalog } from "@/core/usecases/sync-catalog";
@@ -156,6 +160,21 @@ export interface Usecases {
   publishPost: PublishPost;
   /** E7.5 — per-channel results + batch summary. */
   getBatchStatus: GetBatchStatus;
+  /** E10 — autosave the compose screen so a refresh does not lose typed work. */
+  savePostDraft: SavePostDraft;
+  /** E10 — read the draft back on mount (input only; compose re-runs for real). */
+  loadPostDraft: LoadPostDraft;
+  /** E10 — drop the draft after a batch is created, or on "Xoá nháp". */
+  discardPostDraft: DiscardPostDraft;
+  /**
+   * E10 — session e-mail -> `app_user.id`, the owner every draft is addressed
+   * by. Exposed because the draft route (unlike retry/reschedule, which hand an
+   * e-mail to a usecase that resolves it internally) needs the id BEFORE it can
+   * call anything: a draft with no owner is tenant-shared, and two operators
+   * would overwrite each other. `null` for an unknown e-mail is NOT an error —
+   * the route answers "chỉ lưu trên máy này" and the screen says so.
+   */
+  findOperatorUserId: (tenantId: string, email: string) => Promise<string | null>;
   /** E11.1 — operator job log. */
   listPostJobs: ListPostJobs;
   /** E11.1 — re-queue a failed/blocked job (stock recheck still applies). */
@@ -496,7 +515,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const tenants = new DrizzleTenantRepo(deps.db);
   const products = new DrizzleProductRepo(deps.db);
   const media = new DrizzleMediaRepo(deps.db);
-  const syncRuns = new DrizzleSyncRunRepo(deps.db);
+  const syncRuns = new DrizzleSyncRunRepo(deps.db, deps.logger);
   const catalogConfig = new DrizzleCatalogConfigRepo(deps.db, deps.logger);
   const postJobs = new DrizzlePostJobRepo(deps.db);
   const channels = new DrizzleChannelConfigRepo(deps.db, {
@@ -504,6 +523,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     logger: deps.logger,
   });
   const channelGroups = new DrizzleChannelGroupRepo(deps.db);
+  // E10 — one open compose draft per operator per tenant.
+  const postDrafts = new DrizzlePostDraftRepo(deps.db);
   // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
   const users = new DrizzleUserRepo(deps.db);
   const google = makeLazyGoogleSources({ logger: deps.logger });
@@ -653,6 +674,11 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
         }),
     }),
     getBatchStatus: makeGetBatchStatus({ postJobs, logger: deps.logger }),
+    savePostDraft: makeSavePostDraft({ drafts: postDrafts, logger: deps.logger }),
+    loadPostDraft: makeLoadPostDraft({ drafts: postDrafts, logger: deps.logger }),
+    discardPostDraft: makeDiscardPostDraft({ drafts: postDrafts, logger: deps.logger }),
+    findOperatorUserId: (tenantId: string, email: string) =>
+      users.findUserIdByEmail(tenantId, email),
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
     retryPostJob: makeRetryPostJob({
       postJobs,

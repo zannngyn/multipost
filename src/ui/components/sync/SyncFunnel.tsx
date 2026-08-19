@@ -100,7 +100,7 @@ function StageRow({ stage }: { stage: Stage }) {
               </span>
               <span className="text-muted-foreground text-sm">
                 {stage.forwardLabel}
-                {share !== null ? ` · ${share}% số đã vào` : ""}
+                {share !== null ? ` · ${share} số đã vào` : ""}
               </span>
             </p>
 

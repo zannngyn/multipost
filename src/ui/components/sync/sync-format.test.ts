@@ -26,9 +26,26 @@ describe("percentOf", () => {
   });
 
   it("rounds the share to a whole percent", () => {
-    expect(percentOf(9_132, 14_987)).toBe(61);
-    expect(percentOf(359, 367)).toBe(98);
-    expect(percentOf(0, 100)).toBe(0);
+    expect(percentOf(9_132, 14_987)).toBe("61%");
+    expect(percentOf(359, 367)).toBe("98%");
+    expect(percentOf(1, 100)).toBe("1%");
+  });
+
+  /**
+   * A real zero and a share too small to round to one percent are different
+   * facts. "0%" printed next to a count of 30 reads as a broken cell.
+   */
+  it("says '<1%' for a tiny share, and keeps '0%' for a real zero", () => {
+    expect(percentOf(30, 7_434)).toBe("<1%");
+    expect(percentOf(8, 7_434)).toBe("<1%");
+    // 0.5% still rounds up to a printable 1%, so it is NOT the "<1%" case.
+    expect(percentOf(50, 10_000)).toBe("1%");
+    expect(percentOf(0, 100)).toBe("0%");
+  });
+
+  it("still has no answer at all when there is nothing to divide by", () => {
+    // Distinct from "0%": no denominator means no share, not a share of zero.
+    expect(percentOf(0, 0)).toBeNull();
   });
 });
 

@@ -48,6 +48,14 @@ describe("buildStages — a run that read nothing", () => {
     }
   });
 
+  it("prints '<1%' for a stage that kept only a handful of a huge folder", () => {
+    // 12 of 15.000 files survived: "0%" next to the count 12 reads as a bug.
+    const [drive] = buildStages(counts({ driveFilesSeen: 15_000, mediaParsed: 12 }));
+
+    expect(drive.total).toBe(15_000);
+    expect(percentOf(drive.forwardValue, drive.total)).toBe("<1%");
+  });
+
   it("carries a sentence for the empty case instead of an empty bar", () => {
     for (const stage of stages) {
       expect(stage.emptyLabel.length).toBeGreaterThan(20);
