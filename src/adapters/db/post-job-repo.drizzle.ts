@@ -34,6 +34,7 @@ import type {
   PostBatchSummary,
   PostJobListItem,
   OverdueScanQuery,
+  PostJobEventInput,
   PostJobPage,
   PostJobRepo,
   StaleScanQuery,
@@ -44,7 +45,7 @@ import type {
 
 import type { Database, DbExecutor } from "./client";
 import { findPgError, isPgError, wrapDbError } from "./db-errors";
-import { auditLogs, postBatches, postJobs, type PostJobRow } from "./schema";
+import { auditLogs, postBatches, postJobEvents, postJobs, type PostJobRow } from "./schema";
 import { forTenant } from "./tenant-scope";
 
 /**
@@ -851,6 +852,66 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
 
   async getBatchSummary(tenantId: string, batchId: string): Promise<PostBatchSummary | null> {
     return this.buildSummary(this.db, tenantId, batchId);
+  }
+
+  /**
+   * E7.5 — one milestone row (design §5.4). Deliberately NOT part of the
+   * publish transaction: a note about a post must never be able to roll a post
+   * back, and it must survive the transitions it describes.
+   *
+   * It still throws like every other method here. The decision that telemetry
+   * may not stop a publish belongs to the caller, which owns the post; a repo
+   * that silently ate its own INSERT would make "the trail has a hole" an
+   * unanswerable question.
+   */
+  async appendJobEvent(input: PostJobEventInput): Promise<void> {
+    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const postJobId = typeof input?.postJobId === "string" ? input.postJobId.trim() : "";
+    const batchId = typeof input?.batchId === "string" ? input.batchId.trim() : "";
+    const stage = typeof input?.stage === "string" ? input.stage.trim() : "";
+    if (postJobId.length === 0 || batchId.length === 0 || stage.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "appendJobEvent requires a post job id, a batch id and a stage",
+        userMessage: "Thiếu thông tin để ghi mốc tiến độ của bài đăng.",
+        context: {
+          tenant_id: scope.tenantId,
+          job_id: postJobId || null,
+          batch_id: batchId || null,
+          stage: stage || null,
+        },
+      });
+    }
+
+    const occurredAt =
+      input?.occurredAt instanceof Date && Number.isFinite(input.occurredAt.getTime())
+        ? input.occurredAt
+        : new Date();
+    const attempt =
+      typeof input?.attempt === "number" && Number.isFinite(input.attempt)
+        ? Math.max(0, Math.floor(input.attempt))
+        : 0;
+
+    try {
+      await scope.db.insert(postJobEvents).values(
+        scope.row({
+          postJobId,
+          batchId,
+          stage,
+          attempt,
+          detail: { ...(input?.detail ?? {}) },
+          occurredAt,
+        }),
+      );
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.appendJobEvent",
+        tenant_id: scope.tenantId,
+        job_id: postJobId,
+        batch_id: batchId,
+        stage,
+        field: "postJobId",
+      });
+    }
   }
 
   private async buildSummary(

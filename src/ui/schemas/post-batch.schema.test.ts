@@ -49,6 +49,26 @@ function makeBatch(overrides: Partial<BatchStatusResponse> = {}): BatchStatusRes
     durationMs: null,
     channels: [],
     summaryMessage: "Đang chạy",
+    progressSteps: [],
+    ...overrides,
+  };
+}
+
+/** A channel row with no live progress — the common case, and the old shape. */
+function makeChannel(
+  overrides: Partial<BatchStatusResponse["channels"][number]> = {},
+): BatchStatusResponse["channels"][number] {
+  return {
+    channelId: "fbpage-a",
+    postJobId: "job-1",
+    status: "queued",
+    attemptCount: 0,
+    publishedPostId: null,
+    publishedUrl: null,
+    publishedAt: null,
+    lastErrorCode: null,
+    userMessage: "Đang chờ trong hàng đợi để đăng",
+    progress: null,
     ...overrides,
   };
 }
@@ -69,6 +89,101 @@ describe("batchPollInterval", () => {
     expect(batchPollInterval(makeBatch({ status: "running" }), 0)).toBe(3_000);
     expect(batchPollInterval(makeBatch({ status: "pending" }), 2)).toBe(5_000);
     expect(batchPollInterval(makeBatch({ status: "running" }), 99)).toBe(8_000);
+  });
+
+  it("polls fast while a channel is publishing, however far the backoff had run", () => {
+    const publishing = makeBatch({
+      status: "running",
+      channels: [makeChannel({ status: "publishing", attemptCount: 1 })],
+    });
+    // The backoff is IGNORED here, not merely shortened: a stepper refreshed on
+    // an 8s curve is what this exception exists to prevent.
+    expect(batchPollInterval(publishing, 0)).toBe(1_500);
+    expect(batchPollInterval(publishing, 99)).toBe(1_500);
+  });
+
+  it("returns to the backoff once nothing is publishing any more", () => {
+    const queuedOnly = makeBatch({
+      status: "running",
+      channels: [makeChannel({ status: "queued" })],
+    });
+    expect(batchPollInterval(queuedOnly, 99)).toBe(8_000);
+  });
+
+  it("stops polling on a settled batch even while a row still says publishing", () => {
+    // A stale row must not outrank the batch verdict — otherwise the screen
+    // polls forever on a finished batch.
+    const settled = makeBatch({
+      status: "completed",
+      channels: [makeChannel({ status: "publishing" })],
+    });
+    expect(batchPollInterval(settled, 1)).toBe(false);
+  });
+});
+
+describe("batch progress payload", () => {
+  it("parses a payload from a server that sends no progress at all", () => {
+    // Backward compatibility is the reason both fields carry `.default()`: a
+    // deploy where the browser is newer than the server must not blank the page.
+    const { progressSteps: _steps, ...batch } = makeBatch();
+    const { progress: _progress, ...channel } = makeChannel();
+    const parsed = BatchStatusResponseSchema.safeParse({ ...batch, channels: [channel] });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.progressSteps).toEqual([]);
+    expect(parsed.data?.channels[0]?.progress).toBeNull();
+  });
+
+  it("parses a live upload step with its counts and no deadline", () => {
+    const parsed = BatchStatusResponseSchema.safeParse(
+      makeBatch({
+        progressSteps: ["Chờ hàng đợi", "Kiểm tồn", "Tải ảnh", "Gửi lên kênh", "Xong"],
+        channels: [
+          makeChannel({
+            status: "publishing",
+            progress: {
+              stage: "uploading_media",
+              stepIndex: 2,
+              label: "Đang tải ảnh lên kênh 3/10 (IMG_2041.jpg)",
+              doneCount: 3,
+              totalCount: 10,
+              currentItem: "IMG_2041.jpg",
+              stageStartedAt: "2026-08-12T03:00:10.000Z",
+              waitUntil: null,
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(parsed.success).toBe(true);
+    // §3.2: an upload carries counts and NEVER a deadline to count down to.
+    expect(parsed.data?.channels[0]?.progress?.waitUntil).toBeNull();
+    expect(parsed.data?.channels[0]?.progress?.totalCount).toBe(10);
+  });
+
+  it("rejects a progress block whose timestamps are not real dates", () => {
+    const parsed = BatchStatusResponseSchema.safeParse(
+      makeBatch({
+        channels: [
+          makeChannel({
+            status: "publishing",
+            progress: {
+              stage: "uploading_media",
+              stepIndex: 2,
+              label: "x",
+              doneCount: 1,
+              totalCount: 2,
+              currentItem: null,
+              stageStartedAt: "hôm qua",
+              waitUntil: null,
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(parsed.success).toBe(false);
   });
 });
 
@@ -157,17 +272,11 @@ describe("response schemas", () => {
         inProgress: 1,
       },
       channels: [
-        {
-          channelId: "fbpage-a",
-          postJobId: "job-1",
+        makeChannel({
           status: "scheduled_on_facebook",
           attemptCount: 1,
-          publishedPostId: null,
-          publishedUrl: null,
-          publishedAt: null,
-          lastErrorCode: null,
           userMessage: "Facebook đã nhận lịch và sẽ tự đăng.",
-        },
+        }),
       ],
     });
     expect(BatchStatusResponseSchema.safeParse(payload).success).toBe(true);
@@ -175,19 +284,7 @@ describe("response schemas", () => {
 
   it("rejects a batch payload with an unknown job status", () => {
     const payload = makeBatch({
-      channels: [
-        {
-          channelId: "facebook",
-          postJobId: "job-1",
-          status: "exploded" as never,
-          attemptCount: 0,
-          publishedPostId: null,
-          publishedUrl: null,
-          publishedAt: null,
-          lastErrorCode: null,
-          userMessage: "x",
-        },
-      ],
+      channels: [makeChannel({ channelId: "facebook", status: "exploded" as never })],
     });
     expect(BatchStatusResponseSchema.safeParse(payload).success).toBe(false);
   });

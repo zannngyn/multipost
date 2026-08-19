@@ -303,6 +303,51 @@ export interface PublishMediaItem {
   readonly readBytes: () => Promise<PublishMediaBytes>;
 }
 
+/**
+ * E7.5 — what a publisher tells the caller WHILE it works (design §5.5).
+ *
+ * These are facts the adapter has in hand, never estimates: which photo of how
+ * many, its file name, and the one moment that matters for business rule 4 —
+ * the instant before the creating request leaves the process.
+ */
+export type PublishProgressEvent =
+  | {
+      readonly kind: "media_upload_started";
+      /** 0-based index in album order. */
+      readonly index: number;
+      readonly total: number;
+      readonly fileName: string;
+    }
+  | {
+      readonly kind: "media_upload_finished";
+      readonly index: number;
+      readonly total: number;
+      readonly fileName: string;
+    }
+  /** The request that creates the post is about to be sent. Exactly once. */
+  | { readonly kind: "creating_post" }
+  /** Byte-level video progress, for a platform that streams the file itself. */
+  | {
+      readonly kind: "video_upload_progress";
+      readonly bytesSent: number;
+      readonly bytesTotal: number | null;
+    };
+
+/**
+ * Progress callback, shared by every publishing method below.
+ *
+ * Contract for every implementer:
+ *  - called SYNCHRONOUSLY, fire-and-forget: never awaited, and its return value
+ *    is ignored;
+ *  - wrapped in try/catch by the adapter — a listener that throws is the
+ *    listener's problem, never a failed post;
+ *  - `creating_post` fires IMMEDIATELY BEFORE the creating request, exactly
+ *    once, so the operator screen never says "sending" for a post that has not
+ *    been sent (and business rule 4's boundary is visible on screen);
+ *  - absent `onProgress` is normal: the adapter behaves exactly as before.
+ */
+export type PublishProgressListener = (event: PublishProgressEvent) => void;
+
 export interface PublishImagePostInput {
   readonly tenantId: string;
   readonly channel: ChannelConfig;
@@ -316,6 +361,8 @@ export interface PublishImagePostInput {
    * index + the `queued -> publishing` claim (business rule 4).
    */
   readonly idempotencyKey: string;
+  /** E7.5 — optional progress listener; see PublishProgressListener. */
+  readonly onProgress?: PublishProgressListener;
 }
 
 export interface PublishResult {
@@ -348,6 +395,8 @@ export interface PublishVideoPostInput {
   readonly durationSec?: number | null;
   /** Tracing only, like the image path. */
   readonly idempotencyKey: string;
+  /** E7.5 — optional progress listener; see PublishProgressListener. */
+  readonly onProgress?: PublishProgressListener;
 }
 
 /** Same post as `publishImagePost`, handed over for a LATER hour (E8.6). */

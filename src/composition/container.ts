@@ -25,6 +25,7 @@ import { makeGraphClient } from "@/adapters/meta/graph-client";
 import { makeTikTokClient } from "@/adapters/tiktok/tiktok-client";
 import { makeTikTokPublisher } from "@/adapters/tiktok/tiktok-publisher";
 import { makeBullMqJobQueue } from "@/adapters/queue/bullmq-job-queue";
+import { makeRedisJobProgressStore } from "@/adapters/queue/redis-job-progress";
 import { createRedisConnection } from "@/adapters/queue/redis-connection";
 import { AppError } from "@/core/domain/errors";
 import {
@@ -34,6 +35,7 @@ import {
 } from "@/core/domain/media-url";
 import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
+import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { JobQueue, QueueWorkerRegistry } from "@/core/ports/job-queue";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaByteCache } from "@/core/ports/media-byte-cache";
@@ -237,6 +239,11 @@ export interface UsecaseOverrides {
   sheet?: SheetSource;
   /** Worker passes its own queue so one process holds ONE Redis connection. */
   queue?: JobQueue;
+  /**
+   * E7.5 — same reason as `queue`: the worker builds the progress store on the
+   * Redis connection it already has, and tests pass an in-memory one.
+   */
+  progress?: JobProgressStore;
   publisher?: ChannelPublisher;
   /** E6 — override per platform; the key wins over `publisher` for that platform. */
   publishers?: Partial<Record<ChannelPlatform, ChannelPublisher>>;
@@ -327,6 +334,48 @@ const lazyQueueClosers = new Set<() => Promise<void>>();
 /** Does this queue also answer "how many workers are attached?" (E11 banner)? */
 function isWorkerRegistry(queue: JobQueue): queue is JobQueue & QueueWorkerRegistry {
   return typeof (queue as Partial<QueueWorkerRegistry>).countWorkers === "function";
+}
+
+/**
+ * E7.5 — live job progress (design §5.3), built on first use like the queue
+ * above: a page render and `next build` must not need a reachable Redis.
+ *
+ * In practice this connection stays unopened in the WORKER: that process passes
+ * its own store, built on the connection it already holds for BullMQ (see
+ * worker-container). The web process opens it only when the tracking screen
+ * actually asks for progress.
+ */
+function makeLazyJobProgressStore(config: Config, logger: Logger): JobProgressStore {
+  let real: JobProgressStore | null = null;
+
+  const build = (): JobProgressStore => {
+    if (real) return real;
+    /**
+     * The offline queue stays ON (the ioredis default), and the adapter's
+     * command timeout is what bounds a dead Redis — see
+     * PROGRESS_COMMAND_TIMEOUT_MS.
+     *
+     * Turning it off was tried and reverted: a command issued before the
+     * connection finished opening is rejected outright ("Stream isn't
+     * writeable"), so the FIRST poll after a cold start lost its progress
+     * against a perfectly healthy Redis. Waiting a few milliseconds for a
+     * connection that is coming up is correct; only waiting forever is not, and
+     * that is the timeout's job.
+     */
+    const connection = createRedisConnection({ url: config.REDIS_URL, logger });
+    real = makeRedisJobProgressStore({ connection, logger });
+    lazyQueueClosers.add(async () => {
+      real = null;
+      await connection.quit();
+    });
+    return real;
+  };
+
+  return {
+    report: (input) => build().report(input),
+    read: (tenantId, postJobIds) => build().read(tenantId, postJobIds),
+    clear: (tenantId, postJobId) => build().clear(tenantId, postJobId),
+  };
 }
 
 /**
@@ -530,6 +579,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const google = makeLazyGoogleSources({ logger: deps.logger });
   const lazyQueue = makeLazyJobQueue(deps.config, deps.logger);
   const queue = overrides.queue ?? lazyQueue;
+  const jobProgress = overrides.progress ?? makeLazyJobProgressStore(deps.config, deps.logger);
   // The worker census is a SEPARATE port (nothing that publishes gets it). An
   // override may be a plain JobQueue — the worker's own queue does implement the
   // census, a test fake does not — so fall back to the real lazy queue, which
@@ -650,6 +700,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       channels,
       publishers,
       queue,
+      // E7.5 — where each step of this publish is reported (design §5.6).
+      progress: jobProgress,
       clock: deps.clock,
       logger: deps.logger,
       // Re-signed per attempt: a queued job can outlive the URL it was born with.
@@ -673,7 +725,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
           logger: deps.logger,
         }),
     }),
-    getBatchStatus: makeGetBatchStatus({ postJobs, logger: deps.logger }),
+    // E7.5 — the same store publishPost writes to; here it is only READ, and a
+    // store that is down costs the stepper, not the table (design §5.7).
+    getBatchStatus: makeGetBatchStatus({ postJobs, progress: jobProgress, logger: deps.logger }),
     savePostDraft: makeSavePostDraft({ drafts: postDrafts, logger: deps.logger }),
     loadPostDraft: makeLoadPostDraft({ drafts: postDrafts, logger: deps.logger }),
     discardPostDraft: makeDiscardPostDraft({ drafts: postDrafts, logger: deps.logger }),

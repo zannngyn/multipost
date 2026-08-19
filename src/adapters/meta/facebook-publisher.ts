@@ -8,6 +8,8 @@ import type {
   ChannelPublisher,
   PublishImagePostInput,
   PublishMediaItem,
+  PublishProgressEvent,
+  PublishProgressListener,
   PublishResult,
   PublishVideoPostInput,
   RemotePostQuery,
@@ -164,8 +166,19 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
 
       // --- Single photo: one call, published immediately ---------------------
       if (media.length === 1) {
+        const fileName = media[0]?.fileName ?? "";
+        emitProgress(input.onProgress, log, {
+          kind: "media_upload_started",
+          index: 0,
+          total: 1,
+          fileName,
+        });
         // Reading the bytes creates nothing (readPart flags that itself).
         const file = await readPart(media[0], 0, logContext);
+        // No `media_upload_finished` here on purpose: on this path the upload IS
+        // the post. The next event the caller sees is `creating_post`, so the
+        // screen never falls back to "uploading" for a post already on the Page.
+        emitProgress(input.onProgress, log, { kind: "creating_post" });
         let raw: Record<string, unknown>;
         try {
           raw = await deps.graph.postMultipart({
@@ -209,7 +222,10 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       // --- Album: upload unpublished photos, then one feed post -------------
       let mediaFbIds: string[];
       try {
-        mediaFbIds = await uploadAlbumPhotos(deps, channel, media, logContext);
+        mediaFbIds = await uploadAlbumPhotos(deps, channel, media, logContext, {
+          onProgress: input.onProgress,
+          log,
+        });
       } catch (error) {
         // Same reasoning as the scheduled path: these calls only make
         // `published=false` photo objects, which are not posts. Whatever failed
@@ -231,6 +247,9 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
         params[`attached_media[${index}]`] = JSON.stringify({ media_fbid: mediaFbId });
       });
 
+      // Fired here, not earlier: everything above only made unpublished photo
+      // objects, and this is the one call that can put a post on the Page.
+      emitProgress(input.onProgress, log, { kind: "creating_post" });
       let raw: Record<string, unknown>;
       try {
         raw = await deps.graph.post({
@@ -358,6 +377,9 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
       if (target === "video") {
         // ONE call, and it is the creating one: Meta accepts the video and
         // publishes it. Nothing that comes back can promise the Page is empty.
+        // Minimal progress by design (§2): the bytes travel from Meta's side of
+        // the wire (file_url), so there is no upload here to count.
+        emitProgress(input.onProgress, log, { kind: "creating_post" });
         let raw: Record<string, unknown>;
         try {
           raw = await deps.graph.post({
@@ -434,6 +456,9 @@ export function makeFacebookPublisher(deps: FacebookPublisherDeps): ChannelPubli
         });
       }
 
+      // Only the finish phase publishes; start + upload created an unpublished
+      // container. So this, and nothing before it, is `creating_post`.
+      emitProgress(input.onProgress, log, { kind: "creating_post" });
       let finishRaw: Record<string, unknown>;
       try {
         finishRaw = await deps.graph.post({
@@ -566,10 +591,13 @@ function makeFacebookScheduledPublisher(
 
       let mediaFbIds: string[];
       try {
-        mediaFbIds = await uploadAlbumPhotos(deps, channel, media, {
-          ...logContext,
-          scheduled_publish_time: scheduledPublishTime,
-        });
+        mediaFbIds = await uploadAlbumPhotos(
+          deps,
+          channel,
+          media,
+          { ...logContext, scheduled_publish_time: scheduledPublishTime },
+          { onProgress: input.onProgress, log },
+        );
       } catch (error) {
         // Nothing that creates a POST has been sent yet: these calls only make
         // UNPUBLISHED photo objects (`published=false`), and /feed below is what
@@ -617,6 +645,9 @@ function makeFacebookScheduledPublisher(
         params[`attached_media[${index}]`] = JSON.stringify({ media_fbid: mediaFbId });
       });
 
+      // The scheduled /feed creates the object Facebook will hold: same boundary
+      // as an immediate publish, same single event, fired immediately before it.
+      emitProgress(input.onProgress, log, { kind: "creating_post" });
       let raw: Record<string, unknown>;
       try {
         raw = await deps.graph.post({
@@ -847,10 +878,25 @@ async function uploadAlbumPhotos(
   channel: ChannelConfig,
   media: readonly PublishMediaItem[],
   logContext: Record<string, unknown>,
+  /** E7.5 — where the per-photo progress goes. Absent = the pre-E7.5 behaviour. */
+  progress: { onProgress?: PublishProgressListener; log: Logger } = {
+    log: deps.logger,
+  },
 ): Promise<string[]> {
   const pageId = channel.externalId.trim();
   const mediaFbIds: string[] = [];
+  const total = media.length;
   for (const [index, item] of media.entries()) {
+    const fileName = typeof item?.fileName === "string" ? item.fileName : "";
+    // Fired BEFORE the bytes are read: reading a 9 MB photo off Drive is part of
+    // what the operator is waiting for, and a screen that only counts finished
+    // photos sits on "2/10" while the third is being fetched.
+    emitProgress(progress.onProgress, progress.log, {
+      kind: "media_upload_started",
+      index,
+      total,
+      fileName,
+    });
     const file = await readPart(item, index, logContext);
     const raw = await deps.graph.postMultipart({
       path: `${pageId}/photos`,
@@ -874,8 +920,41 @@ async function uploadAlbumPhotos(
       });
     }
     mediaFbIds.push(parsed.data.id);
+    emitProgress(progress.onProgress, progress.log, {
+      kind: "media_upload_finished",
+      index,
+      total,
+      fileName: file.fileName,
+    });
   }
   return mediaFbIds;
+}
+
+/**
+ * Hands ONE progress event to the caller's listener (port contract on
+ * PublishProgressListener, design §5.5).
+ *
+ * The try/catch is the contract, not an oversight: a listener that throws is a
+ * broken LISTENER, and a post that reached Facebook must not be reported as
+ * failed because the screen's telemetry hiccupped. The failure is logged with
+ * the event kind so it is still visible; nothing else in this adapter swallows
+ * anything.
+ */
+function emitProgress(
+  onProgress: PublishProgressListener | undefined,
+  log: Logger,
+  event: PublishProgressEvent,
+): void {
+  if (typeof onProgress !== "function") return;
+  try {
+    onProgress(event);
+  } catch (error) {
+    log.warn("Progress listener threw — publishing continues", {
+      err: AppError.from(error, "INTERNAL", { reason: "PROGRESS_LISTENER_FAILED" }),
+      error_code: "INTERNAL",
+      progress_kind: event.kind,
+    });
+  }
 }
 
 interface ValidatedImagePost {

@@ -7,10 +7,12 @@ import type { VideoSpec } from "@/core/domain/video-spec";
 import type { MediaAssetLookup } from "@/core/ports/drive-source";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
+import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
 import type {
   ApplyTransitionInput,
   PostBatchSummary,
+  PostJobEventInput,
   PostJobRepo,
 } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
@@ -28,6 +30,10 @@ import type {
 import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 
 import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
+import {
+  makeMemoryJobProgressStore,
+  makeThrowingJobProgressStore,
+} from "./__fixtures__/job-progress-store";
 import { makePublishPost, spacingWaitMs } from "./publish-post";
 
 /**
@@ -90,14 +96,17 @@ function makeMemoryRepo(jobs: PostJob[]) {
   const store = new Map(jobs.map((job) => [job.id, job]));
   const transitions: Array<{ from: PostJobStatus; to: PostJobStatus; reason: string; ok: boolean }> = [];
   const transitionInputs: ApplyTransitionInput[] = [];
+  const events: PostJobEventInput[] = [];
   const repo: PostJobRepo & {
     transitions: typeof transitions;
     transitionInputs: ApplyTransitionInput[];
+    events: PostJobEventInput[];
     get(id: string): PostJob | undefined;
     refreshCalls: string[];
   } = {
     transitions,
     transitionInputs,
+    events,
     refreshCalls: [],
     get: (id: string) => store.get(id),
     async createBatchWithJobs() {
@@ -176,6 +185,11 @@ function makeMemoryRepo(jobs: PostJob[]) {
     async getBatchSummary() {
       return null;
     },
+    // E7.5 — durable milestones; recorded so a test can prove ONE row per
+    // stage change (never one per photo).
+    async appendJobEvent(input) {
+      repo.events.push(input);
+    },
   };
   return repo;
 }
@@ -250,6 +264,8 @@ interface Harness {
   publish: ReturnType<typeof makePublishPost>;
   repo: ReturnType<typeof makeMemoryRepo>;
   queue: ReturnType<typeof makeQueue>;
+  /** E7.5 — every stage this run reported, in order. */
+  progress: ReturnType<typeof makeMemoryJobProgressStore>;
   publisher: {
     publishImagePost: ReturnType<typeof vi.fn>;
     publishVideoPost: ReturnType<typeof vi.fn>;
@@ -303,6 +319,8 @@ function harness(options: {
   schedulePost?: (input: SchedulePostInput) => Promise<SchedulePostResult>;
   /** E8.6 — build a publisher that cannot hold a post (TikTok-like). */
   withoutScheduler?: boolean;
+  /** E7.5 — swap in a store that breaks, to prove the post still goes out. */
+  progress?: JobProgressStore;
 } = {}): Harness {
   const repo = makeMemoryRepo(options.jobs ?? [makeJob()]);
   const queue = makeQueue();
@@ -334,6 +352,10 @@ function harness(options: {
         }),
   };
   const signer = fakeSigner(clock);
+  // `progress` on the harness is always the RECORDING store; a test that swaps
+  // in a broken one is asserting on the job, not on what it recorded.
+  const recorded = makeMemoryJobProgressStore();
+  const progress = options.progress ?? recorded;
   const readMediaBytes = vi.fn<ReadMediaBytes>(
     options.readMediaBytes ?? (async () => ({ bytes: PHOTO_BYTES, mimeType: "image/jpeg" })),
   );
@@ -344,6 +366,7 @@ function harness(options: {
     publisher,
     signer,
     readMediaBytes,
+    progress: recorded,
     publish: makePublishPost({
       postJobs: repo,
       products: makeProducts(options.product === undefined ? makeProduct("104") : options.product),
@@ -351,6 +374,7 @@ function harness(options: {
       publisher,
       ...(options.publishers ? { publishers: options.publishers } : {}),
       queue,
+      progress,
       clock,
       logger: silentLogger(),
       signMediaUrl: options.signMediaUrl ?? signer.sign,
@@ -1037,6 +1061,7 @@ describe("publishPost — happy path", () => {
         },
       },
       queue: makeQueue(),
+      progress: makeMemoryJobProgressStore(),
       clock: fixedClock(),
       logger: silentLogger(),
       signMediaUrl: fakeSigner(fixedClock()).sign,
@@ -1261,6 +1286,7 @@ describe("publishPost — video and reels (E5.3/E5.4)", () => {
         publishVideoPost: async () => ({ postId: "555000111_5", url: null }),
       },
       queue: makeQueue(),
+      progress: makeMemoryJobProgressStore(),
       clock: fixedClock(),
       logger: {
         child: () => ({
@@ -2021,5 +2047,261 @@ describe("publishPost — handing a scheduled post to Facebook (E8.6)", () => {
     expect(result.deferredMs).toBe(20 * 60_000);
     expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
     expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * E7.5 — the progress this usecase reports (design §5.6).
+ *
+ * The rule under every test here: progress is DECORATION (design §3.1). It must
+ * describe the run truthfully, and it must never be able to change its outcome.
+ */
+describe("publishPost — progress reporting (E7.5)", () => {
+  const NOW = Date.parse("2026-08-13T02:00:00.000Z");
+  const at = (offsetMs: number): Date => new Date(NOW + offsetMs);
+
+  /** A publisher that emits the events the real Facebook adapter emits. */
+  const albumPublisher = (fileNames: readonly string[]) =>
+    async (input: PublishImagePostInput) => {
+      fileNames.forEach((fileName, index) => {
+        input.onProgress?.({
+          kind: "media_upload_started",
+          index,
+          total: fileNames.length,
+          fileName,
+        });
+        input.onProgress?.({
+          kind: "media_upload_finished",
+          index,
+          total: fileNames.length,
+          fileName,
+        });
+      });
+      input.onProgress?.({ kind: "creating_post" });
+      return { postId: "555000111_1", url: "https://fb/555000111_1" };
+    };
+
+  // --- Edge cases first ------------------------------------------------------
+
+  it("publishes the post even when EVERY progress write throws", async () => {
+    const h = harness({
+      progress: makeThrowingJobProgressStore(),
+      publish: albumPublisher(["1.jpg"]),
+    });
+    // The durable half is broken too: a telemetry INSERT may not fail a post.
+    h.repo.appendJobEvent = async () => {
+      throw new AppError("DB_ERROR", { message: "post_job_event is unreachable" });
+    };
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(h.repo.get("job-1")?.status).toBe("published");
+  });
+
+  it("reports nothing for a job it refuses to touch (already published)", async () => {
+    const h = harness({
+      jobs: [makeJob({ status: "published", publishedPostId: "555000111_1" })],
+    });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(h.progress.stages()).toEqual([]);
+    expect(h.progress.cleared).toEqual([]);
+    expect(h.repo.events).toEqual([]);
+  });
+
+  // --- Each milestone of the design table ------------------------------------
+
+  it("reports the spacing wait with the deadline the gate computed", async () => {
+    const published = makeJob({
+      id: "job-0",
+      channelId: "fbpage-a",
+      status: "published",
+      publishedAt: new Date(NOW - 10_000),
+    });
+    const h = harness({
+      jobs: [published, makeJob({ id: "job-1" })],
+      settings: { spacingMs: 60_000 },
+    });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const report = h.progress.reports.at(-1);
+    expect(report?.progress.stage).toBe("waiting_for_spacing");
+    // 60s spacing, 10s already elapsed -> a REAL deadline 50s from now.
+    expect(report?.progress.waitUntil).toEqual(at(50_000));
+    expect(report?.progress.doneCount).toBeNull();
+    expect(h.repo.events).toMatchObject([
+      { stage: "waiting_for_spacing", detail: { wait_ms: 50_000, spacing_ms: 60_000 } },
+    ]);
+  });
+
+  it("reports the wait for the handoff window with the instant it wakes up at", async () => {
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: at(40 * 60_000), queueJobId: "pp.job-1" })],
+    });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const report = h.progress.reports.at(-1);
+    expect(report?.progress.stage).toBe("waiting_for_schedule");
+    // The window opens at T-30, i.e. 10 minutes from now.
+    expect(report?.progress.waitUntil).toEqual(at(10 * 60_000));
+  });
+
+  it("walks the stock check, the channel read, every photo and the send", async () => {
+    const h = harness({ publish: albumPublisher(["1.jpg", "2.jpg", "3.jpg"]) });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(h.progress.stages()).toEqual([
+      "checking_stock",
+      "reading_channel",
+      // started(0) / finished(1) for each of the three photos...
+      "uploading_media",
+      "uploading_media",
+      "uploading_media",
+      "uploading_media",
+      "uploading_media",
+      "uploading_media",
+      "sending_to_channel",
+    ]);
+
+    const uploads = h.progress.reports.filter(
+      (entry) => entry.progress.stage === "uploading_media",
+    );
+    expect(uploads.map((entry) => `${entry.progress.doneCount}/${entry.progress.totalCount}`)).toEqual([
+      "0/3",
+      "1/3",
+      "1/3",
+      "2/3",
+      "2/3",
+      "3/3",
+    ]);
+    expect(uploads[0].progress.currentItem).toBe("1.jpg");
+  });
+
+  it("writes ONE durable row per stage change, never one per photo (§5.4)", async () => {
+    const h = harness({ publish: albumPublisher(["1.jpg", "2.jpg", "3.jpg"]) });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(h.repo.events.map((event) => event.stage)).toEqual([
+      "checking_stock",
+      "reading_channel",
+      "uploading_media",
+      "sending_to_channel",
+      "done",
+    ]);
+    for (const event of h.repo.events) {
+      expect(event.tenantId).toBe(TENANT);
+      expect(event.postJobId).toBe("job-1");
+      expect(event.batchId).toBe("batch-1");
+      expect(event.occurredAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it("reports the video spec gate before anything is uploaded", async () => {
+    const h = harness({
+      jobs: [makeJob({ format: "reels" })],
+      publishVideo: async () => ({ postId: "555000111_5", url: null }),
+    });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(h.progress.stages().slice(0, 3)).toEqual([
+      "checking_stock",
+      "reading_channel",
+      "checking_video_spec",
+    ]);
+  });
+
+  it("reports the handoff, then the wait Facebook now owns", async () => {
+    const scheduledAt = at(20 * 60_000);
+    const h = harness({ jobs: [makeJob({ scheduledAt })] });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("scheduled_on_facebook");
+    expect(h.progress.stages()).toEqual([
+      "checking_stock",
+      "reading_channel",
+      "handing_to_facebook",
+      "waiting_on_facebook",
+    ]);
+    const waiting = h.progress.reports.at(-1)?.progress;
+    // The deadline is the scheduled hour itself — a fact, not an estimate.
+    expect(waiting?.waitUntil).toEqual(scheduledAt);
+    // Facebook holds the post; the key is NOT cleared, and the reading usecase
+    // hides it anyway once the status leaves queued/publishing (§3.1).
+    expect(h.progress.cleared).toEqual([]);
+  });
+
+  // --- The end of a job ------------------------------------------------------
+
+  it("closes a published job with `done` and drops the hot key", async () => {
+    const h = harness({ publish: albumPublisher(["1.jpg"]) });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(h.repo.events.at(-1)).toMatchObject({
+      stage: "done",
+      detail: { status: "published", published_post_id: "555000111_1" },
+    });
+    expect(h.progress.cleared).toEqual(["job-1"]);
+    expect(h.progress.latest("job-1")).toBeUndefined();
+  });
+
+  it("closes a job blocked by the stock recheck with `stopped`", async () => {
+    const h = harness({ product: makeProduct("0") });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("blocked");
+    expect(h.repo.events.at(-1)).toMatchObject({
+      stage: "stopped",
+      detail: { status: "blocked", error_code: "OUT_OF_STOCK" },
+    });
+    expect(h.progress.cleared).toEqual(["job-1"]);
+  });
+
+  it("closes a failed job with `stopped` too", async () => {
+    const h = harness({
+      publish: async () => {
+        throw new AppError("META_ERROR", {
+          message: "Graph refused",
+          context: { retryable: false, platform_created_nothing: true },
+        });
+      },
+    });
+
+    await expect(h.publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "PUBLISH_FAILED",
+    });
+
+    expect(h.repo.events.at(-1)).toMatchObject({ stage: "stopped", detail: { status: "failed" } });
+    expect(h.progress.cleared).toEqual(["job-1"]);
+  });
+
+  it("never leaves an upload report behind after the key was cleared", async () => {
+    const h = harness({ publish: albumPublisher(["1.jpg", "2.jpg"]) });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    // Everything the publisher emitted landed BEFORE the clear, so a finished
+    // job can never be shown as "đang tải ảnh 1/2".
+    expect(h.progress.latest("job-1")).toBeUndefined();
+    const lastReportedStage = h.progress.stages().at(-1);
+    expect(lastReportedStage).toBe("sending_to_channel");
+  });
+
+  it("carries the attempt number into both halves", async () => {
+    const h = harness({ publish: albumPublisher(["1.jpg"]) });
+
+    await h.publish({ tenantId: TENANT, postJobId: "job-1", attempt: 2, maxAttempts: 3 });
+
+    expect(h.progress.reports[0]?.progress.attempt).toBe(2);
+    expect(h.repo.events[0]?.attempt).toBe(2);
   });
 });

@@ -1,3 +1,4 @@
+import { ChannelProgress } from "@/ui/components/batch/ChannelProgress";
 import { JobStatusBadge } from "@/ui/components/post/PostStatusBadge";
 import {
   facebookPostUrl,
@@ -14,8 +15,19 @@ import {
  * invents a reason, and never hides one.
  *
  * Presentational only: no fetching, no retry logic (that lives on /jobs).
+ *
+ * A row that is still moving also carries its live progress block (design
+ * §5.9). `progressSteps` comes down with the payload rather than being imported:
+ * `ui/` may not reach into `core/` (docs/07 §2), and a second copy of the labels
+ * would be the thing that drifts the day a stage is added.
  */
-export function BatchChannelTable({ channels }: { channels: readonly BatchChannelStatus[] }) {
+export function BatchChannelTable({
+  channels,
+  progressSteps,
+}: {
+  channels: readonly BatchChannelStatus[];
+  progressSteps: readonly string[];
+}) {
   return (
     <section aria-labelledby="batch-channels-heading" className="space-y-3">
       <h2 id="batch-channels-heading" className="text-base font-semibold">
@@ -96,6 +108,17 @@ export function BatchChannelTable({ channels }: { channels: readonly BatchChanne
                       <p className="text-muted-foreground/80 mt-1 font-mono text-xs">
                         Mã lỗi: {channel.lastErrorCode}
                       </p>
+                    ) : null}
+                    {/* Present only while the job is queued/publishing — the
+                        server drops it for every other status (law 3.1), so
+                        this row never has to decide. */}
+                    {channel.progress ? (
+                      <ChannelProgress
+                        progress={channel.progress}
+                        steps={progressSteps}
+                        channelId={channel.channelId}
+                        statusMessage={channel.userMessage}
+                      />
                     ) : null}
                   </td>
                 </tr>

@@ -71,6 +71,13 @@
       "when": 1787105913195,
       "tag": "0009_cooing_luke_cage",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787108582373,
+      "tag": "0010_mighty_living_tribunal",
+      "breakpoints": true
     }
   ]
 }

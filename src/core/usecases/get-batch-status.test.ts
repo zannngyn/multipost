@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { deriveBatchStatus, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
+import {
+  POST_JOB_PROGRESS_STEPS,
+  waitingProgress,
+  workingProgress,
+  type PostJobProgress,
+} from "@/core/domain/post-job-progress";
 import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
+import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { PostBatchSummary, PostJobRepo } from "@/core/ports/post-job-repo";
 
 import { makeGetBatchStatus } from "./get-batch-status";
@@ -82,14 +89,54 @@ function summaryOf(jobs: PostJob[], finished = true): PostBatchSummary {
   };
 }
 
-function harness(summary: PostBatchSummary | null) {
+/**
+ * A progress store that answers from a fixed map, and remembers which ids it was
+ * asked about — law 3.1 is partly "do not even ask about a settled job".
+ */
+function fakeProgress(entries: Record<string, PostJobProgress> = {}) {
+  const askedFor: string[][] = [];
+  const store: JobProgressStore = {
+    async report() {},
+    async clear() {},
+    async read(_tenantId, postJobIds) {
+      askedFor.push([...postJobIds]);
+      const map = new Map<string, PostJobProgress>();
+      for (const id of postJobIds) {
+        const entry = entries[id];
+        if (entry) map.set(id, entry);
+      }
+      return map;
+    },
+  };
+  return { store, askedFor };
+}
+
+/** Redis is down: `read` throws instead of honouring its no-throw contract. */
+function throwingProgress(): JobProgressStore {
+  return {
+    async report() {},
+    async clear() {},
+    async read() {
+      throw new Error("ECONNREFUSED 127.0.0.1:6379");
+    },
+  };
+}
+
+function harness(summary: PostBatchSummary | null, progress?: JobProgressStore) {
   const lines: LogLine[] = [];
   const postJobs = {
     async getBatchSummary(_tenantId: string, _batchId: string) {
       return summary;
     },
   } as unknown as PostJobRepo;
-  return { getBatchStatus: makeGetBatchStatus({ postJobs, logger: recordingLogger(lines) }), lines };
+  return {
+    getBatchStatus: makeGetBatchStatus({
+      postJobs,
+      progress: progress ?? fakeProgress().store,
+      logger: recordingLogger(lines),
+    }),
+    lines,
+  };
 }
 
 // --- Edge cases first -------------------------------------------------------
@@ -229,6 +276,200 @@ describe("getBatchStatus — per-channel table (brief §3/§6)", () => {
     expect(result.status).toBe("failed");
     expect(result.channels[0].userMessage).toContain("3 lần thử");
     expect(result.channels[0].userMessage).toContain("PUBLISH_FAILED");
+  });
+});
+
+// --- Progress: decoration, and only where the status allows it (design §5.7) -
+
+describe("getBatchStatus — progress, edge cases first", () => {
+  const NOW = new Date("2026-08-13T02:01:00.000Z");
+
+  const running = (overrides: Partial<PostJob> = {}): PostJob =>
+    job({
+      status: "publishing",
+      publishedPostId: null,
+      publishedUrl: null,
+      publishedAt: null,
+      ...overrides,
+    });
+
+  it("keeps every row when the progress store is down, with progress: null and one warn", async () => {
+    const { getBatchStatus, lines } = harness(
+      summaryOf([running(), running({ id: "job-2", channelId: "fbpage-b", status: "queued" })], false),
+      throwingProgress(),
+    );
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    // The decoration is gone; NOTHING else is.
+    expect(result.channels.map((channel) => channel.progress)).toEqual([null, null]);
+    expect(result.channels.map((channel) => channel.channelId)).toEqual(["fbpage-a", "fbpage-b"]);
+    expect(result.channels[1].userMessage).toBe("Đang chờ trong hàng đợi để đăng");
+    expect(result.totals.inProgress).toBe(2);
+    expect(lines.filter((line) => line.level === "error")).toHaveLength(0);
+    expect(
+      lines.find(
+        (line) => line.level === "warn" && line.context?.error_code === "QUEUE_ERROR",
+      )?.context,
+    ).toMatchObject({ tenant_id: TENANT, batch_id: BATCH, post_job_count: 2 });
+  });
+
+  it("gives a failed job no progress, even when a key still describes an upload", async () => {
+    const stale = workingProgress("uploading_media", {
+      attempt: 1,
+      now: NOW,
+      doneCount: 3,
+      totalCount: 10,
+      currentItem: "IMG_2041.jpg",
+    });
+    const { store, askedFor } = fakeProgress({ "job-1": stale });
+    const { getBatchStatus } = harness(
+      summaryOf([
+        job({
+          status: "failed",
+          lastErrorCode: "PUBLISH_FAILED",
+          publishedPostId: null,
+          publishedUrl: null,
+          publishedAt: null,
+        }),
+      ]),
+      store,
+    );
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.channels[0].progress).toBeNull();
+    // Law 3.1 upstream of the round trip: a settled job is not even asked about.
+    expect(askedFor.flat()).not.toContain("job-1");
+  });
+
+  it("shows a post Facebook is holding, counting down to the hour it will publish", async () => {
+    // The one case where the remaining time is exact: the operator chose it.
+    // The reassurance is the point — this post goes out at that hour whether or
+    // not our server is running.
+    const publishAt = new Date(NOW.getTime() + 45 * 60_000);
+    const { store } = fakeProgress({
+      "job-1": waitingProgress("waiting_on_facebook", {
+        attempt: 1,
+        waitUntil: publishAt,
+        now: NOW,
+      }),
+    });
+    const { getBatchStatus } = harness(
+      summaryOf([job({ status: "scheduled_on_facebook", scheduledPostId: "sched-1" })], false),
+      store,
+    );
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.channels[0].progress).toMatchObject({
+      stage: "waiting_on_facebook",
+      waitUntil: publishAt,
+      doneCount: null,
+      totalCount: null,
+    });
+  });
+
+  it("refuses a stale upload key on a post Facebook is already holding", async () => {
+    // The reason `scheduled_on_facebook` pins its stage: the status is stable,
+    // so a `waiting_on_facebook` write that failed (best-effort) would leave the
+    // previous key claiming "đang tải ảnh 3/10" for DAYS about a post that is
+    // finished and handed over.
+    const { store } = fakeProgress({
+      "job-1": workingProgress("uploading_media", {
+        attempt: 1,
+        now: NOW,
+        doneCount: 3,
+        totalCount: 10,
+      }),
+    });
+    const { getBatchStatus } = harness(
+      summaryOf([job({ status: "scheduled_on_facebook", scheduledPostId: "sched-1" })], false),
+      store,
+    );
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.channels[0].progress).toBeNull();
+    expect(result.channels[0].status).toBe("scheduled_on_facebook");
+  });
+
+  it("drops a stale key whose stage is off the stepper instead of drawing step -1", async () => {
+    const { store } = fakeProgress({
+      "job-1": workingProgress("stopped", { attempt: 1, now: NOW }),
+    });
+    const { getBatchStatus } = harness(summaryOf([running()], false), store);
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.channels[0].progress).toBeNull();
+    expect(result.channels[0].status).toBe("publishing");
+  });
+
+  it("renders a row with progress next to a row without one", async () => {
+    const { store } = fakeProgress({
+      "job-1": workingProgress("uploading_media", {
+        attempt: 1,
+        now: NOW,
+        doneCount: 3,
+        totalCount: 10,
+        currentItem: "IMG_2041.jpg",
+      }),
+    });
+    const { getBatchStatus } = harness(
+      summaryOf([running(), running({ id: "job-2", channelId: "fbpage-b", status: "queued" })], false),
+      store,
+    );
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.channels[0].progress).toEqual({
+      stage: "uploading_media",
+      stepIndex: 2,
+      label: "Đang tải ảnh lên kênh 3/10 (IMG_2041.jpg)",
+      doneCount: 3,
+      totalCount: 10,
+      currentItem: "IMG_2041.jpg",
+      stageStartedAt: NOW,
+      // §3.2 — the upload step never carries a deadline.
+      waitUntil: null,
+    });
+    expect(result.channels[1].progress).toBeNull();
+  });
+
+  it("passes the real deadline through for a waiting stage, and no counts", async () => {
+    const waitUntil = new Date("2026-08-13T02:02:00.000Z");
+    const { store } = fakeProgress({
+      "job-1": waitingProgress("waiting_for_spacing", { attempt: 1, waitUntil, now: NOW }),
+    });
+    const { getBatchStatus } = harness(summaryOf([running({ status: "queued" })], false), store);
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.channels[0].progress).toMatchObject({
+      stage: "waiting_for_spacing",
+      stepIndex: 0,
+      waitUntil,
+      doneCount: null,
+      totalCount: null,
+    });
+  });
+
+  it("ships the stepper labels from the domain so the screen keeps no copy", async () => {
+    const { getBatchStatus } = harness(summaryOf([job()]));
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.progressSteps).toEqual([...POST_JOB_PROGRESS_STEPS]);
+  });
+
+  it("does not call the store at all for a batch nobody is working on", async () => {
+    const { store, askedFor } = fakeProgress();
+    const { getBatchStatus } = harness(summaryOf([job()]), store);
+
+    await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(askedFor).toEqual([]);
   });
 });
 

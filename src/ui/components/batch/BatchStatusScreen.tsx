@@ -104,7 +104,7 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
               }
             />
           ) : (
-            <BatchChannelTable channels={data.channels} />
+            <BatchChannelTable channels={data.channels} progressSteps={data.progressSteps} />
           )}
 
           <div className="flex flex-wrap gap-2 border-t pt-4">

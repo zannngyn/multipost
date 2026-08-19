@@ -14,6 +14,7 @@ import type {
   SignMediaUrlFn,
 } from "@/core/ports/publisher";
 import { channelWriteStubs } from "@/core/usecases/__fixtures__/channel-config-repo";
+import { makeMemoryJobProgressStore } from "@/core/usecases/__fixtures__/job-progress-store";
 import { makeListPostJobs } from "@/core/usecases/list-post-jobs";
 import { makePublishPost } from "@/core/usecases/publish-post";
 import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
@@ -173,6 +174,9 @@ export function makeMemoryRepo(job: PostJob) {
     async getBatchSummary() {
       return null;
     },
+    // E7.5 progress milestones: not what this file is about, but the port
+    // requires the method, and a fake that throws would hide a real regression.
+    async appendJobEvent() {},
   };
   return repo;
 }
@@ -250,12 +254,14 @@ export function harness(
   });
   const channels = makeChannels(options.channel ?? CHANNEL);
   const clock = fixedClock();
+  const progress = makeMemoryJobProgressStore();
   const publish = makePublishPost({
     postJobs: repo,
     products: makeProducts(),
     channels,
     publishers: { facebook, ...(options.publishers ?? {}) },
     queue,
+    progress,
     clock,
     logger,
     signMediaUrl,
@@ -266,7 +272,7 @@ export function harness(
   // worker uses: these three must agree.
   const retry = makeRetryPostJob({ postJobs: repo, channels, queue, clock, logger });
   const listJobs = makeListPostJobs({ postJobs: repo, logger });
-  return { publish, retry, listJobs, repo, queue, readMediaBytes };
+  return { publish, retry, listJobs, repo, queue, readMediaBytes, progress };
 }
 
 export function jsonResponse(body: unknown, status = 200): Response {

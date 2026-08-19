@@ -8,6 +8,7 @@ export * from "./product";
 export * from "./media-asset";
 export * from "./post-batch";
 export * from "./post-job";
+export * from "./post-job-event";
 export * from "./channel-group";
 export * from "./post-draft";
 export * from "./ai-generation";

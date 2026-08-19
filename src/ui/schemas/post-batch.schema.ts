@@ -160,6 +160,32 @@ export type CreateBatchResponse = z.infer<typeof CreateBatchResponseSchema>;
 
 // --- Batch status (GET /api/posts/batches/:id) ------------------------------
 
+/**
+ * E7.5 — where a still-running post stands (design §5.9).
+ *
+ * `stage` is deliberately a plain string, not an enum mirroring the domain: the
+ * screen renders `label` and `stepIndex` and branches on NEITHER, so a second
+ * copy of the stage list here would only be one more thing to drift. The two
+ * fields the screen does use are validated properly.
+ *
+ * `waitUntil` is the ONLY source of a countdown (design §3.2). Null means the
+ * system has no deadline for this step — the screen then says how long the step
+ * has been running and nothing more. No percentage, no "còn khoảng…", ever.
+ */
+export const BatchChannelProgressSchema = z.object({
+  stage: z.string().min(1),
+  /** 0-based position on the stepper; the server never sends an off-line stage. */
+  stepIndex: z.number().int(),
+  label: z.string().min(1),
+  /** Only the media-upload step counts anything; null everywhere else. */
+  doneCount: z.number().nullable(),
+  totalCount: z.number().nullable(),
+  currentItem: z.string().nullable(),
+  stageStartedAt: z.iso.datetime(),
+  waitUntil: z.iso.datetime().nullable(),
+});
+export type BatchChannelProgress = z.infer<typeof BatchChannelProgressSchema>;
+
 export const BatchChannelStatusSchema = z.object({
   channelId: z.string().min(1),
   postJobId: z.string().min(1),
@@ -171,6 +197,12 @@ export const BatchChannelStatusSchema = z.object({
   lastErrorCode: z.string().nullable(),
   /** Vietnamese sentence built by the usecase — always populated. */
   userMessage: z.string(),
+  /**
+   * Decoration, absent far more often than present: the server already dropped
+   * it for every status outside `queued | publishing` (law 3.1). Defaulted so a
+   * server that does not send the block at all still parses.
+   */
+  progress: BatchChannelProgressSchema.nullable().default(null),
 });
 export type BatchChannelStatus = z.infer<typeof BatchChannelStatusSchema>;
 
@@ -201,6 +233,13 @@ export const BatchStatusResponseSchema = z.object({
   durationMs: z.number().nullable(),
   channels: z.array(BatchChannelStatusSchema),
   summaryMessage: z.string(),
+  /**
+   * Stepper labels, in order, as the DOMAIN spells them (design §5.9: the screen
+   * hardcodes none of them). `ui/` may not import `core/`, so they travel with
+   * the payload instead of being copied here — an empty array simply means no
+   * stepper is drawn, never an invented one.
+   */
+  progressSteps: z.array(z.string().min(1)).default([]),
 });
 export type BatchStatusResponse = z.infer<typeof BatchStatusResponseSchema>;
 

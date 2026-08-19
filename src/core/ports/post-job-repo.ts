@@ -20,6 +20,7 @@ import type {
   PostJobMedia,
   PostJobStatus,
 } from "@/core/domain/post-job";
+import type { PostJobStage } from "@/core/domain/post-job-progress";
 
 export interface NewPostBatch {
   /** Caller-supplied id = the idempotency scope of the anti-duplicate lock. */
@@ -180,6 +181,23 @@ export interface OverdueScanQuery {
 }
 
 /**
+ * E7.5 — ONE milestone of a running post job (design §5.4). Written when the
+ * STAGE changes, never per photo: roughly 6-8 rows per post.
+ */
+export interface PostJobEventInput {
+  readonly tenantId: string;
+  readonly postJobId: string;
+  readonly batchId: string;
+  readonly stage: PostJobStage;
+  /** Publish attempt this milestone belongs to. */
+  readonly attempt: number;
+  /** Numbers of the milestone: `{ done: 10, total: 10 }`, `{ wait_ms: 45000 }`. */
+  readonly detail?: Readonly<Record<string, unknown>>;
+  /** Worker clock at the moment of the change, not the insert time. */
+  readonly occurredAt: Date;
+}
+
+/**
  * E11 worker-health probe: "how many of this tenant's jobs are queued and have
  * NEVER been attempted?".
  *
@@ -302,4 +320,15 @@ export interface PostJobRepo {
   refreshBatchStatus(tenantId: string, batchId: string): Promise<PostBatchSummary>;
 
   getBatchSummary(tenantId: string, batchId: string): Promise<PostBatchSummary | null>;
+
+  /**
+   * E7.5 — appends ONE progress milestone (design §5.4). Not part of the
+   * publish transaction: a milestone is a note about a post, never the post.
+   *
+   * Failures surface as AppError('DB_ERROR') like every other method here — the
+   * CALLER decides that telemetry may not stop a publish (see the reportStage
+   * helper in core/usecases/publish-post.ts), so this implementer stays honest
+   * about what it did and did not write.
+   */
+  appendJobEvent(input: PostJobEventInput): Promise<void>;
 }
