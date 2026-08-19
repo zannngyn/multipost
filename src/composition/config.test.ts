@@ -144,6 +144,23 @@ describe("loadAuthConfig", () => {
   it("parses AUTH_ALLOWED_DOMAINS csv into a lower-cased, trimmed array", () => {
     expect(loadAuthConfig(AUTH_ENV).AUTH_ALLOWED_DOMAINS).toEqual(["example.com", "partner.vn"]);
   });
+
+  // `AUTH_FACEBOOK_ALLOWED_USER_IDS=` is what .env.example ships and what compose
+  // passes for an unset variable. Rejecting it took the whole sign-in page down,
+  // not just the Facebook button.
+  it("reads a blank AUTH_FACEBOOK_ALLOWED_USER_IDS as not configured", () => {
+    expect(
+      loadAuthConfig({ ...AUTH_ENV, AUTH_FACEBOOK_ALLOWED_USER_IDS: "" })
+        .AUTH_FACEBOOK_ALLOWED_USER_IDS,
+    ).toBeUndefined();
+  });
+
+  it("parses AUTH_FACEBOOK_ALLOWED_USER_IDS csv into an array", () => {
+    expect(
+      loadAuthConfig({ ...AUTH_ENV, AUTH_FACEBOOK_ALLOWED_USER_IDS: " 1234, 5678 " })
+        .AUTH_FACEBOOK_ALLOWED_USER_IDS,
+    ).toEqual(["1234", "5678"]);
+  });
 });
 
 describe("loadGoogleConfig — Service Account (E2)", () => {

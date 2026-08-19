@@ -1,0 +1,264 @@
+# Build and deploy. The whole promotion flow is these two branches:
+#
+#   dev  ->  stg  ->  main
+#   (nothing) (staging) (production)
+#
+# Pushing to `dev` triggers NOTHING, on purpose — dev is where work lands, not
+# where it ships. A change reaches an environment only by being merged forward.
+#
+# One VPS hosts both environments as two independent compose stacks; see
+# docker-compose.prod.yml and deploy/bootstrap.sh.
+name: Deploy
+
+on:
+  push:
+    branches: [stg, main]
+  # Re-deploy the current head of stg/main without an empty commit — the usual
+  # answer to "the box was rebooted and something did not come back".
+  workflow_dispatch:
+
+# Deploys to one environment must queue, never overlap: two `compose up` runs
+# against the same stack race over the same containers. cancel-in-progress stays
+# false — a half-applied deploy is worse than a slow one.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  context:
+    name: Resolve target
+    runs-on: ubuntu-latest
+    outputs:
+      env_name: ${{ steps.pick.outputs.env_name }}
+      stack: ${{ steps.pick.outputs.stack }}
+      image_prefix: ${{ steps.pick.outputs.image_prefix }}
+      url: ${{ steps.pick.outputs.url }}
+    steps:
+      - id: pick
+        # Through env, not interpolated into the script: a ref name is
+        # attacker-influenceable text, and `${{ }}` inside `run` is textual
+        # substitution — it would be executed, not compared.
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          case "$REF_NAME" in
+            main)
+              env_name=production
+              stack=prod
+              url=https://mysp.vannt.asia
+              ;;
+            stg)
+              env_name=staging
+              stack=stg
+              url=https://mysp-stg.vannt.asia
+              ;;
+            *)
+              echo "::error::$REF_NAME is not a deployable branch (expected stg or main)"
+              exit 1
+              ;;
+          esac
+
+          # GHCR rejects an uppercase path, and the repository is "MYSP".
+          image_prefix="ghcr.io/$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+
+          {
+            echo "env_name=$env_name"
+            echo "stack=$stack"
+            echo "url=$url"
+            echo "image_prefix=$image_prefix"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Deploying $SHA to $env_name ($url)" >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: Verify
+    needs: context
+    uses: ./.github/workflows/verify.yml
+
+  build:
+    name: Build and push images
+    needs: [context, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The three targets are built in one job, in this order, on one builder:
+      # they all share the `deps` stage, so building them together installs the
+      # dependency tree once instead of three times. `web` goes first because it
+      # is the only one that also runs `next build`.
+      - name: Build web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: web
+          push: true
+          tags: |
+            ${{ needs.context.outputs.image_prefix }}/web:${{ github.sha }}
+            ${{ needs.context.outputs.image_prefix }}/web:${{ needs.context.outputs.stack }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+          provenance: false
+
+      - name: Build worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker
+          push: true
+          tags: |
+            ${{ needs.context.outputs.image_prefix }}/worker:${{ github.sha }}
+            ${{ needs.context.outputs.image_prefix }}/worker:${{ needs.context.outputs.stack }}
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+          provenance: false
+
+      - name: Build migrate
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: migrate
+          push: true
+          tags: |
+            ${{ needs.context.outputs.image_prefix }}/migrate:${{ github.sha }}
+            ${{ needs.context.outputs.image_prefix }}/migrate:${{ needs.context.outputs.stack }}
+          cache-from: type=gha,scope=migrate
+          cache-to: type=gha,mode=max,scope=migrate
+          provenance: false
+
+  deploy:
+    name: Deploy to ${{ needs.context.outputs.env_name }}
+    needs: [context, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The GitHub Environment carries DEPLOY_PATH and, on production, whatever
+    # approval rule the repo owner puts on it.
+    environment:
+      name: ${{ needs.context.outputs.env_name }}
+      url: ${{ needs.context.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            # Trust-on-first-use. Works, but a man in the middle on the very
+            # first run would be accepted silently — set DEPLOY_SSH_KNOWN_HOSTS
+            # to close that window.
+            echo "::warning::DEPLOY_SSH_KNOWN_HOSTS is not set; falling back to ssh-keyscan"
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+          cat > ~/.ssh/config <<EOF
+          Host deploy-target
+            HostName $SSH_HOST
+            Port $SSH_PORT
+            User ${{ secrets.DEPLOY_SSH_USER }}
+            IdentityFile ~/.ssh/id_deploy
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            ServerAliveInterval 30
+          EOF
+          chmod 600 ~/.ssh/config
+
+          ssh -o BatchMode=yes deploy-target 'echo "ssh ok: $(hostname)"'
+
+      - name: Ship compose files
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_PATH" || { echo "::error::DEPLOY_PATH is not set on this environment"; exit 1; }
+
+          # tar over ssh rather than rsync/scp -r: tar is on every box, it is one
+          # round trip, and it copies exactly this list — the server's .env and
+          # .image-tag.env are not in it and cannot be clobbered.
+          tar czf - docker-compose.yml docker-compose.prod.yml deploy \
+            | ssh -o BatchMode=yes deploy-target \
+                "mkdir -p '$DEPLOY_PATH' && tar xzf - -C '$DEPLOY_PATH' && chmod +x '$DEPLOY_PATH'/deploy/*.sh"
+
+      - name: Deploy
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          IMAGE_PREFIX: ${{ needs.context.outputs.image_prefix }}
+          IMAGE_TAG: ${{ github.sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # The variables are prepended to the script on stdin rather than put in
+          # the ssh command line: argv is world-readable through `ps` on the
+          # server, and one of these is a registry token.
+          {
+            printf 'export DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
+            printf 'export IMAGE_PREFIX=%q\n' "$IMAGE_PREFIX"
+            printf 'export IMAGE_TAG=%q\n' "$IMAGE_TAG"
+            printf 'export GHCR_USER=%q\n' "$GHCR_USER"
+            printf 'export GHCR_TOKEN=%q\n' "$GHCR_TOKEN"
+            cat deploy/remote-deploy.sh
+          } | ssh -o BatchMode=yes deploy-target 'bash -s'
+
+      - name: Smoke test the public URL
+        env:
+          URL: ${{ needs.context.outputs.url }}
+        run: |
+          set -euo pipefail
+          # Deliberately from the internet, not from the VPS: this is the only
+          # step that proves DNS, the edge Caddy, its certificate and the app
+          # are all working at once. A container can be healthy while the
+          # hostname still points nowhere.
+          for attempt in $(seq 1 10); do
+            if body="$(curl -fsS --max-time 15 "$URL/api/health")"; then
+              echo "$URL/api/health -> $body"
+              case "$body" in
+                *'"status":"ok"'*) exit 0 ;;
+                *) echo "::error::unexpected health body: $body"; exit 1 ;;
+              esac
+            fi
+            echo "attempt $attempt failed, retrying in 10s"
+            sleep 10
+          done
+          echo "::error::$URL/api/health never answered — check DNS, the edge Caddy, and its certificate"
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ job.status }} — ${{ needs.context.outputs.env_name }}"
+            echo ""
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- images: \`${{ needs.context.outputs.image_prefix }}/{web,worker,migrate}:${{ github.sha }}\`"
+            echo "- url: ${{ needs.context.outputs.url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
