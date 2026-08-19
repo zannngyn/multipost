@@ -244,6 +244,19 @@ bỏ kèm log warn* chứ không được thay bằng mặc định.
 ### 5.3. `adapters/queue/redis-job-progress.ts`
 
 - Key: `mysp:progress:{tenantId}:{postJobId}`, giá trị JSON, `SET ... EX 3600`.
+- **Mọi lệnh Redis phải có timeout (1,5 giây).** Bổ sung 19/08/2026 sau khi chạy thật
+  bắt được lỗi: trỏ `REDIS_URL` vào một server chết thì `getBatchStatus` **treo vĩnh
+  viễn** chứ không suy giảm. Kết nối được dùng chung với BullMQ, mà BullMQ bắt buộc
+  `maxRetriesPerRequest: null` để lệnh blocking của nó không bị huỷ giữa chừng — hệ quả
+  là một `MGET` bị xếp hàng offline và thử lại mãi mãi, nên mọi khối `catch` bên dưới
+  không bao giờ chạy tới. Chế độ hỏng thật của Redis là **im lặng**, không phải từ chối.
+  Timeout đặt trong adapter chứ không chỉ ở tuỳ chọn kết nối, vì worker cố ý dùng chung
+  kết nối BullMQ và cũng không được treo: nó `await` các lệnh ghi này (`drain`) trước
+  khi chuyển trạng thái cuối của job, nên một `SET` treo sẽ làm kẹt chính bài đăng.
+- **Không tắt hàng đợi offline của ioredis.** Đã thử và đã hoàn tác: lệnh phát ra trước
+  khi kết nối mở xong bị từ chối thẳng, làm lần poll ĐẦU TIÊN sau khi khởi động mất tiến
+  độ dù Redis hoàn toàn khoẻ. Chờ vài mili giây cho một kết nối đang lên là đúng; chỉ có
+  chờ vô hạn mới sai, và đó là việc của timeout.
 - Đọc: một `MGET` cho toàn bộ job của lô — một vòng round trip cho cả bảng.
 - **Redis là dữ liệu ngoài** (chuẩn #2): giá trị đọc lên phải qua schema zod trước khi
   dùng. JSON hỏng / thiếu trường / `stage` lạ → bỏ qua key đó, log warn, coi như không

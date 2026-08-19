@@ -231,6 +231,61 @@ describe("a store that is down", () => {
   });
 });
 
+/**
+ * REGRESSION. The block above models a dead Redis as one that REFUSES, and that
+ * is not what happened: pointed at a dead server, the real store never answered
+ * at all and `getBatchStatus` hung forever. The connection is BullMQ's, and
+ * BullMQ requires `maxRetriesPerRequest: null`, so an MGET is queued offline and
+ * retried indefinitely rather than failing — every catch block above was
+ * unreachable.
+ *
+ * Silence is therefore the failure mode that must be tested, and the worker
+ * needs it as much as the screen: it awaits these writes (`drain`) before a
+ * job's terminal transition, so a hanging SET would stall the post itself.
+ */
+describe("a store that never answers", () => {
+  const NEVER: ProgressRedisClient = {
+    set: () => new Promise(() => {}),
+    mget: () => new Promise(() => {}),
+    del: () => new Promise(() => {}),
+  };
+
+  function makeImpatientStore() {
+    const lines: LogLine[] = [];
+    const store = makeRedisJobProgressStore({
+      connection: NEVER,
+      logger: recordingLogger(lines),
+      commandTimeoutMs: 20,
+    });
+    return { store, lines };
+  }
+
+  it("read gives up and answers with an empty map instead of hanging", async () => {
+    const { store, lines } = makeImpatientStore();
+
+    const map = await store.read(TENANT, ["job-1"]);
+
+    expect(map.size).toBe(0);
+    const warn = lines.find((line) => line.level === "warn");
+    expect(warn?.context).toMatchObject({ error_code: "QUEUE_ERROR" });
+  });
+
+  it("report gives up instead of stalling the publish that is awaiting it", async () => {
+    const { store, lines } = makeImpatientStore();
+
+    await expect(
+      store.report({ tenantId: TENANT, postJobId: "job-1", progress: UPLOADING }),
+    ).resolves.toBeUndefined();
+    expect(lines.some((line) => line.level === "warn")).toBe(true);
+  });
+
+  it("clear gives up instead of stalling the job's terminal transition", async () => {
+    const { store } = makeImpatientStore();
+
+    await expect(store.clear(TENANT, "job-1")).resolves.toBeUndefined();
+  });
+});
+
 describe("identity guards", () => {
   it("never writes a key for a blank tenant or job id", async () => {
     const client = fakeRedis();

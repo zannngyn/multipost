@@ -304,6 +304,18 @@ function makeLazyJobProgressStore(config: Config, logger: Logger): JobProgressSt
 
   const build = (): JobProgressStore => {
     if (real) return real;
+    /**
+     * The offline queue stays ON (the ioredis default), and the adapter's
+     * command timeout is what bounds a dead Redis — see
+     * PROGRESS_COMMAND_TIMEOUT_MS.
+     *
+     * Turning it off was tried and reverted: a command issued before the
+     * connection finished opening is rejected outright ("Stream isn't
+     * writeable"), so the FIRST poll after a cold start lost its progress
+     * against a perfectly healthy Redis. Waiting a few milliseconds for a
+     * connection that is coming up is correct; only waiting forever is not, and
+     * that is the timeout's job.
+     */
     const connection = createRedisConnection({ url: config.REDIS_URL, logger });
     real = makeRedisJobProgressStore({ connection, logger });
     lazyQueueClosers.add(async () => {

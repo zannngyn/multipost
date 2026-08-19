@@ -20,6 +20,25 @@ import type { JobProgressStore, ReportProgressInput } from "@/core/ports/job-pro
 /** One hour: long enough for the slowest album, short enough to self-clean. */
 export const PROGRESS_TTL_SECONDS = 3600;
 
+/**
+ * MEASURED FAILURE, not a precaution: with `REDIS_URL` pointing at a dead
+ * server, `getBatchStatus` never returned. The connection this store is handed
+ * is the BullMQ one, and BullMQ REQUIRES `maxRetriesPerRequest: null` so its
+ * blocking commands are not aborted mid-wait — which also means an ordinary
+ * MGET is queued offline and retried forever instead of failing. The catch
+ * blocks below were never reached, so the tracking screen hung rather than
+ * degrading (design §5.7 promises the opposite).
+ *
+ * A timeout here, rather than only different connection options, because the
+ * WORKER passes the BullMQ connection on purpose (design §5.3) and must not be
+ * able to hang either: `drain()` awaits these writes before a job's terminal
+ * transition, so a hanging SET would stall the post itself.
+ *
+ * 1.5s is the screen's own poll interval while publishing: an answer slower
+ * than the next request is worthless to it.
+ */
+export const PROGRESS_COMMAND_TIMEOUT_MS = 1_500;
+
 const KEY_PREFIX = "mysp:progress";
 
 /**
@@ -38,6 +57,8 @@ export interface RedisJobProgressDeps {
   logger: Logger;
   /** Override only for tests that want to watch a key expire. */
   ttlSeconds?: number;
+  /** Override only for tests; see PROGRESS_COMMAND_TIMEOUT_MS. */
+  commandTimeoutMs?: number;
 }
 
 /**
@@ -67,6 +88,41 @@ export function makeRedisJobProgressStore(deps: RedisJobProgressDeps): JobProgre
     typeof deps.ttlSeconds === "number" && Number.isInteger(deps.ttlSeconds) && deps.ttlSeconds > 0
       ? deps.ttlSeconds
       : PROGRESS_TTL_SECONDS;
+  const timeoutMs =
+    typeof deps.commandTimeoutMs === "number" &&
+    Number.isFinite(deps.commandTimeoutMs) &&
+    deps.commandTimeoutMs > 0
+      ? deps.commandTimeoutMs
+      : PROGRESS_COMMAND_TIMEOUT_MS;
+
+  /**
+   * Turns "never answers" into "answers with an error", which the catch blocks
+   * below already handle. See PROGRESS_COMMAND_TIMEOUT_MS for why silence is
+   * the failure mode that actually happens here.
+   */
+  function withTimeout<T>(operation: string, run: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(
+          new AppError("QUEUE_ERROR", {
+            message: `Redis did not answer ${operation} within ${timeoutMs}ms`,
+            context: { operation, timeout_ms: timeoutMs, reason: "PROGRESS_REDIS_TIMEOUT" },
+          }),
+        );
+      }, timeoutMs);
+
+      run().then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+  }
 
   return {
     async report(input: ReportProgressInput): Promise<void> {
@@ -85,11 +141,13 @@ export function makeRedisJobProgressStore(deps: RedisJobProgressDeps): JobProgre
       }
 
       try {
-        await deps.connection.set(
-          keyOf(tenantId, postJobId),
-          JSON.stringify(encode(progress)),
-          "EX",
-          ttlSeconds,
+        await withTimeout("SET", () =>
+          deps.connection.set(
+            keyOf(tenantId, postJobId),
+            JSON.stringify(encode(progress)),
+            "EX",
+            ttlSeconds,
+          ),
         );
       } catch (error) {
         // DELIBERATE, PM-APPROVED EXCEPTION to technical standard #5 (design
@@ -128,7 +186,9 @@ export function makeRedisJobProgressStore(deps: RedisJobProgressDeps): JobProgre
 
       let values: (string | null)[];
       try {
-        values = await deps.connection.mget(...ids.map((id) => keyOf(tenant, id)));
+        values = await withTimeout("MGET", () =>
+          deps.connection.mget(...ids.map((id) => keyOf(tenant, id))),
+        );
       } catch (error) {
         // The screen keeps every status column it had; only the decoration is
         // missing (design §5.7). Logged, not thrown: a dead Redis must not turn
@@ -169,7 +229,7 @@ export function makeRedisJobProgressStore(deps: RedisJobProgressDeps): JobProgre
       }
 
       try {
-        await deps.connection.del(keyOf(tenant, jobId));
+        await withTimeout("DEL", () => deps.connection.del(keyOf(tenant, jobId)));
       } catch (error) {
         // Same deliberate exception as `report` (design §5.2). A key that could
         // not be deleted expires on its own within the TTL, and the reading
