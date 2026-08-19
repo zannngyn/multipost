@@ -202,7 +202,9 @@ export function parseSheetRow(
       ok: false,
       issue: "MISSING_CODE",
       rowNumber,
-      detail: `Row ${rowNumber} has an empty '${SHEET_COLUMNS.code}' cell`,
+      // Operator-facing sentence (CLAUDE.md rule 6): Vietnamese, keeps the row
+      // number and the column name so the fix can be found on the Sheet.
+      detail: `Dòng ${rowNumber}: ô '${SHEET_COLUMNS.code}' đang trống — điền mã sản phẩm rồi đồng bộ lại.`,
     };
   }
 
@@ -212,7 +214,7 @@ export function parseSheetRow(
       ok: false,
       issue: "MALFORMED_CODE",
       rowNumber,
-      detail: `Row ${rowNumber} has an unusable product code '${rawCode}'`,
+      detail: `Dòng ${rowNumber}: mã sản phẩm '${rawCode}' không dùng được (chỉ chấp nhận 4-20 ký tự chữ HOA, số hoặc '-') — sửa lại mã trên Sheet.`,
     };
   }
 
@@ -223,7 +225,7 @@ export function parseSheetRow(
       ok: false,
       issue: "MISSING_NAME",
       rowNumber,
-      detail: `Row ${rowNumber} (${code}) has an empty '${SHEET_COLUMNS.name}' cell`,
+      detail: `Dòng ${rowNumber} (${code}): ô '${SHEET_COLUMNS.name}' đang trống — caption mở đầu bằng tên sản phẩm nên dòng này chưa dùng được.`,
     };
   }
 

@@ -20,6 +20,23 @@ const ROUTE = "GET /api/catalog/sync-status";
 
 const QuerySchema = z.object({
   tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
+  /**
+   * How many history rows the rail wants. Absent = the usecase default, which
+   * is SIX and not five: `recentRuns` includes the run the response already
+   * describes, and the rail drops that one before showing "5 lần chạy trước".
+   *
+   * Coerced because a query string only ever carries text. The 1..20 literals
+   * below mirror MAX_RECENT_RUNS in `core/usecases/get-sync-status.ts`, which
+   * re-checks the range — the usecase owns the rule, this is the early 400 so a
+   * bad query never reaches the DB. A route may only take types/error codes
+   * from core (docs/07 §2), so the two stay in step by hand.
+   */
+  recentLimit: z.coerce
+    .number({ error: "Tham số recentLimit phải là số." })
+    .int("Tham số recentLimit phải là số nguyên.")
+    .min(1, "Tham số recentLimit phải từ 1 đến 20.")
+    .max(20, "Tham số recentLimit phải từ 1 đến 20.")
+    .optional(),
 });
 
 export const dynamic = "force-dynamic";
@@ -34,6 +51,7 @@ export async function GET(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const parsed = QuerySchema.safeParse({
       tenantId: url.searchParams.get("tenantId") ?? undefined,
+      recentLimit: url.searchParams.get("recentLimit") ?? undefined,
     });
 
     // --- Edge case first: reject bad input before touching the DB -----------
@@ -51,7 +69,10 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    const result = await container.usecases.getSyncStatus({ tenantId: parsed.data.tenantId });
+    const result = await container.usecases.getSyncStatus({
+      tenantId: parsed.data.tenantId,
+      recentLimit: parsed.data.recentLimit,
+    });
 
     if (!result) {
       return Response.json({ state: "never_synced", tenantId: parsed.data.tenantId });

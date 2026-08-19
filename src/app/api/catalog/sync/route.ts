@@ -49,6 +49,7 @@ export async function POST(request: Request): Promise<Response> {
       status: result.status,
       counts: result.counts,
       issues: result.issues,
+      issueGroups: result.issueGroups,
       schemaDrift: result.schemaDrift,
     });
   } catch (error) {

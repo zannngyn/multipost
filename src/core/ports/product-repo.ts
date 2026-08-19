@@ -91,13 +91,32 @@ export type SyncRunStatus = (typeof SYNC_RUN_STATUSES)[number];
  * this photo not in the picker?" without opening a log file (business rule 5).
  */
 export interface SyncIssue {
-  /** AppError code the issue maps to, e.g. FILE_NAME_INVALID. */
+  /**
+   * Machine code the issue is grouped by — English, stable, and severity-bearing
+   * (FILE_NAME_INVALID = dropped, FILE_DUPLICATE = fine, FILE_NEEDS_REVIEW =
+   * kept but worth a look). Some codes match an AppError code, others exist only
+   * on the sync report.
+   */
   readonly errorCode: string;
-  /** Finer-grained reason, e.g. MULTIPLE_PRODUCT_CODES / MISSING_NAME. */
+  /** Finer-grained machine reason, e.g. MULTIPLE_PRODUCT_CODES / MISSING_NAME. */
   readonly reason: string;
   /** File name or sheet row reference the issue is about. */
   readonly ref: string;
+  /** Sentence for the OPERATOR — Vietnamese (CLAUDE.md technical rule 6). */
   readonly detail: string;
+}
+
+/**
+ * All issues of one `errorCode`, counted BEFORE the `issues[]` cap is applied.
+ * This is what lets the screen say "4.812 file sai tên" while storing three
+ * examples of it — the capped list alone could only ever say "200".
+ */
+export interface SyncIssueGroup {
+  readonly errorCode: string;
+  /** Exact number detected by the run — never truncated. */
+  readonly count: number;
+  /** First few issues of the group, kept for the "ví dụ" panel. */
+  readonly examples: readonly SyncIssue[];
 }
 
 export interface SyncRunCounts {
@@ -140,6 +159,8 @@ export interface FinishSyncRunInput {
   readonly counts: SyncRunCounts;
   /** Capped by the usecase — a run must not write 1,500 rows of JSON. */
   readonly issues: readonly SyncIssue[];
+  /** One row per error code, with EXACT counts. Bounded by the code vocabulary. */
+  readonly issueGroups: readonly SyncIssueGroup[];
   readonly errorCode?: string | null;
   readonly errorMessage?: string | null;
 }
@@ -157,8 +178,29 @@ export interface SyncRunSummary {
   /** Null until the run finishes; `counts` is written by `finish`. */
   readonly counts: SyncRunCounts | null;
   readonly issues: readonly SyncIssue[];
+  /**
+   * Null for a run written before the column existed, and while the run is
+   * still `running`. Every reader must handle that null — old rows are NOT
+   * back-filled.
+   */
+  readonly issueGroups: readonly SyncIssueGroup[] | null;
   readonly errorCode: string | null;
   readonly errorMessage: string | null;
+}
+
+/**
+ * One line of the run history rail. Deliberately WITHOUT `issues`/`issueGroups`:
+ * a five-row list must not drag thousands of JSON rows across the wire.
+ */
+export interface SyncRunListItem {
+  readonly id: string;
+  readonly status: SyncRunStatus;
+  readonly startedAt: Date;
+  /** Null while the run is still `running`, or when it crashed mid-way. */
+  readonly finishedAt: Date | null;
+  /** Null when the run wrote no counts yet (`running`/crashed before finish). */
+  readonly issuesTotal: number | null;
+  readonly errorCode: string | null;
 }
 
 export interface SyncRunRepo {
@@ -167,6 +209,11 @@ export interface SyncRunRepo {
   finish(input: FinishSyncRunInput): Promise<void>;
   /** Newest run by `startedAt`, or null when the tenant never synced. */
   findLatest(tenantId: string): Promise<SyncRunSummary | null>;
+  /**
+   * Newest `limit` runs by `startedAt` (descending), newest first. The caller
+   * has already bounded `limit`; the adapter still refuses a non-positive one.
+   */
+  listRecent(tenantId: string, limit: number): Promise<readonly SyncRunListItem[]>;
 }
 
 // --- Catalog read model (E2/E3 "nguồn dữ liệu + sản phẩm") -------------------
