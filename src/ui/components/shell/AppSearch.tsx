@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, CommandPalette, Kbd } from "@astryxdesign/core";
+import { Button, CommandPalette, CommandPaletteFooter, HStack, Kbd, Text } from "@astryxdesign/core";
 import type { SearchSource, SearchableItem } from "@astryxdesign/core";
 import { Search } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -45,6 +45,34 @@ function createNavSource(items: readonly NavSearchItem[]): SearchSource<NavSearc
       return [...items];
     },
   };
+}
+
+/**
+ * The palette's keyboard hints. Astryx hard-codes "Navigate / Select / Close"
+ * inside CommandPaletteFooter instead of routing them through its locale
+ * catalog, so the only way to say them in Vietnamese is to pass the slot.
+ *
+ * The key glyphs keep their English accessible names ("Up arrow", "Enter") —
+ * those are hard-coded in Kbd with no slot to replace them.
+ */
+function PaletteFooter() {
+  return (
+    <CommandPaletteFooter>
+      <HStack gap={1} vAlign="center">
+        <Kbd keys="up" />
+        <Kbd keys="down" />
+        <Text type="supporting">Di chuyển</Text>
+      </HStack>
+      <HStack gap={1} vAlign="center">
+        <Kbd keys="enter" />
+        <Text type="supporting">Chọn</Text>
+      </HStack>
+      <HStack gap={1} vAlign="center">
+        <Kbd keys="escape" />
+        <Text type="supporting">Đóng</Text>
+      </HStack>
+    </CommandPaletteFooter>
+  );
 }
 
 export function AppSearch() {
@@ -92,6 +120,7 @@ export function AppSearch() {
         searchSource={searchSource}
         label="Tìm màn hình"
         emptySearchText="Không có màn hình nào khớp"
+        footer={<PaletteFooter />}
       />
     </>
   );
