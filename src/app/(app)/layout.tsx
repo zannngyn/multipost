@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { readTenantName } from "@/app/(app)/tenant-name";
 import { signOut } from "@/app/_auth/auth";
 import { getOperatorSession } from "@/app/_auth/session";
 import { AppFrame } from "@/ui/components/shell/AppFrame";
-import { SignOutButton } from "@/ui/components/shell/SignOutButton";
 
 /**
  * Shell for every operator screen. The session is resolved here, once, before
@@ -19,30 +19,27 @@ import { SignOutButton } from "@/ui/components/shell/SignOutButton";
 /** Session-dependent: never prerendered, never cached by a proxy. */
 export const dynamic = "force-dynamic";
 
+async function signOutOperator(): Promise<void> {
+  "use server";
+  // signOut() throws NEXT_REDIRECT — keep it out of try/catch.
+  // NOTE (JWT stateless, see _auth/auth.config.ts): this clears the cookie in
+  // THIS browser only. Other devices keep working until the token expires —
+  // "đăng xuất mọi thiết bị" is not built yet.
+  await signOut({ redirectTo: "/signin" });
+}
+
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const session = await getOperatorSession("layout:(app)");
 
   if (!session) redirect("/signin");
 
+  const tenantName = await readTenantName();
+
   return (
     <AppFrame
       operatorLabel={session.name ?? session.email}
-      signOutAction={
-        session.isDevFake ? null : (
-          <form
-            action={async () => {
-              "use server";
-              // signOut() throws NEXT_REDIRECT — keep it out of try/catch.
-              // NOTE (JWT stateless, see _auth/auth.config.ts): this clears the
-              // cookie in THIS browser only. Other devices keep working until
-              // the token expires — "đăng xuất mọi thiết bị" is not built yet.
-              await signOut({ redirectTo: "/signin" });
-            }}
-          >
-            <SignOutButton />
-          </form>
-        )
-      }
+      tenantName={tenantName}
+      signOutAction={session.isDevFake ? undefined : signOutOperator}
     >
       {children}
     </AppFrame>

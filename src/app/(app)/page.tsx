@@ -8,8 +8,8 @@ import { TenantHealthPanel } from "@/ui/components/tenant/TenantHealthPanel";
  * renders, so there is no "unknown" flash and no private markup can leak
  * (core-auth-session: three session states).
  *
- * The operator identity and the sign-out action now live in the shell's side
- * nav footer, so this page is content only.
+ * The operator identity and the sign-out action live in the shell's top bar,
+ * under the account avatar, so this page is content only.
  *
  * The overview proper (KPI tiles + "việc cần làm") lands in B4; today this is
  * still the walking-skeleton health check.
