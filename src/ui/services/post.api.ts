@@ -22,6 +22,7 @@ import {
   type PostJobStatus,
   type RetryPostJobResponse,
 } from "@/ui/schemas/post-batch.schema";
+import { WorkerHealthSchema, type WorkerHealth } from "@/ui/schemas/worker-health.schema";
 
 import { ApiError } from "./api-error";
 import { apiRequest } from "./http-client";
@@ -44,6 +45,8 @@ export const postKeys = {
   batch: (tenantId: string, batchId: string) => ["posts", tenantId, "batch", batchId] as const,
   jobs: (tenantId: string, filter: { status?: string | null; batchId?: string | null }) =>
     ["posts", tenantId, "jobs", filter.status ?? "all", filter.batchId ?? "all"] as const,
+  /** Deliberately NOT under `jobs`: a job-list invalidation must not refetch it. */
+  workerHealth: (tenantId: string) => ["posts", tenantId, "worker-health"] as const,
 };
 
 export interface ComposeParams {
@@ -351,6 +354,28 @@ export async function listPostJobs(
     signal,
     malformedMessage:
       "Dữ liệu nhật ký đăng bài không đúng định dạng. Hãy báo quản trị viên kiểm tra máy chủ.",
+  });
+}
+
+/**
+ * Is anything draining the publish queue? Read by the job log so a queue nobody
+ * serves stops looking like a queue that is merely busy.
+ *
+ * The endpoint answers 200 even when the queue is unreachable — "không hỏi được"
+ * is part of the answer, not an error. A non-200 here therefore means the check
+ * itself failed, which the screen shows as its quietest notice.
+ */
+export async function fetchWorkerHealth(
+  params: { tenantId: string },
+  signal?: AbortSignal,
+): Promise<WorkerHealth> {
+  const query = new URLSearchParams({ tenantId: requirePostTenantId(params.tenantId) });
+
+  return apiRequest(`/api/posts/worker-health?${query.toString()}`, {
+    schema: WorkerHealthSchema,
+    signal,
+    malformedMessage:
+      "Dữ liệu tình trạng máy đăng bài không đúng định dạng. Hãy báo quản trị viên kiểm tra máy chủ.",
   });
 }
 

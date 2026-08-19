@@ -7,6 +7,8 @@ import type {
   EnqueueOptions,
   EnqueueResult,
   JobQueue,
+  QueueWorkerCensus,
+  QueueWorkerRegistry,
   RepeatableJobInput,
 } from "@/core/ports/job-queue";
 
@@ -26,7 +28,15 @@ export interface BullMqJobQueueDeps {
   queueName?: string;
 }
 
-class BullMqJobQueue implements JobQueue {
+/**
+ * BullMQ answers `getWorkers()` with ONE synthetic entry carrying this text
+ * (instead of failing) when the server refuses `CLIENT LIST` — some managed
+ * Redis offerings do. Counting it would report a worker that does not exist,
+ * which is the exact lie this probe is meant to prevent.
+ */
+const CLIENT_LIST_UNSUPPORTED = "does not support client list";
+
+class BullMqJobQueue implements JobQueue, QueueWorkerRegistry {
   private readonly queue: Queue;
   private readonly logger: Logger;
   private readonly queueName: string;
@@ -152,6 +162,49 @@ class BullMqJobQueue implements JobQueue {
   }
 
   /**
+   * Worker census (E11 health banner). `Queue.getWorkers()` reads Redis'
+   * `CLIENT LIST` and keeps the clients whose name is the queue's own client
+   * name (a worker's blocking connection registers itself under it) — so the
+   * answer travels through the BROKER and works across containers, unlike a
+   * heartbeat file the web process cannot see.
+   *
+   * NEVER THROWS (see the port): "Redis is down" is a thing this probe must be
+   * able to REPORT, not a thing it may fail on. The failure is logged with
+   * context and returned as `reachable: false`.
+   */
+  async countWorkers(): Promise<QueueWorkerCensus> {
+    try {
+      const workers = await this.queue.getWorkers();
+      const rows = Array.isArray(workers) ? workers : [];
+
+      // Edge case first: the "unsupported command" placeholder is one row that
+      // is not a worker. Treat it as "could not ask", never as one worker.
+      if (rows.length === 1 && isUnsupportedPlaceholder(rows[0])) {
+        this.logger.warn("broker cannot list clients — worker count unavailable", {
+          reason: "CLIENT_LIST_UNSUPPORTED",
+          queue: this.queueName,
+        });
+        return { workersOnline: 0, reachable: false };
+      }
+
+      return { workersOnline: rows.length, reachable: true };
+    } catch (error) {
+      const appError = AppError.from(error, "QUEUE_ERROR", {
+        queue: this.queueName,
+        operation: "queue.countWorkers",
+      });
+      // warn, not error: this runs on every health poll, and an unreachable
+      // broker is already reported to the operator through `reachable: false`.
+      this.logger.warn("could not count queue workers", {
+        err: appError,
+        error_code: appError.code,
+        queue: this.queueName,
+      });
+      return { workersOnline: 0, reachable: false };
+    }
+  }
+
+  /**
    * BullMQ job scheduler (the successor of `repeat`): one row per schedulerId,
    * upserted — so every worker boot re-declares the same schedule instead of
    * adding one more. Changing `everyMs` in env takes effect on the next boot.
@@ -223,6 +276,12 @@ class BullMqJobQueue implements JobQueue {
   }
 }
 
-export function makeBullMqJobQueue(deps: BullMqJobQueueDeps): JobQueue {
+/** True for the placeholder row BullMQ returns when CLIENT LIST is refused. */
+function isUnsupportedPlaceholder(row: Record<string, string> | undefined): boolean {
+  const name = typeof row?.name === "string" ? row.name.toLowerCase() : "";
+  return name.includes(CLIENT_LIST_UNSUPPORTED);
+}
+
+export function makeBullMqJobQueue(deps: BullMqJobQueueDeps): JobQueue & QueueWorkerRegistry {
   return new BullMqJobQueue(deps);
 }

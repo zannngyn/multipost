@@ -33,7 +33,7 @@ import {
 } from "@/core/domain/media-url";
 import type { DriveSource } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
-import type { JobQueue } from "@/core/ports/job-queue";
+import type { JobQueue, QueueWorkerRegistry } from "@/core/ports/job-queue";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaByteCache } from "@/core/ports/media-byte-cache";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
@@ -94,6 +94,7 @@ import {
   type UpdateCatalogSource,
 } from "@/core/usecases/update-catalog-source";
 import { makeGetSyncStatus, type GetSyncStatus } from "@/core/usecases/get-sync-status";
+import { makeGetWorkerHealth, type GetWorkerHealth } from "@/core/usecases/get-worker-health";
 import { makeHealthcheckTenant, type HealthcheckTenant } from "@/core/usecases/healthcheck-tenant";
 import { makePublishPost, type PublishPost } from "@/core/usecases/publish-post";
 import { makeSyncCatalog, type SyncCatalog } from "@/core/usecases/sync-catalog";
@@ -159,6 +160,11 @@ export interface Usecases {
   listPostJobs: ListPostJobs;
   /** E11.1 — re-queue a failed/blocked job (stock recheck still applies). */
   retryPostJob: RetryPostJob;
+  /**
+   * E11 — "có worker nào đang chạy không?" for the /jobs banner. Advisory only:
+   * never throws, and no publish path may branch on it.
+   */
+  getWorkerHealth: GetWorkerHealth;
   /** E7.6 — preset channel groups (list/create/update/delete). */
   channelGroups: ManageChannelGroups;
   /** E5.1 — the channel list itself (read / switch on-off / remove). */
@@ -250,11 +256,11 @@ export function makeInfra(config: Config, options: InfraOptions = {}): Infra {
  * enqueueing a publish job). Lazy for the same reason as the Google/AI wiring:
  * `next build` and a page render must not need a reachable Redis.
  */
-function makeLazyJobQueue(config: Config, logger: Logger): JobQueue {
-  let real: JobQueue | null = null;
+function makeLazyJobQueue(config: Config, logger: Logger): JobQueue & QueueWorkerRegistry {
+  let real: (JobQueue & QueueWorkerRegistry) | null = null;
   let closer: (() => Promise<void>) | null = null;
 
-  const build = (): JobQueue => {
+  const build = (): JobQueue & QueueWorkerRegistry => {
     if (real) return real;
     const connection = createRedisConnection({ url: config.REDIS_URL, logger });
     const queue = makeBullMqJobQueue({ connection, logger });
@@ -272,6 +278,22 @@ function makeLazyJobQueue(config: Config, logger: Logger): JobQueue {
     remove: (jobId) => build().remove(jobId),
     has: (jobId) => build().has(jobId),
     enqueueRepeatable: (input) => build().enqueueRepeatable(input),
+    // Building the queue here is what OPENS the Redis connection, so a health
+    // probe on a dead broker fails inside the adapter — which answers
+    // `reachable: false` instead of throwing (see QueueWorkerRegistry).
+    countWorkers: async () => {
+      try {
+        return await build().countWorkers();
+      } catch (error) {
+        // Only reachable when the connection itself cannot be constructed
+        // (missing/blank REDIS_URL): still an answer, never an exception.
+        logger.warn("could not open a queue connection to count workers", {
+          err: AppError.from(error, "QUEUE_ERROR", { operation: "queue.countWorkers" }),
+          error_code: "QUEUE_ERROR",
+        });
+        return { workersOnline: 0, reachable: false };
+      }
+    },
     close: async () => {
       if (closer) await closer();
       real = null;
@@ -282,6 +304,11 @@ function makeLazyJobQueue(config: Config, logger: Logger): JobQueue {
 
 /** Closers of lazily built queues, drained by closeContainer(). */
 const lazyQueueClosers = new Set<() => Promise<void>>();
+
+/** Does this queue also answer "how many workers are attached?" (E11 banner)? */
+function isWorkerRegistry(queue: JobQueue): queue is JobQueue & QueueWorkerRegistry {
+  return typeof (queue as Partial<QueueWorkerRegistry>).countWorkers === "function";
+}
 
 /**
  * Facebook publisher, built on first use — same contract as the Google/AI
@@ -480,7 +507,13 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
   const users = new DrizzleUserRepo(deps.db);
   const google = makeLazyGoogleSources({ logger: deps.logger });
-  const queue = overrides.queue ?? makeLazyJobQueue(deps.config, deps.logger);
+  const lazyQueue = makeLazyJobQueue(deps.config, deps.logger);
+  const queue = overrides.queue ?? lazyQueue;
+  // The worker census is a SEPARATE port (nothing that publishes gets it). An
+  // override may be a plain JobQueue — the worker's own queue does implement the
+  // census, a test fake does not — so fall back to the real lazy queue, which
+  // opens its connection only if someone actually asks for a count.
+  const workerRegistry: QueueWorkerRegistry = isWorkerRegistry(queue) ? queue : lazyQueue;
   const publisher = overrides.publisher ?? makeLazyPublisher(deps.logger);
   // One publisher per platform: the channel decides which API a job goes to.
   const publishers: Partial<Record<ChannelPlatform, ChannelPublisher>> = {
@@ -628,6 +661,12 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       clock: deps.clock,
       logger: deps.logger,
       users,
+    }),
+    getWorkerHealth: makeGetWorkerHealth({
+      workers: workerRegistry,
+      postJobs,
+      clock: deps.clock,
+      logger: deps.logger,
     }),
     listScheduledJobs: makeListScheduledJobs({
       postJobs,
