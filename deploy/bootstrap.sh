@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# One-time VPS setup. Run it ON THE SERVER, as the deploy user, once — after
-# that CI owns the box and this script is only useful as a runbook.
+# One-time VPS setup. Run it ON THE SERVER as root, once — after that CI owns
+# the box and this script is only useful as a runbook.
 #
-#   curl -fsSL <raw url>/deploy/bootstrap.sh | bash     # or scp it over
-#   sudo bash deploy/bootstrap.sh                        # if /srv needs root
+#   bash deploy/bootstrap.sh
 #
 # What it does NOT do: fill in secrets. It leaves .env templates in place and
 # stops, because a bootstrap that invents a SESSION_SECRET is a bootstrap that
@@ -12,9 +11,14 @@
 # ---------------------------------------------------------------------------
 # LAYOUT it creates
 #
-#   /srv/mysp/edge/   one Caddy, binds 80/443, routes both hostnames
-#   /srv/mysp/stg/    staging stack   (COMPOSE_PROJECT_NAME=mysp-stg)
-#   /srv/mysp/prod/   production stack (COMPOSE_PROJECT_NAME=mysp-prod)
+#   /srv/mysp/stg/    staging stack    (COMPOSE_PROJECT_NAME=mysp-stg,  :3110)
+#   /srv/mysp/prod/   production stack (COMPOSE_PROJECT_NAME=mysp-prod, :3100)
+#
+# HTTPS comes from the Caddy already installed on this host under systemd — the
+# one serving the other sites. MYSP does not run its own proxy: two processes
+# cannot share :443. This script drops a site file into /etc/caddy/conf.d/ and
+# makes sure the main Caddyfile imports that directory, so the existing site
+# blocks are never edited.
 #
 # ---------------------------------------------------------------------------
 # ROLLBACK runbook (there is no button; this is the procedure)
@@ -29,7 +33,8 @@
 set -euo pipefail
 
 ROOT="${MYSP_ROOT:-/srv/mysp}"
-NETWORK=mysp-edge
+CADDY_CONF_D=/etc/caddy/conf.d
+CADDY_FILE=/etc/caddy/Caddyfile
 
 say() { printf '\n=== %s\n' "$*"; }
 
@@ -37,20 +42,14 @@ say "checking prerequisites"
 command -v docker >/dev/null || { echo "docker is not installed" >&2; exit 1; }
 docker compose version >/dev/null || { echo "the docker compose plugin is missing" >&2; exit 1; }
 docker info >/dev/null 2>&1 || {
-  echo "cannot talk to the docker daemon as $(id -un) — add the user to the 'docker' group" >&2
+  echo "cannot talk to the docker daemon as $(id -un)" >&2
   exit 1
 }
-
-say "shared edge network"
-if docker network inspect "$NETWORK" >/dev/null 2>&1; then
-  echo "  $NETWORK already exists"
-else
-  docker network create "$NETWORK"
-  echo "  created $NETWORK"
-fi
+command -v caddy >/dev/null || { echo "caddy is not installed on this host" >&2; exit 1; }
+test -f "$CADDY_FILE" || { echo "$CADDY_FILE not found" >&2; exit 1; }
 
 say "directories"
-for dir in edge stg prod; do
+for dir in stg prod; do
   mkdir -p "$ROOT/$dir"
   echo "  $ROOT/$dir"
 done
@@ -73,7 +72,6 @@ place_env() {
 }
 place_env "$ROOT/prod/.env" "$here/env/prod.env.example"
 place_env "$ROOT/stg/.env"  "$here/env/stg.env.example"
-place_env "$ROOT/edge/.env" "$here/env/edge.env.example"
 
 say "image-tag placeholders"
 # CI overwrites these on the first deploy. They exist now only so that
@@ -93,22 +91,40 @@ EOF
   fi
 done
 
-say "edge stack files"
-for f in docker-compose.yml Caddyfile; do
-  if [ -f "$ROOT/edge/$f" ]; then
-    echo "  $ROOT/edge/$f already exists, left untouched"
-  else
-    cp "$here/edge/$f" "$ROOT/edge/$f"
-    echo "  $ROOT/edge/$f created"
-  fi
-done
+say "caddy site blocks"
+mkdir -p "$CADDY_CONF_D"
+cp "$here/edge/mysp.caddy" "$CADDY_CONF_D/mysp.caddy"
+echo "  installed $CADDY_CONF_D/mysp.caddy"
+
+# Add the import exactly once, and only if it is not already there — this file
+# belongs to whoever set the box up, and it has other sites in it.
+if grep -qF "$CADDY_CONF_D" "$CADDY_FILE"; then
+  echo "  $CADDY_FILE already imports $CADDY_CONF_D"
+else
+  cp "$CADDY_FILE" "$CADDY_FILE.bak.$(date +%Y%m%d%H%M%S)"
+  printf '\n# Added by MYSP deploy/bootstrap.sh — site files live in their own directory.\nimport %s/*.caddy\n' "$CADDY_CONF_D" >> "$CADDY_FILE"
+  echo "  appended the import (previous file backed up next to it)"
+fi
+
+say "validating caddy config"
+# Validate BEFORE reloading: a reload with a broken config would take the other
+# sites on this host down, and they have nothing to do with MYSP.
+if caddy validate --config "$CADDY_FILE" --adapter caddyfile >/dev/null 2>&1; then
+  echo "  config is valid"
+  systemctl reload caddy
+  echo "  caddy reloaded"
+else
+  echo "  CONFIG IS INVALID — not reloading. Details:" >&2
+  caddy validate --config "$CADDY_FILE" --adapter caddyfile >&2 || true
+  exit 1
+fi
 
 cat <<EOF
 
 === done. Remaining steps, in order:
 
   1. Fill in the secrets:
-       $ROOT/prod/.env   $ROOT/stg/.env   $ROOT/edge/.env
+       $ROOT/prod/.env   $ROOT/stg/.env
      Generate the random ones with:
        openssl rand -base64 32      # SESSION_SECRET, MEDIA_SIGNING_SECRET,
                                     # TENANT_SECRETS_ENC_KEY
@@ -116,27 +132,11 @@ cat <<EOF
                                     # it goes inside DATABASE_URL, where a
                                     # base64 "/" makes the URL invalid
 
-  2. Point DNS at this server — two type-A records at Cloudflare, both
-     "DNS only" (grey cloud), both to this box's public IP:
-       mysp       -> production
-       mysp-stg   -> staging
-     Open inbound 80 and 443. Port 80 is not optional: ACME uses it.
+  2. Check DNS resolves here — two type-A records, both "DNS only" on
+     Cloudflare (grey cloud), both to this box's public IP:
+       mysp.vannt.asia       -> production
+       mysp-stg.vannt.asia   -> staging
+     Caddy fetches a certificate on the first request to each hostname.
 
-  3. Start the edge proxy (it is fine that no stack exists yet):
-       cd $ROOT/edge && docker compose up -d
-
-  4. Add these to the GitHub repository (Settings -> Secrets and variables):
-       secret  DEPLOY_SSH_HOST         this server's public IP
-       secret  DEPLOY_SSH_USER         $(id -un)
-       secret  DEPLOY_SSH_KEY          private key whose public half is in
-                                       ~/.ssh/authorized_keys here
-       secret  DEPLOY_SSH_KNOWN_HOSTS  output of: ssh-keyscan -H <public-ip>
-       variable DEPLOY_SSH_PORT        22, unless sshd moved
-
-     Then, per GitHub Environment:
-       environment "staging"     variable DEPLOY_PATH = $ROOT/stg
-       environment "production"  variable DEPLOY_PATH = $ROOT/prod
-     Put a required reviewer on "production" if a deploy should need a human.
-
-  5. Push to the stg branch. CI builds, pushes to GHCR and deploys here.
+  3. Push to the stg branch. CI builds, pushes to GHCR and deploys here.
 EOF

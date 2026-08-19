@@ -2,19 +2,20 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml <cmd>
 #
-# What it changes:
-#   1. web/worker/migrate run PRE-BUILT images from GHCR instead of building on
-#      the VPS. Building on the box that also runs production means a deploy can
-#      OOM the thing it is deploying.
-#   2. web joins the shared `mysp-edge` network under a per-stack alias, so the
-#      one Caddy in deploy/edge/ can reach every stack on the host.
+# What it changes: web/worker/migrate run PRE-BUILT images from GHCR instead of
+# building on the VPS. Building on the box that also runs production means a
+# deploy can OOM the thing it is deploying.
 #
 # Two stacks share this VPS (staging + production). They stay apart through
 # COMPOSE_PROJECT_NAME, which namespaces containers AND volumes — separate
 # database, separate Redis, separate uploads. Set it in the stack's .env.
 #
-# The per-stack `caddy` service from the base file is NOT used here; the deploy
-# script starts the stack with `--scale caddy=0`. Only deploy/edge/ binds 80/443.
+# HTTPS is NOT in here. The VPS already runs Caddy under systemd (it serves
+# other sites), and two processes cannot share :443. So each stack publishes its
+# web port on LOOPBACK ONLY — WEB_BIND=127.0.0.1 in the stack's .env — and the
+# host Caddy reverse-proxies to it. The site blocks live in
+# deploy/edge/mysp.caddy; the per-stack `caddy` service from the base file is
+# left unstarted (`--scale caddy=0`).
 
 services:
   migrate:
@@ -24,22 +25,7 @@ services:
   web:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX is required}/web:${IMAGE_TAG:?IMAGE_TAG is required}
     pull_policy: always
-    networks:
-      # `default` must be listed explicitly: naming any network on a service
-      # removes the implicit default, which would cut web off from postgres.
-      default: {}
-      edge:
-        aliases:
-          # Stable name for the edge Caddy to proxy to. Compose would give this
-          # container a project-scoped name that changes with the project name;
-          # the alias is what the Caddyfile is written against.
-          - ${STACK_ALIAS:?STACK_ALIAS is required}-web
 
   worker:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX is required}/worker:${IMAGE_TAG:?IMAGE_TAG is required}
     pull_policy: always
-
-networks:
-  edge:
-    external: true
-    name: mysp-edge
