@@ -5,6 +5,7 @@ import type {
   SavePostDraftRecord,
   StoredPostDraft,
 } from "@/core/ports/post-draft-repo";
+import type { UserRepo } from "@/core/ports/user-repo";
 
 /**
  * Shared test doubles for the draft usecases.
@@ -108,4 +109,65 @@ export async function seedRawDraft(
 /** An AppError a repo would raise, for "propagates DB_ERROR untouched" tests. */
 export function dbOutage(): AppError {
   return new AppError("DB_ERROR", { message: "connection refused" });
+}
+
+export interface InMemoryUserRepo extends UserRepo {
+  /** Registers "this e-mail is this app_user in this tenant". */
+  add(tenantId: string, email: string, userId: string): void;
+  /** Next lookup throws this error instead of answering. */
+  failNext(error: unknown): void;
+  /** Every lookup, to assert an explicit ownerUserId short-circuits it. */
+  calls(): { tenantId: string; email: string }[];
+}
+
+/**
+ * Users the draft usecases resolve an owner against.
+ *
+ * Case-insensitive on the e-mail, like the port contract requires — that is how
+ * a session e-mail in mixed case still finds a lower-cased `app_user.email`.
+ */
+export function makeInMemoryUserRepo(): InMemoryUserRepo {
+  const rows = new Map<string, string>();
+  const seen: { tenantId: string; email: string }[] = [];
+  let failure: { error: unknown } | null = null;
+
+  const key = (tenantId: string, email: string): string =>
+    `${tenantId}::${email.trim().toLowerCase()}`;
+
+  return {
+    async findUserIdByEmail(tenantId, email) {
+      seen.push({ tenantId, email });
+      if (failure) {
+        const { error } = failure;
+        failure = null;
+        throw error;
+      }
+      return rows.get(key(tenantId, email)) ?? null;
+    },
+    add(tenantId, email, userId) {
+      rows.set(key(tenantId, email), userId);
+    },
+    failNext(error) {
+      failure = { error };
+    },
+    calls() {
+      return [...seen];
+    },
+  };
+}
+
+/**
+ * Narrows a draft result to its persisted branch, failing loudly otherwise.
+ *
+ * Without it every assertion on `updatedAt` would need an inline type guard,
+ * and a test that silently read `undefined` off the not-persisted branch would
+ * still pass.
+ */
+export function expectPersisted<T extends { persisted: boolean }>(
+  result: T,
+): Extract<T, { persisted: true }> {
+  if (!result.persisted) {
+    throw new Error(`Expected a persisted draft result, got ${JSON.stringify(result)}`);
+  }
+  return result as Extract<T, { persisted: true }>;
 }

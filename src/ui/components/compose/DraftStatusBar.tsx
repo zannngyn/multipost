@@ -25,7 +25,9 @@ import type { ComposeDraftState } from "@/ui/hooks/useComposeDraft";
  *  - restoring → "Đang khôi phục nháp…"
  *  - saved     → "Đã lưu nháp lúc HH:mm" (the hour, not a vague "đã lưu")
  *  - local-only→ "Chỉ lưu trên máy này" + why, because it is a real limitation
- *  - error     → "Lưu nháp lỗi" + the server's reason + a retry that works
+ *  - discarding→ "Đang xoá nháp…", because a queued delete is not "idle"
+ *  - error     → named after the operation that failed (save OR delete), the
+ *                server's reason, and a retry that repeats THAT operation
  *
  * Never a spinner over the content and never a toast: this is ambient state, it
  * belongs in a line the operator can glance at, not in something that steals
@@ -59,9 +61,12 @@ export function DraftStatusBar({ draft }: { draft: ComposeDraftState }) {
         </p>
 
         <div className="ms-auto flex items-center gap-2">
+          {/* The label names the operation being retried: `retry()` repeats
+              whichever one failed, so a bare "Thử lại" after a failed deletion
+              would read as an offer to save. */}
           {draft.phase === "error" ? (
             <Button type="button" variant="outline" size="sm" onClick={draft.retry}>
-              Thử lại
+              {draft.errorAction === "discard" ? "Xoá lại" : "Lưu lại"}
             </Button>
           ) : null}
           <Button
@@ -69,7 +74,9 @@ export function DraftStatusBar({ draft }: { draft: ComposeDraftState }) {
             variant="ghost"
             size="sm"
             onClick={() => setConfirmOpen(true)}
-            disabled={draft.isRestoring}
+            // Also while a delete is on the wire: a second "Xoá nháp" would
+            // write a second marker and queue a delete for a row already going.
+            disabled={draft.isRestoring || draft.phase === "discarding"}
           >
             Xoá nháp
           </Button>
@@ -147,6 +154,12 @@ function describe(draft: ComposeDraftState, showRestoring: boolean): DraftStatus
   switch (draft.phase) {
     case "saving":
       return { title: "Đang lưu nháp…", detail: null, dotClass: "bg-accent-foreground" };
+    case "discarding":
+      return {
+        title: "Đang xoá nháp…",
+        detail: "Đang xoá bản lưu trên máy chủ.",
+        dotClass: "bg-accent-foreground motion-safe:animate-pulse",
+      };
     case "saved":
       return {
         title: draft.updatedAt ? `Đã lưu nháp lúc ${formatSavedAt(draft.updatedAt)}` : "Đã lưu nháp",
@@ -160,12 +173,21 @@ function describe(draft: ComposeDraftState, showRestoring: boolean): DraftStatus
           "Máy chủ chưa nhận diện được người dùng của phiên này, nên nháp không đồng bộ sang máy khác.",
         dotClass: "bg-warning",
       };
+    // Named after the operation that failed. "Lưu nháp lỗi" over a failed
+    // deletion tells the operator the opposite of what happened, and sends them
+    // looking for the wrong problem.
     case "error":
-      return {
-        title: "Lưu nháp lỗi",
-        detail: draft.errorMessage ?? "Không lưu được nháp lên máy chủ.",
-        dotClass: "bg-destructive",
-      };
+      return draft.errorAction === "discard"
+        ? {
+            title: "Xoá nháp lỗi",
+            detail: draft.errorMessage ?? "Không xoá được nháp trên máy chủ.",
+            dotClass: "bg-destructive",
+          }
+        : {
+            title: "Lưu nháp lỗi",
+            detail: draft.errorMessage ?? "Không lưu được nháp lên máy chủ.",
+            dotClass: "bg-destructive",
+          };
     // Also the first ~300ms of a restore, before it is worth announcing: the
     // sentence is true either way, so nothing flickers between the two.
     default:

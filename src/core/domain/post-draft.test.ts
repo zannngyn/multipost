@@ -4,10 +4,12 @@ import { AppError } from "./errors";
 import {
   assertComposeDraftPayload,
   assertPostDraftAddress,
+  assertPostDraftScope,
   normalisePostDraftKind,
   parseComposeDraftPayload,
   POST_DRAFT_KIND_COMPOSE,
   POST_DRAFT_MAX_BYTES,
+  POST_DRAFT_NOT_PERSISTED,
   POST_DRAFT_SCHEMA_VERSION,
   type ComposeDraftPayload,
 } from "./post-draft";
@@ -325,6 +327,42 @@ describe("assertPostDraftAddress", () => {
       ownerUserId: OWNER,
       kind: POST_DRAFT_KIND_COMPOSE,
     });
+  });
+});
+
+describe("assertPostDraftScope", () => {
+  it.each([undefined, null, {}, { tenantId: "" }, { tenantId: "not-a-uuid" }])(
+    "rejects a malformed tenant id before any owner lookup: %s",
+    (input) => {
+      expectThrows(() => assertPostDraftScope(input as never), {
+        code: "INVALID_INPUT",
+        context: { reason: "INVALID_TENANT_ID" },
+      });
+    },
+  );
+
+  it("rejects a malformed kind rather than defaulting it", () => {
+    expectThrows(() => assertPostDraftScope({ tenantId: TENANT, kind: "compose draft" }), {
+      code: "INVALID_INPUT",
+      context: { reason: "INVALID_DRAFT_KIND" },
+    });
+  });
+
+  it("does not need an owner: it is what runs BEFORE one is resolved", () => {
+    expect(assertPostDraftScope({ tenantId: ` ${TENANT} ` })).toEqual({
+      tenantId: TENANT,
+      kind: POST_DRAFT_KIND_COMPOSE,
+    });
+  });
+});
+
+describe("POST_DRAFT_NOT_PERSISTED", () => {
+  it("names the reason instead of leaving a field absent", () => {
+    expect(POST_DRAFT_NOT_PERSISTED).toEqual({ persisted: false, reason: "NO_USER" });
+  });
+
+  it("is frozen — three usecases return the same object", () => {
+    expect(Object.isFrozen(POST_DRAFT_NOT_PERSISTED)).toBe(true);
   });
 });
 

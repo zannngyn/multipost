@@ -6,9 +6,14 @@ import { useWatch } from "react-hook-form";
 import {
   buildComposeDraftPayload,
   draftContentKey,
+  draftRetryAction,
   isDraftWorthSaving,
+  needsSecondDiscard,
   pickNewerDraft,
+  saveAftermath,
   type ComposeDraftSnapshot,
+  type DraftErrorAction,
+  type SaveAftermath,
 } from "@/ui/components/compose/compose-draft";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
 import type { PublishForm } from "@/ui/hooks/usePublishForm";
@@ -62,7 +67,9 @@ export type ComposeDraftPhase =
   | "saved"
   /** Stored on this machine only — no operator row on the server. */
   | "local-only"
-  /** The last save failed; the local copy may still be good. */
+  /** A "Xoá nháp" is on the wire. Not idle: the row is not gone yet. */
+  | "discarding"
+  /** The last save or delete failed; the local copy may still be good. */
   | "error";
 
 export interface ComposeDraftState {
@@ -71,6 +78,11 @@ export interface ComposeDraftState {
   updatedAt: string | null;
   /** Vietnamese reason, present for `phase === "error"`. */
   errorMessage: string | null;
+  /**
+   * WHICH operation failed. The status line and "Thử lại" both read it: a failed
+   * DELETE retried with a PUT would write the row back instead of removing it.
+   */
+  errorAction: DraftErrorAction;
   /** What changed while restoring: cleared captions, dropped order, files. */
   notices: readonly string[];
   isRestoring: boolean;
@@ -86,6 +98,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
   const [phase, setPhase] = useState<ComposeDraftPhase>("restoring");
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorAction, setErrorAction] = useState<DraftErrorAction>("save");
   const [notices, setNotices] = useState<readonly string[]>([]);
   const [localBufferFailed, setLocalBufferFailed] = useState(false);
   /**
@@ -109,6 +122,17 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
 
   /** Content last handed to the server — the dirty check compares against it. */
   const lastSavedRef = useRef<ComposeDraftPayload | null>(null);
+  /**
+   * Generation that last stored something, counted directly rather than read off
+   * `lastSavedRef`.
+   *
+   * `lastSavedRef !== null` used to stand in for "this generation has stored
+   * something", and it only meant that because `discard()` happens to null the
+   * ref 300 lines away. The publish path bumps the generation WITHOUT nulling
+   * it, so on that path the stand-in was simply wrong — harmless today only
+   * because of the order the two requests queue in. A counter says what it means.
+   */
+  const storedGenerationRef = useRef<number | null>(null);
   /** Freshest payload; the debounced callbacks read THIS, never a captured copy. */
   const latestPayloadRef = useRef<ComposeDraftPayload | null>(null);
   const localTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -144,6 +168,8 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
   const saveAbortRef = useRef<AbortController | null>(null);
   /** The save currently on the wire, so a discard can wait for it to settle. */
   const inFlightSaveRef = useRef<Promise<void> | null>(null);
+  /** The DELETE currently settling; a follow-up queues behind it, never races it. */
+  const discardRequestRef = useRef<Promise<void> | null>(null);
   const mountedRef = useRef(true);
 
   const { form } = wizard;
@@ -171,7 +197,10 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
 
   const snapshot: ComposeDraftSnapshot = {
     step: wizard.step.slug,
-    composeKey: wizard.composedKey ?? "",
+    // The CAPTIONS' owner, not "what is composed": a draft can hold captions for
+    // a product whose compose has since been refused, and the restore needs to
+    // know which product they were written for.
+    composeKey: wizard.captionsKey ?? "",
     productCode: productCode ?? "",
     color: color ?? "",
     mediaKind: mediaKind ?? values.mediaKind,
@@ -217,14 +246,103 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
   );
 
   /**
+   * Deletes the draft row on the server — the single door every discard goes
+   * through (operator, post-publish cleanup, and the second delete below).
+   *
+   * Two things it does that a bare `discardComposeDraft()` call cannot:
+   *  - the pending-discard MARKER is written before the request and consumed
+   *    only once the delete is confirmed. Between those two moments the row is
+   *    "meant to be gone but may still be there", so a tab closed mid-way leaves
+   *    the marker behind and the next mount retries the delete instead of
+   *    offering the row back as "nháp đang soạn";
+   *  - requests are queued, never parallel: a second delete that overtook the
+   *    first would report success for a row the first one had not touched yet.
+   *
+   * `waitFor` is the save already on the wire: deleting before it settles would
+   * let the two cross in the other order on purpose.
+   */
+  const requestServerDiscard = useCallback(
+    (params: {
+      reason: "operator" | "late-save" | "after-publish";
+      waitFor?: Promise<void> | null;
+      /** False for the post-publish path: the lô exists, the screen has moved on. */
+      report: boolean;
+    }) => {
+      if (tenantId.length === 0) return;
+      // The server has not named the operator yet on the very first seconds of a
+      // mount, so the marker may land in the anonymous bucket. That is not a
+      // guess about who this is — it is where the marker CAN be written — and
+      // `hydrate` sweeps that bucket as well, so a marker written before the
+      // owner was known is still found and retried.
+      const ownerKey = ownerKeyRef.current ?? ANONYMOUS_OWNER_KEY;
+      composeDraftBuffer.markPendingDiscard({ tenantId, ownerKey });
+      // The row is not gone until the server says so. Painting "Tự động lưu
+      // nháp đang bật" over a delete still in flight tells the operator the
+      // opposite of what is happening (core-feedback-states: the line must
+      // describe the operation actually running).
+      if (params.report && mountedRef.current) setPhase("discarding");
+
+      const queued = Promise.allSettled([
+        discardRequestRef.current ?? Promise.resolve(),
+        params.waitFor ?? Promise.resolve(),
+      ]);
+
+      const request = queued
+        .then(() => discardComposeDraft(tenantId))
+        .then(() => {
+          // Confirmed gone. The marker has done its job and must not survive to
+          // make the next mount delete a draft typed after this one.
+          composeDraftBuffer.takePendingDiscard({ tenantId, ownerKey });
+          // Only OUR phase is handed back: a save that has since painted the
+          // line owns it now, and stamping "idle" over it would erase a state
+          // the operator is entitled to see.
+          if (mountedRef.current) {
+            setPhase((current) => (current === "discarding" ? "idle" : current));
+          }
+        })
+        .catch((error: unknown) => {
+          // The marker stays where it was written, so the next mount retries.
+          // Never silent, whatever `report` says (CLAUDE.md rule 5).
+          console.warn("[useComposeDraft] deleting the draft on the server failed", {
+            scope: "ui/useComposeDraft",
+            action: `discard:${params.reason}`,
+            tenantId,
+            errorCode: ApiError.is(error) ? error.code : undefined,
+          });
+          if (!params.report || !mountedRef.current) return;
+          // The operator asked for this delete, so a failure is theirs to see —
+          // named as a DELETE, so the line does not say "Lưu nháp lỗi" about a
+          // deletion and "Thử lại" does not answer it with a save.
+          setPhase("error");
+          setErrorAction("discard");
+          setErrorMessage(
+            ApiError.is(error)
+              ? error.userMessage
+              : "Không xoá được nháp trên máy chủ. Hãy thử lại.",
+          );
+        });
+
+      discardRequestRef.current = request;
+      void request.then(() => {
+        if (discardRequestRef.current === request) discardRequestRef.current = null;
+      });
+    },
+    [tenantId],
+  );
+
+  /**
    * One server save. Never auto-retried: the next pause brings another one.
    *
-   * Two guards on the WAY BACK, both about work the operator has since undone:
-   *  - the request is abortable, and "Xoá nháp" aborts it, so a PUT cannot land
-   *    after the DELETE and quietly resurrect the row;
-   *  - the generation counter makes a late answer from an aborted-but-already-
-   *    sent request harmless: it can no longer write `lastSavedRef` or paint
-   *    "Đã lưu" over a screen that has just been reset.
+   * Three guards on the WAY BACK, all about work the operator has since undone:
+   *  - the request is abortable, and "Xoá nháp" aborts it, so the answer comes
+   *    back fast and the screen is not left saying "đang lưu" after a delete;
+   *  - the generation counter makes a late answer harmless on screen: it can no
+   *    longer write `lastSavedRef` or paint "Đã lưu" over a reset screen;
+   *  - and — the part an abort CANNOT do — a save that still answers 2xx from
+   *    before the discard is treated as a resurrection of the row. Aborting only
+   *    closes the socket on this side; a route handler that already had the
+   *    request commits its upsert regardless, possibly after the DELETE. So the
+   *    row is deleted a second time (`needsSecondDiscard`).
    */
   const pushToServer = useCallback(
     async (next: ComposeDraftPayload) => {
@@ -234,12 +352,42 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       const controller = new AbortController();
       saveAbortRef.current = controller;
       setPhase("saving");
+      /**
+       * A delete already queued goes FIRST. `requestServerDiscard` makes a
+       * delete wait for the save on the wire; without the mirror image of that
+       * rule the pair is only ordered in one direction, and a PUT sent while a
+       * DELETE was still queued could land behind it — deleting a draft the
+       * operator had just typed. Ordering, not timing: no window to be lucky in.
+       *
+       * No cycle is possible: each request only ever waits on requests that were
+       * registered before it.
+       */
+      const queuedDiscard = discardRequestRef.current;
+      /**
+       * What this save leaves behind. BOTH branches below write it through
+       * `saveAftermath`, because the case that used to be missed — "Xoá nháp"
+       * aborts the PUT, and an abort REJECTS — only ever lands in the catch.
+       */
+      let aftermath: SaveAftermath = {
+        applyToScreen: false,
+        reportError: false,
+        resurrectedRow: false,
+      };
 
       const attempt = (async () => {
         try {
+          if (queuedDiscard) await Promise.allSettled([queuedDiscard]);
           const result = await saveComposeDraft({ tenantId, payload: next }, controller.signal);
-          if (!mountedRef.current || generationRef.current !== generation) return;
+          // The server answered "saved": the row EXISTS now, whatever this
+          // screen did in the meantime. If the draft was discarded while this
+          // request was out, that row is one nobody wants — see below.
+          aftermath = saveAftermath({
+            settlement: { outcome: "saved" },
+            staleGeneration: generationRef.current !== generation,
+          });
+          if (!aftermath.applyToScreen || !mountedRef.current) return;
           lastSavedRef.current = next;
+          storedGenerationRef.current = generation;
           everSavedRef.current = true;
           setErrorMessage(null);
           if (result.persisted) {
@@ -252,10 +400,13 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
             setPhase("local-only");
           }
         } catch (error) {
-          if (!mountedRef.current || generationRef.current !== generation) return;
-          // An abort is our own doing (discard), not something to report.
-          if (controller.signal.aborted) return;
+          aftermath = saveAftermath({
+            settlement: { outcome: "failed", aborted: controller.signal.aborted },
+            staleGeneration: generationRef.current !== generation,
+          });
+          if (!aftermath.reportError || !mountedRef.current) return;
           setPhase("error");
+          setErrorAction("save");
           setErrorMessage(
             ApiError.is(error)
               ? error.userMessage
@@ -269,8 +420,24 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       inFlightSaveRef.current = attempt;
       await attempt;
       if (inFlightSaveRef.current === attempt) inFlightSaveRef.current = null;
+
+      // The DELETE the operator asked for has already gone out (and, by the
+      // queue in `requestServerDiscard`, this one waits for it). Firing it again
+      // here is the only way the row that came back behind it goes away without
+      // the operator having to discover it on their next visit.
+      if (
+        needsSecondDiscard({
+          staleGeneration: aftermath.resurrectedRow,
+          // Counted, not inferred: the publish path bumps the generation without
+          // touching `lastSavedRef`, so reading that ref here answered the wrong
+          // question on that path.
+          storedSinceDiscard: storedGenerationRef.current === generationRef.current,
+        })
+      ) {
+        requestServerDiscard({ reason: "late-save", report: true });
+      }
     },
-    [tenantId],
+    [requestServerDiscard, tenantId],
   );
 
   // --- Hydrate on mount ------------------------------------------------------
@@ -342,7 +509,20 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
 
       // A draft left behind by a publish whose cleanup failed: drop it before it
       // can be offered back as "nháp đang soạn" of a post that already went out.
-      if (ownerKey !== null && composeDraftBuffer.takePendingDiscard({ tenantId, ownerKey })) {
+      //
+      // BOTH buckets are swept. A discard that ran before the server had named
+      // the operator wrote its marker under "anon" while this read looks under
+      // the real key, and such a marker would never be found again — the row it
+      // points at would come back as a restore. `takePendingDiscard` consumes,
+      // so sweeping the second bucket cannot double-report anything.
+      const pendingHere =
+        ownerKey !== null && composeDraftBuffer.takePendingDiscard({ tenantId, ownerKey });
+      const pendingAnonymous =
+        ownerKey !== null &&
+        ownerKey !== ANONYMOUS_OWNER_KEY &&
+        composeDraftBuffer.takePendingDiscard({ tenantId, ownerKey: ANONYMOUS_OWNER_KEY });
+
+      if (ownerKey !== null && (pendingHere || pendingAnonymous)) {
         server = null;
         serverUpdatedAt = null;
         void discardComposeDraft(tenantId).catch((error: unknown) => {
@@ -395,10 +575,17 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       // started: bailing out mid-restore left the form filled, the channels and
       // the schedule empty, and the screen stuck on "Đang khôi phục" with
       // "Xoá nháp" disabled — a half-restore nobody was told about.
+      // The overrides come from the RESTORE OUTCOME, not straight out of the
+      // payload: `restoreDraft` has already dropped the ones a draft had no
+      // owner for, and it hands over the key the rest were typed under so the
+      // publish form can refuse them if compose has since answered with another
+      // product. Passing `picked.payload.captionOverrides` here unconditionally
+      // is what let one product's per-channel text go out under another's.
       publishRef.current.restore({
         selectedChannelIds: picked.payload.selectedChannelIds,
         shareCaption: picked.payload.shareCaption,
-        captionOverrides: picked.payload.captionOverrides,
+        captionOverrides: outcome.captionOverrides,
+        captionOverridesOwner: outcome.captionOverridesOwner,
         schedule: picked.payload.schedule,
       });
 
@@ -529,20 +716,16 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
     clearTimers();
     composeDraftBuffer.clear({ tenantId, ownerKey });
 
-    void discardComposeDraft(tenantId).catch((error: unknown) => {
-      // The lô exists, so this is not the operator's failure to see — but it is
-      // NOT nothing either: the row left behind would be offered back as "nháp
-      // đang soạn" of a post that has already gone out. The marker makes the
-      // next mount retry the delete instead of restoring it.
-      composeDraftBuffer.markPendingDiscard({ tenantId, ownerKey });
-      console.warn("[useComposeDraft] draft cleanup after publish failed", {
-        scope: "ui/useComposeDraft",
-        action: "discard-after-publish",
-        tenantId,
-        errorCode: ApiError.is(error) ? error.code : undefined,
-      });
+    // The lô exists, so a failed cleanup is not the operator's failure to see —
+    // but it is NOT nothing either: the row left behind would be offered back as
+    // "nháp đang soạn" of a post that has already gone out. `report: false` keeps
+    // it off this screen; the marker and the log keep it from vanishing.
+    requestServerDiscard({
+      reason: "after-publish",
+      waitFor: inFlightSaveRef.current,
+      report: false,
     });
-  }, [batchCreated, clearTimers, tenantId]);
+  }, [batchCreated, clearTimers, requestServerDiscard, tenantId]);
 
   useEffect(() => {
     return () => {
@@ -552,21 +735,47 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
     };
   }, []);
 
+  /**
+   * "Thử lại" repeats THE OPERATION THAT FAILED.
+   *
+   * It used to always save. After a failed "Xoá nháp" that meant the button
+   * under "không xoá được nháp" wrote a row back to the server — the exact
+   * opposite of what it says, and on an already-emptied screen it wrote an empty
+   * draft. `draftRetryAction` is the mapping, kept pure so it is testable.
+   */
   const retry = useCallback(() => {
+    const action = draftRetryAction({ phase, errorAction });
+    if (action === "none") return;
+
+    if (action === "discard") {
+      // No phase written here: `requestServerDiscard` sets "discarding" and
+      // hands it back to "idle" only once the server has confirmed the row is
+      // gone. Claiming "idle" up front is the same lie the status line just
+      // stopped telling.
+      setErrorMessage(null);
+      requestServerDiscard({
+        reason: "operator",
+        waitFor: inFlightSaveRef.current,
+        report: true,
+      });
+      return;
+    }
+
     const next = latestPayloadRef.current;
     if (!next) return;
     suspendedRef.current = false;
     mirrorLocally(next);
     void pushToServer(next);
-  }, [mirrorLocally, pushToServer]);
+  }, [errorAction, mirrorLocally, phase, pushToServer, requestServerDiscard]);
 
   const discard = useCallback(() => {
     suspendedRef.current = true;
     clearTimers();
     // Everything already on the wire belongs to the draft being thrown away.
-    // Without this, a PUT that left 200ms ago can land AFTER the DELETE and put
-    // the row back — the operator asked for a delete, saw it happen, and the
-    // draft returns on the next visit.
+    // The generation bump is what makes a late answer harmless HERE; the abort
+    // only gets that answer back quickly. Neither can stop a handler the server
+    // has already started, which is why `pushToServer` watches for a save that
+    // still succeeds afterwards and deletes the row again.
     generationRef.current += 1;
     saveAbortRef.current?.abort();
     saveAbortRef.current = null;
@@ -583,23 +792,14 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       composeDraftBuffer.clear({ tenantId, ownerKey });
 
       // Waits for the aborted save to settle before deleting, so the two
-      // requests cannot cross on the wire in the other order.
-      const pending = inFlightSaveRef.current ?? Promise.resolve();
-      void pending
-        .catch(() => undefined)
-        .then(() => discardComposeDraft(tenantId))
-        .catch((error: unknown) => {
-          if (!mountedRef.current) return;
-          // The operator asked for this one, so a failure is theirs to see —
-          // and the marker makes the next mount try again.
-          composeDraftBuffer.markPendingDiscard({ tenantId, ownerKey });
-          setPhase("error");
-          setErrorMessage(
-            ApiError.is(error)
-              ? error.userMessage
-              : "Không xoá được nháp trên máy chủ. Hãy thử lại.",
-          );
-        });
+      // requests cannot cross on the wire in the other order. Should that save
+      // still answer "đã lưu" afterwards, `pushToServer` sends this DELETE a
+      // second time — the abort alone does not stop a handler already running.
+      requestServerDiscard({
+        reason: "operator",
+        waitFor: inFlightSaveRef.current,
+        report: true,
+      });
     }
 
     // The screen goes back to an empty step 1: dropping the stored copy while
@@ -607,7 +807,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
     wizardRef.current.resetWizard();
     publishRef.current.reset();
     suspendedRef.current = false;
-  }, [clearTimers, tenantId]);
+  }, [clearTimers, requestServerDiscard, tenantId]);
 
   return useMemo(
     () => ({
@@ -616,6 +816,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       phase: batchCreated ? "idle" : phase,
       updatedAt: batchCreated ? null : updatedAt,
       errorMessage: batchCreated ? null : errorMessage,
+      errorAction,
       notices: batchCreated ? [] : notices,
       isRestoring: !batchCreated && (phase === "restoring" || wizard.restorePhase === "restoring"),
       retry,
@@ -625,6 +826,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
     [
       batchCreated,
       discard,
+      errorAction,
       errorMessage,
       localBufferFailed,
       notices,

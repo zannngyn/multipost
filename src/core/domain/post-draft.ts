@@ -303,27 +303,73 @@ export function parseComposeDraftPayload(
 /** Same loose 8-4-4-4-12 shape as `isTenantId`: fixture ids carry no version nibble. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export interface PostDraftAddress {
+/**
+ * The one way a draft operation ends without touching the server AND without
+ * being a failure: the caller has no session e-mail, or that e-mail matches no
+ * `app_user` row of this tenant (a real state of a dev/demo environment).
+ *
+ * It is a named reason, never an absent field: a draft that was not stored must
+ * be impossible to mistake for one that was (business rule 5). The screen turns
+ * it into "nháp chỉ lưu trên máy này".
+ */
+export const POST_DRAFT_NO_USER = "NO_USER";
+
+export interface PostDraftNotPersisted {
+  readonly persisted: false;
+  readonly reason: typeof POST_DRAFT_NO_USER;
+}
+
+/** The single value every draft usecase returns for the no-owner branch. */
+export const POST_DRAFT_NOT_PERSISTED: PostDraftNotPersisted = Object.freeze({
+  persisted: false,
+  reason: POST_DRAFT_NO_USER,
+});
+
+/**
+ * How a caller says who the draft belongs to.
+ *
+ * `ownerUserId` wins when both are given (same rule as `ActorInput`); a caller
+ * that only has a session hands over `ownerEmail` and the usecase resolves it.
+ * Neither given = nobody to own the draft = `POST_DRAFT_NOT_PERSISTED`.
+ *
+ * "Given" means anything other than `undefined`/`null`: an `ownerUserId` that is
+ * present but blank or malformed is a caller BUG and fails with INVALID_INPUT,
+ * never a silent fall back to the e-mail path (which would turn a broken client
+ * into a draft that quietly stops being stored).
+ */
+export interface PostDraftOwnerInput {
+  readonly ownerUserId?: string | null;
+  readonly ownerEmail?: string | null;
+}
+
+export interface PostDraftScope {
   readonly tenantId: string;
-  readonly ownerUserId: string;
   readonly kind: string;
 }
 
-export interface PostDraftAddressInput {
+export interface PostDraftAddress extends PostDraftScope {
+  readonly ownerUserId: string;
+}
+
+export interface PostDraftScopeInput {
   readonly tenantId?: unknown;
-  readonly ownerUserId?: unknown;
   readonly kind?: unknown;
 }
 
+export interface PostDraftAddressInput extends PostDraftScopeInput {
+  readonly ownerUserId?: unknown;
+}
+
 /**
- * Validates and trims the triple every draft operation is addressed by.
+ * Validates the half of the address that is known BEFORE the owner is resolved.
  *
- * `ownerUserId` is mandatory and must be a uuid: without it a draft is not
- * tenant-scoped but tenant-SHARED, and two operators would overwrite each
- * other's work. The caller that cannot resolve a user must not call these
- * usecases at all (the route reports "chỉ lưu trên máy này" instead).
+ * Split out on purpose: a draft usecase must reject a malformed tenant/kind (a
+ * caller bug) before it asks any repository who the operator is, so a bad
+ * request never reaches the database.
  */
-export function assertPostDraftAddress(input: PostDraftAddressInput | null | undefined): PostDraftAddress {
+export function assertPostDraftScope(
+  input: PostDraftScopeInput | null | undefined,
+): PostDraftScope {
   const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
   if (!isTenantId(tenantId)) {
     throw new AppError("INVALID_INPUT", {
@@ -333,16 +379,33 @@ export function assertPostDraftAddress(input: PostDraftAddressInput | null | und
     });
   }
 
+  return { tenantId, kind: normalisePostDraftKind(input?.kind) };
+}
+
+/**
+ * Validates and trims the triple every draft operation is addressed by.
+ *
+ * `ownerUserId` is mandatory and must be a uuid: without it a draft is not
+ * tenant-scoped but tenant-SHARED, and two operators would overwrite each
+ * other's work. A caller that could not resolve an owner must not build an
+ * address at all — the usecase answers `persisted: false` / `NO_USER` and the
+ * screen reports "chỉ lưu trên máy này".
+ */
+export function assertPostDraftAddress(
+  input: PostDraftAddressInput | null | undefined,
+): PostDraftAddress {
+  const scope = assertPostDraftScope(input);
+
   const ownerUserId = typeof input?.ownerUserId === "string" ? input.ownerUserId.trim() : "";
   if (!UUID_PATTERN.test(ownerUserId)) {
     throw new AppError("INVALID_INPUT", {
       message: "ownerUserId must be a UUID",
       userMessage: "Không xác định được người dùng sở hữu bản nháp.",
-      context: { tenant_id: tenantId, reason: "INVALID_OWNER_USER_ID" },
+      context: { tenant_id: scope.tenantId, reason: "INVALID_OWNER_USER_ID" },
     });
   }
 
-  return { tenantId, ownerUserId, kind: normalisePostDraftKind(input?.kind) };
+  return { tenantId: scope.tenantId, ownerUserId, kind: scope.kind };
 }
 
 /**

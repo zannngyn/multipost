@@ -3,6 +3,13 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
+import {
+  captionForChannel,
+  EMPTY_OWNED_CAPTIONS,
+  ownedCaptionText,
+  withCaptionOverride,
+  type OwnedCaptionText,
+} from "@/ui/components/compose/compose-draft";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useCreatePostBatch } from "@/ui/hooks/usePostBatch";
 import { useScheduleChoice } from "@/ui/hooks/useScheduleChoice";
@@ -48,19 +55,34 @@ export function usePublishForm(wizard: ComposeWizard) {
    * free text and react-hook-form reads `a.b` as a nested path, so an id with a
    * dot would silently write to the wrong place. Absent key = "same as the
    * approved caption".
+   *
+   * Stored WITH the compose key they were typed under. Without that owner they
+   * were the third caption leak: the wizard cleared `form.captions` when the
+   * operator looked up another code, this state was never told, and with "dùng
+   * chung caption" off the old product's text went out under the new one.
    */
-  const [captionOverrides, setCaptionOverrides] = useState<Record<string, string>>({});
+  const [overrideState, setOverrideState] = useState<OwnedCaptionText>(EMPTY_OWNED_CAPTIONS);
 
   const captions = wizard.captionValues ?? {};
   const baseCaption = (captions[BASE_CHANNEL_ID] ?? "").trim();
+  /** Identity the captions on screen belong to — the one the wizard maintains. */
+  const captionsKey = wizard.captionsKey;
+
+  /**
+   * Overrides that survive the ownership check, recomputed on every render from
+   * the key the wizard reports. One rule, one place: every path that changes
+   * what is composed (re-lookup, refused compose, draft restore, reset) goes
+   * through this without having to remember to.
+   */
+  const ownedOverrides = ownedCaptionText(overrideState, captionsKey);
+  // Adjusting state DURING render when the value it derives from changed is
+  // React's own answer here — an effect would paint one frame of another
+  // product's caption first. `ownedCaptionText` returns the same object when
+  // nothing changed, which is what stops this from looping.
+  if (ownedOverrides !== overrideState) setOverrideState(ownedOverrides);
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   const groupItems = groups.data?.groups ?? [];
-
-  const captionFor = useCallback(
-    (channelId: string): string => (captionOverrides[channelId] ?? baseCaption).trim(),
-    [captionOverrides, baseCaption],
-  );
 
   const toggleChannel = useCallback((channelId: string, checked: boolean) => {
     setFormError(null);
@@ -84,9 +106,12 @@ export function usePublishForm(wizard: ComposeWizard) {
     });
   }, []);
 
-  const setCaptionOverride = useCallback((channelId: string, text: string) => {
-    setCaptionOverrides((current) => ({ ...current, [channelId]: text }));
-  }, []);
+  const setCaptionOverride = useCallback(
+    (channelId: string, text: string) => {
+      setOverrideState((current) => withCaptionOverride(current, captionsKey, channelId, text));
+    },
+    [captionsKey],
+  );
 
   const setShare = useCallback((next: boolean) => {
     setFormError(null);
@@ -104,18 +129,29 @@ export function usePublishForm(wizard: ComposeWizard) {
    * Channel ids are restored as they were stored. A channel that has since been
    * removed is not filtered out quietly here — the server refuses it by name
    * when the batch is created, which is the answer that is actually true.
+   *
+   * The overrides come back WITH the key they were typed under, never as bare
+   * text: the restore runs after the wizard has re-composed, so by the time this
+   * is called the answer may already be a different product. Handing the owner
+   * over is what lets the ownership rule above throw them away instead of
+   * publishing them under the new code.
    */
   const restore = useCallback(
     (draft: {
       selectedChannelIds: readonly string[];
       shareCaption: boolean;
       captionOverrides: Record<string, string>;
+      /** Compose key the stored overrides belong to; null = they belong to none. */
+      captionOverridesOwner: string | null;
       schedule: { mode: "now" | "scheduled"; value: string };
     }) => {
       setFormError(null);
       setSelected(new Set(draft.selectedChannelIds));
       setShareCaption(draft.shareCaption);
-      setCaptionOverrides({ ...draft.captionOverrides });
+      setOverrideState({
+        ownerKey: draft.captionOverridesOwner,
+        byChannel: { ...draft.captionOverrides },
+      });
       schedule.restore(draft.schedule);
     },
     [schedule],
@@ -126,7 +162,7 @@ export function usePublishForm(wizard: ComposeWizard) {
     setFormError(null);
     setSelected(new Set<string>());
     setShareCaption(true);
-    setCaptionOverrides({});
+    setOverrideState(EMPTY_OWNED_CAPTIONS);
     schedule.reset();
     createBatch.reset();
   }, [createBatch, schedule]);
@@ -163,7 +199,16 @@ export function usePublishForm(wizard: ComposeWizard) {
     const captionByChannel: Record<string, string> = {};
     const missing: string[] = [];
     for (const channelId of selectedIds) {
-      const text = shareCaption ? baseCaption : captionFor(channelId);
+      // Through `captionForChannel`, never straight out of the override record:
+      // that is where an override typed for another product is refused, and this
+      // loop is the last place it could still be refused before Facebook.
+      const text = captionForChannel({
+        channelId,
+        baseCaption,
+        shareCaption,
+        overrides: overrideState,
+        currentKey: captionsKey,
+      });
       if (text.length === 0) missing.push(channelId);
       else captionByChannel[channelId] = text;
     }
@@ -206,9 +251,10 @@ export function usePublishForm(wizard: ComposeWizard) {
     );
   }, [
     baseCaption,
-    captionFor,
+    captionsKey,
     composed,
     createBatch,
+    overrideState,
     router,
     schedule,
     selectedIds,
@@ -228,7 +274,12 @@ export function usePublishForm(wizard: ComposeWizard) {
     toggleGroup,
     shareCaption,
     setShareCaption: setShare,
-    captionOverrides,
+    /**
+     * Only the overrides that belong to what is composed right now — so the
+     * panel cannot display, and the draft cannot store, text left over from
+     * another product.
+     */
+    captionOverrides: ownedOverrides.byChannel,
     setCaptionOverride,
     baseCaption,
     formError,

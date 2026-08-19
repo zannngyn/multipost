@@ -18,6 +18,9 @@ import {
 } from "@/ui/schemas/compose.schema";
 import {
   applyAlbumOrder,
+  captionsOwnerAfterCompose,
+  droppedOverridesNotice,
+  restorableDraftCaptions,
   restoreTargetStep,
   shouldClearCaptions,
 } from "@/ui/components/compose/compose-draft";
@@ -64,6 +67,14 @@ export interface ComposeRestoreOutcome {
   readonly composed: boolean;
   /** What changed on the way back: cleared captions, dropped order, files. */
   readonly notices: readonly string[];
+  /**
+   * Per-channel overrides the draft may hand to the publish form, and the key
+   * they were typed under. The caller passes BOTH: the wizard has re-composed by
+   * the time it restores them, so the publish form is the one that can still say
+   * "that is another product's text" and drop them.
+   */
+  readonly captionOverrides: Record<string, string>;
+  readonly captionOverridesOwner: string | null;
 }
 
 const FIRST_STEP = COMPOSE_STEPS[0];
@@ -126,9 +137,20 @@ export function useComposeWizard() {
    * `media_asset` — that table belongs to the Drive sync.
    */
   const [album, setAlbum] = useState<readonly ComposeResponse["media"][number][]>([]);
+  /**
+   * Identity of the post composed RIGHT NOW — null before the first lookup and
+   * after a refused one, because at that moment nothing is composed.
+   */
   const composedKeyRef = useRef<string | null>(null);
-  /** Render-visible copy of `composedKeyRef` — the draft is stamped with it. */
-  const [composedKey, setComposedKey] = useState<string | null>(null);
+  /**
+   * Identity the CAPTIONS in the form were written for. A different question
+   * from the ref above, and the one that keeps the operator safe: a refused
+   * compose empties steps 2 and 3 but leaves the caption fields exactly as they
+   * were, so this must survive it (`captionsOwnerAfterCompose`).
+   */
+  const captionsOwnerRef = useRef<string | null>(null);
+  /** Render-visible copy of `captionsOwnerRef` — the draft is stamped with it. */
+  const [captionsKey, setCaptionsKey] = useState<string | null>(null);
   /**
    * True when this mount started on a step past the first one — i.e. a reload
    * or a shared link, with no composed post in memory to back it. Computed once
@@ -211,6 +233,50 @@ export function useComposeWizard() {
     onError: () => setUploadRejections([]),
   });
 
+  /**
+   * Records who the captions on screen belong to, in both places at once: the
+   * ref every decision reads, and the state the draft is stamped with. Two
+   * writers for one fact is how they drift, so there is exactly one setter.
+   */
+  const setCaptionsOwner = useCallback((next: string | null) => {
+    captionsOwnerRef.current = next;
+    setCaptionsKey(next);
+  }, []);
+
+  /**
+   * The only way to REPLACE the caption fields wholesale. Text and owner move in
+   * one statement, so there is no reachable state in which a replacement leaves
+   * the fields holding text while the owner says `null`.
+   *
+   * Per-channel writes are a separate case and stay legal: `captions.onSuccess`
+   * below and the operator typing in `StepCaption`. Both can only happen once
+   * `composed` exists, and `composed` exists only after `compose.onSuccess` has
+   * stamped an owner — they write INSIDE an ownership that is already settled
+   * rather than establishing one. `resetWizard` also clears the field through
+   * `form.reset`, immediately followed by `applyCaptions({}, null)`; keep those
+   * two adjacent, with no early return between them.
+   *
+   * This is not style. `restoreDraft` used to write the fields near the top and
+   * stamp the owner forty lines further down, and an early return between the
+   * two (a draft saved with the product code cleared) walked straight past the
+   * stamp: mã A's caption sat in the form owned by nobody, `shouldClearCaptions`
+   * had nothing to compare against, and the next code looked up inherited it.
+   * The pairing is what makes a future early return unable to make that mistake
+   * again — there is nothing left to forget.
+   *
+   * Owner-only moves are still legal (`setCaptionsOwner`): a compose that keeps
+   * the text on screen changes who it belongs to without touching a character.
+   * What is illegal is the other direction — writing text without saying whose.
+   */
+  const applyCaptions = useCallback(
+    (next: Record<string, string>, ownerKey: string | null) => {
+      form.setValue("captions", { ...emptyCaptions(), ...next }, { shouldDirty: false });
+      captionsOwnerRef.current = ownerKey;
+      setCaptionsKey(ownerKey);
+    },
+    [form],
+  );
+
   const compose = useMutation<ComposeResponse, ApiError, void>({
     mutationFn: () => {
       const values = form.getValues();
@@ -229,17 +295,25 @@ export function useComposeWizard() {
       const hadCaptions = Object.values(form.getValues().captions ?? {}).some(
         (text) => text.trim().length > 0,
       );
+      // Whatever is in the caption fields once this is over — cleared, kept, or
+      // still empty — belongs to this post.
+      const nextOwner = captionsOwnerAfterCompose(captionsOwnerRef.current, {
+        ok: true,
+        key: nextKey,
+      });
       // A caption written for another code must never survive into this post.
       // The rule itself lives in `shouldClearCaptions` so a manual re-lookup and
       // a draft restore cannot drift apart — and so it is testable on its own.
-      if (shouldClearCaptions(composedKeyRef.current, nextKey, hadCaptions)) {
-        form.setValue("captions", emptyCaptions(), { shouldDirty: false });
+      if (shouldClearCaptions(captionsOwnerRef.current, nextKey, hadCaptions)) {
+        // Emptied AND re-owned in one call: never one without the other.
+        applyCaptions({}, nextOwner);
         setCaptionsCleared(true);
       } else {
+        // The text is untouched, only its owner moves — the legal direction.
+        setCaptionsOwner(nextOwner);
         setCaptionsCleared(false);
       }
       composedKeyRef.current = nextKey;
-      setComposedKey(nextKey);
       setComposed(result);
       // A new album means a new arrangement. Keeping the old ids would either
       // drop photos the operator can now see or resurrect ones that are gone.
@@ -248,12 +322,16 @@ export function useComposeWizard() {
       setArrivedPastFirstStep(false);
     },
     onError: () => {
-      // Blocked/failed compose invalidates the current post: step 2 and 3 must
+      // Blocked/failed compose invalidates the current POST: step 2 and 3 must
       // not stay reachable with stale data from the previous product.
       setComposed(null);
       setAlbum([]);
       composedKeyRef.current = null;
-      setComposedKey(null);
+      // The CAPTIONS are a separate matter and they are still in the form, so
+      // they still belong to whoever they were written for. Forgetting it here
+      // is what let a caption survive under the NEXT code looked up: with no
+      // owner left, `shouldClearCaptions` had nothing to compare against.
+      setCaptionsOwner(captionsOwnerAfterCompose(captionsOwnerRef.current, { ok: false }));
     },
   });
 
@@ -275,6 +353,11 @@ export function useComposeWizard() {
     },
     retry: false,
     onSuccess: (result) => {
+      // The one caption write that does NOT carry an owner with it, and the only
+      // one that may not: `mutationFn` above refuses to run without a composed
+      // post, and a composed post means `compose.onSuccess` has already stamped
+      // the owner. This text is written INTO that ownership, it does not change
+      // it. Any other whole-field write must go through `applyCaptions`.
       for (const item of result.generated) {
         form.setValue(`captions.${item.channelId}`, item.text, { shouldDirty: true });
       }
@@ -321,9 +404,38 @@ export function useComposeWizard() {
       setRestorePhase("restoring");
       const notices: string[] = [];
 
+      // Decided BEFORE anything is written to the form: a draft whose captions
+      // record no owner (`composeKey: ""` — what the build with the leak wrote,
+      // and those rows are in the DB today) has its captions dropped here, so
+      // there is no moment at which unowned text sits in the fields.
+      const restorable = restorableDraftCaptions(draft);
+
+      /**
+       * EVERY exit goes through here, so everything that must be true of a
+       * finished restore is stated once:
+       *  - the overrides that lost their product are announced, not dropped in
+       *    silence (business rule 5). The publish form prunes them on the next
+       *    render; without this line the operator would simply find the boxes
+       *    back on the shared caption with no explanation.
+       */
       const finish = (composedOk: boolean): ComposeRestoreOutcome => {
+        const droppedOverrides = droppedOverridesNotice({
+          overrides: restorable.captionOverrides,
+          draftOwnerKey: restorable.ownerKey,
+          currentKey: captionsOwnerRef.current,
+        });
+        if (droppedOverrides !== null) notices.push(droppedOverrides);
+
         setRestorePhase("done");
-        return { composed: composedOk, notices };
+        return {
+          composed: composedOk,
+          notices,
+          captionOverrides: restorable.captionOverrides,
+          // The DRAFT's key, not the one just composed: the publish form
+          // compares it against what is on screen now, and that comparison is
+          // the whole point.
+          captionOverridesOwner: restorable.ownerKey,
+        };
       };
 
       form.setValue("productCode", draft.productCode, { shouldDirty: false });
@@ -331,11 +443,12 @@ export function useComposeWizard() {
       form.setValue("mediaKind", draft.mediaKind, { shouldDirty: false });
       form.setValue("videoTarget", draft.videoTarget, { shouldDirty: false });
       form.setValue("source", draft.source, { shouldDirty: false });
-      form.setValue(
-        "captions",
-        { ...emptyCaptions(), ...draft.captions },
-        { shouldDirty: false },
-      );
+      // Text AND owner, one statement, BEFORE the first early return below.
+      // `restorable.ownerKey` is null exactly when the captions were dropped for
+      // having none, so "fields full, owner null" is not a state this function
+      // can produce any more — whatever exit it takes.
+      applyCaptions(restorable.captions, restorable.ownerKey);
+      if (restorable.notice !== null) notices.push(restorable.notice);
 
       // A File cannot be serialised, so mode B's queue is the one thing a draft
       // provably cannot carry. Said plainly, because silently landing on an
@@ -349,13 +462,12 @@ export function useComposeWizard() {
       // Nothing to look up yet — the draft was saved on a half-typed step 1.
       if (draft.productCode.trim().length === 0) return finish(false);
 
-      const draftHadCaptions = Object.values(draft.captions).some(
+      // The owner was stamped together with the text above. It is deliberately
+      // NOT re-stamped here: a second write is a second thing to keep in step,
+      // and the compose below reads the ref to decide whether to clear.
+      const draftHadCaptions = Object.values(restorable.captions).some(
         (text) => text.trim().length > 0,
       );
-      // Hand the draft's identity to the EXISTING key check: if this compose
-      // answers with a different key, captions typed for the old product are
-      // cleared by exactly the same code path a manual re-compose uses.
-      composedKeyRef.current = draft.composeKey.length > 0 ? draft.composeKey : null;
 
       // Through `submitProductStep`, NOT straight to the mutation: a restore
       // must pass the same field validation and land focus in the same place a
@@ -379,7 +491,9 @@ export function useComposeWizard() {
         return finish(false);
       }
 
-      if (shouldClearCaptions(draft.composeKey, composeKey(form.getValues()), draftHadCaptions)) {
+      if (
+        shouldClearCaptions(restorable.ownerKey, composeKey(form.getValues()), draftHadCaptions)
+      ) {
         notices.push(
           "Mã hoặc màu đã khác so với lúc lưu nháp nên caption cũ đã bị xoá — caption luôn gắn với đúng sản phẩm của nó.",
         );
@@ -407,7 +521,7 @@ export function useComposeWizard() {
 
       return finish(true);
     },
-    [form, goToStep, requestedStep.slug, submitProductStep],
+    [applyCaptions, form, goToStep, requestedStep.slug, submitProductStep],
   );
 
   /** Called by the draft hook when no restore is coming (or none was possible). */
@@ -436,7 +550,10 @@ export function useComposeWizard() {
     setComposed(null);
     setAlbum([]);
     composedKeyRef.current = null;
-    setComposedKey(null);
+    // `form.reset` above already blanked the caption fields; this re-states them
+    // together with the owner so the pairing holds on every path that empties
+    // them. Nothing on screen belongs to anything any more.
+    applyCaptions({}, null);
     setCaptionsCleared(false);
     setRestorePhase("done");
     setUploadQueue([]);
@@ -446,7 +563,7 @@ export function useComposeWizard() {
     captions.reset();
     upload.reset();
     goToStep(FIRST_STEP.slug);
-  }, [captions, compose, form, goToStep, upload]);
+  }, [applyCaptions, captions, compose, form, goToStep, upload]);
 
   /**
    * Deep link from the product list: `/compose?code=MGKVX6310&color=TRẮNG`
@@ -501,8 +618,12 @@ export function useComposeWizard() {
     compose,
     captions,
     submitProductStep,
-    /** Identity of the post currently composed; null before the first lookup. */
-    composedKey,
+    /**
+     * Identity the captions on screen were written for; null when none belong
+     * to anything yet. This — not "what is composed" — is what a draft stores,
+     * because a draft can hold captions whose compose has since been refused.
+     */
+    captionsKey,
     restoreDraft,
     markRestoreSettled,
     restorePhase,

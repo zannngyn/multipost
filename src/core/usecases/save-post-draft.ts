@@ -1,11 +1,16 @@
 import { AppError } from "@/core/domain/errors";
 import {
   assertComposeDraftPayload,
-  assertPostDraftAddress,
+  POST_DRAFT_NOT_PERSISTED,
   POST_DRAFT_SCHEMA_VERSION,
+  type PostDraftNotPersisted,
+  type PostDraftOwnerInput,
 } from "@/core/domain/post-draft";
 import type { Logger } from "@/core/ports/infra";
 import type { PostDraftRepo } from "@/core/ports/post-draft-repo";
+import type { UserRepo } from "@/core/ports/user-repo";
+
+import { resolveDraftAddress } from "./resolve-draft-owner";
 
 /**
  * E10 — autosave of the compose screen: store what the operator typed so a
@@ -17,39 +22,52 @@ import type { PostDraftRepo } from "@/core/ports/post-draft-repo";
  * bug in place (business rule 5). The rejection is logged with the offending
  * key and path so the cause is readable without a debugger.
  *
- * Called on a timer, so it stays cheap: one validation, one upsert, no reads.
+ * It also owns the "who does this draft belong to?" decision: an operator with
+ * no `app_user` row gets `persisted: false`, never a save that looks successful.
+ *
+ * Called on a timer, so it stays cheap: one owner lookup, one validation, one
+ * upsert, no reads.
  */
 
-export interface SavePostDraftInput {
+export interface SavePostDraftInput extends PostDraftOwnerInput {
   readonly tenantId: string;
-  /** app_user.id of the operator. Resolved by the caller, never guessed here. */
-  readonly ownerUserId: string;
   /** Defaults to 'compose'. */
   readonly kind?: string;
   /** Straight from the browser — untrusted until `assertComposeDraftPayload`. */
   readonly payload: unknown;
 }
 
-export interface SavePostDraftResult {
+export interface SavedPostDraft {
+  readonly persisted: true;
+  /** `app_user.id` the row is addressed by — the caller scopes its local buffer with it. */
+  readonly ownerUserId: string;
   /** ISO-8601, as written by the DB. The UI shows it as "Đã lưu nháp lúc ...". */
   readonly updatedAt: string;
   readonly schemaVersion: number;
 }
 
+/** Discriminated on `persisted`: there is no "saved, maybe" answer. */
+export type SavePostDraftResult = SavedPostDraft | PostDraftNotPersisted;
+
 export interface SavePostDraftDeps {
   drafts: PostDraftRepo;
+  /** Resolves the session e-mail to the `app_user.id` a draft is owned by. */
+  users?: UserRepo;
   logger: Logger;
 }
 
 export function makeSavePostDraft(deps: SavePostDraftDeps) {
   return async function savePostDraft(input: SavePostDraftInput): Promise<SavePostDraftResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) -----------------------
-    const address = assertPostDraftAddress(input);
-    const log = deps.logger.child({
-      tenant_id: address.tenantId,
-      owner_user_id: address.ownerUserId,
-      draft_kind: address.kind,
-    });
+    const { address, log } = await resolveDraftAddress(deps, input, "save");
+
+    // No owner: nothing to address a row to. Answered, not thrown — the draft
+    // lives on in the browser and the screen says "chỉ lưu trên máy này".
+    // A FAILED lookup lands here too, deliberately: an autosave that cannot name
+    // the owner has written nothing and says so, and the operator loses nothing
+    // because the local buffer still holds the draft. `resolveDraftAddress` logs
+    // which of the two happened (NO_USER vs LOOKUP_FAILED) with the DB error.
+    if (!address) return POST_DRAFT_NOT_PERSISTED;
 
     let payload;
     try {
@@ -80,6 +98,8 @@ export function makeSavePostDraft(deps: SavePostDraftDeps) {
     });
 
     return {
+      persisted: true,
+      ownerUserId: address.ownerUserId,
       updatedAt: stored.updatedAt.toISOString(),
       schemaVersion: stored.schemaVersion,
     };

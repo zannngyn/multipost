@@ -165,15 +165,6 @@ export interface Usecases {
   loadPostDraft: LoadPostDraft;
   /** E10 — drop the draft after a batch is created, or on "Xoá nháp". */
   discardPostDraft: DiscardPostDraft;
-  /**
-   * E10 — session e-mail -> `app_user.id`, the owner every draft is addressed
-   * by. Exposed because the draft route (unlike retry/reschedule, which hand an
-   * e-mail to a usecase that resolves it internally) needs the id BEFORE it can
-   * call anything: a draft with no owner is tenant-shared, and two operators
-   * would overwrite each other. `null` for an unknown e-mail is NOT an error —
-   * the route answers "chỉ lưu trên máy này" and the screen says so.
-   */
-  findOperatorUserId: (tenantId: string, email: string) => Promise<string | null>;
   /** E11.1 — operator job log. */
   listPostJobs: ListPostJobs;
   /** E11.1 — re-queue a failed/blocked job (stock recheck still applies). */
@@ -641,11 +632,11 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
         }),
     }),
     getBatchStatus: makeGetBatchStatus({ postJobs, logger: deps.logger }),
-    savePostDraft: makeSavePostDraft({ drafts: postDrafts, logger: deps.logger }),
-    loadPostDraft: makeLoadPostDraft({ drafts: postDrafts, logger: deps.logger }),
-    discardPostDraft: makeDiscardPostDraft({ drafts: postDrafts, logger: deps.logger }),
-    findOperatorUserId: (tenantId: string, email: string) =>
-      users.findUserIdByEmail(tenantId, email),
+    // `users` is what turns the session e-mail into the `app_user.id` a draft is
+    // owned by; without it every draft would be tenant-shared (docs/07 §3.3).
+    savePostDraft: makeSavePostDraft({ drafts: postDrafts, users, logger: deps.logger }),
+    loadPostDraft: makeLoadPostDraft({ drafts: postDrafts, users, logger: deps.logger }),
+    discardPostDraft: makeDiscardPostDraft({ drafts: postDrafts, users, logger: deps.logger }),
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
     retryPostJob: makeRetryPostJob({
       postJobs,
