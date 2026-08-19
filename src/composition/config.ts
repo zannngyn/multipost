@@ -118,6 +118,37 @@ export const GoogleConfigSchema = z
 export type GoogleConfig = z.infer<typeof GoogleConfigSchema>;
 
 /**
+ * Google Drive OAuth app (E2 — "Kết nối Google Drive"). Its own lazy group, and
+ * ALL THREE ARE OPTIONAL on purpose:
+ *   - a tenant that never connects keeps reading Drive through the Service
+ *     Account, exactly as before, so `next build` and every existing deployment
+ *     must boot without these;
+ *   - pressing the button without them answers GOOGLE_OAUTH_NOT_CONFIGURED
+ *     naming the missing variable, instead of a redirect into a Google 400.
+ *
+ * The client id/secret are the SAME OAuth client the operator sign-in uses
+ * (`AuthConfigSchema`); only the redirect URI differs, so it gets its own
+ * variable. Both redirect URIs must be registered in the Cloud Console client.
+ */
+export const GoogleOAuthConfigSchema = z.object({
+  GOOGLE_CLIENT_ID: blankAsUndefined(z.string().trim().min(1)),
+  GOOGLE_CLIENT_SECRET: blankAsUndefined(z.string().trim().min(1)),
+  /** Must match an "Authorized redirect URI" of the OAuth client, exactly. */
+  GOOGLE_OAUTH_REDIRECT_URI: blankAsUndefined(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .refine(
+        (value) => value.startsWith("https://") || value.startsWith("http://"),
+        "GOOGLE_OAUTH_REDIRECT_URI must be an http(s) URL",
+      ),
+  ),
+});
+
+export type GoogleOAuthConfig = z.infer<typeof GoogleOAuthConfigSchema>;
+
+/**
  * AI gateway (E4, ADR-001). Loaded on demand like auth/google: processes that
  * never generate content must boot without provider keys. Path/TTL are
  * operational knobs with documented defaults, not secrets.
@@ -360,6 +391,10 @@ export function loadAuthConfig(env: EnvRecord = process.env): AuthConfig {
 
 export function loadGoogleConfig(env: EnvRecord = process.env): GoogleConfig {
   return parseEnv(GoogleConfigSchema, env, "google");
+}
+
+export function loadGoogleOAuthConfig(env: EnvRecord = process.env): GoogleOAuthConfig {
+  return parseEnv(GoogleOAuthConfigSchema, env, "google-oauth");
 }
 
 export function loadAiConfig(env: EnvRecord = process.env): AiConfig {

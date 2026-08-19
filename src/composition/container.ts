@@ -6,6 +6,7 @@ import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.driz
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
 import { closeDbHandle, getDbHandle, type Database } from "@/adapters/db/client";
+import { DrizzleGoogleOAuthRepo } from "@/adapters/db/google-oauth-repo.drizzle";
 import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
 import { makeSecretBox, type SecretBox } from "@/adapters/db/secret-box";
 import { DrizzlePostDraftRepo } from "@/adapters/db/post-draft-repo.drizzle";
@@ -47,11 +48,16 @@ import type {
   ScheduledPublisher,
 } from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
+import { makeBrowseGoogleDrive, type BrowseGoogleDrive } from "@/core/usecases/browse-google-drive";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
 import {
   makeConnectFacebookChannels,
   type ConnectFacebookChannels,
 } from "@/core/usecases/connect-facebook-channels";
+import {
+  makeConnectGoogleDrive,
+  type ConnectGoogleDrive,
+} from "@/core/usecases/connect-google-drive";
 import { makeManageChannels, type ManageChannels } from "@/core/usecases/manage-channels";
 import { makeCreatePostBatch, type CreatePostBatch } from "@/core/usecases/create-post-batch";
 import { makeGetBatchStatus, type GetBatchStatus } from "@/core/usecases/get-batch-status";
@@ -192,6 +198,10 @@ export interface Usecases {
   channels: ManageChannels;
   /** E5.1 — connect Fanpages: OAuth, or by pasting a User Access Token. */
   connectChannels: ConnectFacebookChannels;
+  /** E2 — connect the tenant's own Google account (OAuth) for Drive/Sheets. */
+  connectGoogleDrive: ConnectGoogleDrive;
+  /** E2 — browse that account's folders/spreadsheets from inside the app. */
+  browseGoogleDrive: BrowseGoogleDrive;
   /** E8.4 — "bài đã hẹn": what publishes next, soonest first. */
   listScheduledJobs: ListScheduledJobs;
   /** E8.4 — move a scheduled post to another time. */
@@ -576,7 +586,13 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const postDrafts = new DrizzlePostDraftRepo(deps.db);
   // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
   const users = new DrizzleUserRepo(deps.db);
-  const google = makeLazyGoogleSources({ logger: deps.logger });
+  // E2 — the tenant's own Google connection. Same secret box as the Meta
+  // tokens: the refresh token is sealed inside tenant_integration.config.
+  const googleOAuth = new DrizzleGoogleOAuthRepo(deps.db, {
+    box: makeTenantSecretBox(deps.logger),
+    logger: deps.logger,
+  });
+  const google = makeLazyGoogleSources({ logger: deps.logger, oauth: googleOAuth });
   const lazyQueue = makeLazyJobQueue(deps.config, deps.logger);
   const queue = overrides.queue ?? lazyQueue;
   const jobProgress = overrides.progress ?? makeLazyJobProgressStore(deps.config, deps.logger);
@@ -643,6 +659,11 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       catalogConfig,
       logger: deps.logger,
       users,
+      // Pointing the tenant at another folder/sheet invalidates the stored
+      // "can this account read it?" verdict — recompute it right away.
+      oauth: googleOAuth,
+      browser: google.browser,
+      clock: deps.clock,
     }),
     listCatalogProducts: makeListCatalogProducts({ catalog: products, logger: deps.logger }),
     composePost: makeComposePost({
@@ -801,6 +822,26 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // no crypto of its own (docs/07 §2), so it is injected here.
       newState: () => randomBytes(32).toString("hex"),
       users,
+    }),
+    connectGoogleDrive: makeConnectGoogleDrive({
+      oauth: googleOAuth,
+      client: google.oauthClient,
+      // Same object that resolves the per-tenant Drive/Sheet identity: a
+      // connect/disconnect must drop the client the next sync would reuse.
+      authCache: google.auth,
+      // Right after a connect, check whether the account that just arrived can
+      // read the source this tenant already had.
+      catalogConfig,
+      browser: google.browser,
+      clock: deps.clock,
+      logger: deps.logger,
+      newState: () => randomBytes(32).toString("hex"),
+      users,
+    }),
+    browseGoogleDrive: makeBrowseGoogleDrive({
+      browser: google.browser,
+      oauth: googleOAuth,
+      logger: deps.logger,
     }),
     getMediaContent: makeGetMediaContent({
       drive,

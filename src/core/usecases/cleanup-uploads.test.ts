@@ -44,6 +44,7 @@ function harness(
     listByProductCode: async () => [],
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countDriveAssets: async () => 0,
     registerUpload: async () => {},
     listOrphanedUploads,
     listUnreferencedUploadsForCode: async () => [],

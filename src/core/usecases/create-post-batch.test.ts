@@ -229,6 +229,7 @@ function harness(options: {
     findByCode: async () => (options.product === undefined ? makeProduct() : options.product),
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countAll: async () => 0,
   };
   const channels: ChannelConfigRepo = {
     findChannel: async (_tenantId, channelId) =>

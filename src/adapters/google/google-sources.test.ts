@@ -38,8 +38,14 @@ function makeLogger(): Logger {
   return logger;
 }
 
+/**
+ * Per-tenant auth resolver (tenant-google-auth) in its Service-Account shape:
+ * `forTenant` hands back the opaque client `google.drive()` is mocked to
+ * ignore, and `reportAuthFailure` answers null — i.e. "not an expired tenant
+ * connection", so the adapters keep their own DRIVE_ERROR/SHEET_ERROR mapping.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const auth = {} as any;
+const auth = { forTenant: async () => ({}) as any, reportAuthFailure: async () => null, invalidate: () => {} } as any;
 
 describe("makeGoogleAuth", () => {
   it("refuses to build a client with no credentials configured", () => {

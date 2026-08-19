@@ -297,6 +297,27 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
     }
   }
 
+  /**
+   * Row count of the tenant's catalog. `count(*)`, not a page of ids: the caller
+   * only compares it with "how many rows did the sheet parse to".
+   */
+  async countAll(tenantId: string): Promise<number> {
+    const scope = forTenant(this.db, tenantId);
+    try {
+      const rows = await scope.db
+        .select({ count: sql<number>`count(*)` })
+        .from(products)
+        .where(scope.where(products));
+      return toInt(rows[0]?.count);
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "tenantId",
+        operation: "product.countAll",
+      });
+    }
+  }
+
   async deleteStale(tenantId: string, syncRunId: string): Promise<number> {
     const scope = forTenant(this.db, tenantId);
     try {

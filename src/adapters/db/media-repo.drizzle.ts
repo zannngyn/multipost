@@ -237,6 +237,30 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
     }
   }
 
+  /**
+   * Counts exactly what `deleteStale` above may remove — Drive rows only. The
+   * sync compares it with the number of files the listing returned, so the two
+   * numbers must describe the same set or the comparison means nothing.
+   */
+  async countDriveAssets(tenantId: string): Promise<number> {
+    const scope = forTenant(this.db, tenantId);
+    try {
+      const rows = await scope.db
+        .select({ count: sql<number>`count(*)` })
+        .from(mediaAssets)
+        .where(scope.where(mediaAssets, eq(mediaAssets.origin, "drive")));
+      const raw = rows[0]?.count;
+      const parsed = typeof raw === "string" ? Number.parseInt(raw, 10) : Number(raw);
+      return Number.isFinite(parsed) ? parsed : 0;
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "tenantId",
+        operation: "media.countDriveAssets",
+      });
+    }
+  }
+
   // --- E9 (mode B) ---------------------------------------------------------
 
   async registerUpload(tenantId: string, asset: MediaAsset): Promise<void> {

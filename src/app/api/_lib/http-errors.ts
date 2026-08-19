@@ -29,6 +29,16 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   MEDIA_NOT_FOUND: 404,
   OUT_OF_STOCK: 409,
   SYNC_FAILED: 500,
+  // Not an outage and not a bad request: the run refused to delete a catalog
+  // the source stopped describing. The operator fixes the source, then retries.
+  SYNC_SOURCE_EMPTY: 409,
+  // All three are "state/config the operator must fix", not a bad request and
+  // not an outage — 409 keeps them out of the 401 handling of a dead session.
+  GOOGLE_NOT_CONNECTED: 409,
+  GOOGLE_AUTH_EXPIRED: 409,
+  GOOGLE_OAUTH_NOT_CONFIGURED: 409,
+  // The callback carried no usable state/code — the round trip must start over.
+  GOOGLE_CONNECT_STATE_INVALID: 400,
   AI_PROVIDER_ERROR: 502,
   AI_RESPONSE_INVALID: 502,
   AI_RATE_LIMITED: 429,
