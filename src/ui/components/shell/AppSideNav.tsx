@@ -14,7 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
-import type { ComponentType, ReactNode, SVGProps } from "react";
+import type { ComponentType, SVGProps } from "react";
 
 import { NAV_SECTIONS, isNavItemActive } from "@/ui/components/shell/nav-items";
 
@@ -40,14 +40,17 @@ const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "/prompts": Sparkles,
 };
 
-export function AppSideNav({ footer }: { footer: ReactNode }) {
+export function AppSideNav() {
   const pathname = usePathname();
 
   return (
     <SideNav
       collapsible
       resizable={{ defaultWidth: 256, minWidth: 240, maxWidth: 280, autoSaveId: "mysp-nav" }}
-      footer={footer}
+      // AppShell renders the top bar as a second navigation landmark, and a
+      // screen reader lists both by name — "Side navigation" next to a
+      // Vietnamese UI names neither one usefully.
+      aria-label="Điều hướng chính"
     >
       {NAV_SECTIONS.map((section) => (
         <SideNavSection key={section.title} title={section.title}>

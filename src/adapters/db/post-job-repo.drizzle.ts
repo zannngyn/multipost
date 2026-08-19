@@ -1,4 +1,19 @@
-import { and, desc, eq, gt, gte, inArray, isNotNull, lt, or, type SQL } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { AppError } from "@/core/domain/errors";
 import {
@@ -23,6 +38,9 @@ import type {
   PostJobPage,
   PostJobRepo,
   StaleScanQuery,
+  UntouchedQueuedJobs,
+  UntouchedQueuedQuery,
+  UntouchedQueuedRepo,
 } from "@/core/ports/post-job-repo";
 
 import type { Database, DbExecutor } from "./client";
@@ -96,7 +114,17 @@ function emptyCounts(): Record<PostJobStatus, number> {
   };
 }
 
-export class DrizzlePostJobRepo implements PostJobRepo {
+/** Postgres timestamptz comes back as a Date; be tolerant of a driver string. */
+function toDate(value: unknown): Date | null {
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  }
+  return null;
+}
+
+export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
   constructor(private readonly db: Database) {}
 
   async createBatchWithJobs(input: {
@@ -586,6 +614,70 @@ export class DrizzlePostJobRepo implements PostJobRepo {
         tenant_id: scope.tenantId,
         channel: query?.channelId ?? null,
         field: "filter",
+      });
+    }
+  }
+
+  /**
+   * E11 worker-health probe — "how many jobs of this tenant are queued and were
+   * never even attempted?". Tenant-scoped like everything else here.
+   *
+   * THE SUBTLE PART is the scheduled_at predicate. `queued` holds two very
+   * different populations:
+   *   - a post meant to go out now (scheduled_at IS NULL), and
+   *   - a post waiting for its hour (scheduled_at in the future) — E8.4.
+   * The second one is `attempt_count = 0` by DESIGN; counting it would turn
+   * every planned post into a "worker is down" alarm. Only jobs with no hour,
+   * or whose hour has already passed, are symptoms.
+   *
+   * The waiting-since instant is `greatest(created_at, scheduled_at)`: a post
+   * scheduled for last Tuesday and created yesterday has been waiting since
+   * yesterday, and one created last month for 5 minutes ago has been waiting 5
+   * minutes. Taking created_at alone would report days of delay the moment a
+   * long-planned post becomes due.
+   *
+   * Runs on the existing (tenant_id, status) index; no migration needed.
+   */
+  async countUntouchedQueued(query: UntouchedQueuedQuery): Promise<UntouchedQueuedJobs> {
+    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const now = query?.now;
+    if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+      throw new AppError("INVALID_INPUT", {
+        message: "countUntouchedQueued requires the current time",
+        userMessage: "Không kiểm tra được tình trạng hàng đợi: thiếu mốc thời gian.",
+        context: { tenant_id: scope.tenantId, operation: "postJob.countUntouchedQueued" },
+      });
+    }
+
+    try {
+      const rows = await scope.db
+        .select({
+          total: count(),
+          waitingSince: sql`min(greatest(${postJobs.createdAt}, coalesce(${postJobs.scheduledAt}, ${postJobs.createdAt})))`,
+        })
+        .from(postJobs)
+        .where(
+          scope.where(
+            postJobs,
+            eq(postJobs.status, "queued"),
+            eq(postJobs.attemptCount, 0),
+            or(isNull(postJobs.scheduledAt), lte(postJobs.scheduledAt, now)),
+          ),
+        );
+
+      const row = rows[0];
+      const total = Number.isFinite(row?.total) ? Number(row?.total) : 0;
+      // No rows -> min() is NULL; never report a wait without a job to blame.
+      return {
+        count: total,
+        oldestWaitingSince: total > 0 ? toDate(row?.waitingSince) : null,
+      };
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.countUntouchedQueued",
+        tenant_id: scope.tenantId,
+        now: now.toISOString(),
+        field: "tenantId",
       });
     }
   }

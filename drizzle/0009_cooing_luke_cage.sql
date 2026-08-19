@@ -1,0 +1,1 @@
+ALTER TABLE "sync_run" ADD COLUMN "issue_groups" jsonb;

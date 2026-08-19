@@ -3,21 +3,23 @@ import { describe, expect, it, vi } from "vitest";
 import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 
 /**
- * `remove` (E8.4) against a stubbed BullMQ Queue: what matters here is the
- * translation of BullMQ's numeric answer into a boolean the usecases can act on,
- * and that a broker failure becomes a QUEUE_ERROR instead of escaping raw.
- * The real Redis round trip is covered by the publish smoke script.
+ * `remove` (E8.4) and `countWorkers` (E11) against a stubbed BullMQ Queue: what
+ * matters here is the translation of BullMQ's answers into what the usecases act
+ * on — a boolean for remove, and a census that must NEVER throw for the health
+ * banner. The real Redis round trip is covered by the publish smoke script.
  */
 
 const removeMock = vi.fn();
 const addMock = vi.fn();
 const closeMock = vi.fn();
+const getWorkersMock = vi.fn();
 
 vi.mock("bullmq", () => ({
   Queue: class {
     remove = removeMock;
     add = addMock;
     close = closeMock;
+    getWorkers = getWorkersMock;
   },
 }));
 
@@ -83,5 +85,56 @@ describe("BullMqJobQueue.remove", () => {
       context: { job_id: "pp.job-1", operation: "queue.remove" },
     });
     expect(lines.some((line) => line.level === "error")).toBe(true);
+  });
+});
+
+describe("BullMqJobQueue.countWorkers", () => {
+  // --- Edge cases first -----------------------------------------------------
+
+  it("answers `reachable: false` instead of throwing when Redis is unreachable", async () => {
+    getWorkersMock.mockRejectedValueOnce(new Error("connect ECONNREFUSED 127.0.0.1:6379"));
+    const { queue, lines } = makeQueue();
+
+    // The whole point: the health screen must still render.
+    expect(await queue.countWorkers()).toEqual({ workersOnline: 0, reachable: false });
+    expect(
+      lines.some(
+        (line) => line.level === "warn" && line.context?.error_code === "QUEUE_ERROR",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not count the placeholder a broker without CLIENT LIST returns", async () => {
+    getWorkersMock.mockResolvedValueOnce([{ name: "GCP does not support client list" }]);
+    const { queue, lines } = makeQueue();
+
+    expect(await queue.countWorkers()).toEqual({ workersOnline: 0, reachable: false });
+    expect(lines.some((line) => line.context?.reason === "CLIENT_LIST_UNSUPPORTED")).toBe(true);
+  });
+
+  it("treats a non-array answer as no workers rather than crashing", async () => {
+    getWorkersMock.mockResolvedValueOnce(undefined);
+    const { queue } = makeQueue();
+
+    expect(await queue.countWorkers()).toEqual({ workersOnline: 0, reachable: true });
+  });
+
+  it("reports zero workers on a reachable but empty registry", async () => {
+    getWorkersMock.mockResolvedValueOnce([]);
+    const { queue } = makeQueue();
+
+    expect(await queue.countWorkers()).toEqual({ workersOnline: 0, reachable: true });
+  });
+
+  // --- Happy path -----------------------------------------------------------
+
+  it("counts the workers the broker knows about", async () => {
+    getWorkersMock.mockResolvedValueOnce([
+      { name: "bull:bXlzcA==", addr: "172.18.0.4:52344" },
+      { name: "bull:bXlzcA==", addr: "172.18.0.5:52346" },
+    ]);
+    const { queue } = makeQueue();
+
+    expect(await queue.countWorkers()).toEqual({ workersOnline: 2, reachable: true });
   });
 });

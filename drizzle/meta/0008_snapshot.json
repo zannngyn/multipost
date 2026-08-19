@@ -1,5 +1,5 @@
 {
-  "id": "fb83189c-d6ff-4964-a794-f3fcf31469a8",
+  "id": "c39bfcb2-3802-49f9-a77a-6a32ac08c4ff",
   "prevId": "a67cb75b-d4ad-4cad-9ddc-f2f84580df2e",
   "version": "7",
   "dialect": "postgresql",
@@ -1303,152 +1303,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.post_job_event": {
-      "name": "post_job_event",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "post_job_id": {
-          "name": "post_job_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "batch_id": {
-          "name": "batch_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "stage": {
-          "name": "stage",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "attempt": {
-          "name": "attempt",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "detail": {
-          "name": "detail",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "occurred_at": {
-          "name": "occurred_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "post_job_event_tenant_job_idx": {
-          "name": "post_job_event_tenant_job_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "post_job_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "occurred_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "post_job_event_tenant_batch_idx": {
-          "name": "post_job_event_tenant_batch_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "batch_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "occurred_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "post_job_event_tenant_id_tenant_id_fk": {
-          "name": "post_job_event_tenant_id_tenant_id_fk",
-          "tableFrom": "post_job_event",
-          "tableTo": "tenant",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "post_job_event_post_job_id_post_job_id_fk": {
-          "name": "post_job_event_post_job_id_post_job_id_fk",
-          "tableFrom": "post_job_event",
-          "tableTo": "post_job",
-          "columnsFrom": [
-            "post_job_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.channel_group": {
       "name": "channel_group",
       "schema": "",
@@ -1517,6 +1371,109 @@
           "columns": [
             "tenant_id",
             "name"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.post_draft": {
+      "name": "post_draft",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'compose'"
+        },
+        "schema_version": {
+          "name": "schema_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "post_draft_tenant_id_tenant_id_fk": {
+          "name": "post_draft_tenant_id_tenant_id_fk",
+          "tableFrom": "post_draft",
+          "tableTo": "tenant",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "post_draft_owner_user_id_app_user_id_fk": {
+          "name": "post_draft_owner_user_id_app_user_id_fk",
+          "tableFrom": "post_draft",
+          "tableTo": "app_user",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "post_draft_tenant_owner_kind_uq": {
+          "name": "post_draft_tenant_owner_kind_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "owner_user_id",
+            "kind"
           ]
         }
       },

@@ -40,6 +40,11 @@ export const ERROR_CODES = [
   "DUPLICATE_POST_BLOCKED",
   "PUBLISH_FAILED",
   "INVALID_JOB_TRANSITION",
+  // Compose draft (E10 — server-side draft of the compose screen)
+  /** The draft payload carries a forbidden key or does not match the shape. */
+  "DRAFT_PAYLOAD_REJECTED",
+  /** The draft payload is over POST_DRAFT_MAX_BYTES. */
+  "DRAFT_TOO_LARGE",
   // Video (E2/E3 Phase 2)
   "VIDEO_SPEC_INVALID",
   "VIDEO_PROBE_FAILED",
@@ -83,6 +88,9 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   DUPLICATE_POST_BLOCKED: "Bài này đã được đăng (hoặc đang đăng) lên kênh này — đã chặn đăng trùng.",
   PUBLISH_FAILED: "Đăng bài thất bại sau số lần thử cho phép. Xem nhật ký để biết nguyên nhân.",
   INVALID_JOB_TRANSITION: "Trạng thái công việc đăng bài không cho phép thao tác này.",
+  DRAFT_PAYLOAD_REJECTED:
+    "Bản nháp chứa dữ liệu không được phép lưu — hệ thống đã từ chối để tránh lộ dữ liệu nội bộ.",
+  DRAFT_TOO_LARGE: "Bản nháp quá lớn để lưu trên máy chủ. Hãy rút gọn nội dung rồi thử lại.",
   VIDEO_SPEC_INVALID: "Video chưa đạt thông số của kênh — bài đăng bị chặn.",
   VIDEO_PROBE_FAILED: "Không kiểm tra được thông số video. Xem nhật ký để biết chi tiết.",
   TIKTOK_ERROR: "TikTok trả về lỗi khi đăng bài. Xem chi tiết trong nhật ký đăng.",
@@ -119,6 +127,8 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   DUPLICATE_POST_BLOCKED: "Duplicate publish blocked by idempotency lock",
   PUBLISH_FAILED: "Publish failed after allowed retries",
   INVALID_JOB_TRANSITION: "Post job state transition not allowed",
+  DRAFT_PAYLOAD_REJECTED: "Draft payload failed compose-draft validation",
+  DRAFT_TOO_LARGE: "Draft payload exceeds the stored draft size limit",
   VIDEO_SPEC_INVALID: "Video failed channel spec validation",
   VIDEO_PROBE_FAILED: "Could not probe video metadata",
   TIKTOK_ERROR: "TikTok API call failed",

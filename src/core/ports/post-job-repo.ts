@@ -197,6 +197,46 @@ export interface PostJobEventInput {
   readonly occurredAt: Date;
 }
 
+/**
+ * E11 worker-health probe: "how many of this tenant's jobs are queued and have
+ * NEVER been attempted?".
+ *
+ * `now` is passed in (core owns the clock) because it decides the hardest part
+ * of this query: a post with a `scheduled_at` in the FUTURE is queued and
+ * untouched on purpose — that is what hẹn giờ means — and counting it would
+ * raise a false alarm every time someone schedules a post for tomorrow. Only
+ * jobs with no scheduled time, or whose time has already come, are symptoms.
+ */
+export interface UntouchedQueuedQuery {
+  readonly tenantId: string;
+  /** Instant the check is made; a `scheduled_at` after it is excluded. */
+  readonly now: Date;
+}
+
+export interface UntouchedQueuedJobs {
+  /** Jobs `queued` with `attempt_count = 0` that should already be running. */
+  readonly count: number;
+  /**
+   * Since when the oldest of them has been WAITING TO BE PICKED UP; null when
+   * `count` is 0.
+   *
+   * Not simply `created_at`: for a scheduled post the wait starts at its hour,
+   * not at the moment an operator planned it. Reporting "chờ 7 ngày" for a post
+   * that became due one minute ago would make the banner lie.
+   */
+  readonly oldestWaitingSince: Date | null;
+}
+
+/**
+ * Narrow read port for the worker-health probe. Kept apart from `PostJobRepo`
+ * on purpose: this counter is an operational signal (see WorkerHealth), and
+ * nothing that publishes should be handed it.
+ */
+export interface UntouchedQueuedRepo {
+  /** Tenant-scoped. Driver failures surface as AppError('DB_ERROR'). */
+  countUntouchedQueued(query: UntouchedQueuedQuery): Promise<UntouchedQueuedJobs>;
+}
+
 export interface PostJobRepo {
   /** Batch + all its jobs in one transaction. See the duplicate note above. */
   createBatchWithJobs(input: {

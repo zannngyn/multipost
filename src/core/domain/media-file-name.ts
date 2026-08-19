@@ -102,7 +102,11 @@ export type ParsedMediaFileName =
       readonly issue: MediaNameIssue;
       readonly raw: string;
       readonly normalized: string;
-      /** Human-readable detail for the "skipped files" screen. English. */
+      /**
+       * Sentence for the "skipped files" screen — VIETNAMESE: it is shown to
+       * operators as-is (CLAUDE.md technical rule 6). The machine-readable part
+       * is `issue`, which stays English.
+       */
       readonly detail: string;
     };
 
@@ -307,7 +311,7 @@ export function parseMediaFileName(raw: string): ParsedMediaFileName {
       issue: "EMPTY_NAME",
       raw: typeof raw === "string" ? raw : "",
       normalized: "",
-      detail: "File name is empty or whitespace only",
+      detail: "Tên file trống hoặc chỉ có khoảng trắng — đặt lại tên theo mẫu MÃSP-Màu (số).",
     };
   }
 
@@ -330,8 +334,8 @@ export function parseMediaFileName(raw: string): ParsedMediaFileName {
       raw,
       normalized,
       detail: first
-        ? `Product code '${first[0]}' does not start the file name`
-        : "No product code found in file name",
+        ? `Mã '${first[0]}' nằm giữa tên file chứ không đứng đầu — đổi tên thành '${first[0]}-Màu (số)' rồi đồng bộ lại.`
+        : "Tên file không chứa mã sản phẩm nào — đổi tên theo mẫu MÃSP-Màu (số) rồi đồng bộ lại.",
     };
   }
 

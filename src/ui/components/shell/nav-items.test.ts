@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { NAV_SECTIONS, isNavItemActive } from "@/ui/components/shell/nav-items";
+import {
+  NAV_SECTIONS,
+  flattenNavItems,
+  isNavItemActive,
+  toSearchKey,
+} from "@/ui/components/shell/nav-items";
 
 describe("isNavItemActive", () => {
   it("marks the overview only on an exact match", () => {
@@ -50,6 +55,15 @@ describe("NAV_SECTIONS", () => {
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 
+  it("flattens to one searchable entry per destination, keeping its section", () => {
+    const flat = flattenNavItems();
+    const hrefs = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.href));
+
+    expect(flat).toHaveLength(hrefs.length);
+    expect(flat.map((item) => item.href)).toEqual(hrefs);
+    expect(flat).toContainEqual({ href: "/sync", label: "Đồng bộ dữ liệu", section: "Dữ liệu" });
+  });
+
   it("marks every entry that owns another entry's prefix as exact", () => {
     const hrefs = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.href));
 
@@ -61,6 +75,29 @@ describe("NAV_SECTIONS", () => {
         // cannot tell which screen they are on.
         expect(ownsAnother ? item.isExact === true : true).toBe(true);
       }
+    }
+  });
+});
+
+describe("toSearchKey", () => {
+  it("drops tone marks so an unaccented query still matches", () => {
+    expect(toSearchKey("Đồng bộ dữ liệu")).toBe("dong bo du lieu");
+    expect(toSearchKey("Bài đã hẹn")).toBe("bai da hen");
+  });
+
+  it("folds đ and Đ, which NFD leaves whole", () => {
+    expect(toSearchKey("Đ")).toBe("d");
+    expect(toSearchKey("đăng")).toBe("dang");
+  });
+
+  it("handles text with no diacritics and the empty string", () => {
+    expect(toSearchKey("Mẫu prompt")).toBe("mau prompt");
+    expect(toSearchKey("")).toBe("");
+  });
+
+  it("leaves no combining mark behind on any nav label", () => {
+    for (const item of flattenNavItems()) {
+      expect(toSearchKey(item.label)).toMatch(/^[a-z0-9 ]*$/);
     }
   });
 });

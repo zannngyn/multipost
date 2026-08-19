@@ -75,6 +75,47 @@ export interface JobQueue {
   close(): Promise<void>;
 }
 
+/**
+ * Answer of `QueueWorkerRegistry.countWorkers` — an OPERATIONAL signal, never a
+ * business gate.
+ *
+ * `workersOnline: 0` is NOT proof that nothing will run the queue: a broker that
+ * just restarted, a client registry that lags behind, or a hosted Redis without
+ * the client-list command all produce a zero (or an unreachable answer) while
+ * workers are perfectly alive. Read it as "nobody seems to be consuming this
+ * queue — tell the operator", and NEVER as "it is safe to skip/duplicate work".
+ *
+ * Concretely: no publish path may branch on this number. The only thing allowed
+ * to decide whether a post goes out is the post_job row + its optimistic
+ * `queued -> publishing` claim.
+ */
+export interface QueueWorkerCensus {
+  /** Consumers the broker currently reports for this queue. Never negative. */
+  readonly workersOnline: number;
+  /**
+   * False when the broker could not be asked at all (connection refused, command
+   * unsupported...). The count is then 0 and means NOTHING — the caller shows
+   * "không hỏi được hàng đợi", which is itself the alert.
+   */
+  readonly reachable: boolean;
+}
+
+/**
+ * The "is anybody consuming this queue?" probe (E11 worker-health banner).
+ *
+ * Deliberately NOT part of `JobQueue`: producing work and inspecting the
+ * consumer registry are different jobs, and keeping them apart is what stops a
+ * publish usecase from ever depending on a worker count (see the warning above).
+ *
+ * Contract for implementers: `countWorkers` MUST NOT throw. A broker failure is
+ * exactly the case this probe exists to report, so it is returned as
+ * `{ workersOnline: 0, reachable: false }` plus a logged warning — an exception
+ * here would take down the very screen that has to show the outage.
+ */
+export interface QueueWorkerRegistry {
+  countWorkers(): Promise<QueueWorkerCensus>;
+}
+
 export interface RepeatableJobInput<TPayload> {
   /** Stable identity of the SCHEDULE (not of one run). */
   readonly schedulerId: string;
