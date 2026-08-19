@@ -195,7 +195,7 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
       lastErrorCode: job.lastErrorCode,
       userMessage: postJobOperatorMessage(job),
       // `liveJobIds` already applied law 3.1; a settled job has no entry here.
-      progress: toChannelProgress(progressById.get(job.id)),
+      progress: toChannelProgress(progressById.get(job.id), job.status),
     }));
 
     const first = summary.jobs[0];
@@ -244,8 +244,29 @@ export type GetBatchStatus = ReturnType<typeof makeGetBatchStatus>;
 
 // --- progress (decoration) --------------------------------------------------
 
-/** LAW 3.1: the only two statuses whose progress means anything right now. */
-const LIVE_STATUSES: readonly PostJobStatus[] = ["queued", "publishing"];
+/**
+ * LAW 3.1: the statuses whose progress still means something.
+ *
+ * `scheduled_on_facebook` was added on PM's decision (19/08/2026). It is the ONE
+ * case where the system knows the remaining time exactly — the hour the operator
+ * picked — and hiding it made the most reassuring line on the screen invisible:
+ * the post is on Facebook, and it goes out at that hour whether or not this
+ * server is running.
+ */
+const LIVE_STATUSES: readonly PostJobStatus[] = ["queued", "publishing", "scheduled_on_facebook"];
+
+/**
+ * Which stage may be shown for a status. Only `scheduled_on_facebook` is pinned,
+ * and it is pinned because its status is STABLE: the row can sit there for days,
+ * so a stale key (the `waiting_on_facebook` write is best-effort and may have
+ * failed) would keep claiming "đang tải ảnh 3/10" about a post Facebook already
+ * holds — for days. The two moving statuses are left unpinned on purpose: their
+ * keys are rewritten seconds later anyway, and pinning them would drop a
+ * perfectly good stage over a harmless race.
+ */
+const PINNED_STAGE: Partial<Record<PostJobStatus, PostJobStage>> = {
+  scheduled_on_facebook: "waiting_on_facebook",
+};
 
 const NO_PROGRESS: ReadonlyMap<string, PostJobProgress> = new Map();
 
@@ -287,13 +308,21 @@ async function readProgress(
   }
 }
 
-function toChannelProgress(progress: PostJobProgress | undefined): BatchChannelProgress | null {
+function toChannelProgress(
+  progress: PostJobProgress | undefined,
+  status: PostJobStatus,
+): BatchChannelProgress | null {
   if (!progress) return null;
+
+  // A status that pins a stage rejects everything else: see PINNED_STAGE for why
+  // only the stable status does this.
+  const pinned = PINNED_STAGE[status];
+  if (pinned && progress.stage !== pinned) return null;
 
   const stepIndex = progressStepIndex(progress.stage);
   // Off the stepper (`stopped`, or a stage this build cannot read) while the row
-  // is still queued/publishing means a stale key contradicting the status. The
-  // status wins, and drawing nothing is the honest outcome.
+  // is still live means a stale key contradicting the status. The status wins,
+  // and drawing nothing is the honest outcome.
   if (stepIndex === PROGRESS_STEP_NONE) return null;
 
   return {

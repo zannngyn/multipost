@@ -45,10 +45,42 @@ Ba luật này đứng trên mọi chi tiết kỹ thuật bên dưới. Vi ph�
 `post_job.status` trong Postgres là nguồn chân lý duy nhất về việc một bài đã lên hay
 chưa. Tiến độ là dữ liệu bổ trợ, có thể thiếu, có thể cũ, có thể mất.
 
-Hệ quả bắt buộc ở tầng giao diện: chỉ vẽ tiến độ khi `status ∈ {queued, publishing}`.
+Hệ quả bắt buộc: chỉ vẽ tiến độ khi `status ∈ {queued, publishing, scheduled_on_facebook}`.
+
+`scheduled_on_facebook` được PM bổ sung ngày 19/08/2026. Đây là ca DUY NHẤT hệ thống biết
+chính xác thời gian còn lại — chính giờ người vận hành đã chọn — và giấu nó đi làm mất
+dòng chữ trấn an nhất trên màn hình (xem mục 3.4).
+
+Kèm theo là một ràng buộc hẹp: với `scheduled_on_facebook`, **chỉ** chấp nhận stage
+`waiting_on_facebook`, mọi stage khác bị bỏ. Lý do là trạng thái này ỔN ĐỊNH — một hàng
+có thể nằm đó nhiều ngày, nên một key cũ (lượt ghi `waiting_on_facebook` là best-effort
+và có thể đã hỏng) sẽ tiếp tục rao "đang tải ảnh 3/10" suốt nhiều ngày về một bài đã
+giao xong. Hai trạng thái đang chạy KHÔNG bị ghim, có chủ đích: key của chúng bị ghi đè
+sau vài giây, ghim vào sẽ vứt bỏ một stage tốt chỉ vì một cuộc đua vô hại.
 Một bài đã `failed` mà key Redis vẫn còn `uploading_media 3/10` thì **không** được vẽ
 thanh tiến độ — worker chết giữa chừng là tình huống có thật, và màn hình nói "đang tải
 ảnh" cho một bài đã chết là lỗi tệ hơn việc không có tiến độ.
+
+### 3.4. Bài đã giao cho Facebook không phụ thuộc vào server này
+
+Yêu cầu của PM ngày 19/08/2026, và là lý do `scheduled_on_facebook` được hiện lên. Đã
+kiểm chứng trong code chứ không suy đoán:
+
+- Giao lịch thành công → bài TỒN TẠI trên Meta dưới dạng unpublished kèm
+  `scheduled_publish_time`. Meta tự đăng vào giờ đó, không cần server này chạy.
+- `transitionPostJob` xoá `queueJobId` khi chuyển sang `scheduled_on_facebook` → không
+  còn mục nào trong hàng đợi của ta trỏ tới bài đó, nên không có đường đăng lần hai.
+- Reaper chỉ quét hàng kẹt ở `publishing`/`queued`, KHÔNG đụng `scheduled_on_facebook`.
+- `deleteScheduledPost` chỉ có đúng một caller: `cancel-scheduled-job` — thao tác huỷ có
+  chủ đích của người vận hành. Không có đường tự động nào xoá bài đã hẹn.
+
+**Giới hạn phải nói rõ**: lời bảo đảm trên chỉ áp dụng SAU khi giao lịch thành công. Việc
+giao lịch diễn ra trong cửa sổ T-30 tới T-12 (`HANDOFF_WINDOW_START_MS` /
+`HANDOFF_DEADLINE_MS`), thử lại mỗi 5 phút → khoảng 4 cơ hội. Server phải sống được ít
+nhất một thời điểm trong cửa sổ 18 phút đó. Trước khi giao, bài chỉ nằm trong hàng đợi
+của ta; nếu server chết suốt cửa sổ VÀ qua luôn giờ T thì không có gì được đăng — và
+đúng theo rule nghiệp vụ 5, việc đó không im lặng: hàng vẫn ở `queued`, hiện trên màn
+theo dõi, và sẽ đăng trễ khi server sống lại.
 
 ### 3.2. Không bịa thời gian còn lại
 

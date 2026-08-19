@@ -343,6 +343,57 @@ describe("getBatchStatus — progress, edge cases first", () => {
     expect(askedFor.flat()).not.toContain("job-1");
   });
 
+  it("shows a post Facebook is holding, counting down to the hour it will publish", async () => {
+    // The one case where the remaining time is exact: the operator chose it.
+    // The reassurance is the point — this post goes out at that hour whether or
+    // not our server is running.
+    const publishAt = new Date(NOW.getTime() + 45 * 60_000);
+    const { store } = fakeProgress({
+      "job-1": waitingProgress("waiting_on_facebook", {
+        attempt: 1,
+        waitUntil: publishAt,
+        now: NOW,
+      }),
+    });
+    const { getBatchStatus } = harness(
+      summaryOf([job({ status: "scheduled_on_facebook", scheduledPostId: "sched-1" })], false),
+      store,
+    );
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.channels[0].progress).toMatchObject({
+      stage: "waiting_on_facebook",
+      waitUntil: publishAt,
+      doneCount: null,
+      totalCount: null,
+    });
+  });
+
+  it("refuses a stale upload key on a post Facebook is already holding", async () => {
+    // The reason `scheduled_on_facebook` pins its stage: the status is stable,
+    // so a `waiting_on_facebook` write that failed (best-effort) would leave the
+    // previous key claiming "đang tải ảnh 3/10" for DAYS about a post that is
+    // finished and handed over.
+    const { store } = fakeProgress({
+      "job-1": workingProgress("uploading_media", {
+        attempt: 1,
+        now: NOW,
+        doneCount: 3,
+        totalCount: 10,
+      }),
+    });
+    const { getBatchStatus } = harness(
+      summaryOf([job({ status: "scheduled_on_facebook", scheduledPostId: "sched-1" })], false),
+      store,
+    );
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.channels[0].progress).toBeNull();
+    expect(result.channels[0].status).toBe("scheduled_on_facebook");
+  });
+
   it("drops a stale key whose stage is off the stepper instead of drawing step -1", async () => {
     const { store } = fakeProgress({
       "job-1": workingProgress("stopped", { attempt: 1, now: NOW }),
