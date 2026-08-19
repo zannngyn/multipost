@@ -96,6 +96,50 @@ if [ "$failed" -ne 0 ]; then
   exit 1
 fi
 
+echo "--- caddy site file"
+# Kept in sync on every deploy so that changing WEB_PORT, a hostname or a proxy
+# timeout is a git commit and nothing else — no one should ever have to log in
+# to this box to finish a release.
+#
+# This host's Caddy also serves unrelated sites, so the order is: write, then
+# VALIDATE THE WHOLE CONFIG, and only reload if it passes. A failed validation
+# puts the previous file back and fails the deploy, because a reload with a
+# broken config would take those other sites down too.
+caddy_src=./deploy/edge/mysp.caddy
+caddy_dst=/etc/caddy/conf.d/mysp.caddy
+
+if [ ! -f "$caddy_src" ]; then
+  echo "  $caddy_src is missing from the shipped files, skipping"
+elif cmp -s "$caddy_src" "$caddy_dst" 2>/dev/null; then
+  echo "  unchanged"
+elif ! command -v caddy >/dev/null 2>&1; then
+  echo "  caddy is not installed on this host, skipping"
+elif [ ! -w "$(dirname "$caddy_dst")" ]; then
+  echo "  cannot write $caddy_dst as $(id -un) — install it by hand" >&2
+else
+  had_previous=0
+  if [ -f "$caddy_dst" ]; then
+    cp "$caddy_dst" "$caddy_dst.deploy-bak"
+    had_previous=1
+  fi
+  cp "$caddy_src" "$caddy_dst"
+
+  if caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+    systemctl reload caddy
+    rm -f "$caddy_dst.deploy-bak"
+    echo "  updated and reloaded"
+  else
+    if [ "$had_previous" -eq 1 ]; then
+      mv "$caddy_dst.deploy-bak" "$caddy_dst"
+    else
+      rm -f "$caddy_dst"
+    fi
+    echo "  new site file is INVALID — reverted, caddy NOT reloaded" >&2
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >&2 || true
+    exit 1
+  fi
+fi
+
 echo "--- reclaim disk"
 # Two passes. Dangling layers always; then unused images older than a week,
 # because this VPS shares its 60 GB with other services and three fresh images
