@@ -191,7 +191,7 @@ async function main(): Promise<void> {
   // Same variable the container reads lazily; the script needs it for its asserts.
   const mediaBaseUrl = loadMediaConfig().MEDIA_PUBLIC_BASE_URL;
   const channelConfig = new DrizzleChannelConfigRepo(db, { box: secretBox, logger });
-  const getBatchStatus = makeGetBatchStatus({ postJobs: repo, logger });
+  const getBatchStatus = makeGetBatchStatus({ postJobs: repo, progress: jobProgress, logger });
   const listPostJobs = makeListPostJobs({ postJobs: repo, logger });
   const retryPostJob = makeRetryPostJob({
     postJobs: repo,

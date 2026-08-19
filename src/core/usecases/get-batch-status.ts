@@ -5,8 +5,17 @@ import {
   type PostFormat,
   type PostJobStatus,
 } from "@/core/domain/post-job";
+import {
+  POST_JOB_PROGRESS_STEPS,
+  PROGRESS_STEP_NONE,
+  postJobProgressMessage,
+  progressStepIndex,
+  type PostJobProgress,
+  type PostJobStage,
+} from "@/core/domain/post-job-progress";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Logger } from "@/core/ports/infra";
+import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
 
 /**
@@ -20,6 +29,27 @@ import type { PostJobRepo } from "@/core/ports/post-job-repo";
  * the API, the UI and the smoke script all say exactly the same thing.
  */
 
+/**
+ * E7.5 — where this post stands INSIDE its current status (design §5.7).
+ *
+ * Decoration on top of `status`, never a second truth: it is null far more often
+ * than it is set, and every consumer must render fine without it.
+ */
+export interface BatchChannelProgress {
+  readonly stage: PostJobStage;
+  /** Position on the stepper; already 0-based and on the line (never -1 here). */
+  readonly stepIndex: number;
+  /** Vietnamese sentence from the domain — the UI writes none of its own. */
+  readonly label: string;
+  /** Only the media-upload stage counts anything (§3.2). */
+  readonly doneCount: number | null;
+  readonly totalCount: number | null;
+  readonly currentItem: string | null;
+  readonly stageStartedAt: Date;
+  /** A deadline the system COMPUTED. Null = there is no countdown to show. */
+  readonly waitUntil: Date | null;
+}
+
 export interface BatchChannelStatus {
   readonly channelId: string;
   readonly postJobId: string;
@@ -32,6 +62,14 @@ export interface BatchChannelStatus {
   readonly lastErrorCode: string | null;
   /** Vietnamese, always present, for every status (not only failures). */
   readonly userMessage: string;
+  /**
+   * LAW 3.1 APPLIED HERE, not in the screen: null unless `status` is one of
+   * `queued | publishing`. A job that already failed keeps no progress even when
+   * a Redis key still says "uploading 3/10" — a worker dying mid-album is a real
+   * situation, and a screen saying "đang tải ảnh" about a dead post is worse
+   * than a screen saying nothing.
+   */
+  readonly progress: BatchChannelProgress | null;
 }
 
 export interface BatchTotals {
@@ -67,10 +105,23 @@ export interface GetBatchStatusResult {
   readonly channels: readonly BatchChannelStatus[];
   /** One Vietnamese line summarising the run, for the top of the table. */
   readonly summaryMessage: string;
+  /**
+   * Labels of the stepper, in order, straight from the domain. Sent with the
+   * payload so the screen keeps NO copy of them: `ui/` may not import `core/`
+   * (docs/07 §2), and a second list would be the thing that drifts the day a
+   * stage is added. Five short strings per poll is the cheaper half of that
+   * trade.
+   */
+  readonly progressSteps: readonly string[];
 }
 
 export interface GetBatchStatusDeps {
   postJobs: PostJobRepo;
+  /**
+   * Live progress of the jobs still running. Best-effort by contract: a store
+   * that is down costs the decoration, never the table (design §5.7).
+   */
+  progress: JobProgressStore;
   logger: Logger;
 }
 
@@ -120,6 +171,19 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
         summary.byStatus.scheduled_on_facebook,
     };
 
+    // ONE read for the whole batch (design §5.7). The id list is narrowed to the
+    // statuses allowed to show progress, so law 3.1 also saves the round trip:
+    // a finished batch — which is what this screen mostly shows — never touches
+    // the progress store at all.
+    const liveJobIds = summary.jobs
+      .filter((job) => canShowProgress(job.status))
+      .map((job) => job.id);
+    const progressById = await readProgress(deps, {
+      tenantId,
+      batchId: summary.batchId,
+      postJobIds: liveJobIds,
+    });
+
     const channels: BatchChannelStatus[] = summary.jobs.map((job) => ({
       channelId: job.channelId,
       postJobId: job.id,
@@ -130,6 +194,8 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
       publishedAt: job.publishedAt,
       lastErrorCode: job.lastErrorCode,
       userMessage: postJobOperatorMessage(job),
+      // `liveJobIds` already applied law 3.1; a settled job has no entry here.
+      progress: toChannelProgress(progressById.get(job.id)),
     }));
 
     const first = summary.jobs[0];
@@ -148,6 +214,7 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
         : null,
       channels,
       summaryMessage: summaryMessage(summary.status, totals),
+      progressSteps: [...POST_JOB_PROGRESS_STEPS],
     };
 
     deps.logger.info("Batch status read", {
@@ -163,6 +230,9 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
         attempts: channel.attemptCount,
         error_code: channel.lastErrorCode,
         published_post_id: channel.publishedPostId,
+        // Which step a still-running post sits on, so the log answers "nó đang
+        // kẹt ở đâu?" as well as "vì sao nó không lên?".
+        stage: channel.progress?.stage ?? null,
       })),
     });
 
@@ -171,6 +241,72 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
 }
 
 export type GetBatchStatus = ReturnType<typeof makeGetBatchStatus>;
+
+// --- progress (decoration) --------------------------------------------------
+
+/** LAW 3.1: the only two statuses whose progress means anything right now. */
+const LIVE_STATUSES: readonly PostJobStatus[] = ["queued", "publishing"];
+
+const NO_PROGRESS: ReadonlyMap<string, PostJobProgress> = new Map();
+
+function canShowProgress(status: PostJobStatus): boolean {
+  return LIVE_STATUSES.includes(status);
+}
+
+/**
+ * Progress of the given jobs, or an empty map. NEVER throws and never fails the
+ * read: the port promises as much, and this guard makes the promise something
+ * the screen does not have to trust. A dead store costs the stepper and a warn
+ * line — the table keeps every status, every reason and every link it has today
+ * (design §5.7).
+ */
+async function readProgress(
+  deps: GetBatchStatusDeps,
+  input: { tenantId: string; batchId: string; postJobIds: readonly string[] },
+): Promise<ReadonlyMap<string, PostJobProgress>> {
+  if (input.postJobIds.length === 0) return NO_PROGRESS;
+
+  try {
+    const map = await deps.progress.read(input.tenantId, input.postJobIds);
+    // A store returning something that is not a map is a bug in the store, not
+    // a reason to break a read-only screen.
+    return map && typeof map.get === "function" ? map : NO_PROGRESS;
+  } catch (error) {
+    deps.logger.warn("Could not read job progress — the batch table drops the stepper only", {
+      err: AppError.from(error, "QUEUE_ERROR", {
+        tenant_id: input.tenantId,
+        batch_id: input.batchId,
+        operation: "getBatchStatus.progress.read",
+      }),
+      tenant_id: input.tenantId,
+      batch_id: input.batchId,
+      post_job_count: input.postJobIds.length,
+      error_code: "QUEUE_ERROR",
+    });
+    return NO_PROGRESS;
+  }
+}
+
+function toChannelProgress(progress: PostJobProgress | undefined): BatchChannelProgress | null {
+  if (!progress) return null;
+
+  const stepIndex = progressStepIndex(progress.stage);
+  // Off the stepper (`stopped`, or a stage this build cannot read) while the row
+  // is still queued/publishing means a stale key contradicting the status. The
+  // status wins, and drawing nothing is the honest outcome.
+  if (stepIndex === PROGRESS_STEP_NONE) return null;
+
+  return {
+    stage: progress.stage,
+    stepIndex,
+    label: postJobProgressMessage(progress),
+    doneCount: progress.doneCount,
+    totalCount: progress.totalCount,
+    currentItem: progress.currentItem,
+    stageStartedAt: progress.stageStartedAt,
+    waitUntil: progress.waitUntil,
+  };
+}
 
 // --- helpers ----------------------------------------------------------------
 

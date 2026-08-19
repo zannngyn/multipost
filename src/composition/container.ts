@@ -659,7 +659,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
           logger: deps.logger,
         }),
     }),
-    getBatchStatus: makeGetBatchStatus({ postJobs, logger: deps.logger }),
+    // E7.5 — the same store publishPost writes to; here it is only READ, and a
+    // store that is down costs the stepper, not the table (design §5.7).
+    getBatchStatus: makeGetBatchStatus({ postJobs, progress: jobProgress, logger: deps.logger }),
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
     retryPostJob: makeRetryPostJob({
       postJobs,
