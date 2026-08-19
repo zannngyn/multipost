@@ -79,8 +79,13 @@ export const AuthConfigSchema = z.object({
    * an open door. Ids rather than e-mail addresses on purpose: Facebook does
    * not guarantee an e-mail (accounts registered with a phone number have
    * none), so the identity key is the pair (provider, provider user id).
+   *
+   * Blank reads as absent, like the other optional values here: `NAME=` is how
+   * a .env leaves a value unset — it is what .env.example ships and what
+   * compose passes for an unset variable — and rejecting it took down the whole
+   * sign-in page instead of just the Facebook button.
    */
-  AUTH_FACEBOOK_ALLOWED_USER_IDS: csvList.optional(),
+  AUTH_FACEBOOK_ALLOWED_USER_IDS: blankAsUndefined(csvList),
   SESSION_SECRET: nonEmpty("SESSION_SECRET").min(32, "SESSION_SECRET must be at least 32 chars"),
 });
 

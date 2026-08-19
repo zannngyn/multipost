@@ -69,6 +69,10 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       AUTH_ALLOWED_DOMAINS: ${AUTH_ALLOWED_DOMAINS:-example.com}
+      # E5.2. An ABSENT list means nobody can sign in with Facebook (see
+      # composition/config.ts) — leaving it out of compose silently disabled the
+      # whole Facebook sign-in door in every container.
+      AUTH_FACEBOOK_ALLOWED_USER_IDS: ${AUTH_FACEBOOK_ALLOWED_USER_IDS:-}
       # Never derive the browser-visible origin from Docker's 0.0.0.0 bind.
       # Local default follows WEB_PORT; production must set its HTTPS origin.
       AUTH_URL: ${AUTH_URL:-http://localhost:${WEB_PORT:-3000}}
@@ -109,12 +113,18 @@ services:
       META_APP_SECRET: ${META_APP_SECRET:-}
       META_OAUTH_REDIRECT_URI: ${META_OAUTH_REDIRECT_URI:-}
     volumes:
+      # E9 mode B — the web process WRITES operator uploads here. Without this
+      # mount the bytes land in the container layer: gone on the next rebuild,
+      # and invisible to the worker sweep that is supposed to reap them.
+      - uploaddata:/var/lib/mysp/uploads
       - mediacachedata:/var/lib/mysp/media-cache
     expose:
       - "3000"
     ports:
       # Direct access for debugging; Caddy is the normal entry point.
-      - "${WEB_PORT:-3000}:3000"
+      # WEB_BIND exists so a shared VPS can pin this to 127.0.0.1 — on a public
+      # IP an 0.0.0.0 bind would serve the app over plain HTTP, past Caddy.
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy

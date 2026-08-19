@@ -1,0 +1,47 @@
+# The verification gate, in one place so CI and Deploy cannot drift apart.
+# Called by ci.yml (pull requests) and by deploy.yml (before anything is built).
+#
+# `pnpm build` is deliberately NOT here: the Docker image build runs it, so
+# duplicating it would double the slowest step to catch the same failure twice.
+name: Verify
+
+on:
+  workflow_call:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    # Reusable workflows inherit the caller's token scopes; Deploy needs
+    # packages:write, and nothing in here should have it.
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # No version pin: the action reads `packageManager` from package.json, so
+      # CI and every developer machine move together by definition.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Dockerfile's node:22-alpine. A typecheck that passes on
+          # a different major than the runtime is not a gate.
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      # Enforces the one-way dependency rule from docs/07. A violation here is
+      # an architecture break, not a style nit.
+      - name: Dependency rules
+        run: pnpm depcruise
+
+      - name: Unit tests
+        run: pnpm test

@@ -25,7 +25,12 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 
 # --- build: Next.js standalone output ---------------------------------------
 FROM base AS build
-ENV NEXT_TELEMETRY_DISABLED=1
+# NODE_OPTIONS: `next build` type-checks the whole project in one process and
+# blows past Node's default old-space cap (~2 GB), dying with "Ineffective
+# mark-compacts near heap limit" — which reads like a hang, not a limit. 4 GB
+# fits a GitHub-hosted runner and an 8 GB Docker Desktop alike.
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NODE_OPTIONS=--max-old-space-size=4096
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm build && test -f .next/standalone/server.js

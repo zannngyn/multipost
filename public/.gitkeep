@@ -1,0 +1,6 @@
+# Next.js serves this directory at the site root, and the web image copies it
+# (Dockerfile, target "web"). Empty, but it must EXIST: without it the image
+# build fails at `COPY /app/public` — which is why the first real `docker build`
+# of this repo did not get past that line.
+#
+# Drop favicons and other static files here; nothing else is needed.

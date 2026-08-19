@@ -1,0 +1,54 @@
+# Shared HTTPS entry point for the VPS.
+#
+# One VPS, two application stacks (staging + production) — but only one process
+# can bind :443. So the per-stack Caddy from the root docker-compose.yml is left
+# unstarted (`--scale caddy=0`) and this single Caddy fronts both, routing by
+# hostname over the external `mysp-edge` network.
+#
+# Bring up once, then only when the Caddyfile or the domains change:
+#   cd /srv/mysp/edge && docker compose up -d
+#
+# It has its own .env — see deploy/env/edge.env.example.
+#
+# DNS: both hostnames must resolve straight to this VPS. On Cloudflare that
+# means the records are "DNS only" (grey cloud). With the orange proxy on,
+# Cloudflare terminates TLS and Caddy can never answer the ACME challenge.
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: mysp-edge-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3. Harmless if the firewall drops it; clients fall back to TCP.
+      - "443:443/udp"
+    environment:
+      PROD_DOMAIN: ${PROD_DOMAIN:?PROD_DOMAIN is required}
+      STG_DOMAIN: ${STG_DOMAIN:?STG_DOMAIN is required}
+      # Let's Encrypt sends expiry warnings here. A wrong address means a silent
+      # cert expiry, so it is required rather than defaulted.
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live here. Losing this volume re-issues every certificate,
+      # which Let's Encrypt rate-limits — do not prune it casually.
+      - caddydata:/data
+      - caddyconfig:/config
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  edge:
+    external: true
+    name: mysp-edge
+
+volumes:
+  caddydata:
+  caddyconfig:
