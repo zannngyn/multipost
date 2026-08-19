@@ -213,15 +213,31 @@ tức là đánh đổi thứ quan trọng lấy thứ không quan trọng. Đâ
 được ghi ngay trong code tại chỗ `catch`, và `reviewer-qa` được báo trước để không đọc
 nhầm thành lỗi lọt lưới.
 
-Ranh giới của ngoại lệ — **ba chỗ, không hơn** (sửa 17/08/2026 sau khi triển khai phát
-hiện bản spec đầu tự mâu thuẫn: §3.3 đòi một `INSERT` sự kiện hỏng cũng không được giết
-bài đăng, trong khi mục này lại giới hạn ngoại lệ ở `report`/`clear`; và §6 đòi test với
-một store *luôn ném*, tức là một store vi phạm chính hợp đồng của nó):
+Ranh giới của ngoại lệ (sửa 17/08/2026 sau khi triển khai phát hiện bản spec đầu tự mâu
+thuẫn: §3.3 đòi một `INSERT` sự kiện hỏng cũng không được giết bài đăng, trong khi mục
+này lại giới hạn ngoại lệ ở `report`/`clear`; và §6 đòi test với một store *luôn ném*,
+tức một store vi phạm chính hợp đồng của nó).
+
+Ba chỗ thuộc đường **GHI**, là những chỗ có thể giết một bài đăng nếu ném:
 
 1. `report()` trong adapter Redis;
 2. `clear()` trong adapter Redis;
 3. hàm `bestEffort()` — **một** chỗ `catch` duy nhất trong `publish-post.ts`, bọc mọi
    lời ghi tiến độ của usecase.
+
+Ngoài ra, đường **ĐỌC** và đường **bắn sự kiện** cũng bắt lỗi mà không ném, mỗi chỗ do
+một điều khoản khác của spec này cho phép — liệt kê ra đây vì bản đầu viết "ba chỗ,
+không hơn", và người review đếm được **tám** (đúng, nhưng câu chữ thì sai):
+
+4. `read()` trong adapter Redis (§5.2 đoạn cuối) — trả map rỗng;
+5. `decode()` giá trị Redis hỏng (§5.3) — loại bỏ key đó;
+6. `readProgress()` trong `get-batch-status` (§5.7) — bảng vẫn nguyên;
+7. `emitProgress()` trong `facebook-publisher` (§5.5) — lỗi của người nghe không phải
+   lỗi của người đăng;
+8. `emitProgress()` trong `tiktok-publisher` (§5.5) — như trên.
+
+Mọi chỗ đều log `warn` kèm context đầy đủ. Con số đúng là **tám**; điều bất biến là:
+không chỗ nào nuốt lỗi của chính việc đăng bài.
 
 `appendJobEvent` trên repo **ném `DB_ERROR` như mọi phương thức repo khác** — không nuốt
 lỗi ở tầng repo. `bestEffort` mới là chỗ chịu trách nhiệm, và nó cũng làm cho lời hứa

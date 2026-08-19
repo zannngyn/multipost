@@ -5,12 +5,14 @@ import {
   POST_JOB_STAGES,
   POST_JOB_WAITING_STAGES,
   PROGRESS_STEP_NONE,
+  applyStageInvariants,
   isPostJobStage,
   postJobProgressMessage,
   progressStepIndex,
   waitingProgress,
   workingProgress,
   type PostJobStage,
+  type PostJobWaitingStage,
   type PostJobWorkingStage,
 } from "./post-job-progress";
 
@@ -187,6 +189,75 @@ describe("the type-level guarantee of §3.2", () => {
 
     expect(progress.stage).toBe("waiting_in_queue");
     expect(progress.waitUntil).toBeNull();
+  });
+
+  it("drops the deadline when waitingProgress falls back to a working stage", () => {
+    // The other direction, and the one that used to leak: the fallback stage is
+    // `waiting_in_queue`, which WORKS, so carrying the caller's deadline into it
+    // would put a countdown on a working stage.
+    const progress = waitingProgress(
+      "uploading_media" as unknown as PostJobWaitingStage,
+      { attempt: 1, now: NOW, waitUntil: new Date(NOW.getTime() + 60_000) },
+    );
+
+    expect(progress.stage).toBe("waiting_in_queue");
+    expect(progress.waitUntil).toBeNull();
+  });
+});
+
+describe("applyStageInvariants — the pairing rule at a boundary", () => {
+  const base = {
+    attempt: 1,
+    stageStartedAt: NOW,
+    updatedAt: NOW,
+  };
+
+  it("strips a deadline a working stage must never carry", () => {
+    // The shape a hand-edited or older-build Redis value can have. Left alone it
+    // would draw a countdown on the upload step (§3.2).
+    const cleaned = applyStageInvariants({
+      ...base,
+      stage: "uploading_media",
+      doneCount: 3,
+      totalCount: 10,
+      currentItem: "IMG_2041.jpg",
+      waitUntil: new Date(NOW.getTime() + 60_000),
+    });
+
+    expect(cleaned.waitUntil).toBeNull();
+    // The counts are real and are kept — only the invented half goes.
+    expect(cleaned).toMatchObject({ doneCount: 3, totalCount: 10, currentItem: "IMG_2041.jpg" });
+  });
+
+  it("strips counts a waiting stage must never carry", () => {
+    const cleaned = applyStageInvariants({
+      ...base,
+      stage: "waiting_for_spacing",
+      doneCount: 3,
+      totalCount: 10,
+      currentItem: "IMG_2041.jpg",
+      waitUntil: new Date(NOW.getTime() + 60_000),
+    });
+
+    expect(cleaned).toMatchObject({ doneCount: null, totalCount: null, currentItem: null });
+    expect(cleaned.waitUntil).not.toBeNull();
+  });
+
+  it("leaves a value the constructors produced untouched", () => {
+    const working = workingProgress("uploading_media", {
+      attempt: 1,
+      now: NOW,
+      doneCount: 3,
+      totalCount: 10,
+    });
+    expect(applyStageInvariants(working)).toEqual(working);
+
+    const waiting = waitingProgress("waiting_for_spacing", {
+      attempt: 1,
+      now: NOW,
+      waitUntil: new Date(NOW.getTime() + 60_000),
+    });
+    expect(applyStageInvariants(waiting)).toEqual(waiting);
   });
 });
 

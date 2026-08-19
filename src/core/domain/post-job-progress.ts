@@ -119,8 +119,13 @@ export function waitingProgress(
   input: WaitingProgressInput,
 ): PostJobProgress {
   const now = safeDate(input?.now);
+  // A stage this function cannot honour falls back to `waiting_in_queue`, which
+  // is a WORKING stage — so the deadline must go with it. Keeping it would be
+  // the one way a working stage ends up carrying a countdown, i.e. exactly the
+  // hole §3.2 closes by making `waitUntil` unreachable from `workingProgress`.
+  const isWaitingStage = isPostJobWaitingStage(stage);
   return {
-    stage: isPostJobWaitingStage(stage) ? stage : "waiting_in_queue",
+    stage: isWaitingStage ? stage : "waiting_in_queue",
     attempt: safeAttempt(input?.attempt),
     doneCount: null,
     totalCount: null,
@@ -129,9 +134,29 @@ export function waitingProgress(
     // An unusable date is dropped rather than faked: null means "no countdown",
     // which the screen can show honestly. Reaching this line means a caller bug,
     // and the missing countdown is what makes it visible.
-    waitUntil: isUsableDate(input?.waitUntil) ? input.waitUntil : null,
+    waitUntil: isWaitingStage && isUsableDate(input?.waitUntil) ? input.waitUntil : null,
     updatedAt: now,
   };
+}
+
+/**
+ * THE pairing rule of §3.2 stated once, for the one caller that cannot go
+ * through the constructors above: the Redis decoder, which must keep the
+ * timestamps it read instead of stamping `now`.
+ *
+ *   waiting stage -> a deadline, and never counts
+ *   working stage -> counts, and NEVER a deadline
+ *
+ * Without this, a stored value pairing `uploading_media` with a `wait_until`
+ * (an older build, a key edited by hand, a future writer) would put a countdown
+ * on the upload step — the exact claim §3.2 exists to forbid, arriving through
+ * the one door the type system does not guard.
+ */
+export function applyStageInvariants(progress: PostJobProgress): PostJobProgress {
+  if (isPostJobWaitingStage(progress.stage)) {
+    return { ...progress, doneCount: null, totalCount: null, currentItem: null };
+  }
+  return { ...progress, waitUntil: null };
 }
 
 /**

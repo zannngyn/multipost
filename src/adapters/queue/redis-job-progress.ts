@@ -1,7 +1,11 @@
 import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
-import { POST_JOB_STAGES, type PostJobProgress } from "@/core/domain/post-job-progress";
+import {
+  applyStageInvariants,
+  POST_JOB_STAGES,
+  type PostJobProgress,
+} from "@/core/domain/post-job-progress";
 import type { Logger } from "@/core/ports/infra";
 import type { JobProgressStore, ReportProgressInput } from "@/core/ports/job-progress";
 
@@ -327,7 +331,13 @@ function decode(
   // showing nothing (design §3.2 — never invent one either).
   const waitUntil = parsed.data.wait_until ? dateOf(parsed.data.wait_until) : null;
 
-  return {
+  // Through the domain's pairing rule, never straight out of the schema: the
+  // schema types each field on its own, so nothing in it stops a stored value
+  // from pairing `uploading_media` with a `wait_until` and putting an invented
+  // countdown on the upload step (design §3.2). This is the one place the
+  // constructors cannot be used — they stamp `now`, and a decoder must keep the
+  // instants it read — so the rule is applied explicitly instead.
+  return applyStageInvariants({
     stage: parsed.data.stage,
     attempt: parsed.data.attempt,
     doneCount: parsed.data.done_count,
@@ -336,7 +346,7 @@ function decode(
     stageStartedAt,
     waitUntil,
     updatedAt,
-  };
+  });
 }
 
 function snake(ids: { tenantId: string; postJobId: string }): Record<string, string> {

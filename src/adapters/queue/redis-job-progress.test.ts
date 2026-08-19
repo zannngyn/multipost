@@ -185,6 +185,56 @@ describe("read — values Redis should never have contained", () => {
   });
 });
 
+describe("stored values that pair a stage with the wrong fields", () => {
+  it("drops a deadline stored against the upload step", async () => {
+    // The schema types every field on its own, so nothing in it refuses this
+    // pairing: an older build, a future writer, or a key edited by hand. Left
+    // as read, the screen would count down on the upload step (design §3.2).
+    const client = fakeRedis({
+      [`mysp:progress:${TENANT}:job-1`]: JSON.stringify({
+        v: 1,
+        stage: "uploading_media",
+        attempt: 1,
+        done_count: 3,
+        total_count: 10,
+        current_item: "IMG_2041.jpg",
+        stage_started_at: NOW.toISOString(),
+        wait_until: new Date(NOW.getTime() + 60_000).toISOString(),
+        updated_at: NOW.toISOString(),
+      }),
+    });
+    const { store } = makeStore(client);
+
+    const entry = (await store.read(TENANT, ["job-1"])).get("job-1");
+
+    expect(entry?.waitUntil).toBeNull();
+    // The counts were true; only the half that cannot be true is dropped.
+    expect(entry).toMatchObject({ doneCount: 3, totalCount: 10 });
+  });
+
+  it("drops counts stored against a waiting step", async () => {
+    const client = fakeRedis({
+      [`mysp:progress:${TENANT}:job-1`]: JSON.stringify({
+        v: 1,
+        stage: "waiting_for_spacing",
+        attempt: 1,
+        done_count: 3,
+        total_count: 10,
+        current_item: "IMG_2041.jpg",
+        stage_started_at: NOW.toISOString(),
+        wait_until: new Date(NOW.getTime() + 60_000).toISOString(),
+        updated_at: NOW.toISOString(),
+      }),
+    });
+    const { store } = makeStore(client);
+
+    const entry = (await store.read(TENANT, ["job-1"])).get("job-1");
+
+    expect(entry).toMatchObject({ doneCount: null, totalCount: null, currentItem: null });
+    expect(entry?.waitUntil).not.toBeNull();
+  });
+});
+
 describe("a store that is down", () => {
   const dead: ProgressRedisClient = {
     set: async () => {
