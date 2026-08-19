@@ -60,6 +60,18 @@ echo "--- start stack"
 #   schema.
 stack up -d --no-build --remove-orphans --scale caddy=0
 
+echo "--- seed the base rows"
+# Not optional, despite the file calling itself a "development seed": every
+# screen in src/ui hard-codes DEMO_TENANT_ID, so a database without that tenant
+# row fails the FK on the first write. A fresh staging deploy proved it — the
+# Facebook Page import fetched the Page fine and then died on
+# `insert into tenant_integration ... field: tenantId`.
+#
+# Safe to repeat: seed() is one transaction that converges to the same two rows
+# (tenant + demo user) and writes no business data. Revisit when real
+# multi-tenancy lands and the tenant id stops being a constant.
+stack run --rm --no-deps migrate pnpm db:seed
+
 echo "--- wait for health"
 wait_healthy() {
   local service="$1" cid status=""
