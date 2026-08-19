@@ -85,6 +85,20 @@
       "when": 1787124248663,
       "tag": "0011_public_may_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787134239733,
+      "tag": "0012_account_identity_membership_invite",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787134349751,
+      "tag": "0013_backfill_accounts_from_access_request",
+      "breakpoints": true
     }
   ]
 }
