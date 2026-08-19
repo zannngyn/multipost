@@ -125,15 +125,16 @@ Mọi màn UI và mọi route phải xác định mình phục vụ state nào; 
 
 ## 4. Lộ trình — 3 phần *(estimate sửa sau review; M1.3 chốt lại sau M1.0)*
 
-Ước lượng theo ngày dev thuần (flow agent team + gate). **Tổng ~13–14,5 ngày ≈ 3 tuần lịch.**
+Ước lượng theo ngày dev thuần (flow agent team + gate). **Tổng ~15,5–16,5 ngày ≈ 3,5 tuần lịch** *(cập nhật sau M1.0 — phần test 87 file là cấu phần chi phối)*.
 
-### Phần 1 — Hợp đồng + nền móng + vá B-8 *(≈ 6–7,5 ngày)*
+### Phần 1 — Hợp đồng + nền móng + vá B-8 *(≈ 8,5–9,5 ngày — cập nhật sau M1.0)*
 
 - [x] **M0** Threat model + hợp đồng phân quyền → **`docs/10-hop-dong-phan-quyen.md`** — gate reviewer-qa PASS, PM duyệt 19/08/2026 (12 quyết định mục 8, điều chỉnh 8.9: trần theo gói, MYSP không trần) — *commit 2a06319* ✅
-- [ ] **M1.0** Inventory tenant propagation: với từng route lần theo route → usecase → repo → worker/cookie/signed-URL, lập bảng nguồn-đích của `tenantId`; **chốt lại estimate M1.3 bằng số liệu này** — *0,5 ngày* —
+- [x] **M1.0** Inventory tenant propagation → **`docs/11-kiem-ke-tenant-propagation.md`** — 96 chữ ký port, 78 call site `forTenant`, 38 schema route, **87 file test/1.378 test case**; chốt M1.3 = 4 ngày tách đôi a/b — *19/08/2026* ✅
 - [ ] **M1.1** Schema `account` + `identity` + `membership`(+version) + `app_user.account_id` (UNIQUE tenant+account) + `invite` (tạo trước, chưa dùng) + `tenant.slug/created_by/plan` + cột actor cho `ai_generation` + `audit_log.actor_kind` (doc 10 §5); migration + backfill từ `access_request`/`app_user` (integration test trên dump dev); seed cập nhật (tenant MYSP plan `internal`) — *1 ngày* —
 - [ ] **M1.2** Phiên + `requireTenant()` trả branded `TenantId`, cookie active-tenant, cache 3 tầng + `membership.version`, `GET /api/me`, `POST /api/me/active-tenant` — *1 ngày* —
-- [ ] **M1.3** Sửa **40 route** theo hợp đồng M0: bỏ `tenantId` từ client, đổi chữ ký port/usecase sang `TenantId`, bỏ `tenantId` khỏi 2 cookie OAuth state; route media HMAC giữ cơ chế riêng — *1–2,5 ngày (chốt sau M1.0)* —
+- [ ] **M1.3a** Brand `TenantId` xuống lõi, KHÔNG đổi hành vi: `tenant-scope.ts` → 51 DTO port → 43 input usecase → 78 call site; unbrand có tên ở 3 biên chuỗi thô (Redis key, FS path, HMAC); `systemTenantId()` + ESLint cấm `as TenantId`; **helper `testTenantId()` + codemod 87 file test ở commit đầu**; route tạm cast qua MỘT hàm `legacyTenantIdFromRequest()` — *1,75 ngày* (chi tiết docs/11 §3) —
+- [ ] **M1.3b** Cắt dây từ client, đổi hành vi: gỡ 38 schema, `requireTenant()` vào 46 edge, xoá `legacyTenantIdFromRequest()`, OAuth state server-side + `proxy.ts` 302, bug B2–B6 doc 10, suspended-guard worker, ~10 route test nhóm rủi ro cao. **Quá độ: server bỏ qua `tenantId` client gửi (không lỗi) cho tới M1.4** — *2,25 ngày* —
 - [ ] **M1.4** UI: gỡ `DEMO_TENANT_ID` khỏi 13 file, xoá 3 ô nhập UUID, services bỏ tham số tenantId (query key lấy từ `useActiveTenant()`), top bar tên công ty thật, màn NoMembership tạm — *1 ngày* —
 - [ ] **M1.5** Gate + **negative test matrix** (mục 5) chạy thật trên dev với ≥2 account, ≥2 tenant, có account thuộc CẢ HAI tenant — *1 ngày* —
 
@@ -188,7 +189,7 @@ Grep "tenantId từ request" = 0          → chỉ là điều kiện phụ, kh
 
 | Phần | Milestone | Ước lượng | Trạng thái |
 |---|---|---|---|
-| 1 — Hợp đồng + nền móng | M0 → M1.5 | 6–7,5 ngày | 🟨 M0 ✅ (19/08) · đang M1.0 |
+| 1 — Hợp đồng + nền móng | M0 → M1.5 | 8,5–9,5 ngày | 🟨 M0 ✅ · M1.0 ✅ (19/08) · kế tiếp M1.1 |
 | 2 — Onboarding | M2.1 → M2.4 | 3,5 ngày | ⬜ chưa bắt đầu |
 | 3 — Quản trị MYSP | M3.1 → M3.3 | 3,5 ngày | ⬜ chưa bắt đầu |
 
