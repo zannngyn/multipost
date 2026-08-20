@@ -3,11 +3,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
+import { useNowMs } from "@/ui/hooks/useNowMs";
+
 import {
   tenantCacheKey,
   type MeResponse,
   type MembershipRole,
   type MeTenant,
+  type SupportSession,
 } from "@/ui/schemas/me.schema";
 import { ApiError } from "@/ui/services/api-error";
 import { fetchMe, meKeys, setActiveTenant } from "@/ui/services/me.api";
@@ -23,6 +26,9 @@ import { fetchMe, meKeys, setActiveTenant } from "@/ui/services/me.api";
  * must never be handed to company B (core-auth-session §Nhiều tổ chức: switching
  * without clearing is a data leak, not a display bug).
  */
+
+/** How often the expiry of a support session is re-checked on the client. */
+const SUPPORT_EXPIRY_TICK_MS = 60_000;
 
 /** One shared query for the whole app — every screen reads the same answer. */
 export function useMe() {
@@ -40,6 +46,10 @@ export function useMe() {
 }
 
 export interface ActiveTenant {
+  /** M3.3: MYSP staff working inside a customer's company, read-only. */
+  readonly supportSession: SupportSession | null;
+  /** Shorthand: a live support session (expiry included). */
+  readonly isSupportMode: boolean;
   /** Null while unknown, while the picker is due, or for a session with no membership. */
   readonly tenantId: string | null;
   /** Always a string — the cache-partition segment of every tenant query key. */
@@ -58,23 +68,55 @@ export interface ActiveTenant {
 }
 
 /**
+ * A session whose clock has run out is NOT a session. The server refuses it
+ * anyway; treating it as live on this side would keep the banner up and every
+ * write button hidden long after the operator is back to normal — and the next
+ * `/api/me` (60s staleTime, or any mutation) clears it for good.
+ */
+function isSupportSessionLive(session: SupportSession | null, nowMs: number): boolean {
+  if (session === null) return false;
+  const expiresAtMs = Date.parse(session.expiresAt);
+  // An unparseable expiry reads as EXPIRED: refusing to trust a date we cannot
+  // read is safer than pretending a support session lasts forever.
+  if (Number.isNaN(expiresAtMs)) return false;
+  return expiresAtMs > nowMs;
+}
+
+/**
  * Derived view of `useMe()`. Kept separate so screens depend on the four facts
  * they need instead of on the whole payload shape.
  */
 export function useActiveTenant(): ActiveTenant {
   const me = useMe();
   const data = me.data;
+  // Ticks once a minute: enough to retire an expired support session on its own
+  // without turning every screen into a clock.
+  const nowMs = useNowMs(SUPPORT_EXPIRY_TICK_MS);
 
   const tenantId = data?.activeTenantId ?? null;
   const tenants = data?.tenants ?? [];
   const tenant = tenantId === null ? null : (tenants.find((item) => item.id === tenantId) ?? null);
   const isBootstrapAdmin = data?.isBootstrapAdmin ?? false;
 
+  const rawSupportSession = data?.supportSession ?? null;
+  const isSupportMode = isSupportSessionLive(rawSupportSession, nowMs);
+
   return {
     tenantId,
     tenantKey: tenantCacheKey(tenantId),
     tenant,
-    role: tenant?.role ?? null,
+    supportSession: isSupportMode ? rawSupportSession : null,
+    isSupportMode,
+    /**
+     * Support mode is READ-ONLY (doc 09 §3.5, Q8.1): every write answers 403.
+     * Reporting the role as `viewer` makes the whole app hide its write buttons
+     * through the machinery it already has (M2.3 ladder, channel/member/invite
+     * screens) instead of each screen learning about support mode separately.
+     *
+     * The customer's real membership role is NOT what MYSP staff hold here —
+     * they hold none at all — so there is nothing being downgraded.
+     */
+    role: isSupportMode ? "viewer" : (tenant?.role ?? null),
     // A bootstrap operator has no membership row but reaches the app through
     // the env allow-list, so their screens must not wait for a tenant that will
     // never appear in this payload.

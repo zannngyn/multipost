@@ -25,7 +25,7 @@ import {
 
 import type { Database } from "./client";
 import { findPgError, wrapDbError } from "./db-errors";
-import { accounts, identities, memberships, tenants } from "./schema";
+import { accounts, auditLogs, identities, memberships, tenants } from "./schema";
 import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
@@ -269,6 +269,85 @@ export class DrizzleAccountRepo implements AccountRepo {
         operation: "account.attachProviderAccountId",
         provider: input.provider,
         field: "providerAccountId",
+      });
+    }
+  }
+
+  /** M3.1 — fresh standing for platform ops (tier S). Null = no such account. */
+  async findPlatformStanding(
+    accountId: string,
+  ): Promise<{ status: "active" | "suspended"; platformRole: "support" | "super_admin" | null } | null> {
+    const id = str(accountId);
+    if (id.length === 0) return null;
+
+    try {
+      const rows = await this.db
+        .select({ status: accounts.status, platformRole: accounts.platformRole })
+        .from(accounts)
+        .where(eq(accounts.id, id))
+        .limit(1);
+      const row = rows[0];
+      if (!row) return null;
+      if (!isAccountStatus(row.status)) throw unreadable("account.status", row.status);
+      return {
+        status: row.status,
+        platformRole: isPlatformRole(row.platformRole) ? row.platformRole : null,
+      };
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "account.findPlatformStanding",
+        field: "accountId",
+      });
+    }
+  }
+
+  /**
+   * M3.1 — env→DB, exactly once. The WHERE clause is the race guard: two
+   * concurrent first requests both run the UPDATE, only one matches
+   * `platform_role IS NULL`, and only that one writes the audit row.
+   *
+   * The audit carries `tenant_id = NULL` (migration 0015): a platform grant is
+   * an event about the ACCOUNT, not about any tenant. Borrowing a tenant id
+   * here once made the whole transaction an FK bomb on a database without that
+   * row — promote rolled back forever and the platform was unreachable (B1).
+   * NULL has no FK to break, and the audit stays in the SAME transaction.
+   */
+  async grantBootstrapPlatformRole(accountId: string, sessionEmail: string): Promise<boolean> {
+    const id = str(accountId);
+    if (id.length === 0) return false;
+
+    try {
+      return await this.db.transaction(async (tx) => {
+        const rows = await tx
+          .update(accounts)
+          .set({ platformRole: "super_admin" })
+          .where(and(eq(accounts.id, id), sql`${accounts.platformRole} IS NULL`))
+          .returning({ id: accounts.id });
+        if (rows.length === 0) return false; // already granted (or racing loser)
+
+        await tx.insert(auditLogs).values({
+          tenantId: null,
+          actorUserId: null,
+          actorKind: "system",
+          action: "platform.role_granted",
+          entityType: "account",
+          entityId: id,
+          payload: {
+            platform_role: "super_admin",
+            reason: "ENV_BOOTSTRAP",
+            session_email: sessionEmail,
+          },
+        });
+        this.deps.logger.info("Bootstrap admin promoted to platform super_admin", {
+          account_id: id,
+          reason: "ENV_BOOTSTRAP",
+        });
+        return true;
+      });
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "account.grantBootstrapPlatformRole",
+        field: "accountId",
       });
     }
   }

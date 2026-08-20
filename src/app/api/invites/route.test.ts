@@ -26,6 +26,11 @@ vi.mock("@/app/_auth/session", () => ({
   getOperatorSession: (...args: unknown[]) => getOperatorSession(...(args as [])),
 }));
 
+// The link origin comes from AUTH_URL (canonical, https behind Caddy) — set it
+// to something OTHER than the request host so the assertion below proves the
+// request cannot influence the link.
+vi.stubEnv("AUTH_URL", "https://mysp.example");
+
 const { GET, POST } = await import("./route");
 
 const TENANT = "00000000-0000-0000-0000-000000000001";
@@ -84,7 +89,10 @@ describe("/api/invites — token discipline", () => {
 
     expect(response.status).toBe(201);
     const body = await response.json();
-    expect(body.url).toBe(`http://localhost/join/${TOKEN}`);
+    // AUTH_URL's origin, NOT the request's (`http://localhost`): behind Caddy
+    // the request scheme is the internal hop's, and a handed-out link must
+    // carry the real one.
+    expect(body.url).toBe(`https://mysp.example/join/${TOKEN}`);
     expect(createInvite).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId: TENANT,

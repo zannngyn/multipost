@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   NAV_SECTIONS,
+  visibleNavSections,
   flattenNavItems,
   isNavItemActive,
   toSearchKey,
@@ -53,6 +54,7 @@ describe("NAV_SECTIONS", () => {
       "/prompts",
       "/members",
       "/access",
+      "/platform",
     ]);
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
@@ -101,5 +103,46 @@ describe("toSearchKey", () => {
     for (const item of flattenNavItems()) {
       expect(toSearchKey(item.label)).toMatch(/^[a-z0-9 ]*$/);
     }
+  });
+});
+
+/**
+ * M3.2 / ticket N3. The rule: a section nobody may open is not shown at all —
+ * and, just as important, is not shown for one frame while `/api/me` loads,
+ * because an item that blinks into existence is an item somebody clicks
+ * (core-auth-session §menu chờ biết quyền mới render).
+ */
+describe("visibleNavSections", () => {
+  it("hides the platform section from an ordinary operator", () => {
+    const titles = visibleNavSections({ hasPlatformRole: false }).map((section) => section.title);
+    expect(titles).not.toContain("Nền tảng");
+    // …and nothing else disappears with it.
+    expect(titles).toContain("Cấu hình");
+    expect(titles).toContain("Vận hành");
+  });
+
+  it("shows it to an account that holds a platform role", () => {
+    const titles = visibleNavSections({ hasPlatformRole: true }).map((section) => section.title);
+    expect(titles).toContain("Nền tảng");
+  });
+
+  it("hides it while the role is still unknown — the default is the safe one", () => {
+    // The caller passes `false` until /api/me answers; this asserts that the
+    // safe direction is the one that hides, not the one that flashes.
+    const hidden = visibleNavSections({ hasPlatformRole: false });
+    const shown = visibleNavSections({ hasPlatformRole: true });
+    expect(hidden.length).toBe(shown.length - 1);
+  });
+
+  it("keeps the platform destinations out of the command palette too", () => {
+    // Hiding a section from the sidebar but leaving it findable in the palette
+    // would be hiding nothing at all.
+    const hrefs = flattenNavItems(visibleNavSections({ hasPlatformRole: false })).map(
+      (item) => item.href,
+    );
+    expect(hrefs).not.toContain("/platform");
+    expect(
+      flattenNavItems(visibleNavSections({ hasPlatformRole: true })).map((item) => item.href),
+    ).toContain("/platform");
   });
 });

@@ -66,19 +66,30 @@ export interface MediaContentResult {
 /** Which path served the bytes; `bypass` = mode B, whose bytes are already local. */
 export type MediaCacheOutcome = "hit" | "miss" | "bypass";
 
-export interface GetMediaContentDeps {
+/**
+ * Everything needed to turn (tenant, asset id) into bytes — WITHOUT deciding who
+ * is allowed to ask. Shared by the two doors onto the same assets:
+ *   - `getMediaContent`  — tier P, authorised by the HMAC in the URL (Meta);
+ *   - `getMediaPreview`  — session + membership (the compose screen).
+ * Neither may skip `findByDriveFileId(tenantId, …)`: the Service Account can
+ * read EVERY tenant's folder, so the tenant-scoped row IS the isolation gate.
+ */
+export interface MediaContentSourceDeps {
   drive: DriveSource;
   /** E9 — where operator-uploaded bytes live; Drive holds nothing for those. */
   blobs: MediaBlobStore;
   /** Read-through cache in front of Drive — the fix for the Graph 324 timeouts. */
   cache: MediaByteCache;
   mediaAssets: MediaAssetLookup;
-  /** Same MAC the signer used — injected, so core never touches a secret. */
-  sign: SignatureFn;
-  clock: Clock;
   logger: Logger;
   /** Memory guard: the bytes are buffered. Default 25 MiB. */
   maxBytes?: number;
+}
+
+export interface GetMediaContentDeps extends MediaContentSourceDeps {
+  /** Same MAC the signer used — injected, so core never touches a secret. */
+  sign: SignatureFn;
+  clock: Clock;
 }
 
 const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
@@ -107,109 +118,161 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
     // from input rather than minting one off the verified-but-unbranded claim.
     const { assetId } = verdict.claims;
     const tenantId = normalizeTenantId(input.tenantId);
-    const log = deps.logger.child({ tenant_id: tenantId });
-    const maxBytes = positive(deps.maxBytes) ?? DEFAULT_MAX_BYTES;
 
-    const asset = await deps.mediaAssets.findByDriveFileId(tenantId, assetId);
-    if (!asset) {
-      // Also the tenant-isolation verdict: a signature of another tenant lands
-      // here because the row is scoped by tenant_id, not because of the MAC.
-      log.warn("Signed media request for an asset this tenant does not have", {
-        drive_file_id: assetId,
-        error_code: "MEDIA_NOT_FOUND",
-      });
-      throw new AppError("MEDIA_NOT_FOUND", {
-        message: "No synced media asset with this Drive file id for this tenant",
-        userMessage: "Không tìm thấy ảnh này — có thể đã bị xoá trên Drive hoặc chưa đồng bộ.",
-        context: { tenant_id: tenantId, drive_file_id: assetId },
-      });
-    }
+    const { result, asset, cacheOutcome } = await readTenantMediaContent(deps, {
+      tenantId,
+      assetId,
+      surface: "signed_url",
+    });
 
-    // Refuse before the download when the sync already knows the file is huge.
-    if (typeof asset.sizeBytes === "number" && asset.sizeBytes > maxBytes) {
-      throw tooLarge(tenantId, assetId, asset.sizeBytes, maxBytes);
-    }
-
-    // Mode A reads from the cache and falls back to Drive; mode B reads the blob
-    // store (E9). Both end up as the same bytes on the same signed URL, which is
-    // what lets an uploaded post travel the existing publish path unchanged
-    // (brief section 8).
-    let cacheOutcome: MediaCacheOutcome = "bypass";
-    let content: MediaBytes;
-
-    if (asset.origin === "upload") {
-      content = await readUploadedBlob(deps, { tenantId, assetId, asset, maxBytes });
-    } else {
-      const cached = await readCache(deps, { tenantId, assetId, maxBytes });
-      if (cached) {
-        cacheOutcome = "hit";
-        content = cached;
-      } else {
-        cacheOutcome = "miss";
-        content = await deps.drive.download({ tenantId, fileId: assetId, maxBytes });
-      }
-    }
-
-    if (!content?.bytes || content.bytes.length === 0) {
-      // Facebook would fail on a 0-byte body with an opaque Graph error; make
-      // the cause visible here instead.
-      throw new AppError(asset.origin === "upload" ? "MEDIA_NOT_FOUND" : "DRIVE_ERROR", {
-        message: "Media source returned an empty body for an asset",
-        userMessage:
-          asset.origin === "upload"
-            ? "File đã tải lên không còn đọc được — hãy tải lại file cho bài này."
-            : "File ảnh trên Drive rỗng hoặc không tải được — cần kiểm tra lại file.",
-        context: {
-          tenant_id: tenantId,
-          drive_file_id: assetId,
-          file_name: asset.fileName,
-          origin: asset.origin,
-          reason: "EMPTY_CONTENT",
-        },
-      });
-    }
-    if (content.bytes.length > maxBytes) {
-      throw tooLarge(tenantId, assetId, content.bytes.length, maxBytes);
-    }
-
-    // Written only after the size/emptiness gates: a cache must never hold bytes
-    // this route would refuse to serve.
-    if (cacheOutcome === "miss") {
-      await writeCache(deps, {
-        tenantId,
-        assetId,
-        bytes: content.bytes,
-        mimeType: content.mimeType,
-      });
-    }
-
-    const mimeType = pickMime(content.mimeType, asset.mimeType);
-    log.info("Signed media request served", {
+    deps.logger.child({ tenant_id: tenantId }).info("Signed media request served", {
       drive_file_id: assetId,
       product_code: asset.productCode,
       file_name: asset.fileName,
       kind: asset.kind,
-      mime_type: mimeType,
-      bytes: content.bytes.length,
+      mime_type: result.mimeType,
+      bytes: result.sizeBytes,
       // "vì sao bài này không lên": a run of misses means every Meta fetch is
       // paying the Drive latency that caused the 324 timeouts.
       cache: cacheOutcome,
     });
 
-    return {
-      driveFileId: assetId,
-      fileName: asset.fileName,
-      productCode: asset.productCode,
-      kind: asset.kind,
-      mimeType,
-      sizeBytes: content.bytes.length,
-      bytes: content.bytes,
-      cacheSeconds: CACHE_SECONDS,
-    };
+    return result;
   };
 }
 
 export type GetMediaContent = ReturnType<typeof makeGetMediaContent>;
+
+export interface ReadTenantMediaInput {
+  readonly tenantId: TenantId;
+  readonly assetId: string;
+  /** Names the door in the log line, e.g. `signed_url` / `preview`. */
+  readonly surface: string;
+  /**
+   * Policy check run right after the tenant-scoped lookup and BEFORE a single
+   * byte is fetched — throw to refuse (the preview uses it to turn a video
+   * away). Keeps "who may see what" in the caller instead of leaking it here.
+   */
+  readonly accept?: (asset: MediaAsset) => void;
+}
+
+export interface TenantMediaContent {
+  readonly result: MediaContentResult;
+  readonly asset: MediaAsset;
+  readonly cacheOutcome: MediaCacheOutcome;
+}
+
+/**
+ * (tenant, asset id) -> bytes. AUTHORISATION HAS ALREADY HAPPENED when this
+ * runs — the signature for tier P, the membership for the preview — so the one
+ * safety property it still owns is the tenant-scoped lookup below.
+ *
+ * It deliberately does NOT log the success line: the two callers describe the
+ * same bytes to different readers, and one shared half-truthful message would
+ * be worse than two accurate ones.
+ */
+export async function readTenantMediaContent(
+  deps: MediaContentSourceDeps,
+  input: ReadTenantMediaInput,
+): Promise<TenantMediaContent> {
+  const { tenantId, assetId } = input;
+  const log = deps.logger.child({ tenant_id: tenantId });
+  const maxBytes = positive(deps.maxBytes) ?? DEFAULT_MAX_BYTES;
+
+  const asset = await deps.mediaAssets.findByDriveFileId(tenantId, assetId);
+  if (!asset) {
+    // Also the tenant-isolation verdict: an asset of ANOTHER tenant lands here
+    // because the row is scoped by tenant_id — not because of the MAC, and not
+    // because of the membership either.
+    log.warn("Media request for an asset this tenant does not have", {
+      drive_file_id: assetId,
+      surface: input.surface,
+      error_code: "MEDIA_NOT_FOUND",
+    });
+    throw new AppError("MEDIA_NOT_FOUND", {
+      message: "No synced media asset with this Drive file id for this tenant",
+      userMessage: "Không tìm thấy ảnh này — có thể đã bị xoá trên Drive hoặc chưa đồng bộ.",
+      context: { tenant_id: tenantId, drive_file_id: assetId, surface: input.surface },
+    });
+  }
+
+  // Before the download: refusing a video costs one DB read, not a 90s Drive
+  // transfer that is thrown away.
+  input.accept?.(asset);
+
+  // Refuse before the download when the sync already knows the file is huge.
+  if (typeof asset.sizeBytes === "number" && asset.sizeBytes > maxBytes) {
+    throw tooLarge(tenantId, assetId, asset.sizeBytes, maxBytes);
+  }
+
+  // Mode A reads from the cache and falls back to Drive; mode B reads the blob
+  // store (E9). Both end up as the same bytes on the same signed URL, which is
+  // what lets an uploaded post travel the existing publish path unchanged
+  // (brief section 8).
+  let cacheOutcome: MediaCacheOutcome = "bypass";
+  let content: MediaBytes;
+
+  if (asset.origin === "upload") {
+    content = await readUploadedBlob(deps, { tenantId, assetId, asset, maxBytes });
+  } else {
+    const cached = await readCache(deps, { tenantId, assetId, maxBytes });
+    if (cached) {
+      cacheOutcome = "hit";
+      content = cached;
+    } else {
+      cacheOutcome = "miss";
+      content = await deps.drive.download({ tenantId, fileId: assetId, maxBytes });
+    }
+  }
+
+  if (!content?.bytes || content.bytes.length === 0) {
+    // Facebook would fail on a 0-byte body with an opaque Graph error; make
+    // the cause visible here instead.
+    throw new AppError(asset.origin === "upload" ? "MEDIA_NOT_FOUND" : "DRIVE_ERROR", {
+      message: "Media source returned an empty body for an asset",
+      userMessage:
+        asset.origin === "upload"
+          ? "File đã tải lên không còn đọc được — hãy tải lại file cho bài này."
+          : "File ảnh trên Drive rỗng hoặc không tải được — cần kiểm tra lại file.",
+      context: {
+        tenant_id: tenantId,
+        drive_file_id: assetId,
+        file_name: asset.fileName,
+        origin: asset.origin,
+        reason: "EMPTY_CONTENT",
+      },
+    });
+  }
+  if (content.bytes.length > maxBytes) {
+    throw tooLarge(tenantId, assetId, content.bytes.length, maxBytes);
+  }
+
+  // Written only after the size/emptiness gates: a cache must never hold bytes
+  // this route would refuse to serve.
+  if (cacheOutcome === "miss") {
+    await writeCache(deps, {
+      tenantId,
+      assetId,
+      bytes: content.bytes,
+      mimeType: content.mimeType,
+    });
+  }
+
+  return {
+    asset,
+    cacheOutcome,
+    result: {
+      driveFileId: assetId,
+      fileName: asset.fileName,
+      productCode: asset.productCode,
+      kind: asset.kind,
+      mimeType: pickMime(content.mimeType, asset.mimeType),
+      sizeBytes: content.bytes.length,
+      bytes: content.bytes,
+      cacheSeconds: CACHE_SECONDS,
+    },
+  };
+}
 
 // --- helpers ----------------------------------------------------------------
 
@@ -229,7 +292,7 @@ interface MediaBytes {
  * every request rather than as silence.
  */
 async function readCache(
-  deps: GetMediaContentDeps,
+  deps: MediaContentSourceDeps,
   input: { tenantId: TenantId; assetId: string; maxBytes: number },
 ): Promise<MediaBytes | null> {
   try {
@@ -252,7 +315,7 @@ async function readCache(
  * one fails.
  */
 async function writeCache(
-  deps: GetMediaContentDeps,
+  deps: MediaContentSourceDeps,
   input: { tenantId: TenantId; assetId: string; bytes: Uint8Array; mimeType: string | null },
 ): Promise<void> {
   try {
@@ -276,7 +339,7 @@ async function writeCache(
  * fallback would turn a clear "the upload is gone" into an opaque Drive 404.
  */
 async function readUploadedBlob(
-  deps: GetMediaContentDeps,
+  deps: MediaContentSourceDeps,
   input: { tenantId: TenantId; assetId: string; asset: MediaAsset; maxBytes: number },
 ): Promise<{ bytes: Uint8Array; mimeType: string | null }> {
   const { tenantId, assetId, asset, maxBytes } = input;

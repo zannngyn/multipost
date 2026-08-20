@@ -13,8 +13,19 @@ import { z } from "zod";
  */
 
 export const WorkerHealthSchema = z.object({
-  /** 0 means nobody is draining the queue. */
-  workersOnline: z.number().int().min(0),
+  /**
+   * Is ANYBODY draining the queue? That is the whole question an operator has,
+   * and it is the only part everyone may see.
+   *
+   * Field-level rule (M3.3): the COUNT of workers is infrastructure detail — it
+   * tells a customer how the platform is deployed — so it comes back only for
+   * an account with a platform role, as the optional `workersOnline` below.
+   * The banner is built from the boolean; the number, when present, only makes
+   * a sentence more precise for MYSP staff.
+   */
+  workersAvailable: z.boolean(),
+  /** Platform staff only. Absent for everyone else — absence is NOT zero. */
+  workersOnline: z.number().int().min(0).optional(),
   /** false = the queue itself could not be asked; nothing may be concluded. */
   queueReachable: z.boolean(),
   /** Queued jobs never attempted once — schedules not yet due are excluded. */

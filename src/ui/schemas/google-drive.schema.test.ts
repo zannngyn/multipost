@@ -143,28 +143,34 @@ describe("sourceAccessWarning", () => {
 });
 
 describe("GoogleConnectionSchema", () => {
-  it("rejects a connected payload with no account on it", () => {
-    // Without an email the panel could not tell WHICH Google account is in use.
-    expect(
-      GoogleConnectionSchema.safeParse({
-        state: "connected",
-        connectedAt: "x",
-        scopes: [],
-        sourceAccess: "ok",
-      }).success,
-    ).toBe(false);
+  it("accepts a connected payload carrying nothing but the state (M3.3)", () => {
+    // Field-level: a viewer receives `{state}` alone. Failing that parse would
+    // blank the panel for exactly the people allowed to see the least.
+    const parsed = GoogleConnectionSchema.safeParse({ state: "connected" });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.state === "connected" && parsed.data.email).toBeUndefined();
   });
 
-  it("rejects a connected payload without sourceAccess", () => {
-    // A missing key means the server never checked whether this account can
-    // read the stored source — the panel must not vouch for it silently.
+  it("keeps every detail when the server does send them", () => {
+    const parsed = GoogleConnectionSchema.safeParse({
+      state: "connected",
+      email: "a@b.com",
+      connectedAt: "2026-08-19T03:00:00.000Z",
+      scopes: ["drive.readonly"],
+      sourceAccess: "ok",
+    });
+    expect(parsed.success && parsed.data.state === "connected" && parsed.data.sourceAccess).toBe(
+      "ok",
+    );
+  });
+
+  it("still refuses a detail that is present but the wrong type", () => {
+    // Withholding a field is a role decision; sending a broken one is a bug.
     expect(
-      GoogleConnectionSchema.safeParse({
-        state: "connected",
-        email: "a@b.com",
-        connectedAt: "2026-08-19T03:00:00.000Z",
-        scopes: [],
-      }).success,
+      GoogleConnectionSchema.safeParse({ state: "connected", email: "" }).success,
+    ).toBe(false);
+    expect(
+      GoogleConnectionSchema.safeParse({ state: "connected", scopes: "drive" }).success,
     ).toBe(false);
   });
 

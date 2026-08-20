@@ -43,9 +43,11 @@ export function PublishPanel({
   const { selectedIds, groupItems } = publish;
 
   return (
-    <aside
+    // A section in the flow of step 3, not a side panel: the frame's right-hand
+    // column already belongs to the live Facebook preview on every step.
+    <section
       aria-labelledby="publish-heading"
-      className="bg-card border-border flex w-full shrink-0 flex-col gap-4 rounded-xl border p-5 @4xl:w-95"
+      className="bg-card border-border flex flex-col gap-4 rounded-2xl border p-5"
     >
       <div className="space-y-1.5">
         <h3 id="publish-heading" className="text-base font-semibold">
@@ -81,7 +83,12 @@ export function PublishPanel({
           disabled={publish.isPending}
         />
         {groupItems.length > 0 ? (
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
+            <span>
+              {selectedIds.length === 0
+                ? "Chưa chọn kênh nào — bài chưa tạo được lô."
+                : `Sẽ tạo ${selectedIds.length} bài, mỗi kênh một bài.`}
+            </span>
             <Link
               href="/channels/groups"
               className="text-accent-foreground underline underline-offset-4"
@@ -183,6 +190,6 @@ export function PublishPanel({
       <p className="text-foreground-subtle text-xs leading-relaxed">
         Tự động đăng luôn mặc định TẮT: bài chỉ rời khỏi màn hình này khi có người bấm duyệt.
       </p>
-    </aside>
+    </section>
   );
 }

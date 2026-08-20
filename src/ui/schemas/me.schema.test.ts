@@ -54,6 +54,33 @@ describe("MeResponseSchema", () => {
     expect(parsed.success && parsed.data.isBootstrapAdmin).toBe(true);
   });
 
+  it("defaults supportSession to null — the SAFE reading of an absent field", () => {
+    // A server that predates M3.3 sends nothing. Reading that as "đang hỗ trợ"
+    // would hide every write button in the app for no reason.
+    const parsed = MeResponseSchema.safeParse(LIVE_PAYLOAD);
+    expect(parsed.success && parsed.data.supportSession).toBeNull();
+  });
+
+  it("keeps a live support session, with the company being supported", () => {
+    const parsed = MeResponseSchema.safeParse({
+      ...LIVE_PAYLOAD,
+      supportSession: {
+        tenantId: "00000000-0000-0000-0000-000000000002",
+        tenantName: "Nhà Xe An Anh",
+        expiresAt: "2026-08-20T11:00:00.000Z",
+      },
+    });
+    expect(parsed.success && parsed.data.supportSession?.tenantName).toBe("Nhà Xe An Anh");
+  });
+
+  it("rejects a support session with no expiry — it would never end on screen", () => {
+    const parsed = MeResponseSchema.safeParse({
+      ...LIVE_PAYLOAD,
+      supportSession: { tenantId: "t-2", tenantName: "X" },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
   it("accepts NoMembership — belonging to nothing is a state, not an error", () => {
     const parsed = MeResponseSchema.safeParse({
       account: { id: "a1", displayName: null, platformRole: null },

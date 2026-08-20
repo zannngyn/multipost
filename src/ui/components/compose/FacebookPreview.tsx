@@ -3,30 +3,41 @@
 import { useId, useState } from "react";
 
 import { cn } from "@/shared/utils";
+import { MediaThumb } from "@/ui/components/compose/MediaThumb";
+import type { MediaAsset } from "@/ui/schemas/compose.schema";
 
 /**
- * What the caption will look like in a Facebook feed.
+ * What the post will look like in a Facebook feed — the right-hand column of
+ * the approved compose design, visible on every step rather than only while a
+ * caption is being written.
  *
- * It exists for one decision the operator cannot make from a textarea: Facebook
- * truncates a post around 125 characters on mobile, so whatever matters has to
- * be in the first two lines. The mobile view therefore cuts at the real
- * threshold and shows the real "Xem thêm" — a preview that showed everything
- * would be the pretty lie that hides the problem.
+ * It exists for two decisions an operator cannot make from a textarea:
+ *  - Facebook truncates a post around 125 characters on mobile, so whatever
+ *    matters has to be in the first two lines. The mobile view cuts at the real
+ *    threshold and shows the real "Xem thêm" — a preview that showed everything
+ *    would be the pretty lie that hides the problem;
+ *  - the collage. Facebook crops an album into a 2×2 grid with a "+N" overflow,
+ *    and which photo ends up as the big one is exactly what the cover choice on
+ *    step 1 decides. The photos here are the REAL photos, pulled through the
+ *    session-authenticated preview route.
  *
- * The photos are the same labelled empty surfaces as the album grid: Phase 1
- * cannot fetch a Drive picture into the browser, and drawing a stand-in image
- * here would suggest the operator had checked something they had not.
+ * HARD RULE (CLAUDE.md business rule 2): this is the preview of what goes
+ * public. Stock, price and production notes have no place in it — the internal
+ * operator block lives on step 1 and stays there.
  */
 export function FacebookPreview({
   caption,
   pageName,
-  mediaCount,
+  media,
   isVideo,
+  className,
 }: {
   caption: string;
   pageName: string;
-  mediaCount: number;
+  /** The album in publish order; index 0 is the cover. */
+  media: readonly MediaAsset[];
   isVideo: boolean;
+  className?: string;
 }) {
   const groupId = useId();
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
@@ -39,13 +50,20 @@ export function FacebookPreview({
   return (
     <aside
       aria-labelledby={`${groupId}-heading`}
-      className="bg-card border-border flex w-full shrink-0 flex-col overflow-hidden rounded-xl border @4xl:w-100"
+      className={cn("flex w-full min-w-0 flex-col gap-3", className)}
     >
-      <div className="border-border flex flex-wrap items-center gap-3 border-b px-4 py-3.5">
-        <h3 id={`${groupId}-heading`} className="flex-1 text-sm font-semibold">
-          Xem trước bảng feed
+      <div className="flex flex-wrap items-center gap-3">
+        <h3
+          id={`${groupId}-heading`}
+          className="text-foreground-subtle flex-1 font-mono text-xs tracking-widest uppercase"
+        >
+          Xem trước · Facebook
         </h3>
-        <div role="group" aria-label="Khổ màn hình xem trước" className="bg-muted flex gap-1 rounded-lg p-0.5">
+        <div
+          role="group"
+          aria-label="Khổ màn hình xem trước"
+          className="bg-muted flex gap-1 rounded-lg p-0.5"
+        >
           {(["desktop", "mobile"] as const).map((option) => (
             <button
               key={option}
@@ -55,7 +73,7 @@ export function FacebookPreview({
               className={cn(
                 "focus-visible:ring-ring/50 cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition-colors outline-none focus-visible:ring-3",
                 device === option
-                  ? "bg-foreground text-background"
+                  ? "bg-card text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -65,68 +83,61 @@ export function FacebookPreview({
         </div>
       </div>
 
-      <div className="bg-background flex justify-center p-4">
-        <div className={cn("w-full", isMobile && "max-w-85")}>
-          <div
-            className={cn(
-              "border-border bg-card overflow-hidden border",
-              isMobile ? "rounded-2xl" : "rounded-lg",
-            )}
+      <div
+        className={cn(
+          "bg-card border-border overflow-hidden border transition-[max-width]",
+          isMobile ? "max-w-90 self-center rounded-3xl" : "w-full rounded-2xl",
+        )}
+      >
+        <div className="flex items-center gap-2.5 p-4">
+          <span
+            aria-hidden="true"
+            className="bg-accent text-accent-foreground flex size-9 items-center justify-center rounded-full text-xs font-semibold"
           >
-            <div className="flex items-center gap-2.5 p-4">
-              <span
-                aria-hidden="true"
-                className="bg-accent text-accent-foreground flex size-9 items-center justify-center rounded-full text-xs font-semibold"
+            {initialsOf(pageName)}
+          </span>
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-sm font-semibold">{pageName}</span>
+            <span className="text-muted-foreground text-xs">Vừa xong · Công khai</span>
+          </span>
+        </div>
+
+        <div className="px-4 pb-3 text-sm leading-relaxed">
+          {text.length === 0 ? (
+            <p className="text-muted-foreground italic">
+              Chưa có caption — bài chưa thể chuyển sang bước xem lại.
+            </p>
+          ) : isCut ? (
+            <p className="whitespace-pre-wrap">
+              {text.slice(0, MOBILE_CUTOFF)}…{" "}
+              <button
+                type="button"
+                onClick={() => setExpanded(true)}
+                className="text-muted-foreground hover:text-foreground cursor-pointer font-medium underline underline-offset-2"
               >
-                {initialsOf(pageName)}
-              </span>
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate text-sm font-semibold">{pageName}</span>
-                <span className="text-muted-foreground text-xs">Vừa xong · Công khai</span>
-              </span>
-            </div>
+                Xem thêm
+              </button>
+            </p>
+          ) : (
+            <p className="whitespace-pre-wrap">{text}</p>
+          )}
+        </div>
 
-            <div className="px-4 pb-3 text-sm leading-relaxed">
-              {text.length === 0 ? (
-                <p className="text-muted-foreground italic">
-                  Chưa có caption — bài chưa thể chuyển sang bước xem lại.
-                </p>
-              ) : isCut ? (
-                <p className="whitespace-pre-wrap">
-                  {text.slice(0, MOBILE_CUTOFF)}…{" "}
-                  <button
-                    type="button"
-                    onClick={() => setExpanded(true)}
-                    className="text-muted-foreground hover:text-foreground cursor-pointer font-medium underline underline-offset-2"
-                  >
-                    Xem thêm
-                  </button>
-                </p>
-              ) : (
-                <p className="whitespace-pre-wrap">{text}</p>
-              )}
-            </div>
+        <PreviewMedia media={media} isVideo={isVideo} />
 
-            <PreviewMedia count={mediaCount} isVideo={isVideo} />
-
-            <div className="border-border text-muted-foreground flex border-t text-xs">
-              {["Thích", "Bình luận", "Chia sẻ"].map((action) => (
-                <span key={action} className="flex-1 py-2.5 text-center">
-                  {action}
-                </span>
-              ))}
-            </div>
-          </div>
+        <div className="border-border text-muted-foreground flex border-t text-xs">
+          {["Thích", "Bình luận", "Chia sẻ"].map((action) => (
+            <span key={action} className="flex-1 py-2.5 text-center">
+              {action}
+            </span>
+          ))}
         </div>
       </div>
 
-      <div className="border-border text-muted-foreground flex flex-col gap-1.5 border-t px-4 py-3.5 text-xs leading-relaxed">
-        <p>
-          Facebook cắt caption sau khoảng {MOBILE_CUTOFF} ký tự trên mobile — phần quan trọng nên ở
-          hai dòng đầu.
-        </p>
-        <p>Ảnh chỉ là khung giữ chỗ: Phase 1 chưa tải ảnh từ Drive về trình duyệt.</p>
-      </div>
+      <p className="text-muted-foreground text-xs leading-relaxed">
+        Facebook cắt caption sau khoảng {MOBILE_CUTOFF} ký tự trên mobile — phần quan trọng nên ở hai
+        dòng đầu. Khung ảnh bên trên là cách Facebook ghép album, không phải kích thước thật của ảnh.
+      </p>
     </aside>
   );
 }
@@ -134,46 +145,60 @@ export function FacebookPreview({
 /** Where Facebook's mobile feed stops and offers "Xem thêm". */
 const MOBILE_CUTOFF = 125;
 
-/** The 2×2 collage Facebook builds from an album, with the usual "+N" overflow. */
-function PreviewMedia({ count, isVideo }: { count: number; isVideo: boolean }) {
-  if (count === 0) return null;
+/**
+ * The collage Facebook builds from an album: one large cell beside the rest,
+ * with the usual "+N" over the last visible tile.
+ *
+ * Not `aria-hidden`: the album is part of the post, so it gets a plain-language
+ * summary instead of being hidden from anyone who cannot see it.
+ */
+function PreviewMedia({ media, isVideo }: { media: readonly MediaAsset[]; isVideo: boolean }) {
+  if (media.length === 0) return null;
 
-  if (isVideo || count === 1) {
+  if (isVideo || media.length === 1) {
     return (
-      <div
-        aria-hidden="true"
-        className="bg-media-empty-cover text-foreground-subtle flex aspect-video items-center justify-center font-mono text-xs"
-      >
-        {isVideo ? "clip" : "ảnh bìa"}
-      </div>
+      <figure className="m-0">
+        <div className="bg-media-empty-cover relative aspect-video">
+          <MediaThumb asset={media[0]} alt="" lazy={false} />
+        </div>
+        <figcaption className="sr-only">
+          {isVideo ? "Bài video, một clip" : `Bài một ảnh: ${media[0].fileName}`}
+        </figcaption>
+      </figure>
     );
   }
 
-  const cells = Math.min(count, 4);
-  const overflow = count - cells;
+  const cells = Math.min(media.length, 4);
+  const overflow = media.length - cells;
 
   return (
-    <div aria-hidden="true" className="grid grid-cols-2 gap-0.5">
-      {Array.from({ length: cells }, (_, index) => (
-        <div
-          key={index}
-          className={cn(
-            "relative flex aspect-square items-end justify-start p-1.5",
-            index === 0 ? "bg-media-empty-cover" : "bg-media-empty",
-          )}
-        >
-          {overflow > 0 && index === cells - 1 ? (
-            <span className="bg-foreground/45 text-background absolute inset-0 flex items-center justify-center text-lg font-semibold">
-              +{overflow}
-            </span>
-          ) : (
-            <span className="bg-card/90 text-muted-foreground rounded px-1.5 py-0.5 font-mono text-xs">
-              {index === 0 ? "bìa" : index + 1}
-            </span>
-          )}
-        </div>
-      ))}
-    </div>
+    <figure className="m-0">
+      <div className="grid grid-cols-2 gap-0.5">
+        {media.slice(0, cells).map((asset, index) => (
+          <div
+            key={asset.driveFileId}
+            className={cn(
+              "relative aspect-square",
+              index === 0 ? "bg-media-empty-cover" : "bg-media-empty",
+            )}
+          >
+            <MediaThumb asset={asset} alt="" lazy={index > 0} />
+            {overflow > 0 && index === cells - 1 ? (
+              <span
+                aria-hidden="true"
+                className="bg-foreground/45 text-background absolute inset-0 z-1 flex items-center justify-center text-lg font-semibold"
+              >
+                +{overflow}
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <figcaption className="sr-only">
+        Album {media.length} ảnh, ảnh bìa là {media[0].fileName}
+        {overflow > 0 ? `; Facebook gộp ${overflow} ảnh cuối vào ô “+${overflow}”` : ""}.
+      </figcaption>
+    </figure>
   );
 }
 

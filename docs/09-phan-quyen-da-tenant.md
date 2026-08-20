@@ -147,9 +147,9 @@ Mọi màn UI và mọi route phải xác định mình phục vụ state nào; 
 
 ### Phần 3 — Quản trị MYSP *(≈ 3,5 ngày)*
 
-- [ ] **M3.1** `platform_role` (support/super_admin) + `requirePlatformAdmin(minRole)`; bootstrap từ env một lần rồi quản trong DB (đóng luôn nợ N9 — nút Chặn vô hiệu với bootstrap) — *1 ngày* —
-- [ ] **M3.2** Màn quản trị nền tảng: danh sách/tạo/khoá tenant (chỉ super_admin) — *1 ngày* —
-- [ ] **M3.3** Support mode bằng `platform_access_session` đúng mục 3.5 (opaque cookie, ràng buộc, banner, audit) — *1,5 ngày* —
+- [x] **M3.1** `requirePlatformAdmin` đọc tươi mỗi call; bootstrap→DB (promote 1 lần race-safe, **N9 đóng** — suspend chặn được cả bootstrap admin; env chỉ còn cứu hộ); migration 0015 audit_log.tenant_id nullable cho sự kiện `platform.*` (gate bắt ca ghim DEMO_TENANT_ID làm platform chết vĩnh viễn trên DB sạch — đã vá) — *commit 66af1a5, 20/08* ✅
+- [x] **M3.2** Màn `/platform` + API: tạo tenant cho khách kèm invite owner sinh sẵn, suspend/activate có lý do bắt buộc, constructor branded thứ 4 có rule import; **link mời build từ AUTH_URL** (hết bug scheme sau Caddy — PM hỏi trúng); nav lọc theo platformRole (đóng vé N3) — *commit 66af1a5, 20/08* ✅
+- [x] **M3.3** Support mode: visit server-side 1h/1-tenant có purpose, audit entered/exited đủ cặp DƯỚI SỔ TENANT ĐÍCH (`actor_kind='platform_support'`), chỉ-đọc tier R (ghi → 403), membership thắng visit, thoát không cần role (người bị tước quyền giữa chừng phải thoát được), banner + hạ role một chỗ trên UI. E2E thật qua HTTP (promote SQL → vào → đọc 200/ghi 403 → thoát → 404). Kèm cùng wave: 4 luật field-level đóng (absent ≠ false, hết nhãn TODO quá mốc) · endpoint preview ảnh session-backed (tầng P không mất một dòng verify, tái chứng minh bằng 3 ca M1.5) · proxy allowlist thu về đúng một-segment · compose redesign theo mẫu PM — *commit 8efc341, 20/08* ✅
 
 ### Nợ cũ tự khỏi ở đâu
 
@@ -191,7 +191,9 @@ Grep "tenantId từ request" = 0          → chỉ là điều kiện phụ, kh
 |---|---|---|---|
 | 1 — Hợp đồng + nền móng | M0 → M1.5 | 8,5–9,5 ngày | ✅ **HOÀN TẤT 20/08/2026** — B-8 đóng, matrix 12/12 trên dev thật |
 | 2 — Onboarding | M2.1 → M2.4 | 3,5 ngày | ✅ **HOÀN TẤT 20/08/2026** — hết whitelist env, mời bằng link, thành viên quản trong app |
-| 3 — Quản trị MYSP | M3.1 → M3.3 | 3,5 ngày | ⬜ chưa bắt đầu |
+| 3 — Quản trị MYSP | M3.1 → M3.3 | 3,5 ngày | ✅ **HOÀN TẤT 20/08/2026** |
+
+> **TOÀN LỘ TRÌNH 15/15 MILESTONE HOÀN TẤT 20/08/2026** — từ "mọi route tin tenantId client gửi" đến: cách ly tenant cưỡng chế bằng branded type + membership DB, onboarding tự phục vụ bằng link mời, và mặt phẳng quản trị nền tảng với support mode có audit. Vé còn mở ghi tại từng milestone; đáng chú ý nhất trước khi phát link mời cho khách ngoài: **Caddy access log ở edge vẫn ghi `/join/<token>`**.
 
 ## 8. Lịch sử review
 

@@ -35,6 +35,16 @@ export type AuthzTier = "S" | "M" | "R";
  */
 export type { TenantContext, TenantId } from "@/core/domain/tenant-context";
 
+/**
+ * Same reason, for the role LADDER. A route that narrows a FIELD rather than a
+ * whole endpoint (doc 10 Q8.3: `secretsConfigured` is admin+) still has to
+ * compare roles after `requireTenant` returned, and the app layer may not reach
+ * into core/domain/account for the comparator. Re-exported here so the ranking
+ * table stays in exactly one place — hand-rolling `role === "admin" || role ===
+ * "owner"` in a route is how a new role silently stops being counted.
+ */
+export { roleAtLeast } from "@/core/domain/account";
+
 export const TENANT_CONTEXT_CACHE_TTL_MS = 60_000;
 
 export interface RequireTenantSession {
@@ -48,6 +58,12 @@ export interface RequireTenantOptions {
   readonly tier: AuthzTier;
   /** When set, the membership's role must be >= this (doc 10 §1 ladder). */
   readonly minRole?: OperatorRole;
+  /**
+   * M3.3 — the support-mode cookie's opaque row id, if the request carried
+   * one. Only consulted AFTER every membership path missed: a real membership
+   * always wins over a support visit.
+   */
+  readonly supportSessionId?: string | null;
 }
 
 export type RequireTenant = (
@@ -64,6 +80,14 @@ export interface RequireTenantGate {
 
 export interface RequireTenantDeps {
   accounts: AccountRepo;
+  /**
+   * M3.3 — fresh liveness read of a support session (the row IS the
+   * authorisation; never cached). Wired to the support-session repo.
+   */
+  findSupportSession: (
+    sessionId: string,
+    accountId: string,
+  ) => Promise<{ tenantId: TenantId; expiresAt: Date } | null>;
   clock: Clock;
   logger: Logger;
   /** Injection seam for tests. Defaults to TENANT_CONTEXT_CACHE_TTL_MS. */
@@ -157,6 +181,40 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
     // isTenantId above, and only a membership-checked value leaves this function.
     const selected: TenantId | "" = cookieIsUsable ? (rawSelected as TenantId) : "";
 
+    /**
+     * M3.3 — the support-mode fallback, consulted ONLY after a membership path
+     * missed (a real membership always wins). The session row is read FRESH;
+     * doc 10 §8.1 pins support to READ-ONLY, so any tier above R answers 403
+     * rather than pretending the visit is a membership.
+     */
+    const supportFallback = async (selectedTenant: string): Promise<TenantContext | null> => {
+      const sessionId = options.supportSessionId;
+      if (typeof sessionId !== "string" || sessionId.length === 0) return null;
+      const live = await deps.findSupportSession(sessionId, accountId);
+      if (!live) return null;
+      // A selector pointing at a DIFFERENT tenant than the visit covers stays
+      // on the normal refusal path — the session is not a skeleton key.
+      if (selectedTenant.length > 0 && selectedTenant !== live.tenantId) return null;
+
+      if (tier !== "R") {
+        log.warn("Support session refused a write tier — support is read-only", {
+          tenant_id: live.tenantId,
+          error_code: "FORBIDDEN",
+          tier,
+        });
+        throw new AppError("FORBIDDEN", {
+          message: "Support mode is read-only (tier R); writes need a membership",
+          userMessage: "Chế độ hỗ trợ chỉ được xem — thao tác ghi cần là thành viên.",
+          context: { tenant_id: live.tenantId, tier },
+        });
+      }
+      log.info("Tenant context granted through a support session", {
+        tenant_id: live.tenantId,
+        support_mode: true,
+      });
+      return { tenantId: live.tenantId, role: "viewer", membershipVersion: 0, supportMode: true };
+    };
+
     if (selected === "") {
       const activeMemberships = await deps.accounts.listMembershipsWithTenant(accountId);
       const usable = activeMemberships.filter((m) => m.tenantStatus === "active");
@@ -164,6 +222,10 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
         // One company needs no cookie — auto-active (docs/09 §3.8).
         return toContext(usable[0], options.minRole, log);
       }
+      // No usable membership picked — a live support visit may still answer
+      // (this is how a staffer with no memberships reads the visited tenant).
+      const support = await supportFallback("");
+      if (support) return support;
       // Zero (NoMembership) and several (chưa chọn) are the SAME answer to the
       // caller: pick one first. The UI knows which screen from /api/me.
       throw new AppError("TENANT_NOT_SELECTED", {
@@ -177,6 +239,10 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
 
     const membership = await readMembership(accountId, selected, tier);
     if (!membership || membership.status !== "active" || membership.tenantStatus !== "active") {
+      // Membership MISS on the selected tenant — a live support visit covering
+      // exactly that tenant may still answer (read-only, M3.3).
+      const support = await supportFallback(selected);
+      if (support) return support;
       // No membership, removed membership, suspended tenant, nonexistent
       // tenant: ONE indistinguishable 404, so this cannot probe what exists.
       log.warn("Tenant resolution refused", {

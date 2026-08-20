@@ -100,6 +100,23 @@ export interface AccountRepo {
    */
   findMembershipVersion(accountId: string, tenantId: TenantId): Promise<number | null>;
 
+  /**
+   * M3.1 — the FRESH platform standing (every platform op is tier S). Null =
+   * no such account. Status travels with the role so a suspended super_admin
+   * dies here, not a TTL later.
+   */
+  findPlatformStanding(
+    accountId: string,
+  ): Promise<{ status: AccountStatus; platformRole: PlatformRole | null } | null>;
+
+  /**
+   * M3.1 — one-time env→DB promotion of a bootstrap admin to `super_admin`.
+   * MUST be race-safe: `UPDATE ... WHERE platform_role IS NULL RETURNING`, so
+   * two concurrent first requests grant (and audit) exactly once. Returns
+   * whether THIS call performed the grant.
+   */
+  grantBootstrapPlatformRole(accountId: string, sessionEmail: string): Promise<boolean>;
+
   /** ACTIVE memberships joined with tenant name/slug/plan, for /api/me. */
   listMembershipsWithTenant(accountId: string): Promise<readonly MembershipWithTenant[]>;
 }

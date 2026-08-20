@@ -128,7 +128,8 @@ describe("POST /api/posts/captions — refusals happen before any spending", () 
     expect(requireTenant).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "acc-1" }),
       TENANT,
-      { tier: "S", minRole: "editor" },
+      // supportSessionId travels since M3.3 (null without a support cookie).
+      { tier: "S", minRole: "editor", supportSessionId: null },
     );
   });
 

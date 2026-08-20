@@ -212,6 +212,15 @@ function makeUsers(byEmail: Record<string, string>, options: { fail?: boolean } 
       if (options.fail) throw new AppError("DB_ERROR", { message: "app_user unreachable" });
       return byEmail[email.trim().toLowerCase()] ?? null;
     },
+    /**
+     * Retry resolves its actor from the session E-MAIL (a replayed job payload
+     * may carry nothing else), so this arm must never be reached. Throwing
+     * rather than returning null: a silent switch to the account key would
+     * otherwise leave every audit row anonymous with all tests still green.
+     */
+    async findUserIdByAccount() {
+      throw new Error("retryPostJob must resolve its actor by e-mail, not by account");
+    },
   };
   return users;
 }

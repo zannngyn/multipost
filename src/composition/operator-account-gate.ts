@@ -34,12 +34,21 @@ export interface OperatorAccountGate {
   signIn(input: SignInIdentityInput): Promise<SignInAccountVerdict>;
   /** M2.4 — first sign-in creates the person. Fresh; clears the cache. */
   provision(input: SignInIdentityInput & { displayName?: unknown }): Promise<OperatorAccountState>;
+  /**
+   * M3.1 — promote a bootstrap admin to super_admin, exactly once (the repo's
+   * WHERE-IS-NULL is the race guard). NEVER throws: the promotion is a side
+   * benefit of a request that must succeed anyway; a failure is logged and the
+   * env keeps carrying the session until the next attempt.
+   */
+  grantBootstrapRole(accountId: string, sessionEmail: string): Promise<boolean>;
   /** Drops every cached account. Called the moment a decision is written. */
   invalidateAll(): void;
 }
 
 export interface OperatorAccountGateDeps {
   resolveAccount: ResolveOperatorAccount;
+  /** M3.1 — the one-time env→DB promotion of a bootstrap admin. */
+  grantBootstrapPlatformRole: (accountId: string, sessionEmail: string) => Promise<boolean>;
   clock: Clock;
   logger: Logger;
   /** Injection seam for tests. Defaults to ACCOUNT_CACHE_TTL_MS. */
@@ -90,6 +99,23 @@ export function makeOperatorAccountGate(deps: OperatorAccountGateDeps): Operator
       const state = await deps.resolveAccount.provisionForSignIn(input);
       cache.clear();
       return state;
+    },
+
+    async grantBootstrapRole(accountId, sessionEmail) {
+      try {
+        const granted = await deps.grantBootstrapPlatformRole(accountId, sessionEmail);
+        // The cached resolve still says platform_role=null — drop it.
+        if (granted) cache.clear();
+        return granted;
+      } catch (error) {
+        deps.logger.error("Could not promote the bootstrap admin — env keeps carrying them", {
+          err: AppError.from(error, "DB_ERROR"),
+          error_code: "DB_ERROR",
+          account_id: accountId,
+          alert: "OPERATOR_ATTENTION",
+        });
+        return false;
+      }
     },
 
     invalidateAll() {

@@ -8,20 +8,10 @@ import {
 
 import { buildBaseAuthConfig } from "@/app/_auth/auth.config";
 import { isDevFakeSessionEnabled, warnDevFakeSession } from "@/app/_auth/dev-session";
+import { isPublicPath } from "@/app/_lib/public-paths";
 import { redactSensitivePath } from "@/app/_lib/redact-path";
 import { safeReturnUrl } from "@/app/_auth/return-url";
 import { AppError } from "@/core/domain/errors";
-
-/** Everything else requires a session. Prefix match, plus their sub-paths. */
-const PUBLIC_PREFIXES = [
-  "/signin", // the door itself — must stay outside the guard, or redirect loop
-  "/api/auth", // Auth.js flow endpoints
-  "/api/health", // liveness probe for Docker/Caddy, called without a session
-  // Signed media bridge (E3.6). Meta's fetcher downloads the photo with no
-  // cookie at all, so a session guard here would break every Facebook post.
-  // Its bearer is the HMAC in `?sig=`, verified inside `getMediaContent`.
-  "/api/media",
-] as const;
 
 /**
  * Session decoding only — no providers needed to read a JWT cookie.
@@ -47,12 +37,6 @@ function getGuard(): NextProxy {
   });
 
   return cachedGuard;
-}
-
-function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
 }
 
 function isApiPath(pathname: string): boolean {

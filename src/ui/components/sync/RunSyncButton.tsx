@@ -18,13 +18,22 @@ export function RunSyncButton({
   onConfirm,
   isRunning,
   disabled,
+  disabledReason,
 }: {
   onConfirm: () => void;
   isRunning: boolean;
-  /** True when there is no valid tenant to sync. */
+  /** True when there is no valid tenant to sync, or writing is off (M3.3). */
   disabled?: boolean;
+  /**
+   * Why it is off, when there is a reason worth reading. A dead control with no
+   * explanation is what core-auth-session forbids; the sentence is rendered
+   * next to the button rather than as a tooltip so it survives touch and
+   * keyboard alike.
+   */
+  disabledReason?: string;
 }) {
   const panelId = useId();
+  const reasonId = `${panelId}-reason`;
   const [isConfirming, setIsConfirming] = useState(false);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -46,17 +55,28 @@ export function RunSyncButton({
   }
 
   if (!isConfirming || isRunning) {
+    const isBlocked = Boolean(disabled) && !isRunning && Boolean(disabledReason);
+
     return (
-      <Button
-        ref={triggerRef}
-        type="button"
-        size="lg"
-        onClick={() => setIsConfirming(true)}
-        disabled={disabled || isRunning}
-        aria-describedby={isRunning ? `${panelId}-running` : undefined}
-      >
-        {isRunning ? "Đang đồng bộ…" : "Chạy đồng bộ"}
-      </Button>
+      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <Button
+          ref={triggerRef}
+          type="button"
+          size="lg"
+          onClick={() => setIsConfirming(true)}
+          disabled={disabled || isRunning}
+          aria-describedby={
+            isRunning ? `${panelId}-running` : isBlocked ? reasonId : undefined
+          }
+        >
+          {isRunning ? "Đang đồng bộ…" : "Chạy đồng bộ"}
+        </Button>
+        {isBlocked ? (
+          <span id={reasonId} className="text-muted-foreground max-w-prose text-sm">
+            {disabledReason}
+          </span>
+        ) : null}
+      </span>
     );
   }
 

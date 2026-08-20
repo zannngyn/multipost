@@ -73,6 +73,15 @@ const IMPORT_TESTING_TENANT_ID = {
   selector: "ImportDeclaration[source.value='@/core/domain/tenant-context.testing']",
   message: "testTenantId chỉ dùng trong *.test.ts / __fixtures__ (docs/11 §3).",
 };
+const IMPORT_PLATFORM_TENANT_ID = {
+  selector: "ImportDeclaration[source.value='@/composition/platform-tenant-id']",
+  message:
+    "platformTenantId chỉ được import trong src/app/api/platform/** (doc 10 §3.5) — nơi khác đi qua requireTenant.",
+};
+const IMPORT_SIGNED_MEDIA_TENANT_ID = {
+  selector: "ImportDeclaration[source.value='@/composition/signed-media-tenant-id']",
+  message: "signedMediaTenantId chỉ được import trong src/app/api/media/** (tầng P, doc 10 §2).",
+};
 const restrictSyntax = (selectors) => ({ "no-restricted-syntax": ["error", ...selectors] });
 
 /** Files allowed to mint the brand with an explicit cast (the closed list). */
@@ -82,6 +91,8 @@ const TENANT_BRAND_BLESSED = [
   "src/composition/require-tenant.ts",
   // Tier P (doc 10 §2): the tenant claim inside the signed media URL.
   "src/composition/signed-media-tenant-id.ts",
+  // Platform layer (doc 10 §3.5): super_admin names the target tenant.
+  "src/composition/platform-tenant-id.ts",
   "src/composition/system-tenant-id.ts",
   // The well-known dev/seed tenant id — a literal we own, not client input.
   "src/adapters/db/seed-constants.ts",
@@ -250,20 +261,57 @@ const eslintConfig = defineConfig([
   },
 
   // --- Branded TenantId guards (order matters: last match wins per rule). ---
-  // 1. Baseline: ban the forging cast, the system ctor import and the test ctor.
+  // 1. Baseline: ban the forging cast and EVERY scoped-constructor import
+  //    (system, test, platform, signed-media).
   {
     files: ["src/**/*.{ts,tsx}"],
-    rules: restrictSyntax([AS_TENANT_ID, IMPORT_SYSTEM_TENANT_ID, IMPORT_TESTING_TENANT_ID]),
+    rules: restrictSyntax([
+      AS_TENANT_ID,
+      IMPORT_SYSTEM_TENANT_ID,
+      IMPORT_TESTING_TENANT_ID,
+      IMPORT_PLATFORM_TENANT_ID,
+      IMPORT_SIGNED_MEDIA_TENANT_ID,
+    ]),
   },
-  // 2. Worker (actor=system) may import systemTenantId; the casts stay banned.
+  // 2. Worker (actor=system) may import systemTenantId; everything else stays.
   {
     files: ["src/worker/**"],
-    rules: restrictSyntax([AS_TENANT_ID, IMPORT_TESTING_TENANT_ID]),
+    rules: restrictSyntax([
+      AS_TENANT_ID,
+      IMPORT_TESTING_TENANT_ID,
+      IMPORT_PLATFORM_TENANT_ID,
+      IMPORT_SIGNED_MEDIA_TENANT_ID,
+    ]),
   },
-  // 3. Blessed constructor sites may cast; still no system/test ctor imports.
+  // 2b. Platform routes are the ONE consumer of platformTenantId (doc 10 §3.5).
+  {
+    files: ["src/app/api/platform/**"],
+    rules: restrictSyntax([
+      AS_TENANT_ID,
+      IMPORT_SYSTEM_TENANT_ID,
+      IMPORT_TESTING_TENANT_ID,
+      IMPORT_SIGNED_MEDIA_TENANT_ID,
+    ]),
+  },
+  // 2c. The media route is the ONE consumer of signedMediaTenantId (tier P).
+  {
+    files: ["src/app/api/media/**"],
+    rules: restrictSyntax([
+      AS_TENANT_ID,
+      IMPORT_SYSTEM_TENANT_ID,
+      IMPORT_TESTING_TENANT_ID,
+      IMPORT_PLATFORM_TENANT_ID,
+    ]),
+  },
+  // 3. Blessed constructor sites may cast; no scoped-ctor imports either way.
   {
     files: TENANT_BRAND_BLESSED,
-    rules: restrictSyntax([IMPORT_SYSTEM_TENANT_ID, IMPORT_TESTING_TENANT_ID]),
+    rules: restrictSyntax([
+      IMPORT_SYSTEM_TENANT_ID,
+      IMPORT_TESTING_TENANT_ID,
+      IMPORT_PLATFORM_TENANT_ID,
+      IMPORT_SIGNED_MEDIA_TENANT_ID,
+    ]),
   },
   // 4. Tests + fixtures are exempt from all of the above (they brand freely and
   //    wire across layers on purpose — mirrors dependency-cruiser's test exclude).

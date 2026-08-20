@@ -25,13 +25,16 @@ type AccountLike = {
 };
 
 const resolveMock = vi.fn<(email: string) => Promise<AccountLike | null>>();
+const grantBootstrapRoleMock = vi.fn<(accountId: string, email: string) => Promise<boolean>>();
 
 vi.mock("./auth", () => ({ auth: () => authMock() }));
 
 vi.mock("@/composition/container", () => ({
   ACCESS_REGISTRY_TENANT_ID: DEMO_TENANT,
   getContainer: () => ({
-    usecases: { operatorAccounts: { resolve: resolveMock } },
+    usecases: {
+      operatorAccounts: { resolve: resolveMock, grantBootstrapRole: grantBootstrapRoleMock },
+    },
   }),
 }));
 
@@ -69,6 +72,8 @@ beforeEach(() => {
   authMock.mockReset();
   resolveMock.mockReset();
   resolveMock.mockResolvedValue(null);
+  grantBootstrapRoleMock.mockReset();
+  grantBootstrapRoleMock.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -162,8 +167,8 @@ describe("getOperatorSession — the account tables decide", () => {
   });
 });
 
-describe("getOperatorSession — env bootstrap admins", () => {
-  it("lets an address from AUTH_BOOTSTRAP_ADMINS in even when no account row exists", async () => {
+describe("getOperatorSession — env bootstrap admins (M3.1: the DB decides once a row exists)", () => {
+  it("RESCUE DOOR unchanged: no account row → session on env authority alone", async () => {
     authMock.mockResolvedValue({ user: { email: "boss@mysp.vn", name: "Boss" } });
     resolveMock.mockResolvedValue(null);
     const getOperatorSession = await loadSession();
@@ -176,18 +181,46 @@ describe("getOperatorSession — env bootstrap admins", () => {
       accountId: null,
     });
     expect(canManageAccess(session)).toBe(true);
+    expect(grantBootstrapRoleMock).not.toHaveBeenCalled(); // nothing to promote
   });
 
-  it("attaches the account id when the bootstrap admin does have an account row", async () => {
+  /**
+   * NEW BEHAVIOUR (M3.1, closes N9): once the row exists, the DATABASE is the
+   * source of truth — a suspended bootstrap admin is OUT, env or no env.
+   */
+  it("N9: a SUSPENDED bootstrap admin with an account row gets NO session", async () => {
     authMock.mockResolvedValue({ user: { email: "boss@mysp.vn", name: "Boss" } });
-    resolveMock.mockResolvedValue(member({ accountId: "acc-boss", platformRole: "super_admin" }));
+    resolveMock.mockResolvedValue(
+      member({ accountId: "acc-boss", status: "suspended", platformRole: "super_admin" }),
+    );
+    const getOperatorSession = await loadSession();
+
+    await expect(getOperatorSession("test")).resolves.toBeNull();
+    expect(grantBootstrapRoleMock).not.toHaveBeenCalled();
+  });
+
+  /** NEW (M3.1): env seeds the DB exactly once — the promote hook. */
+  it("promotes a bootstrap admin with a NULL platform_role and carries super_admin", async () => {
+    authMock.mockResolvedValue({ user: { email: "boss@mysp.vn", name: "Boss" } });
+    resolveMock.mockResolvedValue(member({ accountId: "acc-boss", platformRole: null }));
+    const getOperatorSession = await loadSession();
+
+    const session = await getOperatorSession("test");
+
+    expect(grantBootstrapRoleMock).toHaveBeenCalledWith("acc-boss", "boss@mysp.vn");
+    expect(session).toMatchObject({ isBootstrapAdmin: true, platformRole: "super_admin" });
+  });
+
+  it("keeps the DB's platform_role verbatim when it is already set", async () => {
+    authMock.mockResolvedValue({ user: { email: "boss@mysp.vn", name: "Boss" } });
+    resolveMock.mockResolvedValue(member({ accountId: "acc-boss", platformRole: "support" }));
     const getOperatorSession = await loadSession();
 
     await expect(getOperatorSession("test")).resolves.toMatchObject({
-      isBootstrapAdmin: true,
       accountId: "acc-boss",
-      platformRole: "super_admin",
+      platformRole: "support",
     });
+    expect(grantBootstrapRoleMock).not.toHaveBeenCalled(); // not null → no re-grant
   });
 
   it("lets an allow-listed Facebook id in through its synthetic address", async () => {

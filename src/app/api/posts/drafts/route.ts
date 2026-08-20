@@ -26,17 +26,25 @@ import type { TenantId } from "@/composition/require-tenant";
  * deliberately NO parameter naming another owner: a draft is "chỉ chính chủ",
  * admin and owner included, so the route physically cannot address one.
  *
- * "No app_user row for this e-mail" is NOT an error. It is a real state of a
- * dev/demo environment, and it answers `persisted: false` so the screen can say
- * "nháp chỉ lưu trên máy này" out loud — the one thing it must not do is look
- * like a successful save.
+ * The owner is the ACCOUNT, not the e-mail (closes the last field-level TODO of
+ * doc 10 §4.2). An address is an attribute of an identity (docs/09 §3.1): key
+ * ownership on it and an operator who changes e-mail silently loses their work,
+ * while the old address — reused by a new colleague — inherits it. `account.id`
+ * is the stable identifier, and `app_user` has carried `account_id` with
+ * `UNIQUE (tenant_id, account_id)` since M1.1.
+ *
+ * "No app_user row for this account" is NOT an error. It is a real state (the
+ * dev bypass without a row, an M1.1 backfill leftover whose `account_id` stayed
+ * NULL), and it answers `persisted: false` so the screen can say "nháp chỉ lưu
+ * trên máy này" out loud — the one thing it must not do is look like a
+ * successful save.
  */
 
 const ROUTE_GET = "GET /api/posts/drafts";
 const ROUTE_PUT = "PUT /api/posts/drafts";
 const ROUTE_DELETE = "DELETE /api/posts/drafts";
 
-/** Answered when the session e-mail matches no `app_user` row of this tenant. */
+/** Answered when the session account matches no `app_user` row of this tenant. */
 const NO_USER_REASON = "NO_USER";
 
 /**
@@ -70,20 +78,24 @@ const SaveSchema = z
 export const dynamic = "force-dynamic";
 
 /**
- * `app_user.id` of the caller, or null when the session e-mail matches no row.
+ * `app_user.id` of the caller, or null when this account has no row here.
  *
- * Not an authorisation check — `requireTenantContext` already did that. This is
- * the ownership key, and refusing to guess it is the point.
+ * Not an authorisation check — `requireTenantContext` already proved the
+ * membership, and the lookup is scoped to the tenant it returned. This is the
+ * ownership key, and refusing to guess it is the point.
  *
- * TODO(M1.4): resolve through `account_id` -> membership -> app_user instead of
- * the session e-mail. Doc 10 §4.2 says the owner is an ACCOUNT; e-mail is only a
- * lookup key and doc 09 §3.1 makes it an attribute, not an identity.
+ * A session with no `accountId` (the local dev bypass on a box with no database)
+ * is a legitimate state, not a failure: it means there is nowhere on the server
+ * for this person's draft to live, which is exactly what `null` says.
  */
-async function resolveOwnerUserId(tenantId: TenantId, email: string): Promise<string | null> {
-  const trimmed = email.trim();
+async function resolveOwnerUserId(
+  tenantId: TenantId,
+  accountId: string | null,
+): Promise<string | null> {
+  const trimmed = accountId?.trim() ?? "";
   if (trimmed.length === 0) return null;
 
-  return getContainer().usecases.findOperatorUserId(tenantId, trimmed);
+  return getContainer().usecases.findDraftOwnerUserId(tenantId, trimmed);
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -99,7 +111,7 @@ export async function GET(request: Request): Promise<Response> {
       tier: "R",
       minRole: "editor",
     });
-    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.email);
+    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.accountId);
 
     // No owner means no server-side draft, not a failure.
     if (ownerUserId === null) {
@@ -146,7 +158,7 @@ export async function PUT(request: Request): Promise<Response> {
     // `readJsonBody` parses the body itself, so a `text/plain` beacon body is
     // read exactly like an `application/json` one.
     const body = await readJsonBody(request, SaveSchema, { route: ROUTE_PUT });
-    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.email);
+    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.accountId);
 
     if (ownerUserId === null) {
       logger.warn("Draft autosave without a resolvable operator", {
@@ -191,7 +203,7 @@ export async function DELETE(request: Request): Promise<Response> {
       tier: "M",
       minRole: "editor",
     });
-    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.email);
+    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.accountId);
 
     // No owner = no row addressed to anyone; "already gone" is the same outcome
     // the caller asked for, so it answers 204 rather than inventing a failure.

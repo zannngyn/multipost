@@ -15,6 +15,7 @@ import { SyncRailSkeleton, SyncStatusSkeleton } from "@/ui/components/sync/SyncS
 import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useActiveTenant } from "@/ui/hooks/useMe";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { useRunCatalogSync, useSyncStatus } from "@/ui/hooks/useCatalogSync";
 import type { BadgeTone } from "@/ui/components/ui/badge";
 import {
@@ -69,6 +70,8 @@ export function SyncScreen() {
    * that, not an empty text box, is this screen's idle state now.
    */
   const { isResolved } = useActiveTenant();
+  /** Support mode: reading a customer's catalogue is fine, rewriting it is not. */
+  const readOnlyReason = useReadOnlyReason();
   const status = useSyncStatus();
   const run = useRunCatalogSync();
 
@@ -103,7 +106,8 @@ export function SyncScreen() {
                   run.mutate();
                 }}
                 isRunning={run.isPending}
-                disabled={!isResolved}
+                disabled={!isResolved || readOnlyReason !== null}
+                disabledReason={readOnlyReason ?? undefined}
               />
             </div>
           </header>

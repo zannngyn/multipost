@@ -82,6 +82,26 @@ export function makeFakeAccountRepo(seed: FakeAccountRecord[] = []): FakeAccount
       return records.get(sessionEmail.trim().toLowerCase())?.summary ?? null;
     },
 
+    // M3.1 — fresh standing; the fake serves the stored summary verbatim.
+    async findPlatformStanding(accountId) {
+      for (const record of records.values()) {
+        if (record.summary.accountId !== accountId) continue;
+        return { status: record.summary.status, platformRole: record.summary.platformRole };
+      }
+      return null;
+    },
+
+    // Mirrors the race rule: only a null role is granted, exactly once.
+    async grantBootstrapPlatformRole(accountId) {
+      for (const record of records.values()) {
+        if (record.summary.accountId !== accountId) continue;
+        if (record.summary.platformRole !== null) return false;
+        record.summary = { ...record.summary, platformRole: "super_admin" };
+        return true;
+      }
+      return false;
+    },
+
     // Mirrors the adapter's race rule: an existing row is ADOPTED, not an error.
     async provisionAccount(input) {
       const key = input.sessionEmail.trim().toLowerCase();

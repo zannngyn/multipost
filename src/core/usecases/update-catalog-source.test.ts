@@ -56,6 +56,9 @@ function makeHarness(
   };
   const users: UserRepo = {
     findUserIdByEmail: async () => options.userId ?? null,
+    // This usecase names its actor by e-mail; the account arm exists only to
+    // satisfy the port (added for draft ownership, doc 10 §4.2).
+    findUserIdByAccount: async () => null,
   };
   return { saved, catalogConfig, logger: makeLogger(), users };
 }

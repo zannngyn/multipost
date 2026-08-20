@@ -1,5 +1,6 @@
 import { getOperatorSession } from "@/app/_auth/session";
 import { readActiveTenantCookie } from "@/app/_lib/active-tenant-cookie";
+import { readSupportSessionCookie } from "@/app/_lib/support-session-cookie";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 import type { AuthzTier, TenantContext } from "@/composition/require-tenant";
@@ -47,6 +48,8 @@ export async function requireTenantContext(
   const ctx = await container.usecases.requireTenant(session, readActiveTenantCookie(request), {
     tier: options.tier,
     ...(options.minRole ? { minRole: options.minRole } : {}),
+    // M3.3 — consulted only after every membership path missed, tier R only.
+    supportSessionId: readSupportSessionCookie(request),
   });
 
   return { ctx, session };

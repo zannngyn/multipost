@@ -75,6 +75,7 @@ describe("GET /api/prompts/active — answers", () => {
     expect(requireTenant).toHaveBeenCalledWith(expect.anything(), TENANT, {
       tier: "R",
       minRole: "editor",
+      supportSessionId: null, // M3.3: carried by requireTenantContext
     });
   });
 

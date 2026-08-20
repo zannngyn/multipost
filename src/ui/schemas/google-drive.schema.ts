@@ -46,11 +46,14 @@ function isSourceAccess(value: string): value is SourceAccess {
 }
 
 /**
- * Required on a `connected` payload: a missing key means the server never
- * checked, and this screen would then vouch for a source it knows nothing
- * about. An unrecognised VALUE degrades to `unknown` instead of failing the
- * whole status — a future enum member must not blank the panel the operator
- * needs in order to reconnect.
+ * An unrecognised VALUE degrades to `unknown` instead of failing the whole
+ * status — a future enum member must not blank the panel the operator needs in
+ * order to reconnect.
+ *
+ * Field-level rule (M3.3): the field itself is now OPTIONAL, because a viewer
+ * receives only `{state}`. Absent means "không được xem", which is NOT the same
+ * as `unknown` ("đã kiểm tra, không kết luận được") — the panel tells those two
+ * apart rather than showing a viewer a warning they cannot act on.
  */
 const sourceAccessField = () =>
   z
@@ -69,19 +72,25 @@ export const GoogleConnectionSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("not_connected") }),
   z.object({
     state: z.literal("connected"),
-    email: z.string().min(1),
+    /**
+     * Everything below `state` is admin-only (M3.3): which Google account is
+     * connected, what it may read and whether the stored source is reachable
+     * are credential-adjacent facts. A viewer receives `{state}` alone and the
+     * panel simply shows less — it never shows a blank where a fact should be.
+     */
+    email: z.string().min(1).optional(),
     /** ISO-8601 from the server; formatted defensively, never parsed twice. */
-    connectedAt: z.string().min(1),
-    scopes: z.array(z.string()),
+    connectedAt: z.string().min(1).optional(),
+    scopes: z.array(z.string()).optional(),
     /** Whether the source ALREADY stored is readable by THIS account. */
-    sourceAccess: sourceAccessField(),
+    sourceAccess: sourceAccessField().optional(),
   }),
   z.object({
     state: z.literal("expired"),
-    email: z.string().min(1),
-    connectedAt: z.string().min(1),
+    email: z.string().min(1).optional(),
+    connectedAt: z.string().min(1).optional(),
     /** Server error code, e.g. GOOGLE_AUTH_EXPIRED — shown as a reference. */
-    reason: z.string().min(1),
+    reason: z.string().min(1).optional(),
   }),
 ]);
 export type GoogleConnection = z.infer<typeof GoogleConnectionSchema>;

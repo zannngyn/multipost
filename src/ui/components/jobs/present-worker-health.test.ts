@@ -16,7 +16,7 @@ import { presentWorkerHealth } from "./present-worker-health";
 
 function health(overrides: Partial<WorkerHealth> = {}): WorkerHealth {
   return {
-    workersOnline: 1,
+    workersAvailable: true,
     queueReachable: true,
     untouchedQueuedJobs: 0,
     oldestUntouchedWaitMs: null,
@@ -38,7 +38,7 @@ describe("presentWorkerHealth — silence", () => {
   it("says nothing when workers are online and posts are waiting their turn", () => {
     // Publish spacing legitimately leaves the tail of a batch untouched.
     const notice = presentWorkerHealth({
-      health: health({ workersOnline: 2, untouchedQueuedJobs: 40, oldestUntouchedWaitMs: 39 * 60_000 }),
+      health: health({ workersAvailable: true, untouchedQueuedJobs: 40, oldestUntouchedWaitMs: 39 * 60_000 }),
     });
     expect(notice).toBeNull();
   });
@@ -50,7 +50,7 @@ describe("presentWorkerHealth — silence", () => {
 
 describe("presentWorkerHealth — no worker, posts waiting", () => {
   const notice = presentWorkerHealth({
-    health: health({ workersOnline: 0, untouchedQueuedJobs: 5, oldestUntouchedWaitMs: 22 * 60_000 }),
+    health: health({ workersAvailable: false, untouchedQueuedJobs: 5, oldestUntouchedWaitMs: 22 * 60_000 }),
   });
 
   it("is the loudest of the three situations", () => {
@@ -70,7 +70,7 @@ describe("presentWorkerHealth — no worker, posts waiting", () => {
 
   it("drops the wait sentence rather than printing a broken number", () => {
     const withoutWait = presentWorkerHealth({
-      health: health({ workersOnline: 0, untouchedQueuedJobs: 3, oldestUntouchedWaitMs: null }),
+      health: health({ workersAvailable: false, untouchedQueuedJobs: 3, oldestUntouchedWaitMs: null }),
     });
     expect(withoutWait?.kind).toBe("workers-down-with-backlog");
     expect(withoutWait?.description).toContain("3 bài");
@@ -79,7 +79,7 @@ describe("presentWorkerHealth — no worker, posts waiting", () => {
 });
 
 describe("presentWorkerHealth — no worker, nothing waiting", () => {
-  const notice = presentWorkerHealth({ health: health({ workersOnline: 0 }) });
+  const notice = presentWorkerHealth({ health: health({ workersAvailable: false }) });
 
   it("is an early warning, not the incident wording", () => {
     expect(notice?.kind).toBe("workers-down-idle");
@@ -102,7 +102,7 @@ describe("presentWorkerHealth — queue unreachable", () => {
   it("refuses to conclude anything about the workers", () => {
     // Even with `workersOnline: 0` in the payload: that number was not measured.
     const notice = presentWorkerHealth({
-      health: health({ queueReachable: false, workersOnline: 0, untouchedQueuedJobs: 9 }),
+      health: health({ queueReachable: false, workersAvailable: false, untouchedQueuedJobs: 9 }),
     });
     expect(notice?.kind).toBe("queue-unreachable");
     expect(notice?.description).not.toMatch(/không có máy đăng bài nào chạy/i);
@@ -126,21 +126,28 @@ describe("presentWorkerHealth — the check itself failed", () => {
 });
 
 describe("presentWorkerHealth — defensive numbers", () => {
-  it("treats a negative worker count as down, not as healthy", () => {
+  /**
+   * M3.3 field-level: the banner reads `workersAvailable` (everyone gets it),
+   * never the optional `workersOnline` (platform staff only). An ABSENT count
+   * must not read as zero — that would fire "không có máy nào chạy" at every
+   * customer the moment the field stopped being sent to them.
+   */
+  it("stays silent for an operator who receives no worker count at all", () => {
+    const { workersOnline: _hidden, ...withoutCount } = health({ workersOnline: 3 });
+    expect(presentWorkerHealth({ health: withoutCount })).toBeNull();
+  });
+
+  it("fires on the boolean even when a count is present and non-zero", () => {
+    // Contradictory payload; the flag is the contract, so the flag wins.
     const notice = presentWorkerHealth({
-      health: health({ workersOnline: -1, untouchedQueuedJobs: 2 }),
+      health: health({ workersAvailable: false, workersOnline: 2, untouchedQueuedJobs: 2 }),
     });
     expect(notice?.kind).toBe("workers-down-with-backlog");
   });
 
-  it("treats a NaN worker count as down", () => {
-    const notice = presentWorkerHealth({ health: health({ workersOnline: Number.NaN }) });
-    expect(notice?.kind).toBe("workers-down-idle");
-  });
-
   it("never prints a negative job count", () => {
     const notice = presentWorkerHealth({
-      health: health({ workersOnline: 0, untouchedQueuedJobs: -4 }),
+      health: health({ workersAvailable: false, untouchedQueuedJobs: -4 }),
     });
     expect(notice?.kind).toBe("workers-down-idle");
   });
@@ -156,8 +163,18 @@ describe("WorkerHealthSchema", () => {
     expect(WorkerHealthSchema.safeParse(rest).success).toBe(false);
   });
 
-  it("rejects a non-numeric worker count", () => {
+  it("rejects a non-numeric worker count when one IS sent", () => {
     expect(WorkerHealthSchema.safeParse({ ...health(), workersOnline: "0" }).success).toBe(false);
+  });
+
+  it("accepts a payload with no worker count — that is the customer's view", () => {
+    const { workersOnline: _hidden, ...withoutCount } = health({ workersOnline: 1 });
+    expect(WorkerHealthSchema.safeParse(withoutCount).success).toBe(true);
+  });
+
+  it("rejects a payload missing workersAvailable — everyone receives that one", () => {
+    const { workersAvailable: _drop, ...rest } = health();
+    expect(WorkerHealthSchema.safeParse(rest).success).toBe(false);
   });
 
   it("accepts a null oldest wait, rejects a negative one", () => {

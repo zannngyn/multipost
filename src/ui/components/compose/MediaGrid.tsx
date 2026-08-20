@@ -1,6 +1,7 @@
 "use client";
 
 import { AlbumArranger } from "@/ui/components/compose/AlbumArranger";
+import { MediaThumb } from "@/ui/components/compose/MediaThumb";
 import { Badge } from "@/ui/components/ui/badge";
 import type { MediaAsset } from "@/ui/schemas/compose.schema";
 
@@ -16,20 +17,24 @@ import type { MediaAsset } from "@/ui/schemas/compose.schema";
  * Drive sync, which rewrites it on every run. `createPostBatch` already takes
  * the album in caller order, so nothing downstream needs to change.
  *
- * There is no <img> on purpose: the browser has no access to Drive and the media
- * bridge (`/api/media/[driveFileId]`) only answers links signed server-side for
- * Meta's fetcher, so the tiles show file identity instead of pretending to show
- * a picture. A fake placeholder would let an operator "approve" photos they
- * never saw.
+ * The tiles show the REAL photo, fetched through the session-authenticated
+ * preview route (`ui/services/media-preview`). Until that route existed this
+ * grid deliberately drew labelled empty surfaces rather than pretend pictures —
+ * approving photos nobody could see was the thing to avoid, and it still is:
+ * a tile whose bytes fail to load says so in words instead of quietly looking
+ * like a plain tile.
  */
 export function MediaGrid({
   media,
   onReorder,
+  onRemove,
   disabled,
 }: {
   media: readonly MediaAsset[];
   /** Absent = read-only. */
   onReorder?: (next: MediaAsset[]) => void;
+  /** Absent = the album cannot be trimmed here (step 3 confirms, it does not edit). */
+  onRemove?: (next: MediaAsset[]) => void;
   disabled?: boolean;
 }) {
   // A video post carries exactly one clip, so "ảnh bìa"/"thứ tự đăng" would be
@@ -37,11 +42,12 @@ export function MediaGrid({
   const isVideo = media[0]?.kind === "video";
   // Nothing to arrange with one item, and a lone drag handle only adds noise.
   const arrangeable = Boolean(onReorder) && !isVideo && media.length > 1;
+  const reviewNames = media.filter((asset) => asset.needsReview).map((asset) => asset.fileName);
 
   return (
     <section
       aria-labelledby="media-heading"
-      className="bg-card border-border space-y-3.5 rounded-xl border p-5"
+      className="bg-card border-border space-y-3.5 rounded-2xl border p-5"
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 id="media-heading" className="text-base font-semibold">
@@ -60,11 +66,19 @@ export function MediaGrid({
         layout="grid"
         items={media.map(toEntry)}
         onChange={(next) => onReorder?.(next.map((entry) => entry.asset))}
+        onRemove={
+          onRemove && !isVideo
+            ? (index) => onRemove(media.filter((_asset, position) => position !== index))
+            : undefined
+        }
         disabled={disabled}
         readOnly={!arrangeable}
         coverLabel={isVideo ? "Clip" : "Ảnh bìa"}
-        coverNote={isVideo ? "chưa xem trước được clip" : "chưa tải được ảnh từ Drive"}
+        coverNote={isVideo ? "chưa xem trước được clip" : undefined}
         itemName={(entry) => entry.asset.fileName}
+        // `alt=""`: the filename is written on the tile right beside it, and a
+        // screen reader repeating it twice per tile is noise, not information.
+        renderMedia={(entry) => <MediaThumb asset={entry.asset} alt="" />}
         renderContent={(entry) => <CoverLine asset={entry.asset} />}
         renderCompact={(entry) => <TileLine asset={entry.asset} />}
       />
@@ -72,7 +86,10 @@ export function MediaGrid({
       <p className="border-border text-muted-foreground border-t pt-3 text-xs leading-relaxed">
         {isVideo
           ? "Chưa xem trước được clip trên màn hình này — chưa có đường tải video từ Drive về trình duyệt. Kiểm tra bằng tên file và bảng thông số, hoặc mở thư mục Drive tương ứng."
-          : "Chưa xem được ảnh trực tiếp trên màn hình này — Phase 1 chưa có đường tải ảnh từ Drive về trình duyệt. Ô có chấm cam là file cần rà soát tên."}
+          : "Ảnh được tải qua máy chủ MYSP nên chỉ người trong đơn vị xem được. Ô nào báo “không tải được ảnh” là file đã bị xoá hoặc hỏng trên Drive — bỏ ô đó ra khỏi bài trước khi đăng."}
+        {reviewNames.length > 0
+          ? ` Ô có chấm cam là file cần rà soát tên: ${reviewNames.join(", ")}.`
+          : ""}
       </p>
     </section>
   );

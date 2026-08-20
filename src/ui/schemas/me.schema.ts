@@ -36,6 +36,22 @@ export const MeTenantSchema = z.object({
 });
 export type MeTenant = z.infer<typeof MeTenantSchema>;
 
+/**
+ * An open support session (M3.3): MYSP staff working INSIDE a customer's
+ * company, read-only and time-boxed.
+ *
+ * While one is open, `activeTenantId` above points at the company being
+ * supported — so every screen already reads the right data — and the app owes
+ * the operator a permanent, unmissable reminder of whose data they are looking
+ * at (see `SupportModeBanner`).
+ */
+export const SupportSessionSchema = z.object({
+  tenantId: z.string().min(1),
+  tenantName: z.string().min(1),
+  expiresAt: z.iso.datetime({ offset: true }),
+});
+export type SupportSession = z.infer<typeof SupportSessionSchema>;
+
 export const MeResponseSchema = z.object({
   /** Null for env-bootstrap / dev-bypass sessions that have no account row. */
   account: z
@@ -59,6 +75,12 @@ export const MeResponseSchema = z.object({
    * IS present but not a boolean is still a contract break and fails loudly.
    */
   isBootstrapAdmin: z.boolean().default(false),
+  /**
+   * Null (or absent, on a server that predates M3.3) = working normally. The
+   * default is the SAFE one: a missing field must never be read as "đang hỗ
+   * trợ", which would hide every write button for no reason.
+   */
+  supportSession: SupportSessionSchema.nullish().default(null),
 });
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 

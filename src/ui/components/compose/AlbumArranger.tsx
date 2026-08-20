@@ -74,6 +74,17 @@ export interface AlbumArrangerProps<T extends AlbumEntry> {
   renderCompact?: (item: T, index: number) => ReactNode;
   /** Optional trailing controls, e.g. "Bỏ" in the upload panel. `list` only. */
   renderActions?: (item: T, index: number) => ReactNode;
+  /**
+   * The picture itself, drawn as the tile's background. `grid` only.
+   * Absent = the tile stays a labelled empty surface (a one-clip video post, or
+   * a caller with nothing to show).
+   */
+  renderMedia?: (item: T, index: number) => ReactNode;
+  /**
+   * Drops an item from the album. `grid` only, and absent = not removable.
+   * The last item is never removable — an album of zero cannot be published.
+   */
+  onRemove?: (index: number) => void;
   disabled?: boolean;
   /**
    * A one-clip video post has nothing to arrange, and "ảnh bìa" would be
@@ -119,6 +130,17 @@ export function AlbumArranger<T extends AlbumEntry>(props: AlbumArrangerProps<T>
     setAnnouncement(describeMove(itemName(items[index]), 0, next.length));
   }
 
+  /**
+   * Removing is announced like a move is: the list shrank and the numbering
+   * shifted, and a keyboard user has no other way to find that out.
+   */
+  function remove(index: number) {
+    const dropped = items[index];
+    if (!dropped || !props.onRemove) return;
+    props.onRemove(index);
+    setAnnouncement(`Đã bỏ ${itemName(dropped)} khỏi bài. Còn ${items.length - 1} mục.`);
+  }
+
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -156,11 +178,18 @@ export function AlbumArranger<T extends AlbumEntry>(props: AlbumArrangerProps<T>
         <GridFrame>
           {items.map((item, index) =>
             index === 0 ? (
-              <TileShell key={item.id} isCover ordinal={1} coverLabel={coverLabel} coverNote={props.coverNote}>
+              <TileShell
+                key={item.id}
+                isCover
+                ordinal={1}
+                coverLabel={coverLabel}
+                coverNote={props.coverNote}
+                media={props.renderMedia?.(item, 0)}
+              >
                 {props.renderContent(item, 0)}
               </TileShell>
             ) : (
-              <TileShell key={item.id} ordinal={index + 1}>
+              <TileShell key={item.id} ordinal={index + 1} media={props.renderMedia?.(item, index)}>
                 {compact(item, index)}
               </TileShell>
             ),
@@ -195,6 +224,8 @@ export function AlbumArranger<T extends AlbumEntry>(props: AlbumArrangerProps<T>
     onMoveUp: () => move(index, index - 1),
     onMoveDown: () => move(index, index + 1),
     onCover: () => cover(index),
+    // An album of zero cannot be published, so the last item stays put.
+    onRemove: props.onRemove && items.length > 1 ? () => remove(index) : undefined,
   }));
 
   return (
@@ -218,6 +249,7 @@ export function AlbumArranger<T extends AlbumEntry>(props: AlbumArrangerProps<T>
                   isCover={index === 0}
                   coverLabel={coverLabel}
                   coverNote={props.coverNote}
+                  media={props.renderMedia?.(items[index], index)}
                 >
                   {index === 0
                     ? props.renderContent(items[0], 0)
@@ -268,19 +300,25 @@ interface TileShellProps {
   coverLabel?: string;
   coverNote?: string;
   children: ReactNode;
+  /** The picture, drawn behind everything else. Absent = empty surface. */
+  media?: ReactNode;
   /** Drag affordances; absent in the read-only album. */
   handle?: ReactNode;
   controls?: ReactNode;
+  /** Worded actions along the bottom bar ("Đặt làm bìa", "Bỏ"). */
+  actions?: ReactNode;
   isDragging?: boolean;
   innerRef?: (node: HTMLElement | null) => void;
   style?: React.CSSProperties;
 }
 
 /**
- * The visual tile. There is no <img> on purpose: the browser has no access to
- * Drive and the media bridge only answers server-signed links, so a tile shows
- * file identity instead of pretending to show a picture. A fake thumbnail would
- * let an operator "approve" photos they never saw.
+ * The visual tile: the photo, with the album's facts written over it.
+ *
+ * The tinted surface stays underneath the picture rather than being replaced by
+ * it — it is what the operator sees while the bytes are in flight, and what
+ * stays there if they never arrive. Nothing about the box depends on the image,
+ * so a slow or missing photo cannot move the layout (CLS = 0).
  *
  * The cover spans 2×2 cells, which makes it exactly square next to square tiles
  * without needing a fixed pixel size — the grid stays fluid.
@@ -291,8 +329,10 @@ function TileShell({
   coverLabel,
   coverNote,
   children,
+  media,
   handle,
   controls,
+  actions,
   isDragging = false,
   innerRef,
   style,
@@ -307,7 +347,9 @@ function TileShell({
         isDragging && "z-10 opacity-40",
       )}
     >
-      <span className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+      {media}
+
+      <span className="absolute top-2.5 left-2.5 z-1 flex items-center gap-1.5">
         {isCover ? (
           <span className="bg-accent text-accent-foreground rounded-full px-2.5 py-1 text-xs font-semibold">
             {coverLabel} · 1
@@ -320,20 +362,28 @@ function TileShell({
       </span>
 
       {handle || controls ? (
-        <span className="absolute top-2 right-2 flex items-center gap-0.5">
+        <span className="absolute top-2 right-2 z-1 flex items-center gap-0.5">
           {handle}
           {controls}
         </span>
       ) : null}
 
-      {isCover && coverNote ? (
+      {/* Only when nothing is drawn behind: with a photo on the tile, a centred
+          note would sit on top of the very thing it is explaining. */}
+      {isCover && coverNote && !media ? (
         <span className="text-foreground-subtle absolute inset-x-0 top-1/2 -translate-y-1/2 px-4 text-center font-mono text-xs">
           {coverNote}
         </span>
       ) : null}
 
-      <span className={cn("bg-card/90 flex flex-col gap-1.5", isCover ? "p-3" : "px-2 py-1.5")}>
+      <span
+        className={cn(
+          "bg-card/90 relative z-1 flex flex-col gap-1.5 backdrop-blur-sm",
+          isCover ? "p-3" : "px-2 py-1.5",
+        )}
+      >
         {children}
+        {actions ? <span className="flex flex-wrap items-center gap-1">{actions}</span> : null}
       </span>
     </li>
   );
@@ -348,6 +398,8 @@ interface SortableEntry {
   onMoveUp: () => void;
   onMoveDown: () => void;
   onCover: () => void;
+  /** Absent = this album may not shrink any further. */
+  onRemove?: () => void;
 }
 
 function SortableTile(
@@ -355,6 +407,7 @@ function SortableTile(
     isCover?: boolean;
     coverLabel?: string;
     coverNote?: string;
+    media?: ReactNode;
     children: ReactNode;
   },
 ) {
@@ -369,6 +422,7 @@ function SortableTile(
       isCover={isCover}
       coverLabel={coverLabel}
       coverNote={props.coverNote}
+      media={props.media}
       ordinal={index + 1}
       isDragging={isDragging}
       innerRef={setNodeRef}
@@ -409,6 +463,34 @@ function SortableTile(
           >
             →
           </Button>
+        </>
+      }
+      actions={
+        <>
+          {!isCover ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              disabled={disabled}
+              onClick={props.onCover}
+              aria-label={`Đặt ${name} làm ${coverLabel?.toLowerCase() ?? "ảnh bìa"}`}
+            >
+              Đặt làm bìa
+            </Button>
+          ) : null}
+          {props.onRemove ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              disabled={disabled}
+              onClick={props.onRemove}
+              aria-label={`Bỏ ${name} khỏi bài`}
+            >
+              Bỏ
+            </Button>
+          ) : null}
         </>
       }
     >

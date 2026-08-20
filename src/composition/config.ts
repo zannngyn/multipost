@@ -422,6 +422,28 @@ export const OnboardingConfigSchema = z.object({
 
 export type OnboardingConfig = z.infer<typeof OnboardingConfigSchema>;
 
+/**
+ * The CANONICAL public origin of this deployment, from AUTH_URL — the one
+ * variable every environment already sets for the OAuth callbacks.
+ *
+ * Why not `request.url`: behind Caddy the internal hop is plain HTTP, so a
+ * link built from the request comes out `http://…` and only works thanks to
+ * the proxy's http→https redirect. Links we HAND OUT (invite URLs) must carry
+ * the real scheme from day one.
+ */
+export const AppOriginConfigSchema = z.object({
+  AUTH_URL: nonEmpty("AUTH_URL").refine(
+    (value) => value.startsWith("https://") || value.startsWith("http://"),
+    "AUTH_URL must be an http(s) URL",
+  ),
+});
+
+/** `https://host[:port]` — no path, no trailing slash (URL.origin guarantees). */
+export function loadAppOrigin(env: EnvRecord = process.env): string {
+  const cfg = parseEnv(AppOriginConfigSchema, env, "app-origin");
+  return new URL(cfg.AUTH_URL).origin;
+}
+
 export function loadOnboardingConfig(env: EnvRecord = process.env): OnboardingConfig {
   return parseEnv(OnboardingConfigSchema, env, "onboarding");
 }

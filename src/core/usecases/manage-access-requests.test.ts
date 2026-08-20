@@ -22,7 +22,12 @@ function clock(): Clock {
 
 function harness(seed = [accessRow()]) {
   const requests = makeFakeAccessRepo(seed);
-  const users: UserRepo = { findUserIdByEmail: async () => "admin-user-id" };
+  const users: UserRepo = {
+    findUserIdByEmail: async () => "admin-user-id",
+    // This usecase names its actor by e-mail; the account arm exists only to
+    // satisfy the port (added for draft ownership, doc 10 §4.2).
+    findUserIdByAccount: async () => null,
+  };
   const usecase = makeManageAccessRequests({
     requests,
     clock: clock(),

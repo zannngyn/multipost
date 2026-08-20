@@ -56,6 +56,7 @@ const TOKEN_HINT = `Token phải có đủ quyền: ${REQUIRED_TOKEN_SCOPES.join
 export function ChannelConnectPanel({
   tokenInputRef,
   areWritesBlocked,
+  blockedReasonOverride,
 }: {
   /** Lets the empty state send the operator straight into the token field. */
   tokenInputRef: RefObject<HTMLInputElement | null>;
@@ -65,6 +66,8 @@ export function ChannelConnectPanel({
    * waiting — the read path gives no hint at all that this is broken.
    */
   areWritesBlocked: boolean;
+  /** The sentence to show when the block is not the missing key (M3.3). */
+  blockedReasonOverride?: string;
 }) {
   const importChannels = useImportChannels();
   const refresh = useRefreshChannels();
@@ -96,7 +99,9 @@ export function ChannelConnectPanel({
    * user reaches the reason too — a dead control that explains nothing is worse
    * than one that fails loudly.
    */
-  const blockedReason = areWritesBlocked ? secretsNotConfiguredReason() : undefined;
+  const blockedReason = areWritesBlocked
+    ? (blockedReasonOverride ?? secretsNotConfiguredReason())
+    : undefined;
 
   function submitToken(values: ChannelImportFormValues) {
     importChannels.reset();

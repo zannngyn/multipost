@@ -195,6 +195,16 @@ describe("AUTH_BOOTSTRAP_ADMINS is still the escape hatch", () => {
     expect(provisionAccount).toHaveBeenCalledTimes(1);
   });
 
+  /** NEW (M3.1, N9): once the row ANSWERS, the DB decides — even for them. */
+  it("REFUSES a bootstrap admin whose own account row is suspended", async () => {
+    const { deps, provisionAccount, lines } = harness({ account: "suspended" });
+    const decideSignIn = await loadGate();
+
+    await expect(decideSignIn(deps, { ...googleUser, email: "boss@mysp.vn" })).resolves.toBe(false);
+    expect(provisionAccount).not.toHaveBeenCalled();
+    expect(lines.some((line) => line.context?.account_verdict === "suspended")).toBe(true);
+  });
+
   it("lets the bootstrap admin in even when the database is down — loudly", async () => {
     const { deps, lines } = harness({ failing: true });
     const decideSignIn = await loadGate();

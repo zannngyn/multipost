@@ -38,7 +38,16 @@ export type ApiErrorKind =
  * Left out (`undefined`) keeps the publishing/reading wording every other screen
  * uses today.
  */
-export type ApiErrorOperation = "cancel";
+export type ApiErrorOperation =
+  | "cancel"
+  /**
+   * The platform admin screen (M3.2). The same codes mean something else
+   * there: `FORBIDDEN` is about the PLATFORM role, not a membership role, and
+   * `TENANT_NOT_FOUND` is "công ty này không tồn tại", not "bạn đã bị gỡ khỏi
+   * công ty đó" — telling a super_admin they lost their membership would send
+   * them looking for the wrong problem.
+   */
+  | "platform";
 
 export interface PresentApiErrorOptions {
   readonly operation?: ApiErrorOperation;
@@ -155,6 +164,41 @@ function presentCancelError(error: ApiError): ApiErrorView | null {
   }
 }
 
+/**
+ * Copy for errors raised on the PLATFORM admin screen (M3.2).
+ *
+ * Only the codes whose shared copy would point the operator the wrong way are
+ * listed; everything else falls through to the branch below, which stays the
+ * single owner of config/validation/session wording.
+ */
+function presentPlatformError(error: ApiError): ApiErrorView | null {
+  switch (error.code) {
+    // Not about a membership: this account's PLATFORM role is not enough. There
+    // is nothing to ask a company owner for, so the copy does not suggest it.
+    case "FORBIDDEN":
+      return {
+        kind: "business",
+        title: "Bạn không có quyền quản trị nền tảng",
+        description: `${error.userMessage} Tạo và khoá công ty chỉ dành cho quản trị nền tảng (super_admin); tài khoản hỗ trợ chỉ xem được danh sách.`,
+        canRetry: false,
+      };
+
+    // Addressed by id from outside every tenant, so "bạn đã bị gỡ khỏi công ty"
+    // would be nonsense here.
+    case "TENANT_NOT_FOUND":
+      return {
+        kind: "business",
+        title: "Không tìm thấy công ty này",
+        description: `${error.userMessage} Công ty có thể vừa bị xoá hoặc mã công ty không còn đúng.`,
+        hint: "Tải lại danh sách công ty để xem trạng thái mới nhất.",
+        canRetry: false,
+      };
+
+    default:
+      return null;
+  }
+}
+
 export function presentApiError(
   error: ApiError,
   options?: PresentApiErrorOptions,
@@ -183,6 +227,11 @@ export function presentApiError(
   if (options?.operation === "cancel") {
     const cancelView = presentCancelError(error);
     if (cancelView) return cancelView;
+  }
+
+  if (options?.operation === "platform") {
+    const platformView = presentPlatformError(error);
+    if (platformView) return platformView;
   }
 
   switch (error.code) {

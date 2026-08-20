@@ -101,7 +101,8 @@ describe("requireAccessAdmin — the two doors", () => {
     expect(requireTenant).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "acc-1" }),
       null,
-      { tier: "S", minRole: "admin" },
+      // supportSessionId travels since M3.3 (null without a support cookie).
+      { tier: "S", minRole: "admin", supportSessionId: null },
     );
   });
 });

@@ -1,16 +1,18 @@
 "use client";
 
 import { useId } from "react";
-import { useWatch, type UseFormRegisterReturn } from "react-hook-form";
+import { useWatch } from "react-hook-form";
 
 import { cn } from "@/shared/utils";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { MediaGrid } from "@/ui/components/compose/MediaGrid";
+import { ProductPicker } from "@/ui/components/compose/ProductPicker";
+import { SegmentedField } from "@/ui/components/compose/SegmentedField";
 import { UploadPanel } from "@/ui/components/compose/UploadPanel";
 import { VideoSpecCard } from "@/ui/components/compose/VideoSpecCard";
+import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
-import { Input } from "@/ui/components/ui/input";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
 import {
@@ -28,8 +30,13 @@ import {
 } from "@/ui/schemas/compose.schema";
 
 /**
- * Step 1 — pick the product: type a code (and optionally a colour), pull the
- * sheet row, the stock gate and the album.
+ * Step 1 — pick the product: type or pick a code, choose what kind of post it
+ * is, pull the sheet row, the stock gate and the album.
+ *
+ * Laid out as the approved design draws it: ONE tall field at the top (the code
+ * is the only thing that starts a post), a resolved line that replaces the field
+ * with facts once the lookup answered, then the short settings as segmented
+ * rows, then the album.
  *
  * Business rule 2 lives visibly in this file: `ContentFacts` renders the four
  * whitelisted columns on a raised surface, and everything about stock sits in a
@@ -48,97 +55,126 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
   // instant "Video" is picked, and the value re-renders nothing else.
   const mediaKind = useWatch({ control: form.control, name: "mediaKind" }) ?? "image";
   const source = useWatch({ control: form.control, name: "source" }) ?? "drive";
+  const videoTarget = useWatch({ control: form.control, name: "videoTarget" }) ?? "facebook_video";
+  const productCode = useWatch({ control: form.control, name: "productCode" }) ?? "";
+  const color = useWatch({ control: form.control, name: "color" }) ?? "";
 
   const hasTypedCaption = Object.values(wizard.captionValues ?? {}).some(
     (text) => text.trim().length > 0,
   );
 
+  const codeHintId = `${fieldId}-code-hint`;
+  const codeErrorId = `${fieldId}-code-error`;
+
+  function lookUp() {
+    void wizard.submitProductStep();
+  }
+
   return (
-    <div className="flex max-w-6xl flex-col gap-5">
+    <div className="flex flex-col gap-5">
       <form
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          void wizard.submitProductStep();
+          lookUp();
         }}
-        className="flex flex-col gap-5"
+        className="bg-card border-border flex flex-col gap-5 rounded-2xl border p-5"
       >
-        <div className="grid gap-4 @xl:grid-cols-2 @3xl:grid-cols-3">
-          <Field
-            id={`${fieldId}-code`}
-            label="Mã sản phẩm"
-            hint="Ví dụ: MGKVX6310. Mã phải có trên Sheet và đã được đồng bộ."
-            error={errors.productCode?.message}
-          >
-            {(props) => (
-              <Input
-                {...form.register("productCode")}
-                {...props}
-                placeholder="MGKVX6310"
-                autoComplete="off"
-                spellCheck={false}
-                className="font-mono uppercase"
-              />
-            )}
-          </Field>
+        <div className="flex flex-col gap-2">
+          <label htmlFor={`${fieldId}-code`} className="text-sm font-medium">
+            Mã sản phẩm
+          </label>
 
-          <Field
-            id={`${fieldId}-color`}
-            label="Màu (tuỳ chọn)"
-            hint="Bỏ trống để hệ thống tự chọn. Viết TRANG hay TRẮNG đều được."
-            error={errors.color?.message}
-          >
-            {(props) => (
-              <Input {...form.register("color")} {...props} placeholder="TRẮNG" autoComplete="off" />
-            )}
-          </Field>
+          <ProductPicker
+            id={`${fieldId}-code`}
+            register={form.register("productCode")}
+            value={productCode}
+            onSelectCode={(code) =>
+              form.setValue("productCode", code, { shouldDirty: true, shouldValidate: true })
+            }
+            onSubmit={lookUp}
+            disabled={compose.isPending}
+            invalid={Boolean(errors.productCode)}
+            describedBy={errors.productCode ? `${codeErrorId} ${codeHintId}` : codeHintId}
+          />
+
+          {errors.productCode ? (
+            <p id={codeErrorId} role="alert" className="text-destructive text-xs">
+              {errors.productCode.message}
+            </p>
+          ) : null}
+
+          {composed ? (
+            <ResolvedLine
+              id={codeHintId}
+              composed={composed}
+              albumCount={wizard.album.length}
+              onChangeProduct={() => {
+                form.setValue("productCode", "", { shouldDirty: true });
+                form.setValue("color", "", { shouldDirty: true });
+                form.setFocus("productCode");
+              }}
+            />
+          ) : (
+            <p id={codeHintId} className="text-muted-foreground text-xs leading-relaxed">
+              Gõ vài ký tự đầu của mã rồi chọn trong danh sách, hoặc gõ hết mã và bấm “Tra dữ liệu
+              sản phẩm”. Mã đã hết hàng không đăng được — danh sách nói rõ ngay khi bạn chọn.
+            </p>
+          )}
         </div>
 
-        {/* Brief §8: two file modes, sharing everything downstream. */}
-        <RadioField
-          legend="Nguồn file"
-          hint="Chế độ B dùng khi file chưa có trên Drive. Mã sản phẩm vẫn bắt buộc — Sheet và AI không đổi."
-          name="source"
-          options={MEDIA_SOURCES.map((value) => ({
-            value,
-            label: MEDIA_SOURCE_LABELS[value],
-            hint: MEDIA_SOURCE_HINTS[value],
-          }))}
-          register={form.register("source")}
-          disabled={compose.isPending || wizard.upload.isPending}
-          error={errors.source?.message}
-        />
+        <span aria-hidden="true" className="bg-border h-px" />
 
-        {/* Two fixed options -> radio (core-form-inputs: native first). */}
-        <RadioField
-          legend="Loại bài"
-          hint="Bài ảnh gom 5–10 ảnh; bài video dùng đúng một clip và được kiểm thông số trước khi đăng."
-          name="mediaKind"
-          options={MEDIA_KINDS.map((kind) => ({
-            value: kind,
-            label: MEDIA_KIND_LABELS[kind],
-            hint: MEDIA_KIND_HINTS[kind],
-          }))}
-          register={form.register("mediaKind")}
-          disabled={compose.isPending}
-          error={errors.mediaKind?.message}
-        />
-
-        {mediaKind === "video" ? (
-          <RadioField
-            legend="Đích đăng video"
-            hint="Reels có ràng buộc chặt hơn Video thường; chọn sai thì clip bị chặn ngay ở bước này."
-            name="videoTarget"
-            options={VIDEO_TARGETS.map((target) => ({
-              value: target,
-              label: VIDEO_TARGET_LABELS[target],
-              hint: VIDEO_TARGET_HINTS[target],
+        <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+          {/* Two fixed options with a one-line meaning each -> segmented track. */}
+          <SegmentedField
+            legend="Kiểu bài"
+            name="mediaKind"
+            value={mediaKind}
+            options={MEDIA_KINDS.map((kind) => ({
+              value: kind,
+              label: MEDIA_KIND_LABELS[kind],
+              hint: MEDIA_KIND_HINTS[kind],
             }))}
-            register={form.register("videoTarget")}
+            register={form.register("mediaKind")}
             disabled={compose.isPending}
-            error={errors.videoTarget?.message}
+            error={errors.mediaKind?.message}
+            className="max-w-md"
           />
-        ) : null}
+
+          {mediaKind === "video" ? (
+            <SegmentedField
+              legend="Đích đăng video"
+              name="videoTarget"
+              value={videoTarget}
+              options={VIDEO_TARGETS.map((target) => ({
+                value: target,
+                label: VIDEO_TARGET_LABELS[target],
+                hint: VIDEO_TARGET_HINTS[target],
+              }))}
+              register={form.register("videoTarget")}
+              disabled={compose.isPending}
+              error={errors.videoTarget?.message}
+              className="max-w-md"
+            />
+          ) : null}
+
+          {/* Brief §8: two file modes, sharing everything downstream. */}
+          <SegmentedField
+            legend="Nguồn file"
+            name="source"
+            value={source}
+            options={MEDIA_SOURCES.map((value) => ({
+              value,
+              label: MEDIA_SOURCE_LABELS[value],
+              hint: MEDIA_SOURCE_HINTS[value],
+            }))}
+            register={form.register("source")}
+            disabled={compose.isPending || wizard.upload.isPending}
+            error={errors.source?.message}
+            className="max-w-md"
+          />
+        </div>
 
         {source === "upload" ? (
           <UploadPanel
@@ -157,7 +193,7 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
         ) : null}
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" size="lg" className="h-10 px-5" disabled={compose.isPending}>
+          <Button type="submit" size="lg" className="h-11 px-5" disabled={compose.isPending}>
             {compose.isPending
               ? "Đang tra dữ liệu…"
               : mediaKind === "video"
@@ -165,7 +201,7 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
                 : "Tra dữ liệu sản phẩm"}
           </Button>
           {hasTypedCaption ? (
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground max-w-md text-xs leading-relaxed">
               Tra một mã khác sẽ xoá caption đang soạn — caption luôn gắn với đúng sản phẩm của nó.
             </p>
           ) : null}
@@ -195,6 +231,11 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
         <ComposeResult
           composed={composed}
           album={wizard.album}
+          activeColor={color}
+          onPickColor={(next) => {
+            form.setValue("color", next, { shouldDirty: true });
+            lookUp();
+          }}
           onReorder={wizard.setAlbum}
           disabled={compose.isPending}
         />
@@ -213,27 +254,181 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
   );
 }
 
+/**
+ * The line that replaces the hint once a code resolved — the design's "✓ tên ·
+ * … · Đổi sản phẩm" row.
+ *
+ * Price is NOT here, unlike the mock: the four caption-safe columns and the
+ * internal stock block below own that information, and a summary line is the
+ * easiest place for a forbidden field to sneak into a screenshot. Stock is
+ * allowed (step 1 is the internal step) and is drawn as a status pill, visibly
+ * apart from the product's name.
+ */
+function ResolvedLine({
+  id,
+  composed,
+  albumCount,
+  onChangeProduct,
+}: {
+  /** Same id the field's `aria-describedby` points at: this line IS the field's
+      description once a code resolved. */
+  id: string;
+  composed: ComposeResponse;
+  albumCount: number;
+  onChangeProduct: () => void;
+}) {
+  const isVideo = Boolean(composed.video);
+
+  return (
+    <div id={id} className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-sm">
+      <span
+        aria-hidden="true"
+        className="bg-success/25 text-success-foreground flex size-5 shrink-0 items-center justify-center rounded-full text-xs"
+      >
+        ✓
+      </span>
+      <span className="font-semibold">{composed.content.name}</span>
+      <span className="text-muted-foreground font-mono text-xs">{composed.content.code}</span>
+      <span aria-hidden="true" className="text-muted-foreground">
+        ·
+      </span>
+      <span className="text-muted-foreground text-xs">
+        {isVideo ? "1 clip" : `${albumCount} ảnh`}
+      </span>
+
+      {composed.inventory ? (
+        <Badge tone={composed.inventory.status === "in_stock" ? "success" : "warning"}>
+          {INVENTORY_STATUS_LABELS[composed.inventory.status]}
+          {composed.inventory.stock !== null ? ` · tồn ${composed.inventory.stock}` : ""}
+        </Badge>
+      ) : null}
+
+      <span className="flex-1" />
+
+      <Button type="button" variant="ghost" size="sm" onClick={onChangeProduct}>
+        Đổi sản phẩm
+      </Button>
+    </div>
+  );
+}
+
 function ComposeResult({
   composed,
   album,
+  activeColor,
+  onPickColor,
   onReorder,
   disabled,
 }: {
   composed: ComposeResponse;
   /** Publish order, which this step lets the operator rearrange. */
   album: readonly ComposeResponse["media"][number][];
+  activeColor: string;
+  onPickColor: (color: string) => void;
   onReorder: (next: ComposeResponse["media"][number][]) => void;
   disabled: boolean;
 }) {
   return (
     <div className="flex flex-col gap-4">
+      <ColorChoice
+        colors={composed.availableColors}
+        active={activeColor}
+        onPick={onPickColor}
+        disabled={disabled}
+      />
       <div className="grid items-start gap-4 @3xl:grid-cols-[1.15fr_1fr]">
         <ContentFacts composed={composed} />
         <InternalOperatorInfo composed={composed} />
       </div>
       {composed.video ? <VideoSpecCard video={composed.video} clip={composed.media[0]} /> : null}
-      <MediaGrid media={album} onReorder={onReorder} disabled={disabled} />
+      {/* Reorder and remove both end the same way — the album on screen IS the
+          album that gets published, so both write the same list back. */}
+      <MediaGrid media={album} onReorder={onReorder} onRemove={onReorder} disabled={disabled} />
     </div>
+  );
+}
+
+/**
+ * "Màu đưa vào bài" — the colours this code actually has files for.
+ *
+ * The list comes from the SERVER (`availableColors`), already normalised by the
+ * data pipeline, so TRANG and TRẮNG arrive as one entry and the operator never
+ * has to know they were ever two (business rule: gộp biến thể).
+ *
+ * Buttons, not radios: picking a colour re-runs the whole lookup — Sheet, stock
+ * gate, album — and a control that fires a request is an action, not a field.
+ * Nothing is hidden: the caption warning below the form already says that
+ * changing the colour clears a caption written for another one.
+ */
+function ColorChoice({
+  colors,
+  active,
+  onPick,
+  disabled,
+}: {
+  colors: readonly string[];
+  active: string;
+  onPick: (color: string) => void;
+  disabled: boolean;
+}) {
+  if (colors.length === 0) return null;
+
+  const normalised = active.trim().toLowerCase();
+
+  return (
+    <section aria-labelledby="color-heading" className="flex flex-col gap-2">
+      <h3 id="color-heading" className="text-muted-foreground text-xs">
+        Màu đưa vào bài — lấy từ tên file trên Drive
+      </h3>
+      <div className="flex flex-wrap gap-2">
+        <ColorChip
+          label="Mọi màu có ảnh"
+          pressed={normalised.length === 0}
+          disabled={disabled}
+          onClick={() => onPick("")}
+        />
+        {colors.map((colorName) => (
+          <ColorChip
+            key={colorName}
+            label={colorName}
+            pressed={normalised === colorName.trim().toLowerCase()}
+            disabled={disabled}
+            onClick={() => onPick(colorName)}
+          />
+        ))}
+      </div>
+      <p className="text-muted-foreground text-xs leading-relaxed">
+        Chọn một màu sẽ tra lại mã và chỉ lấy ảnh của màu đó. Bỏ chọn để hệ thống tự lấy màu có
+        nhiều ảnh nhất.
+      </p>
+    </section>
+  );
+}
+
+function ColorChip({
+  label,
+  pressed,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  pressed: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "focus-visible:ring-ring/50 border-border bg-card flex h-10 cursor-pointer items-center gap-2 rounded-xl border px-3.5 text-sm transition-colors outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-60",
+        pressed ? "border-primary bg-accent/25 ring-primary font-semibold ring-1" : "hover:bg-muted",
+      )}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -244,7 +439,7 @@ function ContentFacts({ composed }: { composed: ComposeResponse }) {
   return (
     <section
       aria-labelledby="content-heading"
-      className="bg-card border-border h-full rounded-xl border p-5"
+      className="bg-card border-border h-full rounded-2xl border p-5"
     >
       <div className="flex flex-wrap items-center gap-2.5 pb-3.5">
         <span aria-hidden="true" className="bg-primary size-2 rounded-full" />
@@ -280,7 +475,7 @@ function InternalOperatorInfo({ composed }: { composed: ComposeResponse }) {
   if (!inventory && warnings.length === 0 && availableColors.length === 0) return null;
 
   return (
-    <section aria-labelledby="internal-heading" className="bg-muted h-full rounded-xl p-5">
+    <section aria-labelledby="internal-heading" className="bg-muted h-full rounded-2xl p-5">
       <div className="flex flex-wrap items-center gap-2.5 pb-3.5">
         <span aria-hidden="true" className="bg-foreground-subtle size-2 rounded-full" />
         <h3 id="internal-heading" className="text-base font-semibold">
@@ -331,138 +526,19 @@ function Fact({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-/** Field wrapper: label + hint + error wired together for assistive tech. */
-function Field({
-  id,
-  label,
-  hint,
-  error,
-  children,
-}: {
-  id: string;
-  label: string;
-  hint: string;
-  error?: string;
-  children: (props: {
-    id: string;
-    "aria-invalid": boolean;
-    "aria-describedby": string;
-  }) => React.ReactNode;
-}) {
-  const hintId = `${id}-hint`;
-  const errorId = `${id}-error`;
-
-  return (
-    <div className="bg-card border-border flex flex-col gap-1.5 rounded-xl border p-4">
-      <label htmlFor={id} className="text-sm font-medium">
-        {label}
-      </label>
-      {children({
-        id,
-        "aria-invalid": Boolean(error),
-        "aria-describedby": error ? `${errorId} ${hintId}` : hintId,
-      })}
-      <p id={hintId} className="text-muted-foreground text-xs leading-relaxed">
-        {hint}
-      </p>
-      {error ? (
-        <p id={errorId} role="alert" className="text-destructive text-xs">
-          {error}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Radio group for a small fixed set (core-form-inputs: native `<input
- * type="radio">` first, no custom widget for two options).
- *
- * `<fieldset>` + `<legend>` is what makes the group a group for assistive tech.
- * The native control is visually replaced by a drawn dot but still present and
- * focusable, so keyboard, click-the-label and screen-reader behaviour are the
- * browser's, not ours.
- */
-function RadioField({
-  legend,
-  hint,
-  name,
-  options,
-  register,
-  disabled,
-  error,
-}: {
-  legend: string;
-  hint: string;
-  name: string;
-  options: readonly { value: string; label: string; hint: string }[];
-  register: UseFormRegisterReturn;
-  disabled?: boolean;
-  error?: string;
-}) {
-  const hintId = `${name}-hint`;
-  const errorId = `${name}-error`;
-
-  return (
-    <fieldset
-      className="flex flex-col gap-2.5"
-      aria-describedby={error ? `${errorId} ${hintId}` : hintId}
-      aria-invalid={Boolean(error)}
-    >
-      {/* <legend> must stay the first child of <fieldset>: wrapping it in a div
-          to sit it beside the hint would silently drop the group's name. */}
-      <legend className="text-base font-semibold">{legend}</legend>
-      <p id={hintId} className="text-muted-foreground text-xs leading-relaxed">
-        {hint}
-      </p>
-
-      <div className="grid gap-3 @xl:grid-cols-2">
-        {options.map((option) => (
-          <label
-            key={option.value}
-            htmlFor={`${name}-${option.value}`}
-            className={cn(
-              "bg-card border-border has-checked:border-primary has-checked:bg-accent/20 has-checked:ring-primary flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors has-checked:ring-1",
-              "has-focus-visible:ring-ring/50 has-focus-visible:ring-3",
-            )}
-          >
-            <input
-              {...register}
-              id={`${name}-${option.value}`}
-              type="radio"
-              value={option.value}
-              disabled={disabled}
-              className="peer sr-only"
-            />
-            <span
-              aria-hidden="true"
-              className="border-input peer-checked:border-primary mt-0.5 size-4 shrink-0 rounded-full border-2 bg-transparent transition-colors peer-checked:bg-primary"
-            />
-            <span className="flex min-w-0 flex-col gap-1">
-              <span className="text-sm font-semibold">{option.label}</span>
-              <span className="text-muted-foreground text-xs leading-relaxed">{option.hint}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-
-      {error ? (
-        <p id={errorId} role="alert" className="text-destructive text-xs">
-          {error}
-        </p>
-      ) : null}
-    </fieldset>
-  );
-}
-
 function ComposeResultSkeleton() {
   return (
     <div aria-hidden="true" className="flex flex-col gap-4 motion-safe:animate-pulse">
-      <div className="grid gap-4 @3xl:grid-cols-[1.15fr_1fr]">
-        <div className="bg-card border-border h-52 rounded-xl border" />
-        <div className="bg-muted h-52 rounded-xl" />
+      <div className="flex gap-2">
+        {[0, 1, 2].map((chip) => (
+          <div key={chip} className="bg-muted h-10 w-28 rounded-xl" />
+        ))}
       </div>
-      <div className="bg-card border-border grid grid-cols-2 gap-2.5 rounded-xl border p-5 sm:grid-cols-5">
+      <div className="grid gap-4 @3xl:grid-cols-[1.15fr_1fr]">
+        <div className="bg-card border-border h-52 rounded-2xl border" />
+        <div className="bg-muted h-52 rounded-2xl" />
+      </div>
+      <div className="bg-card border-border grid grid-cols-2 gap-2.5 rounded-2xl border p-5 @2xl:grid-cols-5">
         <div className="bg-media-empty-cover col-span-2 row-span-2 aspect-square rounded-xl" />
         {[0, 1, 2, 3, 4, 5].map((cell) => (
           <div key={cell} className="bg-media-empty aspect-square rounded-xl" />

@@ -58,12 +58,17 @@ export const ChannelListResponseSchema = z.object({
    * Listing works without it, so this is the only way the screen can warn
    * before someone pastes a token into a write that is going to fail.
    *
-   * Optional, defaulting to TRUE on purpose: a server that predates the flag
-   * is not a broken server, and the screen must not lock itself out over a
-   * field that simply is not there yet. A field that IS present but not a
-   * boolean is still a contract break and fails like any other.
+   * Field-level rule (M3.3): sent to admin+ ONLY — whether the deployment is
+   * missing an encryption key is a fact about the machine, not about the
+   * tenant's channels. Absent therefore means "không được xem", NOT "chưa cấu
+   * hình": the screen renders no warning at all rather than a warning nobody
+   * on this side could act on. A field that IS present but not a boolean is
+   * still a contract break and fails like any other.
+   *
+   * (It kept a `true` default before M3.3 so an older server would not lock the
+   * screen out; the same reasoning now lands on "no field, no warning".)
    */
-  secretsConfigured: z.boolean().default(true),
+  secretsConfigured: z.boolean().optional(),
 });
 export type ChannelListResponse = z.infer<typeof ChannelListResponseSchema>;
 

@@ -79,4 +79,11 @@ export interface TenantContext {
   readonly tenantId: TenantId;
   readonly role: OperatorRole;
   readonly membershipVersion: number;
+  /**
+   * M3.3 — set (and only ever `true`) when this context came from a SUPPORT
+   * SESSION, not a membership: platform staff visiting a customer's tenant,
+   * read-only (doc 10 §8.1 — requireTenant grants it for tier R alone), role
+   * pinned to `viewer`, `membershipVersion` 0 (there is no membership).
+   */
+  readonly supportMode?: true;
 }

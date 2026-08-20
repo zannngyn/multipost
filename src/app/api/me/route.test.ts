@@ -9,6 +9,7 @@ import { testTenantId } from "@/core/domain/tenant-context.testing";
  */
 
 const getOperatorOverview = vi.fn();
+const peekSupport = vi.fn();
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
 const getOperatorSession = vi.fn();
 
@@ -16,7 +17,7 @@ vi.mock("@/composition/container", () => ({
   getContainer: () => ({
     logger,
     config: { NODE_ENV: "test" },
-    usecases: { getOperatorOverview },
+    usecases: { getOperatorOverview, supportSessions: { peek: peekSupport } },
   }),
 }));
 
@@ -42,6 +43,7 @@ beforeEach(() => {
     accountId: "acc-1",
     isBootstrapAdmin: false,
   });
+  peekSupport.mockResolvedValue(null);
   getOperatorOverview.mockResolvedValue({
     isBootstrapAdmin: false,
     account: { id: "acc-1", displayName: "Worker", platformRole: null },
@@ -125,6 +127,42 @@ describe("GET /api/me — answers", () => {
     });
   });
 
+  it("M3.3: a live support visit rides on top — banner data + activeTenantId override", async () => {
+    const { SUPPORT_SESSION_COOKIE } = await import("@/app/_lib/support-session-cookie");
+    const VISITED = "00000000-0000-0000-0000-00000000d00d";
+    peekSupport.mockResolvedValue({
+      sessionId: "99999999-8888-7777-6666-555555555555",
+      tenantId: VISITED,
+      tenantName: "Khách A",
+      tenantSlug: "khach-a",
+      expiresAt: new Date("2026-08-22T07:00:00.000Z"),
+    });
+
+    const response = await GET(
+      request(`${SUPPORT_SESSION_COOKIE}=99999999-8888-7777-6666-555555555555`),
+    );
+
+    const body = await response.json();
+    expect(body.supportSession).toEqual({
+      tenantId: VISITED,
+      tenantName: "Khách A",
+      expiresAt: "2026-08-22T07:00:00.000Z",
+    });
+    // The visited tenant becomes the active one so the R routes read its data.
+    expect(body.activeTenantId).toBe(VISITED);
+    expect(peekSupport).toHaveBeenCalledWith(
+      "99999999-8888-7777-6666-555555555555",
+      "acc-1",
+    );
+  });
+
+  it("answers supportSession: null when no visit is live — the overview stands", async () => {
+    const response = await GET(request());
+    const body = await response.json();
+    expect(body.supportSession).toBeNull();
+    expect(body.activeTenantId).toBe(TENANT); // untouched
+  });
+
   it("stays 200 for a NoMembership answer — the UI needs it to draw the picker", async () => {
     getOperatorOverview.mockResolvedValue({
       isBootstrapAdmin: false,
@@ -141,6 +179,7 @@ describe("GET /api/me — answers", () => {
       account: null,
       tenants: [],
       activeTenantId: null,
+      supportSession: null, // M3.3: present on every answer
     });
   });
 });

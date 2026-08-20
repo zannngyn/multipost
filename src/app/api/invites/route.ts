@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
+import { loadAppOrigin } from "@/composition/config";
 import { getContainer } from "@/composition/container";
 import { OPERATOR_ROLES } from "@/shared/operator-access";
 
@@ -70,8 +71,10 @@ export async function POST(request: Request): Promise<Response> {
       role: body.role,
     });
 
-    // The ONE appearance of the raw token, addressed to whoever created it.
-    const url = `${new URL(request.url).origin}/join/${created.token}`;
+    // The ONE appearance of the raw token. Origin from AUTH_URL, never from
+    // the request: behind Caddy the internal hop is http and a request-built
+    // link would ship the wrong scheme to the invitee.
+    const url = `${loadAppOrigin()}/join/${created.token}`;
     return Response.json(
       { id: created.id, role: created.role, url, expiresAt: created.expiresAt },
       { status: 201 },

@@ -34,12 +34,22 @@ function harness(records = [accountRecord()], ttlMs = 60_000) {
   const accounts = makeFakeAccountRepo(records);
   const findMembership = vi.spyOn(accounts, "findMembership");
   const findMembershipVersion = vi.spyOn(accounts, "findMembershipVersion");
-  const gate = makeRequireTenant({ accounts, clock, logger: silentLogger(), ttlMs });
+  const findSupportSession = vi.fn(
+    async (): Promise<{ tenantId: never; expiresAt: Date } | null> => null,
+  );
+  const gate = makeRequireTenant({
+    accounts,
+    findSupportSession,
+    clock,
+    logger: silentLogger(),
+    ttlMs,
+  });
   return {
     gate,
     accounts,
     findMembership,
     findMembershipVersion,
+    findSupportSession,
     advance: (ms: number) => (nowMs += ms),
   };
 }
@@ -229,3 +239,82 @@ describe("requireTenant — cache tiers", () => {
     expect(findMembership).toHaveBeenCalledTimes(2);
   });
 });
+
+// --- M3.3: the support-mode fallback ------------------------------------------
+
+describe("requireTenant — support sessions (doc 10 §8.1: read-only)", () => {
+  const SUPPORT_SESSION = "99999999-8888-7777-6666-555555555555";
+  const liveVisit = { tenantId: TENANT_Y as never, expiresAt: new Date("2026-08-22T06:00:00Z") };
+
+  it("grants a READ context for the visited tenant when every membership missed", async () => {
+    const { gate, findSupportSession } = harness([accountRecord({ memberships: [] })]);
+    findSupportSession.mockResolvedValue(liveVisit);
+
+    const context = await gate.requireTenant(SESSION, null, {
+      tier: "R",
+      supportSessionId: SUPPORT_SESSION,
+    });
+
+    expect(context).toEqual({
+      tenantId: TENANT_Y,
+      role: "viewer",
+      membershipVersion: 0,
+      supportMode: true,
+    });
+    expect(findSupportSession).toHaveBeenCalledWith(SUPPORT_SESSION, "acc-1");
+  });
+
+  it.each(["M", "S"] as const)(
+    "403s tier %s — support never writes a customer's data",
+    async (tier) => {
+      const { gate, findSupportSession } = harness([accountRecord({ memberships: [] })]);
+      findSupportSession.mockResolvedValue(liveVisit);
+
+      await expect(
+        gate.requireTenant(SESSION, TENANT_Y, { tier, supportSessionId: SUPPORT_SESSION }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    },
+  );
+
+  it("an expired/revoked visit (fresh read answers null) falls back to the normal refusal", async () => {
+    const { gate, findSupportSession } = harness([accountRecord({ memberships: [] })]);
+    findSupportSession.mockResolvedValue(null);
+
+    await expect(
+      gate.requireTenant(SESSION, TENANT_Y, { tier: "R", supportSessionId: SUPPORT_SESSION }),
+    ).rejects.toMatchObject({ code: "TENANT_NOT_FOUND" });
+  });
+
+  it("a REAL membership wins: the visit is never consulted on a membership hit", async () => {
+    const { gate, findSupportSession } = harness(); // member of TENANT_X
+    findSupportSession.mockResolvedValue(liveVisit);
+
+    const context = await gate.requireTenant(SESSION, TENANT_X, {
+      tier: "R",
+      supportSessionId: SUPPORT_SESSION,
+    });
+
+    expect(context.supportMode).toBeUndefined();
+    expect(context.role).toBe("editor");
+    expect(findSupportSession).not.toHaveBeenCalled();
+  });
+
+  it("the visit is NOT a skeleton key: a selector for a THIRD tenant still 404s", async () => {
+    const { gate, findSupportSession } = harness([accountRecord({ memberships: [] })]);
+    findSupportSession.mockResolvedValue(liveVisit); // visit covers TENANT_Y
+
+    await expect(
+      gate.requireTenant(SESSION, TENANT_X, { tier: "R", supportSessionId: SUPPORT_SESSION }),
+    ).rejects.toMatchObject({ code: "TENANT_NOT_FOUND" });
+  });
+
+  it("no support cookie → the fallback never queries", async () => {
+    const { gate, findSupportSession } = harness([accountRecord({ memberships: [] })]);
+
+    await expect(gate.requireTenant(SESSION, null, { tier: "R" })).rejects.toMatchObject({
+      code: "TENANT_NOT_SELECTED",
+    });
+    expect(findSupportSession).not.toHaveBeenCalled();
+  });
+});
+

@@ -347,4 +347,46 @@ describe("presentApiError — video posts (E10.1 Phase 2)", () => {
     expect(view.hint).toContain("Chủ sở hữu");
     expect(view.title).toContain("ít nhất một chủ sở hữu");
   });
+
+  /**
+   * M3.2 — the same code, a different screen. On the platform admin screen a
+   * refusal is about the PLATFORM role and about a company addressed by id, so
+   * the shared membership wording would send someone after the wrong problem.
+   */
+  it("re-words FORBIDDEN for the platform screen", () => {
+    const shared = presentApiError(
+      makeError({ code: "FORBIDDEN", status: 403, userMessage: "Không đủ quyền." }),
+    );
+    const platform = presentApiError(
+      makeError({ code: "FORBIDDEN", status: 403, userMessage: "Không đủ quyền." }),
+      { operation: "platform" },
+    );
+    expect(shared.description).toContain("công ty này");
+    expect(platform.description).toContain("super_admin");
+    expect(platform.canRetry).toBe(false);
+  });
+
+  it("re-words TENANT_NOT_FOUND for the platform screen", () => {
+    const platform = presentApiError(
+      makeError({
+        code: "TENANT_NOT_FOUND",
+        status: 404,
+        userMessage: "Không tìm thấy công ty.",
+      }),
+      { operation: "platform" },
+    );
+    // "Bạn đã bị gỡ khỏi công ty đó" is nonsense to a super_admin standing
+    // outside every company.
+    expect(platform.description).not.toContain("gỡ khỏi công ty");
+    expect(platform.hint).toContain("Tải lại danh sách");
+  });
+
+  it("leaves every other code alone on the platform screen", () => {
+    const platform = presentApiError(
+      makeError({ code: "DB_ERROR", status: 503, userMessage: "Lỗi CSDL." }),
+      { operation: "platform" },
+    );
+    expect(platform.kind).toBe("server");
+    expect(platform.canRetry).toBe(true);
+  });
 });

@@ -100,6 +100,7 @@ describe("POST /api/prompts/versions/[version]/activate — answers", () => {
     expect(requireTenant).toHaveBeenCalledWith(expect.anything(), TENANT, {
       tier: "S",
       minRole: "admin",
+      supportSessionId: null, // M3.3: carried by requireTenantContext
     });
   });
 

@@ -29,14 +29,17 @@ import type { OperatorSession } from "./operator-session";
  * route goes through requireTenant, which answers 409 TENANT_NOT_SELECTED for
  * a lobby session, and the UI shows the create-or-join screen.
  *
- * ORDER OF PRECEDENCE (same as the sign-in gate, see auth.config.ts):
+ * ORDER OF PRECEDENCE (M3.1 edition — same wording in auth.config.ts and
+ * signin-gate.ts; change one, change all three):
  *   1. DEV_FAKE_SESSION — local dev only;
- *   2. the bootstrap lists of INDIVIDUALS (AUTH_BOOTSTRAP_ADMINS exact
- *      addresses, AUTH_FACEBOOK_ALLOWED_USER_IDS exact ids) — always in, even
- *      with an empty database, so nobody can lock themselves out of the screen
- *      that grants access. AUTH_ALLOWED_DOMAINS is NOT one of them: it filters
- *      who may sign in and grants nothing;
- *   3. the account tables, short-cached (composition/operator-account-gate).
+ *   2. the account tables, short-cached — THE source of truth the moment an
+ *      account row exists. This includes bootstrap admins: their env entry is
+ *      a SEED (promoted once to `platform_role='super_admin'`, audited) and a
+ *      RESCUE (only when no row exists or the DB is unreachable). A bootstrap
+ *      admin whose row is suspended is OUT like anyone else — that is N9;
+ *   3. the env bootstrap lists of INDIVIDUALS — seed + rescue only, see above.
+ *      AUTH_ALLOWED_DOMAINS is NOT one of them: it filters who may sign in and
+ *      grants nothing.
  */
 export async function getOperatorSession(surface: string): Promise<OperatorSession | null> {
   // Checked first so the bypass needs no auth env at all (see dev-session.ts).
@@ -76,20 +79,45 @@ export async function getOperatorSession(surface: string): Promise<OperatorSessi
 
   if (isBootstrapOperatorEmail(email)) {
     /**
-     * The escape hatch stays database-free on the critical path: a bootstrap
-     * admin must get in even when the account tables are unreachable. Their
-     * account row (if any) is still resolved BEST-EFFORT so /api/me and the
-     * future requireTenant see the person — `resolve` never throws.
+     * M3.1: once the account ROW exists, the DATABASE decides — the env only
+     * SEEDS it. `resolve` never throws; a null answer covers both "no row yet"
+     * and "DB unreachable", and only THEN does the env carry the session (the
+     * rescue door, deliberately account-less so no platform op can run on it).
      */
-    const account = await getContainer().usecases.operatorAccounts.resolve(email);
+    const gate = getContainer().usecases.operatorAccounts;
+    const account = await gate.resolve(email);
+
+    if (account) {
+      // N9 closed: a suspended bootstrap admin is refused BY THE DATABASE.
+      if (account.status !== "active") return null;
+
+      let platformRole = account.platformRole;
+      if (platformRole === null) {
+        // One-time env→DB promotion (audited, race-safe in the repo). Failure
+        // is logged inside and the env keeps carrying them until next time.
+        const granted = await gate.grantBootstrapRole(account.accountId, email);
+        if (granted) platformRole = "super_admin";
+      }
+
+      return {
+        email,
+        name,
+        isDevFake: false,
+        role: null,
+        isBootstrapAdmin: true,
+        accountId: account.accountId,
+        platformRole,
+      };
+    }
+
     return {
       email,
       name,
       isDevFake: false,
       role: null,
       isBootstrapAdmin: true,
-      accountId: account?.accountId ?? null,
-      platformRole: account?.platformRole ?? null,
+      accountId: null,
+      platformRole: null,
     };
   }
 

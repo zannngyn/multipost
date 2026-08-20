@@ -1,7 +1,7 @@
 import { index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 import { actorKindEnum } from "./_actor-kind";
-import { tenantIdColumn } from "./_tenant-column";
+import { tenants } from "./tenant";
 import { users } from "./user";
 
 /**
@@ -12,7 +12,17 @@ export const auditLogs = pgTable(
   "audit_log",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: tenantIdColumn(),
+    /**
+     * NULLABLE since M3.1 (migration 0015), for ONE reason only: PLATFORM /
+     * ACCOUNT-level events (`platform.role_granted`, ...) are about a PERSON or
+     * the platform itself and belong to no tenant — pinning them to a borrowed
+     * tenant id turned the promote transaction into an FK bomb on a database
+     * without that tenant (B1). Every TENANT-SCOPED event stays NOT NULL by
+     * discipline: those writers go through `scope.row(...)`, which stamps the
+     * tenant and cannot emit NULL. A NULL here MUST mean `action LIKE
+     * 'platform.%'` — anything else is a writer bug.
+     */
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
     /** Null for system/worker actions with no human actor. */
     actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
     /**

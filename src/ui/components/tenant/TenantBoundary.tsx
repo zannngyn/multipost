@@ -1,10 +1,12 @@
 "use client";
 
 import { Heading, Skeleton, Stack, Text } from "@astryxdesign/core";
+import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { OnboardingPanel } from "@/ui/components/tenant/OnboardingPanel";
+import { isTenantIndependentPath } from "@/ui/components/tenant/tenant-independent-paths";
 import { TenantPicker } from "@/ui/components/tenant/TenantPicker";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useActiveTenant, useMe } from "@/ui/hooks/useMe";
@@ -27,10 +29,23 @@ import { useActiveTenant, useMe } from "@/ui/hooks/useMe";
  */
 export function TenantBoundary({ children }: { children: ReactNode }) {
   const me = useMe();
+  const pathname = usePathname();
   const { hasNoMembership, mustPickTenant, tenants } = useActiveTenant();
 
   const isFirstLoad = me.isPending && me.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
+
+  /**
+   * Some screens inside the shell are not about a company at all (M3.2). A
+   * platform admin with no membership must reach `/platform`, not the
+   * onboarding screen — same pass-through the bootstrap session already has,
+   * for the same reason: this boundary answers "which company?", and that is
+   * not a question these routes ask.
+   *
+   * They guard themselves server-side; letting them past a boundary about
+   * TENANTS grants nothing.
+   */
+  if (isTenantIndependentPath(pathname)) return <>{children}</>;
 
   // --- Loading --------------------------------------------------------------
   if (isFirstLoad) {

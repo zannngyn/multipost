@@ -12,12 +12,15 @@ import { evaluateEnvAllowList } from "./auth.config";
  * COMPANY still comes only from a membership — signing in grants nothing but a
  * lobby.
  *
- * Order, and why each step exists:
+ * Order, and why each step exists (M3.1 — same precedence wording in
+ * session.ts and auth.config.ts; change one, change all three):
  *   1. env verdict (pure, see auth.config):
  *        reject -> out; an unverified e-mail, an unknown provider or an address
  *                  outside AUTH_ALLOWED_DOMAINS can never enter;
- *        allow  -> a BOOTSTRAP admin (exact address / exact Facebook id): in,
- *                  with no database on the critical path;
+ *        allow  -> a BOOTSTRAP admin. Since M3.1 the env is only SEED + RESCUE:
+ *                  when their account ROW answers, the DATABASE decides — a
+ *                  suspended/rejected row refuses even them (N9). Only a DB
+ *                  that cannot answer leaves the env carrying them;
  *        consult -> everyone else, to the account tables.
  *   2. the account tables:
  *        member / no_membership -> in (the session is valid either way; the
@@ -122,8 +125,7 @@ export async function decideSignIn(
   };
 
   if (verdict === "allow") {
-    await recordBootstrapIdentity(deps, identity);
-    return true;
+    return recordBootstrapIdentity(deps, identity);
   }
 
   try {
@@ -168,17 +170,29 @@ export async function decideSignIn(
 
 /**
  * A bootstrap admin is filed in the account tables too, so /api/me and the
- * members screens see the person. Best effort ON PURPOSE: their access comes
- * from env, and a database outage must not close the one door that is meant to
- * survive one.
+ * members screens see the person — and since M3.1 the answer BINDS: a
+ * suspended (or unclaimable/rejected) row refuses even a bootstrap admin,
+ * because once the row exists the DATABASE is the source of truth (N9).
+ * Only a database that cannot answer at all leaves the env carrying them —
+ * the rescue door a broken deployment is repaired through.
  */
 async function recordBootstrapIdentity(
   deps: SignInGateDeps,
   identity: SignInIdentity,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const account = await deps.signInAccount(identity);
+    if (account.kind === "suspended" || account.kind === "rejected") {
+      deps.logger.warn("Bootstrap admin refused by their own account row (N9)", {
+        error_code: "UNAUTHORIZED",
+        provider: identity.provider,
+        account_verdict: account.kind,
+        alert: "OPERATOR_ATTENTION",
+      });
+      return false;
+    }
     if (account.kind === "unknown") await deps.provisionAccount(identity);
+    return true;
   } catch (error) {
     const appError = AppError.from(error, "DB_ERROR");
     deps.logger.error("Bootstrap admin signed in but could not be recorded", {
@@ -187,5 +201,6 @@ async function recordBootstrapIdentity(
       provider: identity.provider,
       alert: "OPERATOR_ATTENTION",
     });
+    return true; // the rescue door: env carries them while the DB is down
   }
 }

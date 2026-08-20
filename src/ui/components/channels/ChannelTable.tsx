@@ -39,6 +39,7 @@ export function ChannelTable({
   channels,
   busyChannelId,
   areWritesBlocked,
+  blockedReasonOverride,
   onSetStatus,
   onRemove,
 }: {
@@ -47,6 +48,8 @@ export function ChannelTable({
   busyChannelId: string | null;
   /** Server cannot seal credentials, so every write here would 400. */
   areWritesBlocked: boolean;
+  /** The sentence to show when the block is not the missing key (M3.3). */
+  blockedReasonOverride?: string;
   onSetStatus: (channelId: string, status: ChannelStatus) => void;
   onRemove: (channelId: string) => void;
 }) {
@@ -58,7 +61,9 @@ export function ChannelTable({
    * focusable (aria-disabled), so the reason is reachable by keyboard too. A
    * dead control with no explanation is the thing this fix exists to avoid.
    */
-  const blockedReason = areWritesBlocked ? secretsNotConfiguredReason() : undefined;
+  const blockedReason = areWritesBlocked
+    ? (blockedReasonOverride ?? secretsNotConfiguredReason())
+    : undefined;
 
   const columns: TableColumn<ChannelRow>[] = [
     {

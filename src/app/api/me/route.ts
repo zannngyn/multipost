@@ -1,5 +1,6 @@
 import { getOperatorSession } from "@/app/_auth/session";
 import { readActiveTenantCookie } from "@/app/_lib/active-tenant-cookie";
+import { readSupportSessionCookie } from "@/app/_lib/support-session-cookie";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
@@ -42,7 +43,29 @@ export async function GET(request: Request): Promise<Response> {
       cookieTenantId: readActiveTenantCookie(request),
     });
 
-    return Response.json(overview);
+    /**
+     * M3.3 — a live support visit rides on top of the overview: the UI draws
+     * the "đang hỗ trợ tenant X" banner from `supportSession`, and
+     * `activeTenantId` points at the VISITED tenant so the ordinary R routes
+     * read its data. The peek is a fresh row check — an expired/revoked visit
+     * simply reads as null and the overview stands untouched.
+     */
+    const support = await container.usecases.supportSessions.peek(
+      readSupportSessionCookie(request),
+      session.accountId,
+    );
+
+    return Response.json({
+      ...overview,
+      supportSession: support
+        ? {
+            tenantId: support.tenantId,
+            tenantName: support.tenantName,
+            expiresAt: support.expiresAt,
+          }
+        : null,
+      activeTenantId: support ? support.tenantId : overview.activeTenantId,
+    });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });
   }

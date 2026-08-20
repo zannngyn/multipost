@@ -185,14 +185,19 @@ function ConnectionFacts({
     );
   }
 
-  const connectedAt = formatConnectedAt(data.connectedAt);
+  /**
+   * Field-level (M3.3): a viewer receives `{state}` and nothing else, so every
+   * detail below is optional. Absent is rendered as ABSENT — never as an empty
+   * string next to a label, which reads as "hệ thống mất dữ liệu".
+   */
+  const connectedAt = data.connectedAt ? formatConnectedAt(data.connectedAt) : null;
 
   if (data.state === "expired") {
     return (
       <div role="alert" className="border-warning/40 bg-warning/10 space-y-3 rounded-xl border p-3.5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <Badge tone="warning">Kết nối đã hết hạn</Badge>
-          <p className="text-sm break-all">{data.email}</p>
+          {data.email ? <p className="text-sm break-all">{data.email}</p> : null}
         </div>
         <p className="text-sm">
           Kết nối đã hết hạn hoặc bị thu hồi — đồng bộ sẽ dừng cho tới khi kết nối lại. Sản phẩm và
@@ -209,12 +214,20 @@ function ConnectionFacts({
             {isDisconnecting ? "Đang ngắt…" : "Ngắt kết nối"}
           </Button>
         </div>
-        <p className="text-muted-foreground font-mono text-xs">Mã tham chiếu: {data.reason}</p>
+        {data.reason ? (
+          <p className="text-muted-foreground font-mono text-xs">Mã tham chiếu: {data.reason}</p>
+        ) : null}
       </div>
     );
   }
 
-  const warning = sourceAccessWarning(data.sourceAccess);
+  /**
+   * `undefined` = the account may not see this fact; `"unknown"` = it was
+   * checked and produced no conclusion. Only the second one is worth a warning
+   * — telling a viewer "nguồn chưa đọc được" from a field they never received
+   * would be inventing an incident.
+   */
+  const warning = data.sourceAccess ? sourceAccessWarning(data.sourceAccess) : null;
 
   return (
     <div className="space-y-3">
@@ -228,12 +241,20 @@ function ConnectionFacts({
         <Badge tone={warning ? "warning" : "success"}>
           {warning ? "Đã kết nối — nguồn chưa đọc được" : "Đã kết nối Google"}
         </Badge>
-        <p className="text-sm">
-          Tài khoản <span className="font-medium break-all">{data.email}</span>
-          {connectedAt ? (
-            <span className="text-muted-foreground"> · kết nối lúc {connectedAt}</span>
-          ) : null}
-        </p>
+        {data.email ? (
+          <p className="text-sm">
+            Tài khoản <span className="font-medium break-all">{data.email}</span>
+            {connectedAt ? (
+              <span className="text-muted-foreground"> · kết nối lúc {connectedAt}</span>
+            ) : null}
+          </p>
+        ) : (
+          // The connection itself is public to the tenant; WHICH account it is
+          // is not. Saying so beats a blank space where a name should be.
+          <p className="text-muted-foreground text-sm">
+            Chi tiết tài khoản chỉ hiện với quản trị viên của đơn vị.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">

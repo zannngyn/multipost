@@ -163,14 +163,16 @@ function warnAuth(message: string, context: Record<string, unknown>): void {
  * What the ENV allow-lists alone can decide about a sign-in. Pure, so it works
  * in the edge bundle and in a unit test.
  *
- * ORDER OF PRECEDENCE for access, everywhere in this app:
+ * ORDER OF PRECEDENCE for access (M3.1 — same wording in session.ts and
+ * signin-gate.ts; change one, change all three):
  *   1. `DEV_FAKE_SESSION` (local dev only, see dev-session.ts);
- *   2. the BOOTSTRAP lists — AUTH_BOOTSTRAP_ADMINS (exact addresses) and
- *      AUTH_FACEBOOK_ALLOWED_USER_IDS (exact ids). They always get in, even with
- *      an empty database, so nobody can lock themselves out of the screen where
- *      access is granted. Both name INDIVIDUALS: that is the shape a grant must
- *      have;
- *   3. the `access_request` registry in the database (approve/block screen).
+ *   2. the ACCOUNT TABLES, the moment a row exists — including for bootstrap
+ *      admins, whose env entry is only a SEED (promoted once to
+ *      platform_role='super_admin', audited) and a RESCUE (no row yet, or the
+ *      DB is unreachable). A suspended row refuses even them (N9);
+ *   3. the env BOOTSTRAP lists — AUTH_BOOTSTRAP_ADMINS (exact addresses) and
+ *      AUTH_FACEBOOK_ALLOWED_USER_IDS (exact ids) — seed + rescue only. Both
+ *      name INDIVIDUALS: that is the shape a grant must have.
  *
  * AUTH_ALLOWED_DOMAINS is deliberately absent from that list: it only filters
  * WHO MAY TRY (see passesDomainFilter). Matching the domain gets an operator as

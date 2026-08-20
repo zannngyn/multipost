@@ -3,6 +3,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { loadSecretsConfig } from "@/composition/config";
 import { getContainer } from "@/composition/container";
+import { roleAtLeast } from "@/composition/require-tenant";
 import { AppError } from "@/core/domain/errors";
 
 /**
@@ -21,10 +22,13 @@ import { AppError } from "@/core/domain/errors";
  * fails. The screen uses the flag to warn BEFORE the token is pasted.
  *
  * M1.3b — viewer / tier R (doc 10 §4.2); the tenant comes from the membership.
- * TODO(M1.4, doc 10 Q8.3): `secretsConfigured` is an infrastructure fact and
- * belongs to admin+ — only an admin can paste a token, so only an admin needs
- * the warning. Held back with the other field-level narrowings so the UI schema
- * changes once.
+ *
+ * Field-level narrowing (doc 10 Q8.3): `secretsConfigured` is a fact about OUR
+ * deployment, not about the tenant's data, and only admin+ can paste a token —
+ * so only admin+ needs the warning. It is OMITTED for everyone else, never sent
+ * as a hard-coded `false`: a false would be a lie a viewer's screen could act
+ * on ("chưa cấu hình!"), while an absent key says "not your business" and the
+ * UI schema can make it optional honestly.
  */
 
 const ROUTE = "GET /api/channels";
@@ -48,10 +52,15 @@ export async function GET(request: Request): Promise<Response> {
       tenantId: ctx.tenantId,
     });
 
+    // Computed ONLY when it will be sent: `hasSecretsKey` logs a warning as a
+    // side effect, and a viewer's list must not fill the log with a warning
+    // about a key they are not being told about.
+    const showSecretsFlag = roleAtLeast(ctx.role, "admin");
+
     return Response.json({
       tenantId: ctx.tenantId,
       channels,
-      secretsConfigured: hasSecretsKey(logger, ctx.tenantId),
+      ...(showSecretsFlag ? { secretsConfigured: hasSecretsKey(logger, ctx.tenantId) } : {}),
     });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });

@@ -106,6 +106,7 @@ describe("GET /api/prompts — answers", () => {
     expect(requireTenant).toHaveBeenCalledWith(expect.anything(), TENANT, {
       tier: "R",
       minRole: "editor",
+      supportSessionId: null, // M3.3: carried by requireTenantContext
     });
   });
 
@@ -155,6 +156,7 @@ describe("POST /api/prompts — answers", () => {
     expect(requireTenant).toHaveBeenCalledWith(expect.anything(), TENANT, {
       tier: "S",
       minRole: "admin",
+      supportSessionId: null, // M3.3: carried by requireTenantContext
     });
   });
 
