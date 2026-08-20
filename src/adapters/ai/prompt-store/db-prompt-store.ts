@@ -16,6 +16,7 @@
  */
 
 import { AppError } from "@/core/domain/errors";
+import { normalizeTenantId } from "@/core/domain/tenant-context";
 import type { PromptStore, PromptTemplate, PromptTemplateRepo } from "@/core/ports/ai";
 import type { Logger } from "@/core/ports/infra";
 
@@ -29,14 +30,15 @@ export interface DbPromptStoreDeps {
 export function makeDbPromptStore(deps: DbPromptStoreDeps): PromptStore {
   return {
     async getActive(query): Promise<PromptTemplate | null> {
-      const tenantId = typeof query?.tenantId === "string" ? query.tenantId.trim() : "";
-      if (!tenantId) {
+      const rawTenantId = typeof query?.tenantId === "string" ? query.tenantId.trim() : "";
+      if (!rawTenantId) {
         throw new AppError("INVALID_INPUT", {
           message: "PromptStore.getActive requires a tenantId",
           userMessage: "Thiếu mã đơn vị (tenant) khi tra mẫu prompt.",
           context: { task: query?.task ?? null, platform: query?.platform ?? null },
         });
       }
+      const tenantId = normalizeTenantId(query.tenantId);
 
       let stored;
       try {

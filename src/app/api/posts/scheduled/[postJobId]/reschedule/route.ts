@@ -7,6 +7,7 @@ import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E8.4 — "đổi giờ" a post that has not gone out yet.
@@ -68,7 +69,7 @@ export async function POST(
     const session = await getOperatorSession(`api:${ROUTE}`);
 
     const result = await container.usecases.reschedulePostJob({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       postJobId: parsedId.data,
       newScheduledAt: new Date(body.scheduledAt),
       actorEmail: session?.email ?? null,

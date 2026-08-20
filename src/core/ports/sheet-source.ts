@@ -1,3 +1,4 @@
+import type { TenantId } from "@/core/domain/tenant-context";
 /**
  * Google Sheets port (E2). Core declares the need; adapters/google implements it.
  * Pure TypeScript: no imports (docs/07 section 2).
@@ -28,7 +29,7 @@ export interface SheetSnapshot {
 }
 
 export interface ReadSheetInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly spreadsheetId: string;
   /** Tab name, e.g. "Mẫu 2026". */
   readonly sheetName: string;

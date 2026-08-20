@@ -35,6 +35,7 @@ import {
   makeThrowingJobProgressStore,
 } from "./__fixtures__/job-progress-store";
 import { makePublishPost, spacingWaitMs } from "./publish-post";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Every branch of E7.4 with in-memory ports. The publisher is a spy: "was
@@ -42,7 +43,7 @@ import { makePublishPost, spacingWaitMs } from "./publish-post";
  * anti-duplicate rules.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function silentLogger(): Logger {
   const logger: Logger = {
@@ -392,7 +393,7 @@ function harness(options: {
 describe("publishPost — rejected calls", () => {
   it("rejects a malformed tenant id or job id", async () => {
     const { publish } = harness();
-    await expect(publish({ tenantId: "nope", postJobId: "job-1" })).rejects.toMatchObject({
+    await expect(publish({ tenantId: testTenantId("nope"), postJobId: "job-1" })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     await expect(publish({ tenantId: TENANT, postJobId: "  " })).rejects.toMatchObject({

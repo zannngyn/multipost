@@ -20,6 +20,7 @@ import {
   SCHEDULE_UNCONFIRMED_ERROR_CODE,
   makeReconcileScheduledPosts,
 } from "./reconcile-scheduled-posts";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E8.6 — the sweep that asks Facebook "did you publish it?".
@@ -28,7 +29,7 @@ import {
  * platform saying so, and nothing is ever re-sent.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const NOW = Date.parse("2026-08-13T02:00:00.000Z");
 const CLOCK: Clock = { now: () => new Date(NOW), nowMs: () => NOW };
 

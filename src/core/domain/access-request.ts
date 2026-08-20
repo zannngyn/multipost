@@ -10,6 +10,7 @@ import {
 } from "@/shared/operator-access";
 
 import { AppError } from "./errors";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Access registry (E1.4) — "ai được vào công cụ này".
@@ -23,7 +24,7 @@ import { AppError } from "./errors";
 
 export interface AccessRequest {
   readonly id: string;
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly provider: OperatorProvider;
   readonly providerAccountId: string;
   /**

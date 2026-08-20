@@ -20,6 +20,7 @@ import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
 import { syncRuns, type SyncRunRow } from "./schema";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Sync-run history (E2). The row is written BEFORE the work starts so a crashed
@@ -217,7 +218,7 @@ export class DrizzleSyncRunRepo implements SyncRunRepo {
     }
   }
 
-  async findLatest(tenantId: string): Promise<SyncRunSummary | null> {
+  async findLatest(tenantId: TenantId): Promise<SyncRunSummary | null> {
     // Throws INVALID_INPUT on a malformed id before any SQL is built.
     const scope = forTenant(this.db, tenantId);
 
@@ -242,7 +243,7 @@ export class DrizzleSyncRunRepo implements SyncRunRepo {
     return row ? toSummary(row) : null;
   }
 
-  async listRecent(tenantId: string, limit: number): Promise<readonly SyncRunListItem[]> {
+  async listRecent(tenantId: TenantId, limit: number): Promise<readonly SyncRunListItem[]> {
     // Throws INVALID_INPUT on a malformed id before any SQL is built.
     const scope = forTenant(this.db, tenantId);
 
@@ -307,7 +308,7 @@ export class DrizzleSyncRunRepo implements SyncRunRepo {
    * "không ghi được số vấn đề" — and the reason is logged with full context, so
    * nothing is swallowed (CLAUDE.md rules 5 + 6).
    */
-  private readIssuesTotal(row: { id: string; counts: unknown }, tenantId: string): number | null {
+  private readIssuesTotal(row: { id: string; counts: unknown }, tenantId: TenantId): number | null {
     // Null while a run is still going: it has written no counts yet.
     if (row.counts === null || row.counts === undefined) return null;
 

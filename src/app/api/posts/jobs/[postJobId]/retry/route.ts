@@ -7,6 +7,7 @@ import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E11.1 — "Chạy lại" one job. Only `failed` and `blocked` may be re-queued;
@@ -69,7 +70,7 @@ export async function POST(
     const session = await getOperatorSession(`api:${ROUTE}`);
 
     const result = await container.usecases.retryPostJob({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       postJobId: parsedId.data,
       actorEmail: session?.email ?? null,
     });

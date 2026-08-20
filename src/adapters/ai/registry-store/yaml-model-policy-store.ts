@@ -25,6 +25,7 @@ import {
   registrySchema,
   type RegistryFile,
 } from "@/adapters/ai/registry-store/registry-schema";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export interface YamlModelPolicyStoreOptions {
   filePath: string;
@@ -172,7 +173,7 @@ function applyTierModels(
 
 function resolveTiers(
   registry: RegistryFile,
-  tenantId: string,
+  tenantId: TenantId,
   task: AITask,
 ): Record<AITier, ModelEntry[]> {
   const resolved: Record<AITier, ModelEntry[]> = { cheap: [], mid: [], top: [] };

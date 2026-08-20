@@ -9,6 +9,7 @@ import {
   operatorSessionEmail,
   type OperatorRole,
 } from "@/shared/operator-access";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * M1.2 — the two questions the auth layer asks the ACCOUNT tables (replacing
@@ -26,7 +27,7 @@ export interface OperatorAccountState {
   readonly status: "active" | "suspended";
   readonly platformRole: PlatformRole | null;
   readonly displayName: string | null;
-  readonly activeMemberships: readonly { tenantId: string; role: OperatorRole; version: number }[];
+  readonly activeMemberships: readonly { tenantId: TenantId; role: OperatorRole; version: number }[];
 }
 
 export type SignInAccountVerdict =

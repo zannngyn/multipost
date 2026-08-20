@@ -6,6 +6,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * "Nguồn dữ liệu" card of the sync screen: WHICH Drive folder and WHICH Sheet
@@ -85,7 +86,7 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    const source = await container.usecases.getCatalogSource({ tenantId: parsed.data.tenantId });
+    const source = await container.usecases.getCatalogSource({ tenantId: legacyTenantIdFromRequest(parsed.data.tenantId) });
 
     if (!source) {
       return Response.json({ state: "not_configured", tenantId: parsed.data.tenantId });
@@ -120,7 +121,7 @@ export async function PUT(request: Request): Promise<Response> {
     const session = await getOperatorSession(`api:${ROUTE_PUT}`);
 
     const source = await container.usecases.updateCatalogSource({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       driveFolder: body.driveFolder,
       spreadsheet: body.spreadsheet,
       sheetName: body.sheetName,

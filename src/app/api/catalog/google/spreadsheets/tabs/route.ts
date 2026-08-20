@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E2 — the tab names of one spreadsheet, so the operator picks "Mẫu 2026" from
@@ -52,7 +53,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const tabs = await container.usecases.browseGoogleDrive.listSheetTabs({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
       spreadsheetId: parsed.data.spreadsheetId,
     });
 

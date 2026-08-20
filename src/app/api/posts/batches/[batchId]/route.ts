@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { uuidField } from "@/app/api/_lib/ids";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E7.5 — read model behind "Theo dõi lô": batch totals + one row per channel.
@@ -60,7 +61,7 @@ export async function GET(
     }
 
     const result = await container.usecases.getBatchStatus({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
       batchId: parsed.data.batchId,
     });
 

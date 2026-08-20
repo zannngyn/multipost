@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { uuidField } from "@/app/api/_lib/ids";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E11.1 — the operator job log: every post_job of a tenant, newest first,
@@ -69,7 +70,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const { tenantId, ...filter } = parsed.data;
-    const result = await container.usecases.listPostJobs({ tenantId, filter });
+    const result = await container.usecases.listPostJobs({ tenantId: legacyTenantIdFromRequest(tenantId), filter });
 
     return Response.json(result);
   } catch (error) {

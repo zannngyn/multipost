@@ -11,6 +11,7 @@ import {
   type GoogleOAuthAppCredentials,
 } from "./google-oauth";
 import type { GoogleAuthClient } from "./service-account";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * WHICH Google identity reads a given tenant's Drive/Sheets (E2).
@@ -33,14 +34,14 @@ export type GoogleApiAuth = GoogleAuthClient | GoogleOAuth2Client;
 
 export interface TenantGoogleAuth extends GoogleAuthCache {
   /** Ready-to-use client. Throws GOOGLE_AUTH_EXPIRED when the grant is dead. */
-  forTenant(tenantId: string): Promise<GoogleApiAuth>;
+  forTenant(tenantId: TenantId): Promise<GoogleApiAuth>;
   /**
    * A Drive/Sheets call failed mid-flight. Returns the AppError to throw when
    * it was an AUTH failure of a connected tenant (and parks the integration in
    * `error`), or null when the caller should keep its own mapping — a Service
    * Account 403 is a sharing problem, not an expired connection.
    */
-  reportAuthFailure(tenantId: string, error: unknown): Promise<AppError | null>;
+  reportAuthFailure(tenantId: TenantId, error: unknown): Promise<AppError | null>;
 }
 
 type AuthMode = "oauth" | "service_account";
@@ -90,13 +91,13 @@ export function makeTenantGoogleAuth(deps: TenantGoogleAuthDeps): TenantGoogleAu
   let serviceAccount: GoogleAuthClient | null = null;
   const nowMs = deps.nowMs ?? (() => Date.now());
 
-  function remember(tenantId: string, entry: Omit<CacheEntry, "expiresAt">): CacheEntry {
+  function remember(tenantId: TenantId, entry: Omit<CacheEntry, "expiresAt">): CacheEntry {
     const stored: CacheEntry = { ...entry, expiresAt: nowMs() + AUTH_CACHE_TTL_MS };
     cache.set(tenantId, stored);
     return stored;
   }
 
-  function fallback(tenantId: string): CacheEntry {
+  function fallback(tenantId: TenantId): CacheEntry {
     // Built once per process: the JWT client is stateless across tenants and
     // parsing the key file on every listing would be pure waste. The TTL still
     // applies to the tenant ENTRY: a tenant that connects an account elsewhere
@@ -105,7 +106,7 @@ export function makeTenantGoogleAuth(deps: TenantGoogleAuthDeps): TenantGoogleAu
     return remember(tenantId, { mode: "service_account", auth: serviceAccount });
   }
 
-  function buildOAuthClient(tenantId: string, refreshToken: string): GoogleOAuth2Client {
+  function buildOAuthClient(tenantId: TenantId, refreshToken: string): GoogleOAuth2Client {
     const credentials = deps.readCredentials();
     const clientId = trim(credentials?.clientId);
     const clientSecret = trim(credentials?.clientSecret);
@@ -132,7 +133,7 @@ export function makeTenantGoogleAuth(deps: TenantGoogleAuthDeps): TenantGoogleAu
     return client;
   }
 
-  async function markExpired(tenantId: string, reason: string, error: unknown): Promise<AppError> {
+  async function markExpired(tenantId: TenantId, reason: string, error: unknown): Promise<AppError> {
     cache.delete(tenantId);
     try {
       await deps.oauth.markConnectionExpired(tenantId, reason);
@@ -155,15 +156,15 @@ export function makeTenantGoogleAuth(deps: TenantGoogleAuthDeps): TenantGoogleAu
   }
 
   return {
-    invalidate(tenantId: string): void {
-      const key = trim(tenantId);
+    invalidate(tenantId: TenantId): void {
+      const key = normalizeTenantId(tenantId);
       if (key.length === 0) return;
       cache.delete(key);
     },
 
-    async forTenant(tenantId: string): Promise<GoogleApiAuth> {
+    async forTenant(tenantId: TenantId): Promise<GoogleApiAuth> {
       // --- Edge cases first --------------------------------------------------
-      const key = trim(tenantId);
+      const key = normalizeTenantId(tenantId);
       if (key.length === 0) {
         throw new AppError("INVALID_INPUT", {
           message: "Resolving Google auth requires a tenant id",
@@ -222,8 +223,8 @@ export function makeTenantGoogleAuth(deps: TenantGoogleAuthDeps): TenantGoogleAu
       return client;
     },
 
-    async reportAuthFailure(tenantId: string, error: unknown): Promise<AppError | null> {
-      const key = trim(tenantId);
+    async reportAuthFailure(tenantId: TenantId, error: unknown): Promise<AppError | null> {
+      const key = normalizeTenantId(tenantId);
       if (key.length === 0) return null;
       // Only a CONNECTED tenant can have an expired connection. On the Service
       // Account a 401/403 means the folder was un-shared — a different story

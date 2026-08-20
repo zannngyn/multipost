@@ -35,6 +35,7 @@
 
 import type { MediaAsset } from "@/core/domain/product";
 import type { VideoSpec } from "@/core/domain/video-spec";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Where the bytes are. A path avoids buffering a multi-GB file; `bytes` exists
@@ -55,7 +56,7 @@ export interface MediaProbe {
 }
 
 export interface ProbeVideoAssetInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly asset: MediaAsset;
 }
 

@@ -28,6 +28,7 @@ import type { ProductRepo } from "@/core/ports/product-repo";
 import type { ChannelConfigRepo, SignMediaUrlFn } from "@/core/ports/publisher";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E7.2 — fan out ONE post to N channels: one post_job per channel, independent
@@ -63,7 +64,7 @@ export interface PostMediaInput {
 }
 
 export interface CreatePostBatchInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /**
    * Idempotency scope. Pass the SAME id to retry a half-created batch safely;
    * omit it for a brand new batch (a fresh id is generated).
@@ -106,7 +107,7 @@ export interface CreatePostBatchChannelResult {
 }
 
 export interface CreatePostBatchResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId: string;
   readonly productCode: string;
   readonly color: string;
@@ -143,14 +144,15 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
     input: CreatePostBatchInput,
   ): Promise<CreatePostBatchResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = str(input?.tenantId);
+    const rawTenantId = str(input?.tenantId);
     const productCode = str(input?.productCode).toUpperCase();
-    if (!isTenantId(tenantId) || productCode.length === 0) {
+    if (!isTenantId(rawTenantId) || productCode.length === 0) {
       throw invalid("createPostBatch requires a tenant UUID and a product code", {
-        tenant_id: tenantId || null,
+        tenant_id: rawTenantId || null,
         product_code: productCode || null,
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const format = input?.format ?? "image_post";
     if (!isPostFormat(format) || !SUPPORTED_FORMATS.includes(format)) {
@@ -603,7 +605,7 @@ function normaliseMediaInput(
  */
 function signMedia(
   deps: CreatePostBatchDeps,
-  tenantId: string,
+  tenantId: TenantId,
   assets: readonly NormalisedAsset[],
   context: Record<string, unknown>,
 ): { media: PostJobMedia[]; expiresAtMs: number } {

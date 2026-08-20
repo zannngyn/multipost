@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E7.6 — preset channel groups: list + create.
@@ -70,7 +71,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const groups = await container.usecases.channelGroups.listChannelGroups({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
     });
 
     return Response.json({ tenantId: parsed.data.tenantId, groups });
@@ -88,7 +89,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const body = await readJsonBody(request, CreateSchema, { route: ROUTE_POST });
     const group = await container.usecases.channelGroups.createChannelGroup({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       name: body.name,
       channelIds: body.channelIds,
     });

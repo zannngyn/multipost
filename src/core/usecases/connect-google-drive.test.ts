@@ -12,6 +12,7 @@ import type {
 import type { Clock, Logger } from "@/core/ports/infra";
 
 import { makeConnectGoogleDrive } from "./connect-google-drive";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E2 — "Kết nối Google Drive". Edge cases first (CLAUDE.md technical rule 1):
@@ -19,7 +20,7 @@ import { makeConnectGoogleDrive } from "./connect-google-drive";
  * revoke Google refuses. The happy path is the last test of each block.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const STATE = "a".repeat(64);
 const NOW = Date.UTC(2026, 7, 19, 3, 0, 0);
 
@@ -118,7 +119,7 @@ function build(options: {
 describe("startGoogleConnect", () => {
   it("refuses a tenant id that is not a UUID before minting a nonce", async () => {
     const client = makeClient();
-    await expect(build({ client }).startGoogleConnect({ tenantId: "nope" })).rejects.toMatchObject({
+    await expect(build({ client }).startGoogleConnect({ tenantId: testTenantId("nope") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     expect(client.buildAuthorizeUrl).not.toHaveBeenCalled();

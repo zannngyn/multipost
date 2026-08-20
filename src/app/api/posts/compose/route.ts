@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Step 1 of the wizard: look a product up, run the stock gate, gather the album
@@ -85,7 +86,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const mediaKind = body.mediaKind ?? "image";
     const result = await container.usecases.composePost({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       productCode: body.productCode,
       channel: body.channel ?? DEFAULT_CHANNEL,
       colors: color.length > 0 ? [color] : undefined,

@@ -10,6 +10,7 @@ import type {
 } from "@/core/ports/publisher";
 
 import { resolveActorUserId } from "./resolve-actor";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E5.1 — the channel list an operator manages: read it, switch one on/off,
@@ -44,18 +45,18 @@ export function toChannelView(channel: ChannelConfig): ChannelView {
 }
 
 export interface ListChannelsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface SetChannelStatusRequest {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly channelId: string;
   readonly status: ChannelStatus;
   readonly actorEmail?: string | null;
 }
 
 export interface RemoveChannelRequest {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly channelId: string;
   readonly actorEmail?: string | null;
 }
@@ -156,19 +157,18 @@ export function makeManageChannels(deps: ManageChannelsDeps): ManageChannels {
 
 // --- helpers ----------------------------------------------------------------
 
-function requireTenant(raw: unknown, operation: string): string {
-  const tenantId = str(raw);
-  if (!isTenantId(tenantId)) {
+function requireTenant(raw: TenantId | undefined, operation: string): TenantId {
+  if (typeof raw !== "string" || !isTenantId(raw.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: "Channel operations require a tenant UUID",
       userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-      context: { tenant_id: tenantId || null, operation },
+      context: { tenant_id: (typeof raw === "string" ? raw.trim() : "") || null, operation },
     });
   }
-  return tenantId;
+  return normalizeTenantId(raw);
 }
 
-function requireChannelId(raw: unknown, tenantId: string, operation: string): string {
+function requireChannelId(raw: unknown, tenantId: TenantId, operation: string): string {
   const channelId = str(raw);
   if (channelId.length === 0) {
     throw new AppError("INVALID_INPUT", {
@@ -180,7 +180,7 @@ function requireChannelId(raw: unknown, tenantId: string, operation: string): st
   return channelId;
 }
 
-function channelNotFound(tenantId: string, channelId: string, operation: string): AppError {
+function channelNotFound(tenantId: TenantId, channelId: string, operation: string): AppError {
   return new AppError("CHANNEL_NOT_CONFIGURED", {
     message: "Channel not found for this tenant",
     userMessage: `Không tìm thấy kênh "${channelId}" trong đơn vị này.`,

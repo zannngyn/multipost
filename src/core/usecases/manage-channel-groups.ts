@@ -7,6 +7,7 @@ import { AppError } from "@/core/domain/errors";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Logger } from "@/core/ports/infra";
 import type { ChannelConfigRepo, ChannelGroupRepo } from "@/core/ports/publisher";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E7.6 — saved channel presets ("nhóm kênh đặt sẵn"): list / create / update /
@@ -28,24 +29,24 @@ export interface ChannelGroupView {
 }
 
 export interface ListChannelGroupsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface CreateChannelGroupInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly name: string;
   readonly channelIds: readonly string[];
 }
 
 export interface UpdateChannelGroupInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly groupId: string;
   readonly name: string;
   readonly channelIds: readonly string[];
 }
 
 export interface DeleteChannelGroupInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly groupId: string;
 }
 
@@ -79,7 +80,7 @@ export function makeManageChannelGroups(deps: ManageChannelGroupsDeps): ManageCh
    * sends them looking for a data problem that is not there.
    */
   async function assertChannelsExist(
-    tenantId: string,
+    tenantId: TenantId,
     channelIds: readonly string[],
     context: Record<string, unknown>,
   ): Promise<void> {
@@ -203,19 +204,18 @@ function toView(group: ChannelGroup): ChannelGroupView {
   };
 }
 
-function requireTenant(raw: unknown): string {
-  const tenantId = typeof raw === "string" ? raw.trim() : "";
-  if (!isTenantId(tenantId)) {
+function requireTenant(raw: TenantId | undefined): TenantId {
+  if (typeof raw !== "string" || !isTenantId(raw.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: "Channel group operations require a tenant UUID",
       userMessage: "Yêu cầu quản lý nhóm kênh thiếu mã đơn vị.",
-      context: { tenant_id: tenantId || null },
+      context: { tenant_id: (typeof raw === "string" ? raw.trim() : "") || null },
     });
   }
-  return tenantId;
+  return normalizeTenantId(raw);
 }
 
-function requireGroupId(raw: unknown, tenantId: string): string {
+function requireGroupId(raw: unknown, tenantId: TenantId): string {
   const groupId = typeof raw === "string" ? raw.trim() : "";
   if (groupId.length === 0) {
     throw new AppError("INVALID_INPUT", {
@@ -227,7 +227,7 @@ function requireGroupId(raw: unknown, tenantId: string): string {
   return groupId;
 }
 
-function notFound(tenantId: string, groupId: string, operation: string): AppError {
+function notFound(tenantId: TenantId, groupId: string, operation: string): AppError {
   return new AppError("INVALID_INPUT", {
     message: "Channel group not found for this tenant",
     userMessage: "Không tìm thấy nhóm kênh này.",

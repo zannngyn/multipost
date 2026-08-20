@@ -10,9 +10,10 @@ import {
   validComposeDraftPayload,
 } from "./__fixtures__/post-draft";
 import { makeSavePostDraft } from "./save-post-draft";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
-const OTHER_TENANT = "00000000-0000-0000-0000-000000000002";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
+const OTHER_TENANT = testTenantId("00000000-0000-0000-0000-000000000002");
 const OWNER = "00000000-0000-0000-0000-0000000000aa";
 
 function makeLogger(): Logger & { warn: ReturnType<typeof vi.fn> } {
@@ -43,7 +44,7 @@ describe("savePostDraft — edge cases first", () => {
     const harness = makeHarness();
 
     await expect(
-      harness.run({ tenantId, ownerUserId: OWNER, payload: validComposeDraftPayload() }),
+      harness.run({ tenantId: testTenantId(tenantId), ownerUserId: OWNER, payload: validComposeDraftPayload() }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(harness.save).not.toHaveBeenCalled();
   });
@@ -207,7 +208,7 @@ describe("savePostDraft — happy path", () => {
 
     await expect(
       harness.run({
-        tenantId: ` ${TENANT} `,
+        tenantId: testTenantId(` ${TENANT} `),
         ownerUserId: ` ${OWNER} `,
         payload: validComposeDraftPayload({
           step: "san-pham",

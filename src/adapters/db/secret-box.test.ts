@@ -15,6 +15,7 @@ import {
   secretsEqual,
   type SecretBox,
 } from "./secret-box";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Edge cases first: a wrong key, a tampered envelope and a missing key are the
@@ -174,7 +175,7 @@ describe("makeSecretBox — seal/open", () => {
 
   it("passes a legacy plaintext value through WITH a warning, so it stays visible", () => {
     const b = box();
-    const value = b.openSecret(TOKEN, { tenantId: "t-1", provider: "meta", field: "pageAccessToken" });
+    const value = b.openSecret(TOKEN, { tenantId: testTenantId("t-1"), provider: "meta", field: "pageAccessToken" });
 
     expect(value).toBe(TOKEN);
     expect(b.logger.warns).toHaveLength(1);

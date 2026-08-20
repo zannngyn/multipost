@@ -10,6 +10,7 @@ import { DrizzleAccessRequestRepo } from "./access-request-repo.drizzle";
 import { makeDbHandle } from "./client";
 import { accessRequests, accounts, auditLogs, identities, tenants, users } from "./schema";
 import { makeGlobalIdentityTestLock } from "./__fixtures__/global-identity-lock";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The WRITE path of the access registry — the parts a stubbed query builder
@@ -63,7 +64,7 @@ describe.skipIf(!url)("DrizzleAccessRequestRepo — the write path", () => {
   const handle = makeDbHandle({ url: url ?? "postgres://unused", maxPoolSize: 3 });
   const lines: LogLine[] = [];
   const repo = new DrizzleAccessRequestRepo(handle.db, { logger: recordingLogger(lines) });
-  const tenantId = randomUUID();
+  const tenantId = testTenantId(randomUUID());
 
   /** Every session address this file ever writes — the cleanup key. */
   const RUN_EMAILS = [

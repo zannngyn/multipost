@@ -10,6 +10,7 @@ import { makeDbHandle } from "./client";
 import { DrizzleGoogleOAuthRepo } from "./google-oauth-repo.drizzle";
 import { auditLogs, tenantIntegrations, tenants } from "./schema";
 import { makeSecretBox } from "./secret-box";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The WRITE path of the Google connection — everything that runs inside a
@@ -52,7 +53,7 @@ describe.skipIf(!url)("DrizzleGoogleOAuthRepo — the write path", () => {
   const lines: LogLine[] = [];
   const box = makeSecretBox({ logger: recordingLogger(lines), readKey: () => TEST_KEY });
   const repo = new DrizzleGoogleOAuthRepo(handle.db, { box, logger: recordingLogger(lines) });
-  const tenantId = randomUUID();
+  const tenantId = testTenantId(randomUUID());
 
   const readRow = async () => {
     const rows = await handle.db

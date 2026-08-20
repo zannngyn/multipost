@@ -2,6 +2,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readUploadForm } from "@/app/api/_lib/read-upload-form";
 import { getContainer, MAX_UPLOAD_BYTES, type UploadedFile } from "@/composition/container";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E9.1 — mode B intake. Thin by contract (docs/07 §3.3): parse the multipart
@@ -38,7 +39,7 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const result = await container.usecases.uploadMedia({
-      tenantId: form.tenantId,
+      tenantId: legacyTenantIdFromRequest(form.tenantId),
       productCode: form.productCode,
       files,
       order: form.order,

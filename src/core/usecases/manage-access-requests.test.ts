@@ -10,6 +10,7 @@ import {
   TEST_TENANT,
 } from "./__fixtures__/access-request-repo";
 import { makeManageAccessRequests } from "./manage-access-requests";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /** E1.4 — the approval screen: list, approve with a role, block. */
 
@@ -83,7 +84,7 @@ describe("decideAccessRequest — refusals", () => {
   it("refuses a malformed tenant id", async () => {
     const { usecase } = harness();
     await expect(
-      usecase.decideAccessRequest({ tenantId: "nope", id: "req-seed", decision: "block" }),
+      usecase.decideAccessRequest({ tenantId: testTenantId("nope"), id: "req-seed", decision: "block" }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 });

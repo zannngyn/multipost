@@ -9,6 +9,7 @@ import { AppError } from "@/core/domain/errors";
 import { OPERATOR_ROLES } from "@/shared/operator-access";
 
 import { requireAccessAdmin } from "../_lib/admin-guard";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E1.4 — `POST /api/access-requests/decide`: approve (with a role) or block.
@@ -49,7 +50,7 @@ export async function POST(request: Request): Promise<Response> {
     const body = await readJsonBody(request, DecideSchema, { route: ROUTE });
 
     const result = await container.usecases.accessRequests.decideAccessRequest({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       id: body.id,
       decision: body.decision,
       role: body.role,

@@ -5,6 +5,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E5.1, door B — import Fanpages from a User Access Token the operator pasted.
@@ -48,7 +49,7 @@ export async function POST(request: Request): Promise<Response> {
     const session = await getOperatorSession(`api:${ROUTE}`);
 
     const result = await container.usecases.connectChannels.importChannels({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       userAccessToken: body.userAccessToken,
       actorEmail: session?.email ?? null,
     });

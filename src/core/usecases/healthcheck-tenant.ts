@@ -2,6 +2,7 @@ import { AppError } from "@/core/domain/errors";
 import { isTenantId, type TenantStatus } from "@/core/domain/tenant";
 import type { TenantRepo } from "@/core/ports/tenant-repo";
 import type { Clock, Logger } from "@/core/ports/infra";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Walking-skeleton usecase: proves the wiring app -> composition -> adapters/db
@@ -9,11 +10,11 @@ import type { Clock, Logger } from "@/core/ports/infra";
  */
 
 export interface HealthcheckTenantInput {
-  tenantId: string;
+  tenantId: TenantId;
 }
 
 export interface HealthcheckTenantResult {
-  tenantId: string;
+  tenantId: TenantId;
   name: string;
   status: TenantStatus;
   /** ISO-8601, from the injected Clock — core never calls `new Date()`. */
@@ -47,11 +48,12 @@ export function makeHealthcheckTenant(deps: HealthcheckTenantDeps) {
       });
     }
 
-    const log = deps.logger.child({ tenant_id: tenantId });
+    const scopedTenantId = normalizeTenantId(input.tenantId);
+    const log = deps.logger.child({ tenant_id: scopedTenantId });
 
     // Repo failures are already AppError('DB_ERROR') from the adapter — let them
     // propagate untouched; catching here would only blur the cause.
-    const tenant = await deps.tenants.findById(tenantId);
+    const tenant = await deps.tenants.findById(scopedTenantId);
 
     if (!tenant) {
       log.warn("Tenant healthcheck failed: tenant not found", {
@@ -64,7 +66,7 @@ export function makeHealthcheckTenant(deps: HealthcheckTenantDeps) {
     const checkedAt = deps.clock.now().toISOString();
     log.info("Tenant healthcheck ok", { tenant_status: tenant.status, checked_at: checkedAt });
 
-    return { tenantId: tenant.id, name: tenant.name, status: tenant.status, checkedAt };
+    return { tenantId: scopedTenantId, name: tenant.name, status: tenant.status, checkedAt };
   };
 }
 

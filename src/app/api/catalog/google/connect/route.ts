@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { buildGoogleStateCookie } from "@/app/api/catalog/google/_lib/oauth-state-cookie";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E2 step 1 — send the operator's browser to Google's consent screen so the
@@ -56,7 +57,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const started = await container.usecases.connectGoogleDrive.startGoogleConnect({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
     });
 
     return new Response(null, {

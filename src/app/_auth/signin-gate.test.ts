@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Who gets in, and on whose authority (E1.4).
@@ -9,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * admin nobody can block. Only the exact-address / exact-id lists grant.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 const ENV = {
   GOOGLE_CLIENT_ID: "client-id",

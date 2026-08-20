@@ -54,6 +54,39 @@ const ADAPTER_DIRS = ["ai", "clock", "crypto", "db", "google", "logging", "media
 const restrict = (patterns) => ({ "no-restricted-imports": ["error", { patterns }] });
 
 /**
+ * Branded-tenant guards (M1.3a, docs/11 §5 + docs/10 §5).
+ *
+ * `as TenantId` is how defence layer #2 gets forged, so it is banned everywhere
+ * except the blessed constructor sites + tests. `systemTenantId` is the worker's
+ * unchecked constructor, so importing it is banned everywhere except the worker.
+ */
+const AS_TENANT_ID = {
+  selector: "TSAsExpression[typeAnnotation.typeName.name='TenantId']",
+  message:
+    "Cấm 'as TenantId' — brand chỉ được tạo qua requireTenant/legacyTenantIdFromRequest/systemTenantId/testTenantId (docs/11 §5).",
+};
+const IMPORT_SYSTEM_TENANT_ID = {
+  selector: "ImportDeclaration[source.value='@/composition/system-tenant-id']",
+  message: "systemTenantId chỉ được import trong worker (actor=system, docs/10 §5).",
+};
+const IMPORT_TESTING_TENANT_ID = {
+  selector: "ImportDeclaration[source.value='@/core/domain/tenant-context.testing']",
+  message: "testTenantId chỉ dùng trong *.test.ts / __fixtures__ (docs/11 §3).",
+};
+const restrictSyntax = (selectors) => ({ "no-restricted-syntax": ["error", ...selectors] });
+
+/** Files allowed to mint the brand with an explicit cast (the closed list). */
+const TENANT_BRAND_BLESSED = [
+  "src/core/domain/tenant-context.ts",
+  "src/core/domain/tenant-context.testing.ts",
+  "src/composition/require-tenant.ts",
+  "src/composition/legacy-tenant-id.ts",
+  "src/composition/system-tenant-id.ts",
+  // The well-known dev/seed tenant id — a literal we own, not client input.
+  "src/adapters/db/seed-constants.ts",
+];
+
+/**
  * Base rules for every adapter. Flat config REPLACES a rule's options instead of
  * merging them, so any later block targeting a sub-folder must repeat these —
  * otherwise the narrower block silently drops them.
@@ -213,6 +246,29 @@ const eslintConfig = defineConfig([
         message: "shared phải thuần — không phụ thuộc lớp nào và không I/O.",
       },
     ]),
+  },
+
+  // --- Branded TenantId guards (order matters: last match wins per rule). ---
+  // 1. Baseline: ban the forging cast, the system ctor import and the test ctor.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    rules: restrictSyntax([AS_TENANT_ID, IMPORT_SYSTEM_TENANT_ID, IMPORT_TESTING_TENANT_ID]),
+  },
+  // 2. Worker (actor=system) may import systemTenantId; the casts stay banned.
+  {
+    files: ["src/worker/**"],
+    rules: restrictSyntax([AS_TENANT_ID, IMPORT_TESTING_TENANT_ID]),
+  },
+  // 3. Blessed constructor sites may cast; still no system/test ctor imports.
+  {
+    files: TENANT_BRAND_BLESSED,
+    rules: restrictSyntax([IMPORT_SYSTEM_TENANT_ID, IMPORT_TESTING_TENANT_ID]),
+  },
+  // 4. Tests + fixtures are exempt from all of the above (they brand freely and
+  //    wire across layers on purpose — mirrors dependency-cruiser's test exclude).
+  {
+    files: ["src/**/*.test.ts", "src/**/__fixtures__/**"],
+    rules: { "no-restricted-syntax": "off", "no-restricted-imports": "off" },
   },
 ]);
 

@@ -8,6 +8,7 @@ import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * M1.2 — `POST /api/me/active-tenant`: switch the working company.
@@ -47,7 +48,7 @@ export async function POST(request: Request): Promise<Response> {
     const body = await readJsonBody(request, BodySchema, { route: ROUTE });
     const result = await container.usecases.selectActiveTenant({
       sessionEmail: session.email,
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
     });
 
     return Response.json(result, {

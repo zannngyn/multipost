@@ -4,6 +4,7 @@ import type {
   MembershipWithTenant,
   OperatorAccountSummary,
 } from "@/core/ports/account-repo";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * In-memory `account`/`identity`/`membership` store for usecase and gate tests.
@@ -11,8 +12,8 @@ import type {
  * `attachProviderAccountId` PATCHES — it never grows the store.
  */
 
-export const TENANT_X = "00000000-0000-0000-0000-00000000000a";
-export const TENANT_Y = "00000000-0000-0000-0000-00000000000b";
+export const TENANT_X = testTenantId("00000000-0000-0000-0000-00000000000a");
+export const TENANT_Y = testTenantId("00000000-0000-0000-0000-00000000000b");
 
 export interface FakeAccountRecord {
   summary: OperatorAccountSummary;

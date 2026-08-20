@@ -4,9 +4,10 @@ import { MAX_UPLOADS_PER_POST } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
 import { readUploadForm } from "./read-upload-form";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 const ROUTE = "POST /api/posts/uploads";
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function multipart(build: (form: FormData) => void): Request {
   const form = new FormData();

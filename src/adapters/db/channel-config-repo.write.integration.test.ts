@@ -11,6 +11,7 @@ import { integrationLockKey } from "./integration-lock";
 import { makeDbHandle } from "./client";
 import { auditLogs, tenantIntegrations, tenants } from "./schema";
 import { makeSecretBox } from "./secret-box";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The E5.1 WRITE path against a REAL Postgres: the transaction, the jsonb
@@ -51,7 +52,7 @@ describe.skipIf(!url)("DrizzleChannelConfigRepo — write path (real database)",
   const logger = recordingLogger();
   const box = makeSecretBox({ logger, readKey: () => TEST_KEY });
   const repo = new DrizzleChannelConfigRepo(handle.db, { box, logger });
-  const tenantId = randomUUID();
+  const tenantId = testTenantId(randomUUID());
 
   /** The status COLUMN of the provider row (not the per-channel status). */
   async function integrationStatus(): Promise<string> {
@@ -392,7 +393,7 @@ describe.skipIf(!url)("DrizzleChannelConfigRepo — two first imports at once", 
   const logger = recordingLogger();
   const box = makeSecretBox({ logger, readKey: () => TEST_KEY });
   const repo = new DrizzleChannelConfigRepo(handle.db, { box, logger });
-  const tenantId = randomUUID();
+  const tenantId = testTenantId(randomUUID());
 
   beforeAll(async () => {
     await handle.db

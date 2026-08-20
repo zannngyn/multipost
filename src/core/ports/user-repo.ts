@@ -1,3 +1,4 @@
+import type { TenantId } from "@/core/domain/tenant-context";
 /**
  * Operator lookup (E11.1 audit trail). Pure TypeScript: types only (docs/07 §2).
  *
@@ -16,5 +17,5 @@
 
 export interface UserRepo {
   /** Null when this tenant has no user with that e-mail. */
-  findUserIdByEmail(tenantId: string, email: string): Promise<string | null>;
+  findUserIdByEmail(tenantId: TenantId, email: string): Promise<string | null>;
 }

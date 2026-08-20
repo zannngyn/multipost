@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Starts one catalog sync (E2). Thin by contract (docs/07 §3.3).
@@ -42,7 +43,7 @@ export async function POST(request: Request): Promise<Response> {
 
     // The usecase owns everything else: tenant shape, missing integration row,
     // Drive/Sheet failures, and writing the sync_run trail.
-    const result = await container.usecases.syncCatalog({ tenantId: body.tenantId });
+    const result = await container.usecases.syncCatalog({ tenantId: legacyTenantIdFromRequest(body.tenantId) });
 
     return Response.json({
       syncRunId: result.syncRunId,

@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E7.2 — the wizard's final action: fan one approved post out to N channels.
@@ -118,7 +119,7 @@ export async function POST(request: Request): Promise<Response> {
     const scheduledAtByChannel = toScheduleMap(body.scheduledAtByChannel);
 
     const result = await container.usecases.createPostBatch({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       batchId: body.batchId,
       productCode: body.productCode,
       color: color.length > 0 ? color : undefined,

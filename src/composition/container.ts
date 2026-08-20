@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
+import type { TenantId } from "@/core/domain/tenant-context";
 import { DrizzleAccessRequestRepo } from "@/adapters/db/access-request-repo.drizzle";
 import { DrizzleAccountRepo } from "@/adapters/db/account-repo.drizzle";
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
@@ -209,7 +210,7 @@ export interface Usecases {
    * would overwrite each other. `null` for an unknown e-mail is NOT an error —
    * the route answers "chỉ lưu trên máy này" and the screen says so.
    */
-  findOperatorUserId: (tenantId: string, email: string) => Promise<string | null>;
+  findOperatorUserId: (tenantId: TenantId, email: string) => Promise<string | null>;
   /**
    * E1.4 — "ai được vào công cụ này", read on EVERY request (short-cached).
    * `getOperatorSession` calls this: the session is a stateless JWT, so a block
@@ -271,7 +272,7 @@ export interface Usecases {
 }
 
 export interface SignMediaUrlRequest {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Drive file id, i.e. `MediaAsset.driveFileId` / `PostJobMedia.driveFileId`. */
   readonly assetId: string;
   /** Public origin Meta will call, e.g. `https://mysp.example.com`. */
@@ -858,7 +859,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     savePostDraft: makeSavePostDraft({ drafts: postDrafts, logger: deps.logger }),
     loadPostDraft: makeLoadPostDraft({ drafts: postDrafts, logger: deps.logger }),
     discardPostDraft: makeDiscardPostDraft({ drafts: postDrafts, logger: deps.logger }),
-    findOperatorUserId: (tenantId: string, email: string) =>
+    findOperatorUserId: (tenantId: TenantId, email: string) =>
       users.findUserIdByEmail(tenantId, email),
     operatorAccess,
     accessRequests,

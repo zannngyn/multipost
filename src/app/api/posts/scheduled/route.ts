@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E8.4 — "bài đã hẹn": what is going to publish, soonest first. READ ONLY.
@@ -67,7 +68,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const { tenantId, ...filter } = parsed.data;
-    const result = await container.usecases.listScheduledJobs({ tenantId, filter });
+    const result = await container.usecases.listScheduledJobs({ tenantId: legacyTenantIdFromRequest(tenantId), filter });
 
     return Response.json(result);
   } catch (error) {

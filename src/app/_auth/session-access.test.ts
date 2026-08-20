@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { canManageAccess } from "./operator-session";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * THE revocation guard, M1.2 edition: the session is a stateless JWT, so the
@@ -10,7 +11,7 @@ import { canManageAccess } from "./operator-session";
  * that lies.
  */
 
-const DEMO_TENANT = "00000000-0000-0000-0000-000000000001";
+const DEMO_TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 const authMock = vi.fn();
 
@@ -136,7 +137,7 @@ describe("getOperatorSession — the account tables decide", () => {
     resolveMock.mockResolvedValue(
       member({
         activeMemberships: [
-          { tenantId: "00000000-0000-0000-0000-0000000000ff", role: "owner", version: 1 },
+          { tenantId: testTenantId("00000000-0000-0000-0000-0000000000ff"), role: "owner", version: 1 },
         ],
       }),
     );

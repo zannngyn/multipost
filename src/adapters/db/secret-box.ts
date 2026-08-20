@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from "
 
 import { AppError } from "@/core/domain/errors";
 import type { Logger } from "@/core/ports/infra";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Envelope encryption for the credentials that live inside
@@ -38,7 +39,7 @@ export interface SecretBox {
 
 /** Only for logs. Never carries the value itself. */
 export interface SecretFieldContext {
-  readonly tenantId?: string;
+  readonly tenantId?: TenantId;
   readonly provider?: string;
   readonly field?: string;
 }

@@ -14,6 +14,7 @@ import type { UserRepo } from "@/core/ports/user-repo";
 
 import { checkAndRecordSourceAccess } from "./check-google-source-access";
 import { resolveActorUserId } from "./resolve-actor";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E2 — "Kết nối Google Drive" on the sync screen: the tenant grants this app
@@ -29,18 +30,18 @@ import { resolveActorUserId } from "./resolve-actor";
  */
 
 export interface StartGoogleConnectInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface StartGoogleConnectResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly state: string;
   readonly authorizeUrl: string;
 }
 
 export interface CompleteGoogleConnectInput {
   /** Read from the state cookie, NEVER from the query string. */
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly code: string;
   /** `state` as Google echoed it back. */
   readonly state: string;
@@ -50,7 +51,7 @@ export interface CompleteGoogleConnectInput {
 }
 
 export interface GoogleConnectionInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly actorEmail?: string | null;
 }
 
@@ -291,16 +292,15 @@ function normaliseScopes(raw: unknown): readonly string[] {
   return Array.from(new Set(scopes));
 }
 
-function requireTenant(raw: unknown, operation: string): string {
-  const tenantId = str(raw);
-  if (!isTenantId(tenantId)) {
+function requireTenant(raw: TenantId | undefined, operation: string): TenantId {
+  if (typeof raw !== "string" || !isTenantId(raw.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: "Connecting Google Drive requires a tenant UUID",
       userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-      context: { tenant_id: tenantId || null, operation },
+      context: { tenant_id: (typeof raw === "string" ? raw.trim() : "") || null, operation },
     });
   }
-  return tenantId;
+  return normalizeTenantId(raw);
 }
 
 /**

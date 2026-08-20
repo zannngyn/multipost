@@ -11,6 +11,7 @@ import type { UserRepo } from "@/core/ports/user-repo";
 
 import { toChannelView, type ChannelView } from "./manage-channels";
 import { resolveActorUserId } from "./resolve-actor";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E5.1 — "Kết nối Fanpage". Two doors, ONE core:
@@ -39,11 +40,11 @@ export function facebookChannelId(pageId: string): string {
 }
 
 export interface StartFacebookConnectInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface StartFacebookConnectResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** CSRF nonce; the route stores it in an httpOnly cookie and re-checks it. */
   readonly state: string;
   readonly authorizeUrl: string;
@@ -51,7 +52,7 @@ export interface StartFacebookConnectResult {
 
 export interface CompleteFacebookConnectInput {
   /** Read from the state cookie, NEVER from the query string. */
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly code: string;
   /** `state` as Facebook echoed it back. */
   readonly state: string;
@@ -61,19 +62,19 @@ export interface CompleteFacebookConnectInput {
 }
 
 export interface ImportChannelsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** SECRET. Body-only; it must never reach a query string or a log. */
   readonly userAccessToken: string;
   readonly actorEmail?: string | null;
 }
 
 export interface RefreshChannelsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly actorEmail?: string | null;
 }
 
 export interface ImportChannelsResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Channels that did not exist before this import. */
   readonly imported: number;
   /** Channels whose name/token were refreshed. */
@@ -291,16 +292,15 @@ function toChannelUpsert(account: RemoteChannelAccount): ChannelUpsert {
   };
 }
 
-function requireTenant(raw: unknown, operation: string): string {
-  const tenantId = str(raw);
-  if (!isTenantId(tenantId)) {
+function requireTenant(raw: TenantId | undefined, operation: string): TenantId {
+  if (typeof raw !== "string" || !isTenantId(raw.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: "Connecting channels requires a tenant UUID",
       userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-      context: { tenant_id: tenantId || null, operation },
+      context: { tenant_id: (typeof raw === "string" ? raw.trim() : "") || null, operation },
     });
   }
-  return tenantId;
+  return normalizeTenantId(raw);
 }
 
 /**

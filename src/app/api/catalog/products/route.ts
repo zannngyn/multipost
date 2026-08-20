@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Read model behind the "Sản phẩm" screen: which codes are publishable and
@@ -77,7 +78,7 @@ export async function GET(request: Request): Promise<Response> {
 
     const q = parsed.data.q ?? "";
     const result = await container.usecases.listCatalogProducts({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
       filter: {
         ...(parsed.data.status ? { status: parsed.data.status } : {}),
         ...(q.length > 0 ? { q } : {}),

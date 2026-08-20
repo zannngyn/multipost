@@ -13,14 +13,15 @@ import {
   signMediaUrl,
   verifyMediaUrlSignature,
 } from "./media-url";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Edge cases first: every way a link can be wrong (forged, expired, replayed
  * across tenants/assets, tampered expiry) before the one way it can be right.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
-const OTHER_TENANT = "00000000-0000-0000-0000-000000000002";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
+const OTHER_TENANT = testTenantId("00000000-0000-0000-0000-000000000002");
 const ASSET = "1bA48sjugz9BczcoR0";
 const NOW = Date.UTC(2026, 7, 12, 9, 0, 0);
 const SECRET = "test-secret-at-least-32-characters-long";
@@ -54,7 +55,7 @@ function verify(
 
 describe("mediaSignaturePayload", () => {
   it.each([
-    ["a tenant that is not a UUID", { tenantId: "tenant-1", assetId: ASSET, expiresAtMs: NOW }],
+    ["a tenant that is not a UUID", { tenantId: testTenantId("tenant-1"), assetId: ASSET, expiresAtMs: NOW }],
     ["an empty asset id", { tenantId: TENANT, assetId: "", expiresAtMs: NOW }],
     ["an asset id with a separator", { tenantId: TENANT, assetId: "a\nb", expiresAtMs: NOW }],
     ["a non-integer expiry", { tenantId: TENANT, assetId: ASSET, expiresAtMs: 1.5 }],
@@ -73,7 +74,7 @@ describe("mediaSignaturePayload", () => {
   it("never puts the secret in the error context", () => {
     const error = (() => {
       try {
-        mediaSignaturePayload({ tenantId: "nope", assetId: ASSET, expiresAtMs: NOW });
+        mediaSignaturePayload({ tenantId: testTenantId("nope"), assetId: ASSET, expiresAtMs: NOW });
         return null;
       } catch (caught) {
         return caught as { context: Record<string, unknown> };
@@ -96,7 +97,7 @@ describe("signMediaUrl", () => {
 
   it("refuses a malformed tenant/asset before producing a link", () => {
     expect(() =>
-      signMediaUrl({ tenantId: "t1", assetId: ASSET, baseUrl: "https://x.io", nowMs: NOW, sign }),
+      signMediaUrl({ tenantId: testTenantId("t1"), assetId: ASSET, baseUrl: "https://x.io", nowMs: NOW, sign }),
     ).toThrowError(expect.objectContaining({ code: "INVALID_INPUT" }));
   });
 
@@ -151,7 +152,7 @@ describe("verifyMediaUrlSignature", () => {
 
   it("rejects malformed claims before touching the MAC", () => {
     const good = signed();
-    expect(verify({ tenantId: "t1", signature: good.signature })).toEqual({
+    expect(verify({ tenantId: testTenantId("t1"), signature: good.signature })).toEqual({
       ok: false,
       reason: "MALFORMED_CLAIMS",
     });

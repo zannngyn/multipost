@@ -10,9 +10,10 @@ import {
   validComposeDraftPayload,
 } from "./__fixtures__/post-draft";
 import { makeDiscardPostDraft } from "./discard-post-draft";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
-const OTHER_TENANT = "00000000-0000-0000-0000-000000000002";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
+const OTHER_TENANT = testTenantId("00000000-0000-0000-0000-000000000002");
 const OWNER = "00000000-0000-0000-0000-0000000000aa";
 const KIND = "compose";
 
@@ -37,7 +38,7 @@ function makeHarness() {
 describe("discardPostDraft — edge cases first", () => {
   it.each(["", "   ", "not-a-uuid"])("rejects tenant id %s before deleting", async (tenantId) => {
     const harness = makeHarness();
-    await expect(harness.run({ tenantId, ownerUserId: OWNER })).rejects.toMatchObject({
+    await expect(harness.run({ tenantId: testTenantId(tenantId), ownerUserId: OWNER })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     expect(harness.discard).not.toHaveBeenCalled();
@@ -97,7 +98,7 @@ describe("discardPostDraft — happy path", () => {
       payload: validComposeDraftPayload({ productCode: "ZZ999" }),
     });
 
-    await harness.run({ tenantId: ` ${TENANT} `, ownerUserId: OWNER });
+    await harness.run({ tenantId: testTenantId(` ${TENANT} `), ownerUserId: OWNER });
 
     const rows = harness.drafts.rows();
     expect(rows).toHaveLength(1);

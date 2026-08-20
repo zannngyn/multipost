@@ -12,13 +12,14 @@ import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { PostBatchSummary, PostJobRepo } from "@/core/ports/post-job-repo";
 
 import { makeGetBatchStatus } from "./get-batch-status";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E7.5 — the per-channel result table + batch totals. Read-only, so every test
  * is about WHAT the operator sees, especially "vì sao bài này không lên".
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const BATCH = "22222222-2222-2222-2222-222222222222";
 const STARTED_AT = new Date("2026-08-13T02:00:00.000Z");
 const FINISHED_AT = new Date("2026-08-13T02:04:00.000Z");
@@ -143,7 +144,7 @@ function harness(summary: PostBatchSummary | null, progress?: JobProgressStore) 
 
 describe("getBatchStatus — rejected calls", () => {
   it.each([
-    ["a malformed tenant id", { tenantId: "nope", batchId: BATCH }],
+    ["a malformed tenant id", { tenantId: testTenantId("nope"), batchId: BATCH }],
     ["an empty batch id", { tenantId: TENANT, batchId: "   " }],
   ])("rejects %s", async (_label, input) => {
     const { getBatchStatus } = harness(summaryOf([job()]));

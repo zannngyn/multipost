@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { GoogleOAuthRepo } from "@/core/ports/google-oauth";
 import type { Logger } from "@/core/ports/infra";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Which identity reads a tenant's Drive (E2).
@@ -26,7 +27,7 @@ vi.mock("googleapis", () => ({
 
 const { makeTenantGoogleAuth, AUTH_CACHE_TTL_MS } = await import("./tenant-google-auth");
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -88,7 +89,7 @@ beforeEach(() => {
 describe("forTenant", () => {
   it("refuses an empty tenant id", async () => {
     const { auth, repo } = build({});
-    await expect(auth.forTenant("  ")).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(auth.forTenant(testTenantId("  "))).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(repo.findRefreshToken).not.toHaveBeenCalled();
   });
 

@@ -75,7 +75,7 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
 
   async function readMembership(
     accountId: string,
-    tenantId: string,
+    tenantId: TenantId,
     tier: AuthzTier,
   ): Promise<MembershipWithTenant | null> {
     // Tier S: credentials/publishing/membership ops — always the fresh row.
@@ -145,9 +145,11 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
         cookie_length: rawSelected.length,
       });
     }
-    const selected = cookieIsUsable ? rawSelected : "";
+    // Blessed cast site (see core/domain/tenant-context.ts): rawSelected passed
+    // isTenantId above, and only a membership-checked value leaves this function.
+    const selected: TenantId | "" = cookieIsUsable ? (rawSelected as TenantId) : "";
 
-    if (selected.length === 0) {
+    if (selected === "") {
       const activeMemberships = await deps.accounts.listMembershipsWithTenant(accountId);
       const usable = activeMemberships.filter((m) => m.tenantStatus === "active");
       if (usable.length === 1) {

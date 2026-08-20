@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Database } from "./client";
 import { DrizzlePostJobRepo } from "./post-job-repo.drizzle";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E7.5 — the guards of `appendJobEvent`, which run BEFORE the driver is touched
@@ -13,7 +14,7 @@ import { DrizzlePostJobRepo } from "./post-job-repo.drizzle";
  * script against a real Postgres.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const NEVER_TOUCHED = {} as Database;
 
 function repo(): DrizzlePostJobRepo {
@@ -24,7 +25,7 @@ describe("appendJobEvent — refused before the driver is reached", () => {
   it("refuses a tenant id that is not a UUID", async () => {
     await expect(
       repo().appendJobEvent({
-        tenantId: "not-a-tenant",
+        tenantId: testTenantId("not-a-tenant"),
         postJobId: "job-1",
         batchId: "batch-1",
         stage: "checking_stock",

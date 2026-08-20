@@ -5,6 +5,7 @@ import {
   clearGoogleStateCookie,
   readGoogleStateCookie,
 } from "@/app/api/catalog/google/_lib/oauth-state-cookie";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
@@ -66,7 +67,7 @@ export async function GET(request: Request): Promise<Response> {
     await container.usecases.connectGoogleDrive.completeGoogleConnect({
       // From the cookie, never from the query string: a tenant id in a URL is
       // an invitation to write into someone else's tenant.
-      tenantId: payload?.tenantId ?? "",
+      tenantId: legacyTenantIdFromRequest(payload?.tenantId) ?? "",
       code: url.searchParams.get("code") ?? "",
       state: url.searchParams.get("state") ?? "",
       expectedState: payload?.state ?? "",

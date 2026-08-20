@@ -13,6 +13,7 @@ import {
 } from "@/core/ai/model-policy";
 import { makeTestPolicy, TEST_MODELS } from "@/core/ai/testing";
 import { AppError } from "@/core/domain/errors";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 describe("tierLadder", () => {
   it("caps the ladder at maxEscalations", () => {
@@ -136,7 +137,7 @@ describe("cost", () => {
 });
 
 describe("applyPolicyOverride (ADR-001 — YAML + per-tenant DB override)", () => {
-  const TENANT = { tenantId: "11111111-1111-1111-1111-111111111111" };
+  const TENANT = { tenantId: testTenantId("11111111-1111-1111-1111-111111111111") };
 
   it("refuses a model key the YAML registry does not declare", () => {
     try {

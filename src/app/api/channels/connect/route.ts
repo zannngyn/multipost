@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { buildStateCookie } from "@/app/api/channels/_lib/oauth-state-cookie";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E5.1 step 1 — send the operator's browser to Facebook's OAuth dialog.
@@ -55,7 +56,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const started = await container.usecases.connectChannels.startFacebookConnect({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
     });
 
     return new Response(null, {

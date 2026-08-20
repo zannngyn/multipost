@@ -5,6 +5,7 @@ import type { Logger } from "@/core/ports/infra";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaByteCache } from "@/core/ports/media-byte-cache";
 import type { PublishMediaBytes } from "@/core/ports/publisher";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E5 — read ONE media asset's bytes for an upload, cache first, source second.
@@ -33,7 +34,7 @@ import type { PublishMediaBytes } from "@/core/ports/publisher";
 export const DEFAULT_MEDIA_READ_MAX_BYTES = 25 * 1024 * 1024;
 
 export interface ReadMediaBytesInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Asset identity — `PostJobMedia.driveFileId`. */
   readonly assetId: string;
   /** Carried into the logs so a slow read is traceable to its post. */
@@ -57,20 +58,21 @@ export function makeReadMediaBytes(deps: ReadMediaBytesDeps) {
     input: ReadMediaBytesInput,
   ): Promise<PublishMediaBytes> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ----------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
     const assetId = typeof input?.assetId === "string" ? input.assetId.trim() : "";
-    if (!isTenantId(tenantId) || assetId.length === 0) {
+    if (!isTenantId(rawTenantId) || assetId.length === 0) {
       throw new AppError("INVALID_INPUT", {
         message: "readMediaBytes requires a tenant UUID and an asset id",
         userMessage: "Yêu cầu đọc file ảnh thiếu thông tin định danh — đã từ chối.",
         context: {
-          tenant_id: tenantId || null,
+          tenant_id: rawTenantId || null,
           drive_file_id: assetId || null,
           reason: "INVALID_MEDIA_REQUEST",
           retryable: false,
         },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const maxBytes =
       positive(input?.maxBytes) ?? positive(deps.maxBytes) ?? DEFAULT_MEDIA_READ_MAX_BYTES;
@@ -210,7 +212,7 @@ export type ReadMediaBytes = ReturnType<typeof makeReadMediaBytes>;
 async function readCache(
   deps: ReadMediaBytesDeps,
   log: Logger,
-  input: { tenantId: string; assetId: string; maxBytes: number },
+  input: { tenantId: TenantId; assetId: string; maxBytes: number },
 ): Promise<PublishMediaBytes | null> {
   try {
     return await deps.cache.get(input);
@@ -231,7 +233,7 @@ async function readCache(
 async function writeCache(
   deps: ReadMediaBytesDeps,
   log: Logger,
-  input: { tenantId: string; assetId: string; bytes: Uint8Array; mimeType: string | null },
+  input: { tenantId: TenantId; assetId: string; bytes: Uint8Array; mimeType: string | null },
 ): Promise<void> {
   try {
     await deps.cache.put(input);
@@ -248,7 +250,7 @@ async function writeCache(
   }
 }
 
-function missingUpload(tenantId: string, assetId: string, reason: string): AppError {
+function missingUpload(tenantId: TenantId, assetId: string, reason: string): AppError {
   return new AppError("MEDIA_NOT_FOUND", {
     message: "Uploaded media asset has no readable bytes",
     userMessage: "File đã tải lên không còn nữa — hãy tải lại file cho bài này.",
@@ -263,7 +265,7 @@ function missingUpload(tenantId: string, assetId: string, reason: string): AppEr
 }
 
 function tooLarge(
-  tenantId: string,
+  tenantId: TenantId,
   assetId: string,
   fileName: string,
   sizeBytes: number,

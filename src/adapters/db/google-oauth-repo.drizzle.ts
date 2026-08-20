@@ -19,6 +19,7 @@ import { lockIntegrationRow } from "./integration-lock";
 import { auditLogs, tenantIntegrations } from "./schema";
 import { isSealedSecret, type SecretBox } from "./secret-box";
 import { forTenant, type TenantScopedDb } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * The tenant's Google OAuth connection, stored under `oauth` inside the SAME
@@ -80,7 +81,7 @@ export class DrizzleGoogleOAuthRepo implements GoogleOAuthRepo {
     private readonly deps: GoogleOAuthRepoDeps,
   ) {}
 
-  async findConnection(tenantId: string): Promise<GoogleOAuthConnection | null> {
+  async findConnection(tenantId: TenantId): Promise<GoogleOAuthConnection | null> {
     const scope = forTenant(this.db, tenantId);
     const row = await this.readRow(scope);
     if (!row) return null;
@@ -103,7 +104,7 @@ export class DrizzleGoogleOAuthRepo implements GoogleOAuthRepo {
   }
 
   /** SECRET. The only place an envelope becomes a usable refresh token. */
-  async findRefreshToken(tenantId: string): Promise<string | null> {
+  async findRefreshToken(tenantId: TenantId): Promise<string | null> {
     const scope = forTenant(this.db, tenantId);
     const row = await this.readRow(scope);
     if (!row) return null;
@@ -123,7 +124,7 @@ export class DrizzleGoogleOAuthRepo implements GoogleOAuthRepo {
 
   async saveConnection(input: SaveGoogleConnectionInput): Promise<void> {
     // --- Edge cases first ----------------------------------------------------
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const refreshToken = str(input?.refreshToken);
     const email = str(input?.email);
     const connectedAt = str(input?.connectedAt);
@@ -228,7 +229,7 @@ export class DrizzleGoogleOAuthRepo implements GoogleOAuthRepo {
   async deleteConnection(
     input: DeleteGoogleConnectionInput,
   ): Promise<{ readonly removed: boolean }> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
 
     try {
       return await scope.db.transaction(async (tx) => {
@@ -296,7 +297,7 @@ export class DrizzleGoogleOAuthRepo implements GoogleOAuthRepo {
     }
   }
 
-  async markConnectionExpired(tenantId: string, reason: string): Promise<void> {
+  async markConnectionExpired(tenantId: TenantId, reason: string): Promise<void> {
     const scope = forTenant(this.db, tenantId);
     const row = await this.readRow(scope);
     // Nothing to park. Writing `status='error'` on a row whose oauth blob is
@@ -345,7 +346,7 @@ export class DrizzleGoogleOAuthRepo implements GoogleOAuthRepo {
    * a warning about an account they never linked.
    */
   async saveSourceAccess(input: SaveGoogleSourceAccessInput): Promise<void> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const parsed = SourceAccessSchema.safeParse({
       state: input?.state,
       checkedAt: input?.checkedAt,
@@ -425,7 +426,7 @@ export class DrizzleGoogleOAuthRepo implements GoogleOAuthRepo {
    * enum falls back to `active` with a warning, because the alternative is
    * writing a value the column cannot hold. */
   private nextStatusAfterDisconnect(
-    tenantId: string,
+    tenantId: TenantId,
     raw: string,
   ): "active" | "disabled" {
     const parsed = IntegrationStatusSchema.safeParse(raw);
@@ -468,7 +469,7 @@ export class DrizzleGoogleOAuthRepo implements GoogleOAuthRepo {
    * screen showing "chưa kết nối" is the honest answer to an unusable one.
    */
   private parseOAuth(
-    tenantId: string,
+    tenantId: TenantId,
     config: unknown,
   ): z.infer<typeof StoredOAuthSchema> | null {
     if (typeof config !== "object" || config === null) return null;

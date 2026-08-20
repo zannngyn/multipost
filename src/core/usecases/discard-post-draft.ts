@@ -1,6 +1,7 @@
 import { assertPostDraftAddress } from "@/core/domain/post-draft";
 import type { Logger } from "@/core/ports/infra";
 import type { PostDraftRepo } from "@/core/ports/post-draft-repo";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E10 — drops the compose draft: after a batch is created (the draft became a
@@ -13,7 +14,7 @@ import type { PostDraftRepo } from "@/core/ports/post-draft-repo";
  */
 
 export interface DiscardPostDraftInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly ownerUserId: string;
   /** Defaults to 'compose'. */
   readonly kind?: string;

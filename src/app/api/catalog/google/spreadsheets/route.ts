@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E2 — the spreadsheets of the connected Google account.
@@ -58,7 +59,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const result = await container.usecases.browseGoogleDrive.listSpreadsheets({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
       parentId: parsed.data.parentId ?? null,
       pageToken: parsed.data.pageToken ?? null,
       q: parsed.data.q ?? null,

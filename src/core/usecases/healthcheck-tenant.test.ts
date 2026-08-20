@@ -6,8 +6,9 @@ import type { Clock, LogBindings, Logger } from "@/core/ports/infra";
 import type { TenantRepo } from "@/core/ports/tenant-repo";
 
 import { makeHealthcheckTenant, type HealthcheckTenantInput } from "./healthcheck-tenant";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const DEMO_ID = "00000000-0000-0000-0000-000000000001";
+const DEMO_ID = testTenantId("00000000-0000-0000-0000-000000000001");
 const FROZEN_AT = new Date("2026-08-12T03:04:05.000Z");
 
 function fakeClock(at: Date = FROZEN_AT): Clock {
@@ -45,7 +46,7 @@ describe("healthcheckTenant — edge cases", () => {
     const { logger, lines } = fakeLogger();
     const healthcheckTenant = makeHealthcheckTenant({ tenants: repo, clock: fakeClock(), logger });
 
-    await expect(healthcheckTenant({ tenantId })).rejects.toMatchObject({
+    await expect(healthcheckTenant({ tenantId: testTenantId(tenantId) })).rejects.toMatchObject({
       _tag: "AppError",
       code: "INVALID_INPUT",
     });
@@ -109,7 +110,7 @@ describe("healthcheckTenant — happy path", () => {
     const { logger, lines } = fakeLogger();
     const healthcheckTenant = makeHealthcheckTenant({ tenants: repo, clock: fakeClock(), logger });
 
-    await expect(healthcheckTenant({ tenantId: ` ${DEMO_ID} ` })).resolves.toEqual({
+    await expect(healthcheckTenant({ tenantId: testTenantId(` ${DEMO_ID} `) })).resolves.toEqual({
       tenantId: DEMO_ID,
       name: "Demo Tenant",
       status: "active",
@@ -121,7 +122,7 @@ describe("healthcheckTenant — happy path", () => {
   });
 
   it("accepts an upper-case uuid without mangling it", async () => {
-    const upper = DEMO_ID.toUpperCase();
+    const upper = testTenantId(DEMO_ID.toUpperCase());
     const repo = fakeRepo(async () => ({ ...activeTenant, id: upper }));
     const { logger } = fakeLogger();
     const healthcheckTenant = makeHealthcheckTenant({ tenants: repo, clock: fakeClock(), logger });

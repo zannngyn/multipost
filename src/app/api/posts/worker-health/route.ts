@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E11 — "có ai đang xử lý hàng đợi không?" for the job log banner.
@@ -54,7 +55,7 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    const result = await container.usecases.getWorkerHealth({ tenantId: parsed.data.tenantId });
+    const result = await container.usecases.getWorkerHealth({ tenantId: legacyTenantIdFromRequest(parsed.data.tenantId) });
 
     // `checkedAt` is a Date; Response.json serialises it to the ISO string the
     // UI schema expects.

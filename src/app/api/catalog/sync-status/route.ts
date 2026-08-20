@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Read model behind the "Đồng bộ dữ liệu" screen (E2).
@@ -70,7 +71,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const result = await container.usecases.getSyncStatus({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
       recentLimit: parsed.data.recentLimit,
     });
 

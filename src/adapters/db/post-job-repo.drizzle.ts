@@ -47,6 +47,7 @@ import type { Database, DbExecutor } from "./client";
 import { findPgError, isPgError, wrapDbError } from "./db-errors";
 import { auditLogs, postBatches, postJobEvents, postJobs, type PostJobRow } from "./schema";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * post_batch / post_job persistence (E7). Everything goes through the tenant
@@ -236,7 +237,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
     }
   }
 
-  async findJobById(tenantId: string, postJobId: string): Promise<PostJob | null> {
+  async findJobById(tenantId: TenantId, postJobId: string): Promise<PostJob | null> {
     const scope = forTenant(this.db, tenantId);
     const id = typeof postJobId === "string" ? postJobId.trim() : "";
     if (id.length === 0) {
@@ -265,7 +266,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
     }
   }
 
-  async listJobsByBatch(tenantId: string, batchId: string): Promise<readonly PostJob[]> {
+  async listJobsByBatch(tenantId: TenantId, batchId: string): Promise<readonly PostJob[]> {
     const scope = forTenant(this.db, tenantId);
     try {
       const rows = await scope.db
@@ -294,7 +295,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
    * without a second COUNT query.
    */
   async listJobs(query: ListPostJobsQuery): Promise<PostJobPage> {
-    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const scope = forTenant(this.db, query.tenantId);
     const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 20;
 
     const filters: Array<SQL | undefined> = [];
@@ -348,7 +349,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
    * means somebody else moved first: the caller stops instead of publishing.
    */
   async applyTransition(input: ApplyTransitionInput): Promise<PostJob | null> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const next = input?.next;
     if (!next || typeof input?.postJobId !== "string" || input.postJobId.trim().length === 0) {
       throw new AppError("INVALID_INPUT", {
@@ -431,7 +432,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
   }
 
   async setQueueJobId(input: {
-    tenantId: string;
+    tenantId: TenantId;
     postJobId: string;
     queueJobId: string | null;
     auditAction?: string;
@@ -439,7 +440,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
     reason?: string;
     actorUserId?: string | null;
   }): Promise<boolean> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const id = typeof input?.postJobId === "string" ? input.postJobId.trim() : "";
     if (id.length === 0) {
       throw new AppError("INVALID_INPUT", {
@@ -502,7 +503,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
    * instead of rewriting the schedule of a post that is already going out.
    */
   async rescheduleJob(input: RescheduleJobInput): Promise<PostJob | null> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const id = typeof input?.postJobId === "string" ? input.postJobId.trim() : "";
     if (id.length === 0 || !(input?.scheduledAt instanceof Date)) {
       throw new AppError("INVALID_INPUT", {
@@ -570,7 +571,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
    * Keyset on (scheduled_at, id) for the same reason as listJobs.
    */
   async listScheduledJobs(query: ListScheduledJobsQuery): Promise<ScheduledJobPage> {
-    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const scope = forTenant(this.db, query.tenantId);
     const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 20;
 
     const filters: Array<SQL | undefined> = [
@@ -639,7 +640,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
    * Runs on the existing (tenant_id, status) index; no migration needed.
    */
   async countUntouchedQueued(query: UntouchedQueuedQuery): Promise<UntouchedQueuedJobs> {
-    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const scope = forTenant(this.db, query.tenantId);
     const now = query?.now;
     if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
       throw new AppError("INVALID_INPUT", {
@@ -789,7 +790,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
     }
   }
 
-  async findLastPublishedAt(tenantId: string, channelId: string): Promise<Date | null> {
+  async findLastPublishedAt(tenantId: TenantId, channelId: string): Promise<Date | null> {
     const scope = forTenant(this.db, tenantId);
     const channel = typeof channelId === "string" ? channelId.trim() : "";
     if (channel.length === 0) {
@@ -823,7 +824,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
     }
   }
 
-  async refreshBatchStatus(tenantId: string, batchId: string): Promise<PostBatchSummary> {
+  async refreshBatchStatus(tenantId: TenantId, batchId: string): Promise<PostBatchSummary> {
     const summary = await this.buildSummary(this.db, tenantId, batchId);
     if (!summary) {
       throw new AppError("INVALID_INPUT", {
@@ -850,7 +851,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
     return summary;
   }
 
-  async getBatchSummary(tenantId: string, batchId: string): Promise<PostBatchSummary | null> {
+  async getBatchSummary(tenantId: TenantId, batchId: string): Promise<PostBatchSummary | null> {
     return this.buildSummary(this.db, tenantId, batchId);
   }
 
@@ -865,7 +866,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
    * unanswerable question.
    */
   async appendJobEvent(input: PostJobEventInput): Promise<void> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const postJobId = typeof input?.postJobId === "string" ? input.postJobId.trim() : "";
     const batchId = typeof input?.batchId === "string" ? input.batchId.trim() : "";
     const stage = typeof input?.stage === "string" ? input.stage.trim() : "";
@@ -916,7 +917,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
 
   private async buildSummary(
     db: DbExecutor,
-    tenantId: string,
+    tenantId: TenantId,
     batchId: string,
   ): Promise<PostBatchSummary | null> {
     const scope = forTenant(db, tenantId);

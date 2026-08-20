@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * M1.2 — the boundary contract of `GET /api/me`: it serves EVERY signed-in
@@ -26,7 +27,7 @@ vi.mock("@/app/_auth/session", () => ({
 const { GET } = await import("./route");
 const { ACTIVE_TENANT_COOKIE } = await import("@/app/_lib/active-tenant-cookie");
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function request(cookie?: string): Request {
   const headers = new Headers();

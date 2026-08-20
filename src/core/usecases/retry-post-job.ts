@@ -19,6 +19,7 @@ import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
 import { resolveActorUserId } from "./resolve-actor";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E11.1 — an operator presses "chạy lại" on ONE post job.
@@ -51,7 +52,7 @@ import { resolveActorUserId } from "./resolve-actor";
  */
 
 export interface RetryPostJobInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   /** Operator id for the audit trail; null for an automated retry. */
   readonly actorUserId?: string | null;
@@ -63,7 +64,7 @@ export interface RetryPostJobInput {
 }
 
 export interface RetryPostJobResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   readonly batchId: string;
   readonly channelId: string;
@@ -94,15 +95,16 @@ export interface RetryPostJobDeps {
 export function makeRetryPostJob(deps: RetryPostJobDeps) {
   return async function retryPostJob(input: RetryPostJobInput): Promise<RetryPostJobResult> {
     // --- Edge cases first ---------------------------------------------------
-    const tenantId = str(input?.tenantId);
+    const rawTenantId = str(input?.tenantId);
     const postJobId = str(input?.postJobId);
-    if (!isTenantId(tenantId) || postJobId.length === 0) {
+    if (!isTenantId(rawTenantId) || postJobId.length === 0) {
       throw new AppError("INVALID_INPUT", {
         message: "retryPostJob requires a tenant UUID and a post job id",
         userMessage: "Yêu cầu chạy lại bài đăng thiếu thông tin định danh.",
-        context: { tenant_id: tenantId || null, post_job_id: postJobId || null },
+        context: { tenant_id: rawTenantId || null, post_job_id: postJobId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const job = await deps.postJobs.findJobById(tenantId, postJobId);
     if (!job) {

@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 
 import type { DbExecutor } from "./client";
 import type { TenantScopedDb } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Serialises the read-modify-write of ONE `tenant_integration` row.
@@ -21,7 +22,7 @@ import type { TenantScopedDb } from "./tenant-scope";
  */
 
 /** The lock key. Exported so a test can hold the very same lock. */
-export function integrationLockKey(tenantId: string, provider: string): string {
+export function integrationLockKey(tenantId: TenantId, provider: string): string {
   return `tenant_integration:${tenantId}:${provider}`;
 }
 

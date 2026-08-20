@@ -3,6 +3,7 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 
 import { AppError } from "@/core/domain/errors";
 import { isTenantId } from "@/core/domain/tenant";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 import type { Database, DbExecutor } from "./client";
 import { tenants } from "./schema";
@@ -24,7 +25,7 @@ import { tenants } from "./schema";
 export type TenantScopedTable = { tenantId: PgColumn };
 
 export interface TenantScopedDb<TDb extends DbExecutor = Database> {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /**
    * Raw drizzle handle (db or transaction). Every statement built with it MUST
    * take its predicate from `where`/`whereSelf` — the point of this wrapper.
@@ -38,23 +39,25 @@ export interface TenantScopedDb<TDb extends DbExecutor = Database> {
    */
   whereSelf(): SQL;
   /** Stamps tenant_id onto a row so inserts cannot omit it. */
-  row<T extends Record<string, unknown>>(values: T): T & { tenantId: string };
+  row<T extends Record<string, unknown>>(values: T): T & { tenantId: TenantId };
 }
 
 export function forTenant<TDb extends DbExecutor>(
   db: TDb,
-  tenantId: string,
+  tenantId: TenantId,
 ): TenantScopedDb<TDb> {
   // Guard first: an empty/garbage tenant id must never reach a query, where it
   // would either error opaquely or (worse) match nothing and look like "no data".
-  const normalised = typeof tenantId === "string" ? tenantId.trim() : "";
-  if (!isTenantId(normalised)) {
+  // The brand narrows callers to blessed sources, but a test (or the legacy shim)
+  // can still route a malformed value here, so the runtime check stays.
+  if (typeof tenantId !== "string" || !isTenantId(tenantId.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: "tenantId must be a UUID to scope a query",
       userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-      context: { tenant_id: normalised || null },
+      context: { tenant_id: typeof tenantId === "string" ? tenantId.trim() || null : null },
     });
   }
+  const normalised = normalizeTenantId(tenantId);
 
   return {
     tenantId: normalised,

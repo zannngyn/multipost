@@ -11,6 +11,7 @@
  */
 
 import { AppError } from "./errors";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export const MAX_CHANNEL_GROUP_NAME_LENGTH = 80;
 /** Sanity ceiling: a "group" of 50 Pages is a mistake, not a workflow. */
@@ -18,7 +19,7 @@ export const MAX_CHANNELS_PER_GROUP = 50;
 
 export interface ChannelGroup {
   readonly id: string;
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly name: string;
   /** Channel ids of tenant_integration, order preserved as the operator set it. */
   readonly channelIds: readonly string[];

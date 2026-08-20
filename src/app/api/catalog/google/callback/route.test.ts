@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The browser-facing half of the Google connect flow (E2 step 2). No database
@@ -34,7 +35,7 @@ vi.mock("@/app/_auth/session", () => ({
 const { GET } = await import("./route");
 const { GOOGLE_OAUTH_STATE_COOKIE } = await import("../_lib/oauth-state-cookie");
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const STATE = "a".repeat(64);
 
 function request(query: string, cookiePayload?: unknown): Request {
@@ -79,7 +80,7 @@ describe("GET /api/catalog/google/callback — edge cases first", () => {
     const response = await GET(request(`?code=code-1&state=${STATE}`));
 
     expect(completeGoogleConnect).toHaveBeenCalledWith(
-      expect.objectContaining({ tenantId: "", expectedState: "" }),
+      expect.objectContaining({ tenantId: testTenantId(""), expectedState: "" }),
     );
     expect(location(response).searchParams.get("reason")).toBe("GOOGLE_CONNECT_STATE_INVALID");
   });

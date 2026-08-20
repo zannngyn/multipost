@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The query-string boundary of GET /api/catalog/sync-status (docs/07 §3.3): a
@@ -18,7 +19,7 @@ vi.mock("@/composition/container", () => ({
 
 const { GET } = await import("./route");
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function request(query: string): Request {
   return new Request(`http://localhost/api/catalog/sync-status${query}`);

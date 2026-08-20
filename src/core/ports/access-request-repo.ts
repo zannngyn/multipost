@@ -1,5 +1,6 @@
 import type { AccessRequest, OperatorIdentity } from "@/core/domain/access-request";
 import type { AccessStatus, OperatorProvider, OperatorRole } from "@/shared/operator-access";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Persistence contract of the access registry (E1.4). Types only (docs/07 §2).
@@ -17,13 +18,13 @@ import type { AccessStatus, OperatorProvider, OperatorRole } from "@/shared/oper
  */
 
 export interface CreatePendingAccessRequestInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly identity: OperatorIdentity;
   readonly requestedAt: Date;
 }
 
 export interface DecideAccessRequestRecord {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly id: string;
   /** Only a terminal decision is written; a row is never moved back to pending. */
   readonly status: Extract<AccessStatus, "approved" | "blocked">;
@@ -38,19 +39,19 @@ export interface DecideAccessRequestRecord {
 export interface AccessRequestRepo {
   /** Null when this tenant has never seen that provider identity. */
   findByProviderAccount(
-    tenantId: string,
+    tenantId: TenantId,
     provider: OperatorProvider,
     providerAccountId: string,
   ): Promise<AccessRequest | null>;
 
   /** Null when no identity in this tenant signs in under that address. */
-  findBySessionEmail(tenantId: string, sessionEmail: string): Promise<AccessRequest | null>;
+  findBySessionEmail(tenantId: TenantId, sessionEmail: string): Promise<AccessRequest | null>;
 
   /** Returns the freshly created row, or the existing one (idempotent). */
   createPending(input: CreatePendingAccessRequestInput): Promise<AccessRequest>;
 
   /** `status: "all"` returns every row, newest request first. */
-  list(tenantId: string, status: AccessStatus | "all"): Promise<readonly AccessRequest[]>;
+  list(tenantId: TenantId, status: AccessStatus | "all"): Promise<readonly AccessRequest[]>;
 
   /** Null when this tenant has no request with that id. */
   decide(input: DecideAccessRequestRecord): Promise<AccessRequest | null>;

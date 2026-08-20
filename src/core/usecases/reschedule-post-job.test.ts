@@ -15,10 +15,11 @@ import type { ChannelConfigRepo } from "@/core/ports/publisher";
 import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 
 import { makeReschedulePostJob } from "./reschedule-post-job";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /** E8.4 "đổi giờ": what may move, in which order, and what happens on failure. */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const JOB_ID = "11111111-1111-1111-1111-111111111111";
 const NOW = Date.parse("2026-08-13T02:00:00.000Z");
 const SCHEDULED_AT = new Date(NOW + 3 * 60 * 60 * 1000);
@@ -188,7 +189,7 @@ describe("reschedulePostJob — refusals", () => {
   it("rejects a malformed identity", async () => {
     const { reschedulePostJob } = harness(makeJob());
     await expect(
-      reschedulePostJob({ tenantId: "nope", postJobId: JOB_ID, newScheduledAt: NEW_AT }),
+      reschedulePostJob({ tenantId: testTenantId("nope"), postJobId: JOB_ID, newScheduledAt: NEW_AT }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 

@@ -5,6 +5,7 @@ import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import { DrizzleChannelConfigRepo, sealMetaConfig } from "./channel-config-repo.drizzle";
 import type { Database } from "./client";
 import { makeSecretBox } from "./secret-box";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The credential path of tenant_integration (meta), without a database: the
@@ -12,7 +13,7 @@ import { makeSecretBox } from "./secret-box";
  * part a fake would make meaningless.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 /** 32 zero bytes, base64. Test-only key. */
 const TEST_KEY = Buffer.alloc(32, 7).toString("base64");
 

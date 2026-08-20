@@ -12,6 +12,7 @@ import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
 import { aiModelPolicyOverrides } from "./schema";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * `ai_model_policy_override` reader — the DB half of the registry
@@ -29,10 +30,10 @@ export class DrizzleAiModelPolicyOverrideRepo implements ModelPolicyOverrideRepo
   ) {}
 
   async findOverride(query: {
-    tenantId: string;
+    tenantId: TenantId;
     task: AITask;
   }): Promise<ModelPolicyOverrideRecord | null> {
-    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const scope = forTenant(this.db, query.tenantId);
 
     let row;
     try {

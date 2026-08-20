@@ -1,3 +1,4 @@
+import type { TenantId } from "@/core/domain/tenant-context";
 /**
  * Read-through byte cache for media that lives in an EXTERNAL source (Drive).
  *
@@ -47,7 +48,7 @@ export interface CachedMediaBytes {
 }
 
 export interface GetCachedMediaInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Asset identity — the Drive file id carried by post_job.media. */
   readonly assetId: string;
   /** Refuse to buffer more than this many bytes; a bigger entry is a miss. */
@@ -55,7 +56,7 @@ export interface GetCachedMediaInput {
 }
 
 export interface PutCachedMediaInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly assetId: string;
   readonly bytes: Uint8Array;
   readonly mimeType: string | null;

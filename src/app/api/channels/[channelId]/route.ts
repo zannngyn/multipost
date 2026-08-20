@@ -6,6 +6,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E5.1 — one connected channel: switch it on/off (PUT) or drop it (DELETE).
@@ -72,7 +73,7 @@ export async function PUT(
     const session = await getOperatorSession(`api:${ROUTE_PUT}`);
 
     const channel = await container.usecases.channels.setChannelStatus({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       channelId: parsedId.data,
       status: body.status,
       actorEmail: session?.email ?? null,
@@ -119,7 +120,7 @@ export async function DELETE(
 
     const session = await getOperatorSession(`api:${ROUTE_DELETE}`);
     const result = await container.usecases.channels.removeChannel({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
       channelId: parsedId.data,
       actorEmail: session?.email ?? null,
     });

@@ -7,6 +7,7 @@ import type { ReadSheetInput, SheetSnapshot, SheetSource } from "@/core/ports/sh
 
 import { buildSheetSnapshot } from "./sheet-values";
 import type { TenantGoogleAuth } from "./tenant-google-auth";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Sheets implementation of SheetSource (E2).
@@ -31,13 +32,13 @@ export interface GoogleSheetSourceDeps {
 }
 
 export function makeGoogleSheetSource(deps: GoogleSheetSourceDeps): SheetSource {
-  const sheetsFor = async (tenantId: string) =>
+  const sheetsFor = async (tenantId: TenantId) =>
     google.sheets({ version: "v4", auth: await deps.auth.forTenant(tenantId) });
 
   return {
     async readRows(input: ReadSheetInput): Promise<SheetSnapshot> {
       // --- Edge cases first --------------------------------------------------
-      const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+      const tenantId = normalizeTenantId(input.tenantId);
       const spreadsheetId =
         typeof input?.spreadsheetId === "string" ? input.spreadsheetId.trim() : "";
       const sheetName = typeof input?.sheetName === "string" ? input.sheetName.trim() : "";

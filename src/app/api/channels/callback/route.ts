@@ -4,6 +4,7 @@ import { type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { clearStateCookie, readStateCookie } from "@/app/api/channels/_lib/oauth-state-cookie";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E5.1 step 2 — Facebook sends the operator's BROWSER back here.
@@ -67,7 +68,7 @@ export async function GET(request: Request): Promise<Response> {
     const result = await container.usecases.connectChannels.completeFacebookConnect({
       // From the cookie, never from the query string: a tenant id in a URL is
       // an invitation to write into someone else's tenant.
-      tenantId: payload?.tenantId ?? "",
+      tenantId: legacyTenantIdFromRequest(payload?.tenantId) ?? "",
       code: url.searchParams.get("code") ?? "",
       state: url.searchParams.get("state") ?? "",
       expectedState: payload?.state ?? "",

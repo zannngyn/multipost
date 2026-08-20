@@ -15,6 +15,7 @@ import {
 } from "@/shared/operator-access";
 
 import { resolveActorUserId } from "./resolve-actor";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E1.4 — the admin half of the access registry: see who is waiting, approve
@@ -64,7 +65,7 @@ export function toAccessRequestView(request: AccessRequest): AccessRequestView {
 export type AccessListFilter = AccessStatus | "all";
 
 export interface ListAccessRequestsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Defaults to `pending` — the only list an admin normally needs to act on. */
   readonly status?: AccessListFilter;
 }
@@ -73,7 +74,7 @@ export const ACCESS_DECISIONS = ["approve", "block"] as const;
 export type AccessDecision = (typeof ACCESS_DECISIONS)[number];
 
 export interface DecideAccessRequestInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly id: string;
   readonly decision: AccessDecision;
   /** Required for `approve`, ignored for `block`. */
@@ -176,7 +177,7 @@ export function makeManageAccessRequests(
   };
 }
 
-function parseFilter(value: unknown, tenantId: string): AccessListFilter {
+function parseFilter(value: unknown, tenantId: TenantId): AccessListFilter {
   if (value === undefined || value === null || value === "") return "pending";
   if (value === "all" || isAccessStatus(value)) return value;
 
@@ -187,7 +188,7 @@ function parseFilter(value: unknown, tenantId: string): AccessListFilter {
   });
 }
 
-function requireRole(value: unknown, tenantId: string, id: string): OperatorRole {
+function requireRole(value: unknown, tenantId: TenantId, id: string): OperatorRole {
   if (isOperatorRole(value)) return value;
 
   throw new AppError("INVALID_INPUT", {
@@ -197,7 +198,7 @@ function requireRole(value: unknown, tenantId: string, id: string): OperatorRole
   });
 }
 
-function requireId(value: unknown, tenantId: string): string {
+function requireId(value: unknown, tenantId: TenantId): string {
   const id = typeof value === "string" ? value.trim() : "";
   if (id.length === 0) {
     throw new AppError("INVALID_INPUT", {
@@ -209,14 +210,17 @@ function requireId(value: unknown, tenantId: string): string {
   return id;
 }
 
-function requireTenant(value: unknown, operation: string): string {
-  const tenantId = typeof value === "string" ? value.trim() : "";
-  if (!isTenantId(tenantId)) {
+function requireTenant(value: TenantId | undefined, operation: string): TenantId {
+  if (typeof value !== "string" || !isTenantId(value.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: `${operation} requires a tenant id`,
       userMessage: "Thiếu mã đơn vị (tenant) hợp lệ.",
-      context: { operation, tenant_id: tenantId || null, field: "tenantId" },
+      context: {
+        operation,
+        tenant_id: (typeof value === "string" ? value.trim() : "") || null,
+        field: "tenantId",
+      },
     });
   }
-  return tenantId;
+  return normalizeTenantId(value);
 }

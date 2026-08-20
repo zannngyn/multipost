@@ -14,8 +14,9 @@ import type {
 import type { SheetSnapshot, SheetSource } from "@/core/ports/sheet-source";
 
 import { makeSyncCatalog, MAX_ISSUE_EXAMPLES, MAX_STORED_ISSUES } from "./sync-catalog";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -189,7 +190,7 @@ describe("syncCatalog — edge cases first", () => {
 
   it("rejects a malformed tenant id before touching any source", async () => {
     const harness = makeHarness({});
-    await expect(harness.run({ tenantId: "not-a-uuid" })).rejects.toMatchObject({
+    await expect(harness.run({ tenantId: testTenantId("not-a-uuid") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     expect(harness.finished).toHaveLength(0);

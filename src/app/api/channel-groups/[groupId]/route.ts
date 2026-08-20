@@ -6,6 +6,7 @@ import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E7.6 — one preset channel group: rename / change members (PUT) and delete.
@@ -79,7 +80,7 @@ export async function PUT(
     const body = await readJsonBody(request, UpdateSchema, { route: ROUTE_PUT });
 
     const group = await container.usecases.channelGroups.updateChannelGroup({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       groupId: parsedId.data,
       name: body.name,
       channelIds: body.channelIds,
@@ -125,7 +126,7 @@ export async function DELETE(
     }
 
     const result = await container.usecases.channelGroups.deleteChannelGroup({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
       groupId: parsed.data.groupId,
     });
 

@@ -7,6 +7,7 @@ import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
 import { users } from "./schema";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Reads `app_user` — only what the audit trail needs (E11.1). No writes: user
@@ -19,7 +20,7 @@ import { forTenant } from "./tenant-scope";
 export class DrizzleUserRepo implements UserRepo {
   constructor(private readonly db: Database) {}
 
-  async findUserIdByEmail(tenantId: string, email: string): Promise<string | null> {
+  async findUserIdByEmail(tenantId: TenantId, email: string): Promise<string | null> {
     const scope = forTenant(this.db, tenantId);
     const normalised = typeof email === "string" ? email.trim().toLowerCase() : "";
     // Guard: an empty e-mail must not run a query that matches "whoever has ''".

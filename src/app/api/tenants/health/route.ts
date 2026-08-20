@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Walking-skeleton endpoint: UI -> here -> composition -> usecase -> Drizzle
@@ -54,7 +55,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     // The usecase owns the remaining rules (UUID shape, existence, DB errors).
-    const result = await container.usecases.healthcheckTenant({ tenantId: parsed.data.tenantId });
+    const result = await container.usecases.healthcheckTenant({ tenantId: legacyTenantIdFromRequest(parsed.data.tenantId) });
     return Response.json(result);
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });

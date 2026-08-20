@@ -8,6 +8,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E10 — the compose screen's draft: read it back, autosave it, throw it away.
@@ -107,7 +108,7 @@ async function resolveOwnerUserId(tenantId: string, route: string): Promise<stri
   const email = session?.email?.trim() ?? "";
   if (email.length === 0) return null;
 
-  return getContainer().usecases.findOperatorUserId(tenantId, email);
+  return getContainer().usecases.findOperatorUserId(legacyTenantIdFromRequest(tenantId), email);
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -132,7 +133,7 @@ export async function GET(request: Request): Promise<Response> {
       return Response.json({ draft: null, updatedAt: null, persisted: false, ownerKey: null });
     }
 
-    const stored = await container.usecases.loadPostDraft({ tenantId, ownerUserId });
+    const stored = await container.usecases.loadPostDraft({ tenantId: legacyTenantIdFromRequest(tenantId), ownerUserId });
 
     return Response.json({
       draft: stored?.payload ?? null,
@@ -170,7 +171,7 @@ export async function PUT(request: Request): Promise<Response> {
     }
 
     const saved = await container.usecases.savePostDraft({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       ownerUserId,
       payload: body.payload,
     });
@@ -201,7 +202,7 @@ export async function DELETE(request: Request): Promise<Response> {
     // No owner = no row addressed to anyone; "already gone" is the same outcome
     // the caller asked for, so it answers 204 rather than inventing a failure.
     if (ownerUserId !== null) {
-      await container.usecases.discardPostDraft({ tenantId, ownerUserId });
+      await container.usecases.discardPostDraft({ tenantId: legacyTenantIdFromRequest(tenantId), ownerUserId });
     } else {
       logger.warn("Draft discard without a resolvable operator", {
         route: ROUTE_DELETE,

@@ -11,9 +11,10 @@
  */
 
 import type { PostJobProgress } from "@/core/domain/post-job-progress";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export interface ReportProgressInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   readonly progress: PostJobProgress;
 }
@@ -43,7 +44,7 @@ export interface JobProgressStore {
    * A failing store yields an EMPTY map plus a warn — never a throw.
    */
   read(
-    tenantId: string,
+    tenantId: TenantId,
     postJobIds: readonly string[],
   ): Promise<ReadonlyMap<string, PostJobProgress>>;
 
@@ -52,5 +53,5 @@ export interface JobProgressStore {
    * so a dead key does not survive to its TTL and describe a job that is over.
    * Same no-throw contract as `report`.
    */
-  clear(tenantId: string, postJobId: string): Promise<void>;
+  clear(tenantId: TenantId, postJobId: string): Promise<void>;
 }

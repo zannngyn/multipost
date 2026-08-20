@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E2 — "đã kết nối Google chưa?" for the sync screen.
@@ -52,7 +53,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const view = await container.usecases.connectGoogleDrive.getGoogleConnection({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
     });
 
     return Response.json(view, { headers: { "cache-control": "no-store" } });

@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Step 2 of the wizard: one caption per channel (E4). Thin by contract.
@@ -59,7 +60,7 @@ export async function POST(request: Request): Promise<Response> {
     const body = await readJsonBody(request, BodySchema, { route: ROUTE });
 
     const result = await container.usecases.generateCaptions({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       product: body.product,
       channels: body.channels.map((channelId) => ({
         channelId,

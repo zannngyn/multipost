@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeLocalMediaCache } from "@/adapters/media/local-media-cache";
 import type { Logger } from "@/core/ports/infra";
 import type { MediaByteCache } from "@/core/ports/media-byte-cache";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The cache stands between Meta's fetcher and Drive, so the tests lead with the
@@ -26,8 +27,8 @@ import type { MediaByteCache } from "@/core/ports/media-byte-cache";
  * serving an entry past its TTL, or blowing the caller's memory budget.
  */
 
-const TENANT_A = "00000000-0000-0000-0000-000000000001";
-const TENANT_B = "00000000-0000-0000-0000-000000000002";
+const TENANT_A = testTenantId("00000000-0000-0000-0000-000000000001");
+const TENANT_B = testTenantId("00000000-0000-0000-0000-000000000002");
 const ASSET = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs";
 const HOUR = 60 * 60 * 1000;
 const TTL_MS = 72 * HOUR;
@@ -181,7 +182,7 @@ describe("localMediaCache — tenant isolation and traversal", () => {
       expect(await cache.get({ tenantId: TENANT_A, assetId, maxBytes: 1024 })).toBeNull();
     }
     for (const tenantId of ["..", "a/b", "", "../elsewhere"]) {
-      expect(await cache.get({ tenantId, assetId: ASSET, maxBytes: 1024 })).toBeNull();
+      expect(await cache.get({ tenantId: testTenantId(tenantId), assetId: ASSET, maxBytes: 1024 })).toBeNull();
     }
 
     // The decoy is untouched: nothing was read, nothing was moved.
@@ -216,7 +217,7 @@ describe("localMediaCache — tenant isolation and traversal", () => {
     }
     // So is an unsafe tenant id: it arrives from a verified signature as a UUID.
     await expect(
-      cache.put({ tenantId: "../escape", assetId: ASSET, bytes: bytes("x"), mimeType: null }),
+      cache.put({ tenantId: testTenantId("../escape"), assetId: ASSET, bytes: bytes("x"), mimeType: null }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 });

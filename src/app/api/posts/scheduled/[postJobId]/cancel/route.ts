@@ -7,6 +7,7 @@ import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E8.4 — "huỷ" a scheduled post before it goes out.
@@ -68,7 +69,7 @@ export async function POST(
     const note = body.note?.trim() ?? "";
 
     const result = await container.usecases.cancelScheduledJob({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       postJobId: parsedId.data,
       actorEmail: session?.email ?? null,
       note: note.length > 0 ? note : null,

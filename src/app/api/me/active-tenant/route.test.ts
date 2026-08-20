@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * M1.2 — the boundary contract of `POST /api/me/active-tenant`: the cookie is
@@ -25,7 +26,7 @@ vi.mock("@/app/_auth/session", () => ({
 const { POST } = await import("./route");
 const { ACTIVE_TENANT_COOKIE } = await import("@/app/_lib/active-tenant-cookie");
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function request(body: unknown): Request {
   return new Request("http://localhost/api/me/active-tenant", {
@@ -54,7 +55,7 @@ describe("POST /api/me/active-tenant — refusals", () => {
   });
 
   it("400s a body without a UUID tenant id — and sets no cookie", async () => {
-    const response = await POST(request({ tenantId: "demo" }));
+    const response = await POST(request({ tenantId: testTenantId("demo") }));
 
     expect(response.status).toBe(400);
     expect(response.headers.get("set-cookie")).toBeNull();

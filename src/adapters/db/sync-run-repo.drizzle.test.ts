@@ -4,6 +4,7 @@ import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 
 import type { Database } from "./client";
 import { DrizzleSyncRunRepo } from "./sync-run-repo.drizzle";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * `listRecent` without a database: the query builder is stubbed, the ROW
@@ -14,7 +15,7 @@ import { DrizzleSyncRunRepo } from "./sync-run-repo.drizzle";
  * (funnel + issue table of the CURRENT run) down with it.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 interface LogLine {
   level: string;
@@ -99,7 +100,9 @@ describe("listRecent — edge cases first", () => {
 
   it("refuses a malformed tenant id", async () => {
     const { repo } = harness([row()]);
-    await expect(repo.listRecent("not-a-uuid", 5)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(repo.listRecent(testTenantId("not-a-uuid"), 5)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
   });
 
   it("returns an empty list for a tenant with no runs", async () => {

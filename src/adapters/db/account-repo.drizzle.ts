@@ -25,6 +25,7 @@ import {
 import type { Database } from "./client";
 import { findPgError, wrapDbError } from "./db-errors";
 import { accounts, identities, memberships, tenants } from "./schema";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * `account`/`identity`/`membership` reads + the ONE identity write of M1.2
@@ -215,7 +216,7 @@ export class DrizzleAccountRepo implements AccountRepo {
     }
   }
 
-  async findMembership(accountId: string, tenantId: string): Promise<MembershipWithTenant | null> {
+  async findMembership(accountId: string, tenantId: TenantId): Promise<MembershipWithTenant | null> {
     const account = str(accountId);
     const tenant = str(tenantId);
     // Both come from the authoriser, but a malformed uuid must still read as
@@ -229,7 +230,9 @@ export class DrizzleAccountRepo implements AccountRepo {
 
     try {
       const rows = await this.membershipWithTenantQuery()
-        .where(and(eq(memberships.accountId, account), eq(memberships.tenantId, tenant)))
+        .where(
+          and(eq(memberships.accountId, account), eq(memberships.tenantId, normalizeTenantId(tenantId))),
+        )
         .limit(1);
       const row = rows[0];
       return row ? this.toMembershipWithTenant(row) : null;
@@ -242,7 +245,7 @@ export class DrizzleAccountRepo implements AccountRepo {
     }
   }
 
-  async findMembershipVersion(accountId: string, tenantId: string): Promise<number | null> {
+  async findMembershipVersion(accountId: string, tenantId: TenantId): Promise<number | null> {
     const account = str(accountId);
     const tenant = str(tenantId);
     if (account.length === 0 || !isTenantId(tenant)) {
@@ -256,7 +259,9 @@ export class DrizzleAccountRepo implements AccountRepo {
       const rows = await this.db
         .select({ version: memberships.version })
         .from(memberships)
-        .where(and(eq(memberships.accountId, account), eq(memberships.tenantId, tenant)))
+        .where(
+          and(eq(memberships.accountId, account), eq(memberships.tenantId, normalizeTenantId(tenantId))),
+        )
         .limit(1);
       return rows[0]?.version ?? null;
     } catch (error) {
@@ -307,7 +312,7 @@ export class DrizzleAccountRepo implements AccountRepo {
   }
 
   private toMembershipWithTenant(row: {
-    tenantId: string;
+    tenantId: TenantId;
     role: unknown;
     status: unknown;
     version: number;

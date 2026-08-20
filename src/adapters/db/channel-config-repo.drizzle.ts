@@ -26,6 +26,7 @@ import {
   type SecretBox,
 } from "./secret-box";
 import { forTenant, type TenantScopedDb } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Reads the tenant's publishing channels from `tenant_integration`
@@ -119,7 +120,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
     private readonly deps: ChannelConfigRepoDeps,
   ) {}
 
-  async findChannel(tenantId: string, channelId: string): Promise<ChannelConfig | null> {
+  async findChannel(tenantId: TenantId, channelId: string): Promise<ChannelConfig | null> {
     const wanted = typeof channelId === "string" ? channelId.trim() : "";
     if (wanted.length === 0) return null;
     const channels = await this.listChannels(tenantId);
@@ -132,7 +133,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
    * caller only ever sees one flat list keyed by channelId. A duplicate
    * channelId across providers is refused rather than silently shadowed.
    */
-  async listChannels(tenantId: string): Promise<readonly ChannelConfig[]> {
+  async listChannels(tenantId: TenantId): Promise<readonly ChannelConfig[]> {
     const rows = await this.readRows(tenantId);
     const result: ChannelConfig[] = [];
     const seen = new Map<string, string>();
@@ -196,7 +197,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
    * exist so an existing deployment keeps its tuned values; a TikTok-only tenant
    * reads them from its own row.
    */
-  async getPublishSettings(tenantId: string): Promise<PublishSettings> {
+  async getPublishSettings(tenantId: TenantId): Promise<PublishSettings> {
     const rows = await this.readRows(tenantId);
     if (rows.length === 0) return DEFAULT_PUBLISH_SETTINGS;
     const preferred =
@@ -213,7 +214,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
    * The stored USER token (E5.1). Opened like any other credential, returned to
    * the connect usecase only — it must never reach a log or a response.
    */
-  async findUserAccessToken(tenantId: string): Promise<string | null> {
+  async findUserAccessToken(tenantId: TenantId): Promise<string | null> {
     const rows = await this.readRows(tenantId);
     const meta = rows.find((row) => row.provider === META_PROVIDER);
     if (!meta) return null;
@@ -236,7 +237,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
    */
   async upsertChannels(input: UpsertChannelsInput): Promise<UpsertChannelsResult> {
     // --- Edge cases first ----------------------------------------------------
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const incoming = Array.isArray(input?.channels) ? input.channels : [];
     if (incoming.length === 0) {
       throw new AppError("INVALID_INPUT", {
@@ -349,7 +350,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
 
   /** Null when the tenant has no such channel — the caller says "not found". */
   async setChannelStatus(input: SetChannelStatusInput): Promise<ChannelConfig | null> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const channelId = typeof input?.channelId === "string" ? input.channelId.trim() : "";
     const status = input?.status;
     if (channelId.length === 0 || (status !== "active" && status !== "disabled")) {
@@ -413,7 +414,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
    * retroactive delete.
    */
   async removeChannel(input: RemoveChannelInput): Promise<boolean> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const channelId = typeof input?.channelId === "string" ? input.channelId.trim() : "";
     if (channelId.length === 0) {
       throw new AppError("INVALID_INPUT", {
@@ -521,7 +522,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
   }
 
   private async readRows(
-    tenantId: string,
+    tenantId: TenantId,
   ): Promise<Array<{ provider: string; config: Record<string, unknown>; status: string }>> {
     const scope = forTenant(this.db, tenantId);
     try {
@@ -554,7 +555,7 @@ export class DrizzleChannelConfigRepo implements ChannelConfigRepo {
    * Opens the sealed fields, then validates. Order matters: the schema demands a
    * non-empty accessToken, and an envelope only becomes a token after opening.
    */
-  private parse(tenantId: string, provider: string, raw: unknown): ChannelProviderConfig {
+  private parse(tenantId: TenantId, provider: string, raw: unknown): ChannelProviderConfig {
     const plaintextSecrets = findPlaintextSecretFields(raw);
     if (plaintextSecrets.length > 0) {
       // Field NAMES only — a warning that leaks the token defeats its purpose.
@@ -611,7 +612,7 @@ type StoredChannel = z.infer<typeof ChannelSchema>;
  */
 function normaliseUpsert(
   raw: ChannelUpsert,
-  tenantId: string,
+  tenantId: TenantId,
 ): Omit<StoredChannel, "status" | "tokenExpiresAt"> & { tokenExpiresAt: string | null } {
   const channelId = str(raw?.channelId);
   const name = str(raw?.name);

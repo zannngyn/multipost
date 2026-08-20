@@ -5,6 +5,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E2 — "Ngắt kết nối Google".
@@ -41,7 +42,7 @@ export async function DELETE(request: Request): Promise<Response> {
     const session = await getOperatorSession(`api:${ROUTE}`);
 
     const view = await container.usecases.connectGoogleDrive.disconnectGoogle({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       actorEmail: session?.email ?? null,
     });
 

@@ -19,6 +19,7 @@ import { z } from "zod";
 
 import { AppError, type ErrorContext } from "./errors";
 import { isTenantId } from "./tenant";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -304,13 +305,13 @@ export function parseComposeDraftPayload(
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface PostDraftAddress {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly ownerUserId: string;
   readonly kind: string;
 }
 
 export interface PostDraftAddressInput {
-  readonly tenantId?: unknown;
+  readonly tenantId?: TenantId;
   readonly ownerUserId?: unknown;
   readonly kind?: unknown;
 }
@@ -324,14 +325,18 @@ export interface PostDraftAddressInput {
  * usecases at all (the route reports "chỉ lưu trên máy này" instead).
  */
 export function assertPostDraftAddress(input: PostDraftAddressInput | null | undefined): PostDraftAddress {
-  const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
-  if (!isTenantId(tenantId)) {
+  const rawTenantId = input?.tenantId;
+  if (typeof rawTenantId !== "string" || !isTenantId(rawTenantId.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: "tenantId must be a UUID",
       userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-      context: { tenant_id: tenantId || null, reason: "INVALID_TENANT_ID" },
+      context: {
+        tenant_id: (typeof rawTenantId === "string" ? rawTenantId.trim() : "") || null,
+        reason: "INVALID_TENANT_ID",
+      },
     });
   }
+  const tenantId = normalizeTenantId(rawTenantId);
 
   const ownerUserId = typeof input?.ownerUserId === "string" ? input.ownerUserId.trim() : "";
   if (!UUID_PATTERN.test(ownerUserId)) {

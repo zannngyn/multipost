@@ -5,9 +5,10 @@ import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaRepo, OrphanedUpload } from "@/core/ports/product-repo";
 
 import { makeCleanupUploads } from "./cleanup-uploads";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT_A = "00000000-0000-0000-0000-000000000001";
-const TENANT_B = "00000000-0000-0000-0000-000000000002";
+const TENANT_A = testTenantId("00000000-0000-0000-0000-000000000001");
+const TENANT_B = testTenantId("00000000-0000-0000-0000-000000000002");
 const NOW = Date.parse("2026-08-15T10:00:00.000Z");
 
 function makeLogger(): Logger {

@@ -5,10 +5,11 @@ import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { ChannelConfig, ChannelConfigRepo } from "@/core/ports/publisher";
 
 import { makeManageChannels, toChannelView } from "./manage-channels";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /** E5.1 — the channel list screen: read, switch on/off, remove. */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function silentLogger(): Logger {
   const logger: Logger = {
@@ -60,7 +61,7 @@ function harness(seed: ChannelConfig[] = [channel("fb-111")]) {
 describe("manage channels — refusals", () => {
   it("refuses a tenant id that is not a UUID", async () => {
     const { usecases } = harness();
-    await expect(usecases.listChannels({ tenantId: "nope" })).rejects.toMatchObject({
+    await expect(usecases.listChannels({ tenantId: testTenantId("nope") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
   });

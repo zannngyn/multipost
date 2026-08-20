@@ -22,6 +22,7 @@ import { z } from "zod";
 
 import { inspectTemplateBody } from "@/core/ai/prompt-render";
 import { AppError } from "@/core/domain/errors";
+import { tenantIdField } from "@/core/domain/tenant-context";
 import {
   AI_TASKS,
   type AITask,
@@ -89,7 +90,7 @@ export interface ManagePromptTemplates {
 // ---------------------------------------------------------------------------
 
 const targetSchema = z.object({
-  tenantId: z.string().trim().min(1, "tenantId is required"),
+  tenantId: tenantIdField(),
   task: z.enum(AI_TASKS),
   platform: z.string().trim().min(1, "platform is required"),
 });

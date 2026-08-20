@@ -5,6 +5,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { getContainer } from "@/composition/container";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E5.1 — "Làm mới danh sách Trang" with the token already stored for this
@@ -37,7 +38,7 @@ export async function POST(request: Request): Promise<Response> {
     const session = await getOperatorSession(`api:${ROUTE}`);
 
     const result = await container.usecases.connectChannels.refreshChannels({
-      tenantId: body.tenantId,
+      tenantId: legacyTenantIdFromRequest(body.tenantId),
       actorEmail: session?.email ?? null,
     });
 

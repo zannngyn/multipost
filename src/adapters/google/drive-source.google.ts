@@ -13,6 +13,7 @@ import type { Logger } from "@/core/ports/infra";
 
 import { escapeQueryValue } from "./drive-query";
 import type { TenantGoogleAuth } from "./tenant-google-auth";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Drive implementation of DriveSource (E2).
@@ -54,14 +55,14 @@ export interface GoogleDriveSourceDeps {
 
 export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource {
   /** Per tenant, because the identity is per tenant. The client itself is cheap. */
-  const driveFor = async (tenantId: string) =>
+  const driveFor = async (tenantId: TenantId) =>
     google.drive({ version: "v3", auth: await deps.auth.forTenant(tenantId) });
 
   return {
     async listFiles(input: ListDriveFilesInput): Promise<readonly DriveFile[]> {
       // --- Edge cases first --------------------------------------------------
       const folderId = typeof input?.folderId === "string" ? input.folderId.trim() : "";
-      const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+      const tenantId = normalizeTenantId(input.tenantId);
       if (folderId.length === 0) {
         throw new AppError("INVALID_INPUT", {
           message: "listFiles requires a Drive folder id",
@@ -163,7 +164,7 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
     async download(input: DownloadDriveFileInput): Promise<DriveFileContent> {
       // --- Edge cases first --------------------------------------------------
       const fileId = typeof input?.fileId === "string" ? input.fileId.trim() : "";
-      const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+      const tenantId = normalizeTenantId(input.tenantId);
       if (fileId.length === 0) {
         throw new AppError("INVALID_INPUT", {
           message: "download requires a Drive file id",

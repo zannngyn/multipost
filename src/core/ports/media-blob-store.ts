@@ -21,9 +21,10 @@
  */
 
 import type { MediaKind } from "@/core/domain/media-file-name";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export interface PutBlobInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Asset identity the blob belongs to — used to derive the key. */
   readonly assetId: string;
   readonly bytes: Uint8Array;
@@ -38,7 +39,7 @@ export interface StoredBlob {
 }
 
 export interface GetBlobInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly storageKey: string;
   /** Refuse to buffer more than this many bytes. */
   readonly maxBytes: number;
@@ -54,5 +55,5 @@ export interface MediaBlobStore {
   /** Null when the blob is not there (deleted, never written, wrong tenant). */
   get(input: GetBlobInput): Promise<BlobContent | null>;
   /** True when a blob was removed, false when there was nothing to remove. */
-  delete(input: { tenantId: string; storageKey: string }): Promise<boolean>;
+  delete(input: { tenantId: TenantId; storageKey: string }): Promise<boolean>;
 }

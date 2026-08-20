@@ -9,6 +9,7 @@ import {
 import { isTenantId } from "@/core/domain/tenant";
 import type { Logger } from "@/core/ports/infra";
 import type { PostJobCursor, PostJobRepo } from "@/core/ports/post-job-repo";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E11.1 data layer — the job log: every post_job of a tenant, newest first, with
@@ -35,7 +36,7 @@ export interface ListPostJobsFilter {
 }
 
 export interface ListPostJobsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly filter?: ListPostJobsFilter;
 }
 
@@ -65,7 +66,7 @@ export interface PostJobLogEntry {
 }
 
 export interface ListPostJobsResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly items: readonly PostJobLogEntry[];
   /** Pass back as `filter.cursor` for the next page; null = end of the list. */
   readonly nextCursor: string | null;
@@ -80,14 +81,15 @@ export interface ListPostJobsDeps {
 export function makeListPostJobs(deps: ListPostJobsDeps) {
   return async function listPostJobs(input: ListPostJobsInput): Promise<ListPostJobsResult> {
     // --- Edge cases first ---------------------------------------------------
-    const tenantId = str(input?.tenantId);
-    if (!isTenantId(tenantId)) {
+    const rawTenantId = str(input?.tenantId);
+    if (!isTenantId(rawTenantId)) {
       throw new AppError("INVALID_INPUT", {
         message: "listPostJobs requires a tenant UUID",
         userMessage: "Yêu cầu xem nhật ký đăng bài thiếu mã đơn vị.",
-        context: { tenant_id: tenantId || null },
+        context: { tenant_id: rawTenantId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const filter = input?.filter ?? {};
     const limit = normaliseLimit(filter.limit);

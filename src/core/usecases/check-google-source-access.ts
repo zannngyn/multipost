@@ -6,6 +6,7 @@ import type {
   GoogleSourceAccessState,
 } from "@/core/ports/google-oauth";
 import type { Clock, Logger } from "@/core/ports/infra";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * "Can the account this tenant connected actually READ the folder and the sheet
@@ -42,7 +43,7 @@ export interface SourceAccessDeps {
  */
 export async function checkAndRecordSourceAccess(
   deps: SourceAccessDeps,
-  tenantId: string,
+  tenantId: TenantId,
   log: Logger,
   /**
    * The source to check, when the caller just wrote it. Passing it avoids a
@@ -78,7 +79,7 @@ export async function checkAndRecordSourceAccess(
 
 async function probe(
   deps: SourceAccessDeps,
-  tenantId: string,
+  tenantId: TenantId,
   log: Logger,
   knownSource?: CatalogSourceConfig | null,
 ): Promise<GoogleSourceAccessState> {

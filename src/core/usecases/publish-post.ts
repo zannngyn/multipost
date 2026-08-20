@@ -48,6 +48,7 @@ import type {
   SignMediaUrlFn,
   VideoTarget as PublisherVideoTarget,
 } from "@/core/ports/publisher";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E7.4 — publish ONE post job on ONE channel. Called by the worker (queued /
@@ -129,7 +130,7 @@ export type PublishPostOutcome =
   | "skipped";
 
 export interface PublishPostInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   /**
    * Id of the QUEUE entry that woke this run up (BullMQ `job.id`). Compared with
@@ -146,7 +147,7 @@ export interface PublishPostInput {
 }
 
 export interface PublishPostResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   readonly batchId: string | null;
   readonly productCode: string | null;
@@ -226,15 +227,16 @@ export interface PublishPostDeps {
 export function makePublishPost(deps: PublishPostDeps) {
   return async function publishPost(input: PublishPostInput): Promise<PublishPostResult> {
     // --- Edge cases first ---------------------------------------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
     const postJobId = typeof input?.postJobId === "string" ? input.postJobId.trim() : "";
-    if (!isTenantId(tenantId) || postJobId.length === 0) {
+    if (!isTenantId(rawTenantId) || postJobId.length === 0) {
       throw new AppError("INVALID_INPUT", {
         message: "publishPost requires a tenant UUID and a post job id",
         userMessage: "Yêu cầu đăng bài thiếu thông tin định danh — đã từ chối.",
-        context: { tenant_id: tenantId || null, post_job_id: postJobId || null },
+        context: { tenant_id: rawTenantId || null, post_job_id: postJobId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
     const attempt = positiveInt(input?.attempt) ?? 1;
     const maxAttemptsFromQueue = positiveInt(input?.maxAttempts);
 

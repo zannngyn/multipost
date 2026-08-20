@@ -8,6 +8,7 @@ import type { Database } from "./client";
 import { isPgError, wrapDbError } from "./db-errors";
 import { channelGroups, type ChannelGroupRow } from "./schema";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * channel_group persistence (E7.6). Tenant-scoped like every repo here.
@@ -21,7 +22,7 @@ import { forTenant } from "./tenant-scope";
 /** Postgres unique_violation — the (tenant_id, name) index firing. */
 const PG_UNIQUE_VIOLATION = "23505";
 
-function nameTaken(tenantId: string, name: string, error: unknown): AppError {
+function nameTaken(tenantId: TenantId, name: string, error: unknown): AppError {
   return new AppError("INVALID_INPUT", {
     message: `A channel group named "${name}" already exists for this tenant`,
     userMessage: `Đã có nhóm kênh tên "${name}" — hãy đặt tên khác.`,
@@ -47,7 +48,7 @@ function toDomain(row: ChannelGroupRow): ChannelGroup {
 export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
   constructor(private readonly db: Database) {}
 
-  async listGroups(tenantId: string): Promise<readonly ChannelGroup[]> {
+  async listGroups(tenantId: TenantId): Promise<readonly ChannelGroup[]> {
     const scope = forTenant(this.db, tenantId);
     try {
       const rows = await scope.db
@@ -65,7 +66,7 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
     }
   }
 
-  async findGroupById(tenantId: string, groupId: string): Promise<ChannelGroup | null> {
+  async findGroupById(tenantId: TenantId, groupId: string): Promise<ChannelGroup | null> {
     const scope = forTenant(this.db, tenantId);
     const id = str(groupId);
     if (id.length === 0) throw missingId(scope.tenantId, "channelGroup.findGroupById");
@@ -90,11 +91,11 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
 
   async createGroup(input: {
     id: string;
-    tenantId: string;
+    tenantId: TenantId;
     name: string;
     channelIds: readonly string[];
   }): Promise<ChannelGroup> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const id = str(input?.id);
     if (id.length === 0) throw missingId(scope.tenantId, "channelGroup.createGroup");
 
@@ -129,12 +130,12 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
   }
 
   async updateGroup(input: {
-    tenantId: string;
+    tenantId: TenantId;
     groupId: string;
     name: string;
     channelIds: readonly string[];
   }): Promise<ChannelGroup | null> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const id = str(input?.groupId);
     if (id.length === 0) throw missingId(scope.tenantId, "channelGroup.updateGroup");
 
@@ -157,7 +158,7 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
     }
   }
 
-  async deleteGroup(tenantId: string, groupId: string): Promise<boolean> {
+  async deleteGroup(tenantId: TenantId, groupId: string): Promise<boolean> {
     const scope = forTenant(this.db, tenantId);
     const id = str(groupId);
     if (id.length === 0) throw missingId(scope.tenantId, "channelGroup.deleteGroup");
@@ -179,7 +180,7 @@ export class DrizzleChannelGroupRepo implements ChannelGroupRepo {
   }
 }
 
-function missingId(tenantId: string, operation: string): AppError {
+function missingId(tenantId: TenantId, operation: string): AppError {
   return new AppError("INVALID_INPUT", {
     message: `${operation} requires a channel group id`,
     userMessage: "Thiếu mã nhóm kênh.",

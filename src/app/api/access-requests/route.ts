@@ -7,6 +7,7 @@ import { AppError } from "@/core/domain/errors";
 import { ACCESS_STATUSES } from "@/shared/operator-access";
 
 import { requireAccessAdmin } from "./_lib/admin-guard";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E1.4 — the approval queue: `GET /api/access-requests?tenantId=&status=`.
@@ -56,7 +57,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const items = await container.usecases.accessRequests.listAccessRequests({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
       status: parsed.data.status,
     });
 

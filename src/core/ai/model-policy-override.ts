@@ -14,6 +14,7 @@ import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
 import { AI_TIERS, type AITask, type ModelPolicyOverride } from "@/core/ports/ai";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export const modelPolicyOverrideSchema = z
   .object({
@@ -38,7 +39,7 @@ export const modelPolicyOverrideSchema = z
 
 export function parseModelPolicyOverride(
   raw: unknown,
-  context: { tenantId: string; task: AITask },
+  context: { tenantId: TenantId; task: AITask },
 ): ModelPolicyOverride {
   const parsed = modelPolicyOverrideSchema.safeParse(raw);
   if (parsed.success) return parsed.data;

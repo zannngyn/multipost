@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { loadSecretsConfig } from "@/composition/config";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E5.1 — the Fanpage list of one tenant ("Kênh đã kết nối").
@@ -58,7 +59,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const channels = await container.usecases.channels.listChannels({
-      tenantId: parsed.data.tenantId,
+      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
     });
 
     return Response.json({
