@@ -2,9 +2,9 @@ import { z } from "zod";
 
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Read model behind the "Sản phẩm" screen: which codes are publishable and
@@ -19,7 +19,10 @@ import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
  * filter that quietly turns into "everything" makes an operator believe a
  * blocked code is publishable (business rule 5 — nothing fails silently).
  *
- * Auth: enforced by `middleware.ts` for every non-public /api path.
+ * Auth (M1.3b, doc 10 §4.1): viewer, tier R. The tenant comes from
+ * `requireTenantContext`, never from the query string — a `tenantId` an old UI
+ * build still appends is stripped by the schema below and ignored (transition
+ * rule, docs/11 §3.2).
  */
 
 const ROUTE = "GET /api/catalog/products";
@@ -29,7 +32,6 @@ const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 50;
 
 const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
   status: z.enum(["ok", "blocked"], { error: "Bộ lọc trạng thái không hợp lệ." }).optional(),
   /** Free text over code/name. Empty string = no search, not "match nothing". */
   q: z.string().trim().max(128, "Từ khoá tìm kiếm quá dài.").optional(),
@@ -51,9 +53,16 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // Authorise BEFORE parsing: a caller with no membership must not be able
+    // to tell a valid filter from an invalid one (doc 10 §3).
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+      minRole: "viewer",
+    });
+
     const url = new URL(request.url);
     const raw = {
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
       status: url.searchParams.get("status") ?? undefined,
       q: url.searchParams.get("q") ?? undefined,
       cursor: url.searchParams.get("cursor") ?? undefined,
@@ -78,7 +87,7 @@ export async function GET(request: Request): Promise<Response> {
 
     const q = parsed.data.q ?? "";
     const result = await container.usecases.listCatalogProducts({
-      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
+      tenantId: ctx.tenantId,
       filter: {
         ...(parsed.data.status ? { status: parsed.data.status } : {}),
         ...(q.length > 0 ? { q } : {}),

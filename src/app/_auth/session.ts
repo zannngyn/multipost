@@ -41,7 +41,30 @@ import type { OperatorSession } from "./operator-session";
 export async function getOperatorSession(surface: string): Promise<OperatorSession | null> {
   // Checked first so the bypass needs no auth env at all (see dev-session.ts).
   const fake = getDevFakeSession(surface);
-  if (fake) return fake;
+  if (fake) {
+    /**
+     * M1.3b: routes authorise through `requireTenant`, which needs an ACCOUNT.
+     * The seeded dev@localhost has one — attach it BEST-EFFORT (`resolve`
+     * never throws), so the bypass exercises the same authorisation path as a
+     * real session. With no database the bypass still opens, only the
+     * tenant-scoped routes then answer 401 — which is what they should say.
+     */
+    try {
+      const devAccount = await getContainer().usecases.operatorAccounts.resolve(fake.email);
+      return {
+        ...fake,
+        accountId: devAccount?.accountId ?? null,
+        platformRole: devAccount?.platformRole ?? null,
+      };
+    } catch {
+      // `resolve` never throws, but `getContainer()` itself needs DATABASE_URL;
+      // the bypass is explicitly for a box with NO env at all, so a failed
+      // container build degrades to the account-less session instead of taking
+      // the bypass down with it. Nothing is swallowed silently: every
+      // tenant-scoped call will refuse loudly with 401.
+      return fake;
+    }
+  }
 
   const session = await auth();
   const email = session?.user?.email;

@@ -1,14 +1,15 @@
 /**
- * The CSRF nonce of the Facebook connect round trip (E5.1), and the tenant it
- * belongs to, carried in ONE httpOnly cookie between /connect and /callback.
+ * The Facebook connect nonce cookie (E5.1 / M1.3b).
  *
- * Why a cookie and not the query string: the callback must prove that the
- * browser now coming back from facebook.com is the one that started the flow.
- * `state` alone in the URL proves nothing — the cookie is the half an attacker
- * cannot forge.
+ * Since M1.3b the cookie carries ONLY an opaque nonce: the tenant, the account
+ * and the expiry live in the server-side `oauth_state` row the nonce points at
+ * (doc 10 §6). The old cookie carried `tenantId` in unsigned JSON and the
+ * callback trusted it — the worst B-8 hole; nothing the browser holds decides
+ * a tenant anymore.
  *
- * Why the tenant id lives in here too: the callback then never has to trust a
- * tenant id from the query string, which anybody could edit.
+ * Why a cookie at all: the callback must prove that the browser now coming
+ * back from facebook.com is the one that started the flow. `state` in the URL
+ * alone proves nothing — the cookie is the half an attacker cannot forge.
  *
  * SameSite=Lax on purpose: the request arrives as a TOP-LEVEL redirect from
  * facebook.com, so Strict would drop the cookie and every connect would fail
@@ -16,20 +17,17 @@
  */
 
 export const OAUTH_STATE_COOKIE = "mysp_fb_oauth";
-/** Long enough for a login + Page picker, short enough not to linger. */
+/** Matches OAUTH_STATE_TTL_MS server-side; the ROW is what actually expires. */
 export const OAUTH_STATE_TTL_SECONDS = 600;
 /** Both endpoints of the flow live under this path; nothing else sees it. */
 const COOKIE_PATH = "/api/channels";
 
-export interface OAuthStatePayload {
-  readonly state: string;
-  readonly tenantId: string;
-}
+/** The nonce is 64 hex chars (32 random bytes); anything else is garbage. */
+const NONCE_SHAPE = /^[0-9a-f]{32,128}$/i;
 
-export function buildStateCookie(payload: OAuthStatePayload, options: { secure: boolean }): string {
-  const value = encodeURIComponent(JSON.stringify(payload));
+export function buildStateCookie(nonce: string, options: { secure: boolean }): string {
   return [
-    `${OAUTH_STATE_COOKIE}=${value}`,
+    `${OAUTH_STATE_COOKIE}=${encodeURIComponent(nonce)}`,
     `Path=${COOKIE_PATH}`,
     `Max-Age=${OAUTH_STATE_TTL_SECONDS}`,
     "HttpOnly",
@@ -51,41 +49,26 @@ export function clearStateCookie(options: { secure: boolean }): string {
 }
 
 /**
- * Three outcomes, kept apart so the route can LOG the difference: no cookie at
- * all (expired, or third-party cookies blocked) is a different story from a
- * cookie that was edited. Both end the flow, neither is a 500.
+ * The nonce, or null. A malformed value reads as ABSENT: the server-side claim
+ * is what authorises, this only refuses to carry obvious garbage further — and
+ * both outcomes end the flow the same way ("bấm kết nối lại").
  */
-export type StateCookieResult =
-  | { readonly kind: "absent" }
-  | { readonly kind: "malformed" }
-  | { readonly kind: "present"; readonly payload: OAuthStatePayload };
-
-export function readStateCookie(request: Request): StateCookieResult {
+export function readStateCookie(request: Request): string | null {
   const header = request.headers.get("cookie");
-  if (!header) return { kind: "absent" };
+  if (!header) return null;
 
   const raw = header
     .split(";")
     .map((part) => part.trim())
     .find((part) => part.startsWith(`${OAUTH_STATE_COOKIE}=`));
-  if (!raw) return { kind: "absent" };
+  if (!raw) return null;
 
-  const value = raw.slice(OAUTH_STATE_COOKIE.length + 1);
-  if (value.length === 0) return { kind: "absent" };
-
-  let parsed: unknown;
+  let value: string;
   try {
-    parsed = JSON.parse(decodeURIComponent(value));
+    value = decodeURIComponent(raw.slice(OAUTH_STATE_COOKIE.length + 1)).trim();
   } catch {
-    // The cause is worthless here (the value is attacker-controlled and may hold
-    // a nonce); WHAT happened is reported to the caller as `malformed`, which is
-    // logged there and shown to the operator as "phiên kết nối không hợp lệ".
-    return { kind: "malformed" };
+    // Broken percent-encoding: edited or corrupted — read as absent.
+    return null;
   }
-
-  if (typeof parsed !== "object" || parsed === null) return { kind: "malformed" };
-  const { state, tenantId } = parsed as { state?: unknown; tenantId?: unknown };
-  if (typeof state !== "string" || state.trim().length === 0) return { kind: "malformed" };
-  if (typeof tenantId !== "string" || tenantId.trim().length === 0) return { kind: "malformed" };
-  return { kind: "present", payload: { state: state.trim(), tenantId: tenantId.trim() } };
+  return NONCE_SHAPE.test(value) ? value : null;
 }

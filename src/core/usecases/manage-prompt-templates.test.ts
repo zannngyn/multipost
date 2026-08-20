@@ -155,10 +155,12 @@ describe("manage-prompt-templates — rejections", () => {
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("refuses to activate a version that does not exist", async () => {
+  // Doc 10 B3: this is a 404 answer to a bad request, and must stay
+  // distinguishable from the 500 `PROMPT_NOT_FOUND` of a missing built-in.
+  it("refuses to activate a version that does not exist, as PROMPT_VERSION_NOT_FOUND", async () => {
     const usecase = makeUsecase(makeMemoryRepo());
     await expect(usecase.activateVersion({ ...TARGET, version: 9 })).rejects.toMatchObject({
-      code: "PROMPT_NOT_FOUND",
+      code: "PROMPT_VERSION_NOT_FOUND",
     });
   });
 });

@@ -265,6 +265,9 @@ export function harness(
     postJobs: repo,
     products: makeProducts(),
     channels,
+    // Doc 10 §5.2 — active tenant, so these boundary tests keep exercising the
+    // Graph half rather than the suspension gate.
+    tenants: { findById: async () => ({ id: TENANT, name: "Demo", status: "active" }) },
     publishers: { facebook, ...(options.publishers ?? {}) },
     queue,
     progress,

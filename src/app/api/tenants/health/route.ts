@@ -1,29 +1,20 @@
-import { z } from "zod";
-
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
-import { AppError } from "@/core/domain/errors";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Walking-skeleton endpoint: UI -> here -> composition -> usecase -> Drizzle
- * -> Postgres. Thin by contract (docs/07 §3.3): validate, delegate, map errors.
+ * -> Postgres. Thin by contract (docs/07 §3.3): delegate, map errors.
  * No business branching lives in this file.
  *
- * Auth: covered by `middleware.ts` (every /api/* path outside the public list
- * needs a session). This handler therefore only owns input validation.
+ * Auth (M1.3b, doc 10 §4.1 + Q8.7): viewer, tier R, tenant from the session.
+ * That is what ends its second life as a TENANT ORACLE: until M1.3b anyone
+ * signed in could type a UUID and learn from the 404-vs-400 whether that tenant
+ * existed. There is no tenant parameter to type any more.
  */
 
 const ROUTE = "GET /api/tenants/health";
-
-/** Query contract. Kept here, at the boundary — never trust the caller. */
-const QuerySchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu tham số tenantId." })
-    .trim()
-    .min(1, "Thiếu tham số tenantId."),
-});
 
 export const dynamic = "force-dynamic";
 
@@ -34,28 +25,15 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const url = new URL(request.url);
-    const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
+    // --- Edge case first: no membership, no answer (doc 10 §3) --------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+      minRole: "viewer",
     });
 
-    // --- Edge case first: reject bad input before touching the DB -----------
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid query string for tenant healthcheck",
-        userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant).",
-        context: {
-          route: ROUTE,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
-      });
-    }
-
-    // The usecase owns the remaining rules (UUID shape, existence, DB errors).
-    const result = await container.usecases.healthcheckTenant({ tenantId: legacyTenantIdFromRequest(parsed.data.tenantId) });
+    // The usecase owns the remaining rules (existence, DB errors).
+    const result = await container.usecases.healthcheckTenant({ tenantId: ctx.tenantId });
     return Response.json(result);
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });

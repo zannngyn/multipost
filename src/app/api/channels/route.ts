@@ -1,11 +1,9 @@
-import { z } from "zod";
-
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { loadSecretsConfig } from "@/composition/config";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E5.1 — the Fanpage list of one tenant ("Kênh đã kết nối").
@@ -21,13 +19,15 @@ import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
  * hard way: without TENANT_SECRETS_ENC_KEY, READING channels works fine (the
  * box only touches the key when it meets a sealed value) while every WRITE
  * fails. The screen uses the flag to warn BEFORE the token is pasted.
+ *
+ * M1.3b — viewer / tier R (doc 10 §4.2); the tenant comes from the membership.
+ * TODO(M1.4, doc 10 Q8.3): `secretsConfigured` is an infrastructure fact and
+ * belongs to admin+ — only an admin can paste a token, so only an admin needs
+ * the warning. Held back with the other field-level narrowings so the UI schema
+ * changes once.
  */
 
 const ROUTE = "GET /api/channels";
-
-const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
-});
 
 export const dynamic = "force-dynamic";
 
@@ -38,34 +38,20 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const url = new URL(request.url);
-    const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
+    // --- Refusals first: viewer / tier R (doc 10 §4.2) ----------------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
     });
 
-    // --- Edge case first: no tenant, no query -------------------------------
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid query string for the channel list",
-        userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant).",
-        context: {
-          route: ROUTE,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
-      });
-    }
-
     const channels = await container.usecases.channels.listChannels({
-      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
+      tenantId: ctx.tenantId,
     });
 
     return Response.json({
-      tenantId: parsed.data.tenantId,
+      tenantId: ctx.tenantId,
       channels,
-      secretsConfigured: hasSecretsKey(logger, parsed.data.tenantId),
+      secretsConfigured: hasSecretsKey(logger, ctx.tenantId),
     });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });

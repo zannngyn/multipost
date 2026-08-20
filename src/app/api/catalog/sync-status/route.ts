@@ -2,9 +2,9 @@ import { z } from "zod";
 
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Read model behind the "Đồng bộ dữ liệu" screen (E2).
@@ -14,13 +14,14 @@ import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
  * and this route turns it into a 200 with `state: "never_synced"`, so the UI
  * shows an empty state with a call to action instead of a red box.
  *
- * Auth: enforced by `middleware.ts` for every non-public /api path.
+ * Auth (M1.3b, doc 10 §4.1): viewer, tier R. Tenant from
+ * `requireTenantContext`; a `tenantId` still sent by an old UI build is
+ * stripped and ignored (transition rule, docs/11 §3.2).
  */
 
 const ROUTE = "GET /api/catalog/sync-status";
 
 const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
   /**
    * How many history rows the rail wants. Absent = the usecase default, which
    * is SIX and not five: `recentRuns` includes the run the response already
@@ -49,21 +50,27 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // --- Edge case first: no membership, no answer (doc 10 §3) --------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+      minRole: "viewer",
+    });
+
     const url = new URL(request.url);
     const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
       recentLimit: url.searchParams.get("recentLimit") ?? undefined,
     });
 
-    // --- Edge case first: reject bad input before touching the DB -----------
+    // Then the query string: a bad recentLimit is a 400 before the DB sees it.
     if (!parsed.success) {
       throw new AppError("INVALID_INPUT", {
         message: "Invalid query string for sync status",
-        userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant).",
+        userMessage: "Tham số không hợp lệ. Vui lòng thử lại.",
         context: {
           route: ROUTE,
           issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
+            path: issue.path.join(".") || "query",
             message: issue.message,
           })),
         },
@@ -71,12 +78,12 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const result = await container.usecases.getSyncStatus({
-      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
+      tenantId: ctx.tenantId,
       recentLimit: parsed.data.recentLimit,
     });
 
     if (!result) {
-      return Response.json({ state: "never_synced", tenantId: parsed.data.tenantId });
+      return Response.json({ state: "never_synced", tenantId: ctx.tenantId });
     }
 
     return Response.json({ state: "has_run", run: result });

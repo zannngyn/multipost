@@ -16,9 +16,10 @@ import type { OperatorRole } from "@/shared/operator-access";
  * keeps the list closed:
  *   - `requireTenant()` (composition/require-tenant.ts) — membership-checked;
  *   - `testTenantId()`  (core/domain/tenant-context.testing.ts) — tests only;
- *   - `legacyTenantIdFromRequest()` (composition/legacy-tenant-id.ts) — the
- *     M1.3a transition shim, deleted in M1.3b;
- *   - `systemTenantId()` (M1.3a) and the platform layer (M3.3), when they land.
+ *   - `signedMediaTenantId()` (composition/signed-media-tenant-id.ts) — tier P,
+ *     the tenant claim inside the signed media URL (doc 10 §2);
+ *   - `systemTenantId()` (composition, worker only) and the platform layer
+ *     (M3.3), when it lands.
  */
 
 declare const TENANT_ID_BRAND: unique symbol;
@@ -45,7 +46,7 @@ export function unbrandTenantId(tenantId: TenantId): string {
  * untrusted string; `.trim()` returns a plain `string` and so drops the brand.
  * This does the same trim but preserves `TenantId`. It takes a `TenantId`, not a
  * string, so it can NEVER mint a brand from a raw client value — that stays the
- * job of the blessed constructors (`requireTenant`, `legacyTenantIdFromRequest`,
+ * job of the blessed constructors (`requireTenant`, `signedMediaTenantId`,
  * `systemTenantId`). Shape validation stays the caller's `isTenantId` check;
  * this does not throw.
  */

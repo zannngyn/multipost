@@ -1,30 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppError } from "@/core/domain/errors";
-import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
- * The browser-facing half of the Google connect flow (E2 step 2). No database
- * and no Google here: what is tested is the boundary contract of the route.
+ * The browser-facing half of the Google connect flow (E2 step 2, M1.3b).
+ * No database and no Google here: what is tested is the boundary contract.
  *
- *   1. the tenant id comes from the httpOnly COOKIE, never from the query
- *      string — otherwise anybody could connect their account into someone
- *      else's tenant just by editing a URL;
- *   2. the one-time state cookie is cleared on EVERY exit, including the error
- *      ones — a nonce that survives a failed attempt can be replayed;
- *   3. a failure redirects with the AppError CODE, which is what lets the screen
- *      show a sentence instead of "đã xảy ra lỗi".
+ *   1. everything trusted comes from the SERVER-SIDE state row the cookie
+ *      nonce points at — tenant and account are frozen at flow START, so a
+ *      forged cookie or a mid-consent tenant switch moves nothing;
+ *   2. the claim is single-use, and every refusal is the SAME
+ *      `?reason=STATE_MISMATCH` redirect (no oracle);
+ *   3. the CURRENT session must be the starter AND still admin (fresh);
+ *   4. the one-time cookie is cleared on EVERY exit.
  */
 
 const completeGoogleConnect = vi.fn();
+const claim = vi.fn();
+const requireTenant = vi.fn();
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
-const getOperatorSession = vi.fn(async () => ({ email: "operator@example.com" }));
+const getOperatorSession = vi.fn();
 
 vi.mock("@/composition/container", () => ({
   getContainer: () => ({
     logger,
     config: { NODE_ENV: "test" },
-    usecases: { connectGoogleDrive: { completeGoogleConnect } },
+    usecases: {
+      connectGoogleDrive: { completeGoogleConnect },
+      oauthStates: { claim },
+      requireTenant,
+    },
   }),
 }));
 
@@ -35,18 +40,13 @@ vi.mock("@/app/_auth/session", () => ({
 const { GET } = await import("./route");
 const { GOOGLE_OAUTH_STATE_COOKIE } = await import("../_lib/oauth-state-cookie");
 
-const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
-const STATE = "a".repeat(64);
+const TENANT = "00000000-0000-0000-0000-000000000001";
+const OTHER_TENANT = "00000000-0000-0000-0000-0000000000ff";
+const NONCE = "a".repeat(64);
 
-function request(query: string, cookiePayload?: unknown): Request {
+function request(query: string, nonce?: string): Request {
   const headers = new Headers();
-  if (cookiePayload !== undefined) {
-    const value =
-      typeof cookiePayload === "string"
-        ? cookiePayload
-        : encodeURIComponent(JSON.stringify(cookiePayload));
-    headers.set("cookie", `${GOOGLE_OAUTH_STATE_COOKIE}=${value}`);
-  }
+  if (nonce !== undefined) headers.set("cookie", `${GOOGLE_OAUTH_STATE_COOKIE}=${nonce}`);
   return new Request(`http://localhost/api/catalog/google/callback${query}`, { headers });
 }
 
@@ -57,116 +57,138 @@ function location(response: Response): URL {
 beforeEach(() => {
   vi.clearAllMocks();
   completeGoogleConnect.mockResolvedValue({ state: "connected" });
-  getOperatorSession.mockResolvedValue({ email: "operator@example.com" });
+  claim.mockResolvedValue({ tenantId: TENANT, accountId: "acc-1" });
+  requireTenant.mockResolvedValue({ tenantId: TENANT, role: "admin", membershipVersion: 1 });
+  getOperatorSession.mockResolvedValue({ email: "operator@example.com", accountId: "acc-1" });
 });
 
-describe("GET /api/catalog/google/callback — edge cases first", () => {
-  it("treats a declined consent as a normal outcome, not an error", async () => {
-    const response = await GET(
-      request("?error=access_denied", { state: STATE, tenantId: TENANT }),
-    );
+// --- Refusals first -----------------------------------------------------------
+
+describe("GET /api/catalog/google/callback — refusals", () => {
+  it("redirects STATE_MISMATCH without a cookie, and never claims", async () => {
+    const response = await GET(request("?code=abc&state=xyz"));
 
     expect(response.status).toBe(302);
-    expect(location(response).search).toBe("?google=cancelled");
+    const target = location(response);
+    expect(target.pathname).toBe("/sync");
+    expect(target.searchParams.get("reason")).toBe("STATE_MISMATCH");
+    expect(claim).not.toHaveBeenCalled();
     expect(completeGoogleConnect).not.toHaveBeenCalled();
+  });
+
+  it("treats an edited/garbage cookie value as absent", async () => {
+    const response = await GET(request("?code=abc&state=xyz", "not-a-nonce"));
+
+    expect(location(response).searchParams.get("reason")).toBe("STATE_MISMATCH");
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it("redirects STATE_MISMATCH when the nonce was already used (claim refuses)", async () => {
+    claim.mockResolvedValue(null);
+
+    const response = await GET(request(`?code=abc&state=${NONCE}`, NONCE));
+
+    expect(location(response).searchParams.get("reason")).toBe("STATE_MISMATCH");
+    expect(completeGoogleConnect).not.toHaveBeenCalled();
+  });
+
+  it("refuses a session that is NOT the flow starter — cookie theft", async () => {
+    getOperatorSession.mockResolvedValue({ email: "someone.else@example.com", accountId: "acc-2" });
+
+    const response = await GET(request(`?code=abc&state=${NONCE}`, NONCE));
+
+    expect(location(response).searchParams.get("reason")).toBe("STATE_MISMATCH");
+    expect(completeGoogleConnect).not.toHaveBeenCalled();
+    // The nonce is still burned: a refusal must not leave it spendable.
+    expect(claim).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses when the role was demoted mid-consent (fresh check throws FORBIDDEN)", async () => {
+    requireTenant.mockRejectedValue(new AppError("FORBIDDEN"));
+
+    const response = await GET(request(`?code=abc&state=${NONCE}`, NONCE));
+
+    expect(location(response).searchParams.get("reason")).toBe("STATE_MISMATCH");
+    expect(completeGoogleConnect).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the membership is gone (TENANT_NOT_FOUND) with the same reason", async () => {
+    requireTenant.mockRejectedValue(new AppError("TENANT_NOT_FOUND"));
+
+    const response = await GET(request(`?code=abc&state=${NONCE}`, NONCE));
+
+    expect(location(response).searchParams.get("reason")).toBe("STATE_MISMATCH");
+  });
+
+  it("clears the one-time cookie on an error exit", async () => {
+    claim.mockResolvedValue(null);
+
+    const response = await GET(request(`?code=abc&state=${NONCE}`, NONCE));
+
+    expect(response.headers.get("set-cookie")).toContain(`${GOOGLE_OAUTH_STATE_COOKIE}=;`);
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 
-  it("passes an EMPTY tenant id when there is no cookie — the usecase must refuse it", async () => {
-    completeGoogleConnect.mockRejectedValueOnce(
-      new AppError("GOOGLE_CONNECT_STATE_INVALID", { message: "no state cookie" }),
-    );
+  it("redirects with the AppError code when the usecase itself fails", async () => {
+    completeGoogleConnect.mockRejectedValue(new AppError("GOOGLE_AUTH_EXPIRED"));
 
-    const response = await GET(request(`?code=code-1&state=${STATE}`));
+    const response = await GET(request(`?code=abc&state=${NONCE}`, NONCE));
 
-    expect(completeGoogleConnect).toHaveBeenCalledWith(
-      expect.objectContaining({ tenantId: testTenantId(""), expectedState: "" }),
-    );
-    expect(location(response).searchParams.get("reason")).toBe("GOOGLE_CONNECT_STATE_INVALID");
+    expect(location(response).searchParams.get("reason")).toBe("GOOGLE_AUTH_EXPIRED");
   });
+});
 
-  it("never takes the tenant id from the query string", async () => {
-    const attacker = "11111111-1111-1111-1111-111111111111";
+// --- The decline path ---------------------------------------------------------
 
-    await GET(
-      request(`?code=code-1&state=${STATE}&tenantId=${attacker}`, {
-        state: STATE,
-        tenantId: TENANT,
-      }),
-    );
+describe("GET /api/catalog/google/callback — decline", () => {
+  it("treats access_denied as a choice, not an error, and burns nothing", async () => {
+    const response = await GET(request("?error=access_denied", NONCE));
 
-    expect(completeGoogleConnect).toHaveBeenCalledWith(
-      expect.objectContaining({ tenantId: TENANT }),
-    );
+    expect(location(response).searchParams.get("google")).toBe("cancelled");
+    expect(claim).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
+});
 
-  it("logs a malformed cookie and still ends the flow cleanly", async () => {
-    completeGoogleConnect.mockRejectedValueOnce(
-      new AppError("GOOGLE_CONNECT_STATE_INVALID", { message: "no state cookie" }),
+// --- Happy path ---------------------------------------------------------------
+
+describe("GET /api/catalog/google/callback — success", () => {
+  it("writes into the tenant of the STATE ROW, re-authorised fresh", async () => {
+    const response = await GET(request(`?code=the-code&state=${NONCE}`, NONCE));
+
+    expect(location(response).searchParams.get("google")).toBe("connected");
+    // The claim decides the tenant; the fresh admin check runs against IT.
+    expect(requireTenant).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "acc-1" }),
+      TENANT,
+      { tier: "S", minRole: "admin" },
     );
-
-    const response = await GET(request(`?code=code-1&state=${STATE}`, "not-json"));
-
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ reason: "STATE_COOKIE_MALFORMED" }),
-    );
-    expect(response.status).toBe(302);
-    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
-  });
-
-  it("redirects with the error CODE so the screen can say what to do", async () => {
-    completeGoogleConnect.mockRejectedValueOnce(
-      new AppError("GOOGLE_AUTH_EXPIRED", { message: "no refresh token" }),
-    );
-
-    const response = await GET(
-      request(`?code=code-1&state=${STATE}`, { state: STATE, tenantId: TENANT }),
-    );
-
-    const url = location(response);
-    expect(url.pathname).toBe("/sync");
-    expect(url.searchParams.get("google")).toBe("error");
-    expect(url.searchParams.get("reason")).toBe("GOOGLE_AUTH_EXPIRED");
-    expect(logger.error).toHaveBeenCalled();
-    // The nonce must not survive a failed attempt.
-    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
-  });
-
-  it("maps an unknown failure to INTERNAL rather than leaking it", async () => {
-    completeGoogleConnect.mockRejectedValueOnce(new Error("boom"));
-
-    const response = await GET(
-      request(`?code=code-1&state=${STATE}`, { state: STATE, tenantId: TENANT }),
-    );
-
-    expect(location(response).searchParams.get("reason")).toBe("INTERNAL");
-  });
-
-  it("lands on ?google=connected and clears the cookie on success", async () => {
-    const response = await GET(
-      request(`?code=code-1&state=${STATE}`, { state: STATE, tenantId: TENANT }),
-    );
-
     expect(completeGoogleConnect).toHaveBeenCalledWith({
       tenantId: TENANT,
-      code: "code-1",
-      state: STATE,
-      expectedState: STATE,
+      code: "the-code",
+      state: NONCE,
+      expectedState: NONCE,
       actorEmail: "operator@example.com",
     });
-    expect(location(response).search).toBe("?google=connected");
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
-    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("still connects when there is no session to name the actor", async () => {
-    getOperatorSession.mockResolvedValueOnce(null as never);
+  it("STILL writes into the row's tenant when the active-tenant cookie points elsewhere", async () => {
+    // The operator switched company in another tab mid-consent: the selector
+    // cookie now says OTHER_TENANT, but the state row froze TENANT at start.
+    const headers = new Headers();
+    headers.set(
+      "cookie",
+      `${GOOGLE_OAUTH_STATE_COOKIE}=${NONCE}; mysp_active_tenant=${OTHER_TENANT}`,
+    );
+    const response = await GET(
+      new Request(`http://localhost/api/catalog/google/callback?code=c&state=${NONCE}`, { headers }),
+    );
 
-    await GET(request(`?code=code-1&state=${STATE}`, { state: STATE, tenantId: TENANT }));
-
+    expect(location(response).searchParams.get("google")).toBe("connected");
+    expect(requireTenant).toHaveBeenCalledWith(expect.anything(), TENANT, expect.anything());
     expect(completeGoogleConnect).toHaveBeenCalledWith(
-      expect.objectContaining({ actorEmail: null }),
+      expect.objectContaining({ tenantId: TENANT }),
     );
   });
 });

@@ -4,19 +4,26 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E7.2 — the wizard's final action: fan one approved post out to N channels.
- * Thin by contract (docs/07 §3.3): validate -> usecase -> map errors.
+ * Thin by contract (docs/07 §3.3): authorise -> validate -> usecase -> map.
  *
  * What the body does NOT carry, on purpose:
+ *  - no tenant id. M1.3b: editor / tier S (doc 10 §4.2). Publishing to a real
+ *    Page cannot be undone, so the membership is read FRESH from the database
+ *    on every call — a member removed a second ago must not get one last post
+ *    out. A `tenantId` an old client still sends is stripped by the schema.
  *  - no image URL. The screen sends the ASSETS (drive file id + name + kind);
  *    the signed public URL Facebook fetches is minted server-side by
  *    `createPostBatch`, so a browser can neither forge nor leak one.
  *  - no stock, no price, no note (business rule 2). The caption text is the
  *    only free-form field, and it was approved by a human on step 2.
+ *  - no actor. Bug B6: the most consequential action in the product used to
+ *    store `created_by = null`. The e-mail comes from the SESSION and the
+ *    usecase resolves it to an `app_user.id`, exactly like retry/cancel.
  *
  * The stock gate runs INSIDE the usecase before anything is queued (rule 1),
  * and again in the worker right before the Graph call (rule 3) — this route
@@ -43,10 +50,6 @@ const MediaItemSchema = z.object({
 });
 
 const BodySchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   /** Same id twice = the same batch (idempotency), never a second fan-out. */
   batchId: uuidField("Mã lô bài đăng không hợp lệ.").optional(),
   productCode: z
@@ -114,12 +117,24 @@ export async function POST(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // --- Refusals first: tier S, so the membership is re-read from the DB
+    // before a single job row exists (doc 10 §2) ----------------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "editor",
+    });
+
     const body = await readJsonBody(request, BodySchema, { route: ROUTE });
     const color = body.color?.trim() ?? "";
     const scheduledAtByChannel = toScheduleMap(body.scheduledAtByChannel);
 
     const result = await container.usecases.createPostBatch({
-      tenantId: legacyTenantIdFromRequest(body.tenantId),
+      tenantId: ctx.tenantId,
+      // Bug B6 — the audit trail of a public, irreversible action must name a
+      // person. Resolved to an `app_user.id` inside the usecase; an e-mail with
+      // no row there is a logged warning, not a refusal to publish.
+      actorEmail: session.email,
       batchId: body.batchId,
       productCode: body.productCode,
       color: color.length > 0 ? color : undefined,

@@ -1,12 +1,18 @@
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readUploadForm } from "@/app/api/_lib/read-upload-form";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer, MAX_UPLOAD_BYTES, type UploadedFile } from "@/composition/container";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
- * E9.1 — mode B intake. Thin by contract (docs/07 §3.3): parse the multipart
- * body (`_lib/read-upload-form`), hand it to `uploadMedia`, map the AppError.
+ * E9.1 — mode B intake. Thin by contract (docs/07 §3.3): authorise, parse the
+ * multipart body (`_lib/read-upload-form`), hand it to `uploadMedia`, map the
+ * AppError.
+ *
+ * M1.3b — editor / tier M (doc 10 §4.2), and the authorisation happens BEFORE a
+ * single byte is read: this route writes files into the tenant's storage, so an
+ * unauthorised caller must not even get to spend our memory on their body.
+ * The old `tenantId` multipart FIELD is gone (doc 10 §8.12).
  *
  * A refused file comes back in the body of a 200, not as an error status: the
  * operator dragged several files and needs to see WHICH one was refused while
@@ -25,7 +31,14 @@ export async function POST(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const form = await readUploadForm(request, ROUTE);
+    // --- Refusals first, before the body is touched -------------------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "M",
+      minRole: "editor",
+    });
+
+    const form = await readUploadForm(request, ROUTE, ctx.tenantId);
 
     const files: UploadedFile[] = [];
     for (const [index, part] of form.parts.entries()) {
@@ -39,7 +52,7 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const result = await container.usecases.uploadMedia({
-      tenantId: legacyTenantIdFromRequest(form.tenantId),
+      tenantId: ctx.tenantId,
       productCode: form.productCode,
       files,
       order: form.order,

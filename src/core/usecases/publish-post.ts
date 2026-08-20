@@ -33,6 +33,7 @@ import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
+import type { TenantRepo } from "@/core/ports/tenant-repo";
 import type { MediaAssetLookup } from "@/core/ports/drive-source";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
@@ -58,6 +59,7 @@ import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
  * Order is the whole point (business rules 3 + 4):
  *
  *   1. load + status guard   — published/publishing are never published again
+ *   1b. TENANT SUSPENDED     — a suspended tenant publishes nothing, ever
  *   1c. handoff window (E8.6) — a scheduled post outside its window goes back to
  *                              the queue; nothing is claimed and nothing is sent
  *   2. spacing gate          — too soon on this channel? re-enqueue, stay queued
@@ -80,6 +82,28 @@ import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /** Queue job name; the worker registers its handler under it. */
 export const PUBLISH_POST_JOB_NAME = "publish-post";
+
+/**
+ * Doc 10 §5.2 — the worker's half of "tenant.status='suspended' chặn tất cả".
+ *
+ * `requireTenant()` stops a suspended tenant at every HTTP door, but the worker
+ * has no session and no membership to check: a tenant suspended at 09:00 would
+ * still have its 10:00 scheduled posts go out, on real Pages, with nobody able
+ * to explain it. This is the only place that can say no.
+ *
+ * It BLOCKS rather than fails: a suspension is a rule saying no (like the stock
+ * gate), not a malfunction, and `blocked` is the status an operator can re-queue
+ * from once the tenant is active again.
+ */
+export const TENANT_SUSPENDED_ERROR_CODE = "TENANT_SUSPENDED";
+export const TENANT_SUSPENDED_REASON = "TENANT_SUSPENDED";
+export const TENANT_SUSPENDED_AUDIT_ACTION = "post_job.blocked_tenant_suspended";
+const TENANT_SUSPENDED_MESSAGE =
+  "Công ty đang bị tạm khoá — bài này không được đăng. Liên hệ quản trị viên MYSP.";
+/** A tenant row that vanished is not "active"; same refusal, different reason. */
+export const TENANT_MISSING_REASON = "TENANT_NOT_FOUND";
+const TENANT_MISSING_MESSAGE =
+  "Không tìm thấy công ty của bài đăng này — đã dừng, không đăng.";
 
 /**
  * Audit actions that name the EVENT, not just the resulting status (E8.3/E8.5).
@@ -172,6 +196,13 @@ export interface PublishPostDeps {
   /** Same repo the compose step used — the recheck must read live stock. */
   products: ProductRepo;
   channels: ChannelConfigRepo;
+  /**
+   * Doc 10 §5.2 — the suspended-tenant gate. REQUIRED, not optional: an
+   * optional dependency is one a wiring change can drop without a single test
+   * failing, and the symptom would be a suspended tenant quietly publishing.
+   * That is exactly the failure this gate exists to prevent.
+   */
+  tenants: TenantRepo;
   /**
    * One publisher per platform (E6). The CHANNEL decides which one runs: a
    * tenant with a Facebook Page and a TikTok account publishes the same product
@@ -313,6 +344,42 @@ export function makePublishPost(deps: PublishPostDeps) {
       log.debug("No queue id stored on this job — stale-entry guard skipped", {
         reason: "QUEUE_ID_NOT_STORED",
         actual_queue_job_id: runningQueueJobId,
+      });
+    }
+
+    // --- 1b2. SUSPENDED TENANT (doc 10 §5.2) --------------------------------
+    // Before the handoff window, before the claim, before anything outbound: a
+    // suspended tenant must not reach Facebook by ANY path, and the handoff
+    // path in particular would leave the post in Meta's hands where we could no
+    // longer stop it. Placed after the stale-entry guard so an obsolete message
+    // still changes nothing — the live entry owns the row.
+    const tenant = await deps.tenants.findById(tenantId);
+    if (!tenant || tenant.status !== "active") {
+      const suspended = tenant !== null;
+      const userMessage = suspended ? TENANT_SUSPENDED_MESSAGE : TENANT_MISSING_MESSAGE;
+      const reason = suspended ? TENANT_SUSPENDED_REASON : TENANT_MISSING_REASON;
+      const blocked = await block(
+        deps,
+        job,
+        TENANT_SUSPENDED_ERROR_CODE,
+        userMessage,
+        reason,
+        TENANT_SUSPENDED_AUDIT_ACTION,
+      );
+      log.warn("Publish blocked: the tenant may not publish", {
+        outcome: "blocked",
+        error_code: TENANT_SUSPENDED_ERROR_CODE,
+        reason,
+        tenant_status: tenant?.status ?? null,
+        scheduled_at: job.scheduledAt?.toISOString() ?? null,
+        attempt,
+      });
+      // Nothing was sent, so this is a final answer, not a retry: returning the
+      // blocked row keeps the queue from backing off into another attempt.
+      return result(blocked ?? job, "blocked", {
+        deferredMs: null,
+        errorCode: TENANT_SUSPENDED_ERROR_CODE,
+        userMessage,
       });
     }
 

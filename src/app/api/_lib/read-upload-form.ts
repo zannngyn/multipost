@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { MAX_UPLOADS_PER_POST, MAX_UPLOAD_BYTES } from "@/composition/container";
+import type { TenantId } from "@/composition/require-tenant";
 import { AppError } from "@/core/domain/errors";
 
 /**
@@ -10,16 +11,18 @@ import { AppError } from "@/core/domain/errors";
  *
  * Multipart, not JSON: base64 in a JSON body inflates every file by a third and
  * forces the whole album into one string before anything can be validated.
+ *
+ * M1.3b (doc 10 §8.12) — the `tenantId` FIELD is gone. It was the multipart
+ * twin of the query/body tenant id, and a form field is exactly as forgeable as
+ * either: the route now takes the tenant from `requireTenantContext`. A client
+ * that still appends the field simply has it ignored (transition rule,
+ * docs/11 §3.2), which is why nothing here rejects an extra part.
  */
 
 /** Cheap guard against a body that is large in aggregate rather than per file. */
 export const MAX_TOTAL_UPLOAD_BYTES = MAX_UPLOAD_BYTES * MAX_UPLOADS_PER_POST;
 
 const FieldsSchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   productCode: z
     .string({ error: "Thiếu mã sản phẩm." })
     .trim()
@@ -29,7 +32,6 @@ const FieldsSchema = z.object({
 });
 
 export interface UploadForm {
-  readonly tenantId: string;
   readonly productCode: string;
   /** Indexes into `parts`; index 0 is the cover. Absent = as sent. */
   readonly order?: number[];
@@ -44,13 +46,22 @@ export interface UploadForm {
  * measures the bytes actually received. This one exists so a client that lies
  * about a size cannot cost a full buffer of memory per file.
  */
-export async function readUploadForm(request: Request, route: string): Promise<UploadForm> {
+export async function readUploadForm(
+  request: Request,
+  route: string,
+  /**
+   * Already authorised by the caller. Taken as a parameter purely so every
+   * refusal below still carries `tenant_id` in its log context (CLAUDE.md
+   * technical rule 6) — this function makes no decision with it.
+   */
+  tenantId: TenantId,
+): Promise<UploadForm> {
   const contentType = request.headers.get("content-type") ?? "";
   if (!contentType.toLowerCase().includes("multipart/form-data")) {
     throw new AppError("INVALID_INPUT", {
       message: "Upload requires a multipart/form-data body",
       userMessage: "Yêu cầu tải lên không đúng định dạng.",
-      context: { route, content_type: contentType || null },
+      context: { route, tenant_id: tenantId, content_type: contentType || null },
     });
   }
 
@@ -60,7 +71,7 @@ export async function readUploadForm(request: Request, route: string): Promise<U
   } catch (error) {
     // A truncated or malformed body: say so, rather than letting a parser
     // exception surface as a 500.
-    throw AppError.from(error, "INVALID_INPUT", { route, reason: "MALFORMED_MULTIPART" });
+    throw AppError.from(error, "INVALID_INPUT", { route, tenant_id: tenantId, reason: "MALFORMED_MULTIPART" });
   }
 
   const fields = parseFields(form, route);
@@ -70,7 +81,7 @@ export async function readUploadForm(request: Request, route: string): Promise<U
     throw new AppError("INVALID_INPUT", {
       message: "Upload request carried no file parts",
       userMessage: "Chưa chọn file nào để tải lên.",
-      context: { route, tenant_id: fields.tenantId },
+      context: { route, tenant_id: tenantId },
     });
   }
 
@@ -78,7 +89,7 @@ export async function readUploadForm(request: Request, route: string): Promise<U
     throw new AppError("INVALID_INPUT", {
       message: "Upload request carried too many file parts",
       userMessage: `Một bài chỉ nhận tối đa ${MAX_UPLOADS_PER_POST} file — đang gửi ${parts.length}.`,
-      context: { route, tenant_id: fields.tenantId, count: parts.length },
+      context: { route, tenant_id: tenantId, count: parts.length },
     });
   }
 
@@ -90,7 +101,7 @@ export async function readUploadForm(request: Request, route: string): Promise<U
       userMessage: "Thứ tự file không khớp số file gửi lên — hãy tải lại trang và thử lại.",
       context: {
         route,
-        tenant_id: fields.tenantId,
+        tenant_id: tenantId,
         order_length: fields.order.length,
         parts: parts.length,
       },
@@ -106,7 +117,7 @@ export async function readUploadForm(request: Request, route: string): Promise<U
         "Tổng dung lượng các file vượt mức cho phép — hãy bớt file hoặc giảm dung lượng.",
       context: {
         route,
-        tenant_id: fields.tenantId,
+        tenant_id: tenantId,
         total_bytes: total,
         max_bytes: MAX_TOTAL_UPLOAD_BYTES,
       },
@@ -120,7 +131,6 @@ export async function readUploadForm(request: Request, route: string): Promise<U
 
 function parseFields(form: FormData, route: string): z.infer<typeof FieldsSchema> {
   const parsed = FieldsSchema.safeParse({
-    tenantId: asText(form.get("tenantId")),
     productCode: asText(form.get("productCode")),
     order: parseOrder(form.get("order"), route),
   });

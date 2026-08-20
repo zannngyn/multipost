@@ -16,6 +16,8 @@ import type {
   PostJobRepo,
 } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
+import type { Tenant } from "@/core/domain/tenant";
+import type { TenantRepo } from "@/core/ports/tenant-repo";
 import type {
   ChannelConfig,
   ChannelConfigRepo,
@@ -204,6 +206,17 @@ function makeProduct(stockRaw: string, noteRaw = ""): Product {
   };
 }
 
+/**
+ * Doc 10 §5.2 — the suspended-tenant gate needs a tenant row. Default active,
+ * so every pre-existing test keeps its behaviour; `status: "suspended"` and
+ * `null` are what the two new cases pass in.
+ */
+function makeTenants(tenant: Tenant | null = ACTIVE_TENANT): TenantRepo {
+  return { findById: async () => tenant };
+}
+
+const ACTIVE_TENANT: Tenant = { id: TENANT, name: "Demo", status: "active" };
+
 function makeProducts(product: Product | null): ProductRepo {
   return {
     findByCode: async () => product,
@@ -323,6 +336,8 @@ function harness(options: {
   withoutScheduler?: boolean;
   /** E7.5 — swap in a store that breaks, to prove the post still goes out. */
   progress?: JobProgressStore;
+  /** Doc 10 §5.2 — `null` = tenant row gone, `suspended` = tenant locked. */
+  tenant?: Tenant | null;
 } = {}): Harness {
   const repo = makeMemoryRepo(options.jobs ?? [makeJob()]);
   const queue = makeQueue();
@@ -373,6 +388,7 @@ function harness(options: {
       postJobs: repo,
       products: makeProducts(options.product === undefined ? makeProduct("104") : options.product),
       channels: makeChannels(options.channel === undefined ? CHANNEL : options.channel, options.settings),
+      tenants: makeTenants(options.tenant === undefined ? ACTIVE_TENANT : options.tenant),
       publisher,
       ...(options.publishers ? { publishers: options.publishers } : {}),
       queue,
@@ -408,6 +424,66 @@ describe("publishPost — rejected calls", () => {
       context: { reason: "POST_JOB_NOT_FOUND" },
     });
     expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+});
+
+describe("publishPost — suspended tenant (doc 10 §5.2)", () => {
+  // The failure this exists for: a tenant is suspended at 09:00 and its 10:00
+  // scheduled post still lands on a real Page, because the worker has no
+  // session and `requireTenant()` never runs for it.
+  it("publishes NOTHING for a suspended tenant and blocks the job with a reason", async () => {
+    const h = harness({ tenant: { id: TENANT, name: "Demo", status: "suspended" } });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(h.publisher.publishVideoPost).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("blocked");
+    expect(result.errorCode).toBe("TENANT_SUSPENDED");
+    expect(result.userMessage).toContain("tạm khoá");
+    expect(h.repo.get("job-1")?.status).toBe("blocked");
+  });
+
+  it("names the event in the audit row, not just the status", async () => {
+    const h = harness({ tenant: { id: TENANT, name: "Demo", status: "suspended" } });
+    await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const blocked = h.repo.transitionInputs.find((input) => input.next.status === "blocked");
+    expect(blocked?.auditAction).toBe("post_job.blocked_tenant_suspended");
+  });
+
+  it("blocks a SCHEDULED post before the handoff, so Facebook never holds it", async () => {
+    // The dangerous path: a handed-over post publishes at its hour even if this
+    // process dies, so the gate must sit BEFORE the handoff window, not after.
+    // T+20min: INSIDE the handoff window, i.e. the exact instant at which an
+    // active tenant's post is handed to Facebook (see the E8.6 happy path).
+    const inHandoffWindow = new Date(Date.parse("2026-08-13T02:00:00.000Z") + 20 * 60_000);
+    const h = harness({
+      jobs: [makeJob({ scheduledAt: inHandoffWindow })],
+      tenant: { id: TENANT, name: "Demo", status: "suspended" },
+    });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("blocked");
+    expect(h.publisher.scheduled?.schedulePost).not.toHaveBeenCalled();
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("refuses a job whose tenant row is gone, with its own reason", async () => {
+    const h = harness({ tenant: null });
+
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.errorCode).toBe("TENANT_SUSPENDED");
+    expect(h.publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("does not stand in the way of an ACTIVE tenant", async () => {
+    const h = harness();
+    const result = await h.publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.outcome).toBe("published");
   });
 });
 
@@ -1050,6 +1126,7 @@ describe("publishPost — happy path", () => {
       postJobs: repo,
       products,
       channels,
+      tenants: makeTenants(),
       publisher: {
         publishImagePost: async (input) => {
           order.push("publish");
@@ -1284,6 +1361,7 @@ describe("publishPost — video and reels (E5.3/E5.4)", () => {
       postJobs: repo,
       products: makeProducts(makeProduct("104")),
       channels: makeChannels(CHANNEL),
+      tenants: makeTenants(),
       publisher: {
         publishImagePost: async () => ({ postId: "x", url: null }),
         publishVideoPost: async () => ({ postId: "555000111_5", url: null }),

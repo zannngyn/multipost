@@ -7,7 +7,7 @@ import { testTenantId } from "@/core/domain/tenant-context.testing";
  * the same 404 so the endpoint cannot probe which tenants exist.
  */
 
-const selectActiveTenant = vi.fn();
+const requireTenant = vi.fn();
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
 const getOperatorSession = vi.fn();
 
@@ -15,7 +15,7 @@ vi.mock("@/composition/container", () => ({
   getContainer: () => ({
     logger,
     config: { NODE_ENV: "test" },
-    usecases: { selectActiveTenant },
+    usecases: { requireTenant },
   }),
 }));
 
@@ -39,7 +39,7 @@ function request(body: unknown): Request {
 beforeEach(() => {
   vi.clearAllMocks();
   getOperatorSession.mockResolvedValue({ email: "worker@gmail.com", accountId: "acc-1" });
-  selectActiveTenant.mockResolvedValue({ activeTenantId: TENANT });
+  requireTenant.mockResolvedValue({ tenantId: TENANT, role: "editor", membershipVersion: 1 });
 });
 
 // --- Edge cases first ---------------------------------------------------------
@@ -51,7 +51,7 @@ describe("POST /api/me/active-tenant — refusals", () => {
     const response = await POST(request({ tenantId: TENANT }));
 
     expect(response.status).toBe(401);
-    expect(selectActiveTenant).not.toHaveBeenCalled();
+    expect(requireTenant).not.toHaveBeenCalled();
   });
 
   it("400s a body without a UUID tenant id — and sets no cookie", async () => {
@@ -59,12 +59,12 @@ describe("POST /api/me/active-tenant — refusals", () => {
 
     expect(response.status).toBe(400);
     expect(response.headers.get("set-cookie")).toBeNull();
-    expect(selectActiveTenant).not.toHaveBeenCalled();
+    expect(requireTenant).not.toHaveBeenCalled();
   });
 
   it("404s a tenant the account has no membership in — and sets no cookie", async () => {
     const { AppError } = await import("@/core/domain/errors");
-    selectActiveTenant.mockRejectedValue(new AppError("TENANT_NOT_FOUND"));
+    requireTenant.mockRejectedValue(new AppError("TENANT_NOT_FOUND"));
 
     const response = await POST(request({ tenantId: TENANT }));
 
@@ -89,9 +89,12 @@ describe("POST /api/me/active-tenant — the switch", () => {
     // Dev box runs plain http; Secure only in production.
     expect(cookie).not.toContain("Secure");
 
-    expect(selectActiveTenant).toHaveBeenCalledWith({
-      sessionEmail: "worker@gmail.com",
-      tenantId: TENANT,
-    });
+    // The body's tenantId is the SELECTOR handed to the authoriser (tier S,
+    // fresh membership read) — no separate usecase, no second check.
+    expect(requireTenant).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "acc-1" }),
+      TENANT,
+      { tier: "S" },
+    );
   });
 });

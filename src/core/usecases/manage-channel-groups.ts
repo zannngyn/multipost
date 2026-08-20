@@ -227,8 +227,14 @@ function requireGroupId(raw: unknown, tenantId: TenantId): string {
   return groupId;
 }
 
+/**
+ * Bug B5 (doc 10 §7): a group of another tenant, and a group that never
+ * existed, are the SAME answer — and that answer is a 404, not the 400 this
+ * used to send. The request was well formed; the resource is simply not this
+ * tenant's, which doc 10 §3 says must read as "does not exist".
+ */
 function notFound(tenantId: TenantId, groupId: string, operation: string): AppError {
-  return new AppError("INVALID_INPUT", {
+  return new AppError("CHANNEL_GROUP_NOT_FOUND", {
     message: "Channel group not found for this tenant",
     userMessage: "Không tìm thấy nhóm kênh này.",
     context: { tenant_id: tenantId, group_id: groupId, operation, reason: "GROUP_NOT_FOUND" },

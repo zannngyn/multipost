@@ -1,12 +1,10 @@
 import { z } from "zod";
 
-import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
-import { AppError } from "@/core/domain/errors";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * "Nguồn dữ liệu" card of the sync screen: WHICH Drive folder and WHICH Sheet
@@ -18,15 +16,15 @@ import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
  * with `state: "not_configured"`, so the screen shows an empty state with the
  * one sentence an operator needs instead of a red box they cannot act on.
  *
- * Auth: enforced by `middleware.ts` for every non-public /api path.
+ * Auth (M1.3b, doc 10 §4.1): GET = viewer, tier R. PUT = admin, tier S —
+ * changing the source is what the NEXT sync deletes the old catalog for, so the
+ * membership is read fresh, never from a cache. The tenant comes from
+ * `requireTenantContext`; a `tenantId` an old UI build still sends is stripped
+ * and ignored (transition rule, docs/11 §3.2).
  */
 
 const ROUTE = "GET /api/catalog/source";
 const ROUTE_PUT = "PUT /api/catalog/source";
-
-const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
-});
 
 /**
  * A pasted browser URL and a bare id are both accepted — the USECASE parses
@@ -36,10 +34,6 @@ const QuerySchema = z.object({
 const MAX_SOURCE_REF = 512;
 
 const UpdateBodySchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   driveFolder: z
     .string({ error: "Thiếu thư mục Drive." })
     .trim()
@@ -66,33 +60,22 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const url = new URL(request.url);
-    const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
+    // --- Edge case first: no membership, no answer (doc 10 §3) --------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+      minRole: "viewer",
     });
 
-    // --- Edge case first: reject bad input before touching the DB -----------
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid query string for catalog source",
-        userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant).",
-        context: {
-          route: ROUTE,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
-      });
-    }
+    const source = await container.usecases.getCatalogSource({ tenantId: ctx.tenantId });
 
-    const source = await container.usecases.getCatalogSource({ tenantId: legacyTenantIdFromRequest(parsed.data.tenantId) });
-
+    // `not_configured` is a 200 EMPTY STATE, and stays distinct from the 404 of
+    // "no membership" — the two meanings must never be merged (doc 10 §3).
     if (!source) {
-      return Response.json({ state: "not_configured", tenantId: parsed.data.tenantId });
+      return Response.json({ state: "not_configured", tenantId: ctx.tenantId });
     }
 
-    return Response.json({ state: "configured", tenantId: parsed.data.tenantId, source });
+    return Response.json({ state: "configured", tenantId: ctx.tenantId, source });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });
   }
@@ -117,18 +100,24 @@ export async function PUT(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // Authorise BEFORE reading the body: tier S, so the membership is the fresh
+    // row and an editor gets 403 without the payload ever being parsed.
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE_PUT}`,
+      tier: "S",
+      minRole: "admin",
+    });
     const body = await readJsonBody(request, UpdateBodySchema, { route: ROUTE_PUT });
-    const session = await getOperatorSession(`api:${ROUTE_PUT}`);
 
     const source = await container.usecases.updateCatalogSource({
-      tenantId: legacyTenantIdFromRequest(body.tenantId),
+      tenantId: ctx.tenantId,
       driveFolder: body.driveFolder,
       spreadsheet: body.spreadsheet,
       sheetName: body.sheetName,
-      actorEmail: session?.email ?? null,
+      actorEmail: session.email,
     });
 
-    return Response.json({ state: "configured", tenantId: body.tenantId, source });
+    return Response.json({ state: "configured", tenantId: ctx.tenantId, source });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE_PUT } });
   }

@@ -26,8 +26,10 @@ import type { JobQueue } from "@/core/ports/job-queue";
 import type { NewPostJob, PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
 import type { ChannelConfigRepo, SignMediaUrlFn } from "@/core/ports/publisher";
+import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
+import { resolveActorUserId } from "./resolve-actor";
 import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
@@ -90,7 +92,16 @@ export interface CreatePostBatchInput {
    * khung giờ vàng khác nhau"). A bad time blocks ONLY that channel.
    */
   readonly scheduledAtByChannel?: Readonly<Record<string, Date | null | undefined>>;
+  /** `app_user.id` when the caller already knows it; wins over `actorEmail`. */
   readonly createdBy?: string | null;
+  /**
+   * Bug B6 — who pressed "Đăng", read from the SESSION by the route and never
+   * from the body. Resolved to an `app_user.id` here (same contract as retry /
+   * cancel / reschedule): an e-mail that maps to no row is a WARNING and an
+   * unattributed batch, never a refusal — a post that does not go out is a far
+   * worse outcome than a batch whose author we cannot name.
+   */
+  readonly actorEmail?: string | null;
   readonly note?: string | null;
 }
 
@@ -125,6 +136,12 @@ export interface CreatePostBatchDeps {
   queue: JobQueue;
   clock: Clock;
   logger: Logger;
+  /**
+   * Resolves `actorEmail` to an `app_user.id` for `post_batch.created_by`
+   * (Bug B6). Optional for the same reason it is in retry/cancel: a process
+   * without it still publishes, and says out loud that the row is unattributed.
+   */
+  users?: UserRepo;
   /** Injected so tests get deterministic ids. */
   newId: () => string;
   /** Mints the public URL Graph API fetches (E3.6). */
@@ -254,7 +271,15 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
         color,
         format,
         note: str(input?.note) || null,
-        createdBy: str(input?.createdBy) || null,
+        // Bug B6: an explicit id wins, otherwise the session e-mail is looked
+        // up. `post_batch.created_by` is a FK to `app_user.id`, so an e-mail
+        // must never be written into it raw.
+        createdBy: await resolveActorUserId(
+          deps,
+          tenantId,
+          { actorUserId: input?.createdBy, actorEmail: input?.actorEmail },
+          log,
+        ),
       },
       jobs: newJobs,
     });

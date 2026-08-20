@@ -5,7 +5,14 @@ import { AppError } from "@/core/domain/errors";
 /**
  * Shared boundary pieces of `/api/prompts/**` (E10.7). Kept here so the three
  * route files stay thin (docs/07 §3.3) and cannot drift apart on the target
- * (tenant + task + platform) they all validate the same way.
+ * (task + platform) they all validate the same way.
+ *
+ * M1.3b: the target no longer carries a tenant. One schema serves all four
+ * route×method, so dropping `tenantId` HERE is what cuts the client-supplied
+ * tenant out of every `/api/prompts` edge at once (docs/11 §1). Each route now
+ * gets its tenant from `requireTenantContext()`; a `tenantId` an old client
+ * still sends in the query string or body is simply not read — stripped, not
+ * rejected, per the transition rule (docs/11 §3.2).
  */
 
 /**
@@ -25,21 +32,16 @@ export const DEFAULT_TASK = "facebook_content";
 export const DEFAULT_PLATFORM = "facebook";
 
 export const TargetSchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   task: z.enum(AI_TASKS).default(DEFAULT_TASK),
   platform: z.string().trim().min(1, "Thiếu nền tảng.").max(64).default(DEFAULT_PLATFORM),
 });
 
 export type PromptTarget = z.infer<typeof TargetSchema>;
 
-/** Parses `?tenantId=&task=&platform=` into the usecase target. */
+/** Parses `?task=&platform=` into the usecase target. The tenant is not read. */
 export function readTarget(request: Request, route: string): PromptTarget {
   const params = new URL(request.url).searchParams;
   const parsed = TargetSchema.safeParse({
-    tenantId: params.get("tenantId") ?? undefined,
     task: params.get("task") ?? undefined,
     platform: params.get("platform") ?? undefined,
   });
@@ -47,7 +49,7 @@ export function readTarget(request: Request, route: string): PromptTarget {
   if (!parsed.success) {
     throw new AppError("INVALID_INPUT", {
       message: `Invalid query string for ${route}`,
-      userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant) và tác vụ.",
+      userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại tác vụ và nền tảng.",
       context: {
         route,
         issues: parsed.error.issues.map((issue) => ({

@@ -2,9 +2,9 @@ import { z } from "zod";
 
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E2 — the spreadsheets of the connected Google account.
@@ -12,6 +12,9 @@ import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
  * WITHOUT `parentId` this searches the whole Drive, most recently modified
  * first: an operator looking for "bảng hàng thiết kế" almost always wants the
  * one they touched last, not an alphabetical crawl of every folder.
+ *
+ * Auth (M1.3b, doc 10 §4.1): admin, tier S — with no `parentId` this sweeps the
+ * entire Drive of the connected account using the tenant's credential.
  */
 
 const ROUTE = "GET /api/catalog/google/spreadsheets";
@@ -19,7 +22,6 @@ const MAX_PAGE_TOKEN = 4096;
 const MAX_QUERY = 128;
 
 const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
   /** Optional on purpose: absent = search the whole Drive. */
   parentId: z.string().trim().min(1).max(256).optional(),
   pageToken: z.string().trim().min(1).max(MAX_PAGE_TOKEN).optional(),
@@ -35,9 +37,15 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // --- Edge case first: authorise before touching the tenant credential ---
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "admin",
+    });
+
     const url = new URL(request.url);
     const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
       parentId: url.searchParams.get("parentId") ?? undefined,
       pageToken: url.searchParams.get("pageToken") ?? undefined,
       q: url.searchParams.get("q") ?? undefined,
@@ -59,7 +67,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const result = await container.usecases.browseGoogleDrive.listSpreadsheets({
-      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
+      tenantId: ctx.tenantId,
       parentId: parsed.data.parentId ?? null,
       pageToken: parsed.data.pageToken ?? null,
       q: parsed.data.q ?? null,

@@ -315,11 +315,14 @@ export function makeManagePromptTemplates(deps: ManagePromptTemplatesDeps): Mana
 
       const stored = await deps.templates.getVersion(payload);
       if (!stored) {
+        // Doc 10 B3: an asked-for version that is not there is a BAD REQUEST
+        // (404), not a broken deployment (500) — the 500 `PROMPT_NOT_FOUND`
+        // stays for the missing built-in template in `resolveEffective`.
         log.warn("Cannot activate a prompt version that does not exist", {
-          error_code: "PROMPT_NOT_FOUND",
+          error_code: "PROMPT_VERSION_NOT_FOUND",
           prompt_version: payload.version,
         });
-        throw new AppError("PROMPT_NOT_FOUND", {
+        throw new AppError("PROMPT_VERSION_NOT_FOUND", {
           message: `Prompt version ${payload.version} not found for task "${payload.task}"`,
           userMessage: `Không tìm thấy phiên bản prompt v${payload.version} để kích hoạt.`,
           context: {
@@ -357,7 +360,10 @@ export function makeManagePromptTemplates(deps: ManagePromptTemplatesDeps): Mana
       const activated = await deps.templates.activate(payload);
       if (!activated) {
         // Row vanished between read and write (concurrent delete/rollback).
-        throw new AppError("PROMPT_NOT_FOUND", {
+        // Same answer as the branch above on purpose: from the caller's side
+        // the version is not there, and one situation must not produce two
+        // different HTTP statuses depending on timing.
+        throw new AppError("PROMPT_VERSION_NOT_FOUND", {
           message: `Prompt version ${payload.version} disappeared while activating`,
           context: {
             tenant_id: payload.tenantId,

@@ -21,7 +21,6 @@ function photo(name: string, bytes = 8): File {
 
 function valid(patch: (form: FormData) => void = () => {}): Request {
   return multipart((form) => {
-    form.set("tenantId", TENANT);
     form.set("productCode", "MG1");
     form.append("files", photo("a.jpg"));
     patch(form);
@@ -35,22 +34,23 @@ describe("readUploadForm — transport rejections", () => {
       body: JSON.stringify({ tenantId: TENANT }),
       headers: { "content-type": "application/json" },
     });
-    await expect(readUploadForm(request, ROUTE)).rejects.toBeInstanceOf(AppError);
+    await expect(readUploadForm(request, ROUTE, TENANT)).rejects.toBeInstanceOf(AppError);
   });
 
   it("refuses a body with no file parts", async () => {
     const request = multipart((form) => {
-      form.set("tenantId", TENANT);
-      form.set("productCode", "MG1");
+        form.set("productCode", "MG1");
     });
-    await expect(readUploadForm(request, ROUTE)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(readUploadForm(request, ROUTE, TENANT)).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
   it("refuses missing fields with the field's own message", async () => {
+    // `productCode` is now the ONLY required field: M1.3b removed `tenantId`
+    // from the form, so a forged one can no longer address another tenant.
     const request = multipart((form) => {
       form.append("files", photo("a.jpg"));
     });
-    await expect(readUploadForm(request, ROUTE)).rejects.toMatchObject({
+    await expect(readUploadForm(request, ROUTE, TENANT)).rejects.toMatchObject({
       userMessage: expect.stringContaining("Thiếu"),
     });
   });
@@ -61,27 +61,26 @@ describe("readUploadForm — transport rejections", () => {
         form.append("files", photo(`extra-${index}.jpg`));
       }
     });
-    await expect(readUploadForm(request, ROUTE)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(readUploadForm(request, ROUTE, TENANT)).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 });
 
 describe("readUploadForm — the order field", () => {
   it("reads a JSON index list", async () => {
     const request = multipart((form) => {
-      form.set("tenantId", TENANT);
-      form.set("productCode", "MG1");
+        form.set("productCode", "MG1");
       form.append("files", photo("a.jpg"));
       form.append("files", photo("b.jpg"));
       form.set("order", "[1,0]");
     });
 
-    const result = await readUploadForm(request, ROUTE);
+    const result = await readUploadForm(request, ROUTE, TENANT);
     expect(result.order).toEqual([1, 0]);
     expect(result.parts.map((part) => part.name)).toEqual(["a.jpg", "b.jpg"]);
   });
 
   it("treats an absent order as 'keep the order sent'", async () => {
-    const result = await readUploadForm(valid(), ROUTE);
+    const result = await readUploadForm(valid(), ROUTE, TENANT);
     expect(result.order).toBeUndefined();
   });
 
@@ -91,7 +90,7 @@ describe("readUploadForm — the order field", () => {
     // wrong.
     for (const order of ["not json", "{}", '"[0]"']) {
       const request = valid((form) => form.set("order", order));
-      await expect(readUploadForm(request, ROUTE)).rejects.toMatchObject({
+      await expect(readUploadForm(request, ROUTE, TENANT)).rejects.toMatchObject({
         code: "INVALID_INPUT",
       });
     }
@@ -99,35 +98,42 @@ describe("readUploadForm — the order field", () => {
 
   it("refuses an order whose length does not match the file count", async () => {
     const request = valid((form) => form.set("order", "[0,1]"));
-    await expect(readUploadForm(request, ROUTE)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(readUploadForm(request, ROUTE, TENANT)).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
   it("refuses a negative index at the schema boundary", async () => {
     const request = valid((form) => form.set("order", "[-1]"));
-    await expect(readUploadForm(request, ROUTE)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(readUploadForm(request, ROUTE, TENANT)).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 });
 
 describe("readUploadForm — happy path", () => {
   it("returns trimmed fields, the parts and their declared sizes", async () => {
     const request = multipart((form) => {
-      form.set("tenantId", `  ${TENANT}  `);
       form.set("productCode", "  mg1  ");
       form.append("files", photo("a.jpg", 12));
       form.append("files", photo("b.jpg", 34));
     });
 
-    const result = await readUploadForm(request, ROUTE);
+    const result = await readUploadForm(request, ROUTE, TENANT);
 
-    expect(result.tenantId).toBe(TENANT);
     // Upper-casing belongs to the usecase; the transport only trims.
     expect(result.productCode).toBe("mg1");
     expect(result.declaredSizes).toEqual([12, 34]);
   });
 
+  it("IGNORES a tenantId field an old client still sends (docs/11 §3.2)", async () => {
+    // The transition rule: the server does not error on it, it simply never
+    // reads it — the tenant of the write is the authorised one, always.
+    const request = valid((form) => form.set("tenantId", "11111111-1111-1111-1111-111111111111"));
+    const result = await readUploadForm(request, ROUTE, TENANT);
+    expect(result).not.toHaveProperty("tenantId");
+    expect(result.productCode).toBe("MG1");
+  });
+
   it("ignores a non-file part named files", async () => {
     const request = valid((form) => form.append("files", "not-a-file"));
-    const result = await readUploadForm(request, ROUTE);
+    const result = await readUploadForm(request, ROUTE, TENANT);
     expect(result.parts).toHaveLength(1);
   });
 });

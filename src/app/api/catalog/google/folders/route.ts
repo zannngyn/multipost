@@ -2,9 +2,9 @@ import { z } from "zod";
 
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * E2 — one page of the in-app folder picker, plus the breadcrumb from "Drive
@@ -13,6 +13,11 @@ import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
  * Runs on the TENANT's Google connection: a tenant that never connected gets
  * 409 GOOGLE_NOT_CONNECTED, which the screen turns into the connect button.
  * Thin by contract (docs/07 §3.3): validate -> usecase -> map errors.
+ *
+ * Auth (M1.3b, doc 10 §4.1): admin, tier S. It READS, but it reads the whole
+ * company Drive with the tenant's own credential — well outside the configured
+ * source — so it pairs with `PUT /api/catalog/source`, not with the catalog
+ * read models.
  */
 
 const ROUTE = "GET /api/catalog/google/folders";
@@ -20,7 +25,6 @@ const MAX_PAGE_TOKEN = 4096;
 const MAX_QUERY = 128;
 
 const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
   /** `root` = "Drive của tôi"; the usecase defaults to it when absent. */
   parentId: z.string().trim().min(1).max(256).optional(),
   pageToken: z.string().trim().min(1).max(MAX_PAGE_TOKEN).optional(),
@@ -36,9 +40,15 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // --- Edge case first: authorise before touching the tenant credential ---
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "admin",
+    });
+
     const url = new URL(request.url);
     const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
       parentId: url.searchParams.get("parentId") ?? undefined,
       pageToken: url.searchParams.get("pageToken") ?? undefined,
       q: url.searchParams.get("q") ?? undefined,
@@ -60,7 +70,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const result = await container.usecases.browseGoogleDrive.listFolders({
-      tenantId: legacyTenantIdFromRequest(parsed.data.tenantId),
+      tenantId: ctx.tenantId,
       parentId: parsed.data.parentId ?? null,
       pageToken: parsed.data.pageToken ?? null,
       q: parsed.data.q ?? null,

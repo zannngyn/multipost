@@ -151,10 +151,12 @@ describe("getBatchStatus — rejected calls", () => {
     await expect(getBatchStatus(input)).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("reports an unknown batch (or one of another tenant) as not found", async () => {
+  // Bug B5 (doc 10 §7): its OWN code, so the route can answer 404 instead of
+  // telling the caller their well-formed request was malformed.
+  it("reports an unknown batch (or one of another tenant) as BATCH_NOT_FOUND", async () => {
     const { getBatchStatus } = harness(null);
     await expect(getBatchStatus({ tenantId: TENANT, batchId: BATCH })).rejects.toMatchObject({
-      code: "INVALID_INPUT",
+      code: "BATCH_NOT_FOUND",
       context: { reason: "BATCH_NOT_FOUND", batch_id: BATCH },
     });
   });

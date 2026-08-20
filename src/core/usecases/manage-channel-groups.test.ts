@@ -229,7 +229,9 @@ describe("channel groups — rejected writes", () => {
     });
   });
 
-  it("reports update/delete of a group that does not exist", async () => {
+  // Bug B5 (doc 10 §7): "not this tenant's" and "does not exist" are one
+  // answer, and that answer is a 404 code — not INVALID_INPUT.
+  it("reports update/delete of a group that does not exist as CHANNEL_GROUP_NOT_FOUND", async () => {
     const usecases = harness();
     await expect(
       usecases.updateChannelGroup({
@@ -238,10 +240,16 @@ describe("channel groups — rejected writes", () => {
         name: "X",
         channelIds: ["fbpage-a"],
       }),
-    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { reason: "GROUP_NOT_FOUND" } });
+    ).rejects.toMatchObject({
+      code: "CHANNEL_GROUP_NOT_FOUND",
+      context: { reason: "GROUP_NOT_FOUND" },
+    });
     await expect(
       usecases.deleteChannelGroup({ tenantId: TENANT, groupId: "missing" }),
-    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { reason: "GROUP_NOT_FOUND" } });
+    ).rejects.toMatchObject({
+      code: "CHANNEL_GROUP_NOT_FOUND",
+      context: { reason: "GROUP_NOT_FOUND" },
+    });
   });
 
   it("validates membership on UPDATE too (a channel can disappear later)", async () => {

@@ -63,7 +63,7 @@ const restrict = (patterns) => ({ "no-restricted-imports": ["error", { patterns 
 const AS_TENANT_ID = {
   selector: "TSAsExpression[typeAnnotation.typeName.name='TenantId']",
   message:
-    "Cấm 'as TenantId' — brand chỉ được tạo qua requireTenant/legacyTenantIdFromRequest/systemTenantId/testTenantId (docs/11 §5).",
+    "Cấm 'as TenantId' — brand chỉ được tạo qua requireTenant/signedMediaTenantId/systemTenantId/testTenantId (docs/11 §5).",
 };
 const IMPORT_SYSTEM_TENANT_ID = {
   selector: "ImportDeclaration[source.value='@/composition/system-tenant-id']",
@@ -80,7 +80,8 @@ const TENANT_BRAND_BLESSED = [
   "src/core/domain/tenant-context.ts",
   "src/core/domain/tenant-context.testing.ts",
   "src/composition/require-tenant.ts",
-  "src/composition/legacy-tenant-id.ts",
+  // Tier P (doc 10 §2): the tenant claim inside the signed media URL.
+  "src/composition/signed-media-tenant-id.ts",
   "src/composition/system-tenant-id.ts",
   // The well-known dev/seed tenant id — a literal we own, not client input.
   "src/adapters/db/seed-constants.ts",

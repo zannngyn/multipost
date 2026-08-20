@@ -147,9 +147,10 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
       // Also the "batch of another tenant" case: the repo is tenant-scoped, so a
       // foreign batch simply has no rows here — one code, no information leak
       // about whether it exists elsewhere.
-      // NOTE(orchestrator): a dedicated BATCH_NOT_FOUND code would map to 404
-      // more honestly; INVALID_INPUT + reason is the closest existing code.
-      throw new AppError("INVALID_INPUT", {
+      // Bug B5 (doc 10 §7): now its own 404 code. It used to be an
+      // INVALID_INPUT 400, which told the caller their REQUEST was malformed
+      // when the request was fine and the batch simply is not theirs.
+      throw new AppError("BATCH_NOT_FOUND", {
         message: "Post batch not found for this tenant",
         userMessage: "Không tìm thấy lô bài đăng này.",
         context: { tenant_id: tenantId, batch_id: batchId, reason: "BATCH_NOT_FOUND" },

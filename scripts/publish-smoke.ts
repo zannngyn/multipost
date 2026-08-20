@@ -9,6 +9,7 @@ import {
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
 import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
 import { DrizzleProductRepo } from "@/adapters/db/product-repo.drizzle";
+import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import {
   auditLogs,
@@ -1327,6 +1328,9 @@ async function main(): Promise<void> {
       postJobs: repo,
       products: new DrizzleProductRepo(db),
       channels: channelConfig,
+      // Doc 10 §5.2 — the real repo, so the smoke run exercises the
+      // suspended-tenant gate against the row it seeded above.
+      tenants: new DrizzleTenantRepo(db),
       publisher,
       queue,
       // E7.5 — the smoke script runs the real usecase, so it needs the real

@@ -3,9 +3,9 @@ import { z } from "zod";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
 
 /**
  * Step 1 of the wizard: look a product up, run the stock gate, gather the album
@@ -30,7 +30,6 @@ const ROUTE = "POST /api/posts/compose";
 const DEFAULT_CHANNEL = "facebook";
 
 const BodySchema = z.object({
-  tenantId: z.string({ error: "Thiếu mã đơn vị (tenant)." }).trim().min(1, "Thiếu mã đơn vị (tenant)."),
   productCode: z
     .string({ error: "Thiếu mã sản phẩm." })
     .trim()
@@ -81,12 +80,21 @@ export async function POST(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // --- Refusals first: editor / tier M (doc 10 §4.2). Compose writes no
+    // publishing state, but it reads internal stock and calls Drive/Sheet on
+    // the tenant's behalf, so a viewer has no business here ------------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "M",
+      minRole: "editor",
+    });
+
     const body = await readJsonBody(request, BodySchema, { route: ROUTE });
     const color = body.color?.trim() ?? "";
 
     const mediaKind = body.mediaKind ?? "image";
     const result = await container.usecases.composePost({
-      tenantId: legacyTenantIdFromRequest(body.tenantId),
+      tenantId: ctx.tenantId,
       productCode: body.productCode,
       channel: body.channel ?? DEFAULT_CHANNEL,
       colors: color.length > 0 ? [color] : undefined,
@@ -106,7 +114,7 @@ export async function POST(request: Request): Promise<Response> {
         userMessage: result.blocked.userMessage,
         context: {
           route: ROUTE,
-          tenant_id: body.tenantId,
+          tenant_id: ctx.tenantId,
           product_code: body.productCode,
           channel: body.channel ?? DEFAULT_CHANNEL,
           reason: result.blocked.reason,

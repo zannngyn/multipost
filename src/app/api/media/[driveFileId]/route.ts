@@ -1,7 +1,7 @@
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { getContainer, MEDIA_QUERY_PARAMS } from "@/composition/container";
-import { legacyTenantIdFromRequest } from "@/composition/legacy-tenant-id";
+import { signedMediaTenantId } from "@/composition/signed-media-tenant-id";
 
 /**
  * E3.6 — the PUBLIC media bridge: `GET /api/media/<driveFileId>?tenant=&expires=&sig=`.
@@ -45,7 +45,7 @@ export async function GET(
     const query = new URL(request.url).searchParams;
 
     const result = await container.usecases.getMediaContent({
-      tenantId: legacyTenantIdFromRequest(query.get(MEDIA_QUERY_PARAMS.tenant) ?? ""),
+      tenantId: signedMediaTenantId(query.get(MEDIA_QUERY_PARAMS.tenant) ?? ""),
       mediaAssetId: driveFileId,
       expiresAt: query.get(MEDIA_QUERY_PARAMS.expires) ?? "",
       signature: query.get(MEDIA_QUERY_PARAMS.signature) ?? "",
