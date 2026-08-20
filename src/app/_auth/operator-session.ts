@@ -1,3 +1,5 @@
+import type { OperatorRole, PlatformRole } from "@/shared/operator-access";
+
 /**
  * What the app layer needs to know about the signed-in operator.
  * Deliberately smaller than the Auth.js `Session`: screens must not start
@@ -8,4 +10,33 @@ export interface OperatorSession {
   name: string | null;
   /** True only for the guarded local-dev bypass — never in production. */
   isDevFake: boolean;
+  /**
+   * Role from the access registry. Null for the dev bypass and for env
+   * bootstrap admins: their power comes from env, not from a row, and
+   * `isBootstrapAdmin` (not this field) is what opens the admin screens.
+   */
+  role: OperatorRole | null;
+  /**
+   * Named INDIVIDUALLY in AUTH_BOOTSTRAP_ADMINS (exact address) or
+   * AUTH_FACEBOOK_ALLOWED_USER_IDS (exact id). Matching AUTH_ALLOWED_DOMAINS
+   * does NOT set this: a domain covers an open-ended set of people, so it may
+   * filter who can sign in but must never hand out unblockable admin rights.
+   */
+  isBootstrapAdmin: boolean;
+  /**
+   * M1.2 (additive — the 13 existing consumers keep compiling): the person
+   * behind this session. Null for the dev bypass and for env-bootstrap
+   * sessions that have no account row yet; everything tenant-scoped resolves
+   * through `requireTenant`, which refuses a null account.
+   */
+  accountId: string | null;
+  /** `account.platform_role` (docs/09 §3.5). Null = ordinary operator. */
+  platformRole: PlatformRole | null;
+}
+
+/** May this operator approve/block other people? */
+export function canManageAccess(session: OperatorSession | null): boolean {
+  if (!session) return false;
+  if (session.isBootstrapAdmin) return true;
+  return session.role === "owner" || session.role === "admin";
 }

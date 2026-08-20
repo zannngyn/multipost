@@ -6,6 +6,7 @@ import type { ChannelConfig, PublishMediaBytes, PublishMediaItem } from "@/core/
 
 import { makeFacebookPublisher } from "./facebook-publisher";
 import { makeGraphClient } from "./graph-client";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Photo posting against a MOCKED Graph API (fetch is the seam).
@@ -113,7 +114,7 @@ describe("publishImagePost — rejected inputs (nothing is sent, nothing is read
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: { ...CHANNEL, platform: "tiktok" },
         caption: "x",
         media: [item],
@@ -132,7 +133,7 @@ describe("publishImagePost — rejected inputs (nothing is sent, nothing is read
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [],
@@ -141,7 +142,7 @@ describe("publishImagePost — rejected inputs (nothing is sent, nothing is read
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media,
@@ -157,7 +158,7 @@ describe("publishImagePost — rejected inputs (nothing is sent, nothing is read
     const { publisher } = makePublisher(fetchImpl as unknown as typeof fetch);
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "   ",
         media: [photo("d", "f.jpg")],
@@ -175,7 +176,7 @@ describe("publishImagePost — the bytes cannot be read", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d1", "1.jpg", { bytes: new Uint8Array(0) })],
@@ -201,7 +202,7 @@ describe("publishImagePost — the bytes cannot be read", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [first, broken, third],
@@ -232,7 +233,7 @@ describe("publishImagePost — the bytes cannot be read", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [
@@ -265,7 +266,7 @@ describe("publishImagePost — Graph failures", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "Penny – NGÀY MỚI",
         media: [photo("d1", "1.jpg"), second],
@@ -283,7 +284,7 @@ describe("publishImagePost — Graph failures", () => {
     const { publisher } = makePublisher(fetchImpl as unknown as typeof fetch);
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d", "f.jpg")],
@@ -300,7 +301,7 @@ describe("publishImagePost — Graph failures", () => {
     const { publisher } = makePublisher(fetchImpl as unknown as typeof fetch);
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d", "f.jpg")],
@@ -318,7 +319,7 @@ describe("publishImagePost — Graph failures", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d1", "1.jpg"), photo("d2", "2.jpg")],
@@ -339,7 +340,7 @@ describe("publishImagePost — Graph failures", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d", "f.jpg")],
@@ -371,7 +372,7 @@ describe("publishImagePost — happy paths", () => {
     const { publisher } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     const result = await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "Penny – MỘT NGÀY DỊU DÀNG",
       media: [photo("d1", "1.jpg")],
@@ -406,7 +407,7 @@ describe("publishImagePost — happy paths", () => {
 
     // 606 real files carry no extension (docs/05 1.3) — Drive reports no type.
     await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo("d1", "no-extension", { mimeType: null })],
@@ -427,7 +428,7 @@ describe("publishImagePost — happy paths", () => {
     const media = [photo("d1", "1.jpg"), photo("d2", "2.jpg"), photo("d3", "3.jpg")];
 
     const result = await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "Giannal – NẮNG THÁNG TÁM",
       media,
@@ -464,7 +465,7 @@ describe("publishImagePost — happy paths", () => {
     const { publisher } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo("d25", "MR (25).jpg"), photo("d3", "MR (3).jpg")],
@@ -495,7 +496,7 @@ describe("publishImagePost — happy paths", () => {
     });
 
     await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media,

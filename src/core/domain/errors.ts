@@ -13,6 +13,48 @@ export const ERROR_CODES = [
   "UNAUTHORIZED",
   "DB_ERROR",
   "QUEUE_ERROR",
+  // Access registry (E1.4 — allow-list in the database + approval screen)
+  /** The signed-in operator may not perform this administrative action. */
+  "ACCESS_FORBIDDEN",
+  /** No access request with that id in this tenant. */
+  "ACCESS_REQUEST_NOT_FOUND",
+  // Multi-tenant session (M1.2, doc 10 §3)
+  /**
+   * Signed in, but no tenant is selected (no cookie and more than one — or
+   * zero — membership). NOT an error of the operator: the UI answers with the
+   * tenant picker (state NoMembership / chưa chọn, docs/09 §3.8).
+   */
+  "TENANT_NOT_SELECTED",
+  // Onboarding (M2.1/M2.2 — self-service tenants + invite links)
+  /** The account hit the self-service creation cap (lifetime or per-hour). */
+  "TENANT_LIMIT_REACHED",
+  /** The requested slug already names another tenant. */
+  "SLUG_TAKEN",
+  /**
+   * ONE code for every invite refusal — unknown, expired, revoked, used up,
+   * suspended tenant. Deliberately indistinguishable outside (anti-probing);
+   * the precise reason goes to the log.
+   */
+  "INVITE_INVALID",
+  /** The inviter's role may not grant the requested role (doc 10 §4.4 ladder). */
+  "INVITE_ROLE_FORBIDDEN",
+  // Members (M2.3) + retirement (M2.4)
+  /** The change would leave the company without a single active owner. */
+  "LAST_OWNER",
+  /** No membership with that id in this tenant — behaves as absent (doc 10 §3). */
+  "MEMBER_NOT_FOUND",
+  /**
+   * The endpoint was retired by a milestone and answers 410 Gone. Its own code
+   * (not INVALID_INPUT) so an old UI shows "tính năng đã thay đổi", not "dữ
+   * liệu không hợp lệ" — and so retired surfaces stay greppable as a family.
+   */
+  "RETIRED",
+  /**
+   * Has a membership in the tenant but lacks the required role. Deliberately
+   * distinct from 404 (no membership = resource does not exist for you) and
+   * from ACCESS_FORBIDDEN (the legacy /access screen gate, retiring at M2.4).
+   */
+  "FORBIDDEN",
   "JOB_PAYLOAD_INVALID",
   // Data pipeline (E2/E3)
   "DRIVE_ERROR",
@@ -23,6 +65,25 @@ export const ERROR_CODES = [
   "MEDIA_NOT_FOUND",
   "OUT_OF_STOCK",
   "SYNC_FAILED",
+  /**
+   * A sync was STOPPED because the source came back empty while the database
+   * still holds rows — the shape a lost permission takes (Drive answers 200
+   * with `files: []`, it does not answer 403). Deleting here would be data loss.
+   */
+  "SYNC_SOURCE_EMPTY",
+  // Google Drive OAuth (E2 — "Kết nối Google Drive" on the sync screen)
+  /** The tenant never connected a Google account (or disconnected it). */
+  "GOOGLE_NOT_CONNECTED",
+  /** The stored refresh token was revoked/expired — reconnect is the only fix. */
+  "GOOGLE_AUTH_EXPIRED",
+  /** The deployment itself has no Google OAuth app configured (env missing). */
+  "GOOGLE_OAUTH_NOT_CONFIGURED",
+  /**
+   * The OAuth callback could not be trusted: no state cookie, a state that does
+   * not match, or no authorization code. Its own code (not INVALID_INPUT) so the
+   * screen can say "bấm kết nối lại" instead of "dữ liệu gửi lên không hợp lệ".
+   */
+  "GOOGLE_CONNECT_STATE_INVALID",
   // AI gateway (E4, ADR-001)
   "AI_PROVIDER_ERROR",
   "AI_RESPONSE_INVALID",
@@ -31,7 +92,13 @@ export const ERROR_CODES = [
   "CAPTION_VALIDATION_FAILED",
   "MODEL_NOT_CONFIGURED",
   "PROMPT_NOT_FOUND",
+  /** Activating a prompt version that does not exist — caller input, not a broken catalog (doc 10 B3). */
+  "PROMPT_VERSION_NOT_FOUND",
   // Publishing (E5/E7)
+  /** Batch id this tenant does not own — behaves as "does not exist" (doc 10 §3, B5). */
+  "BATCH_NOT_FOUND",
+  /** Channel group id this tenant does not own (doc 10 B5). */
+  "CHANNEL_GROUP_NOT_FOUND",
   "META_ERROR",
   "TOKEN_EXPIRED",
   /** An upload URL the platform handed us points somewhere we will not send a token. */
@@ -64,6 +131,18 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   UNAUTHORIZED: "Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.",
   DB_ERROR: "Không truy cập được cơ sở dữ liệu. Vui lòng thử lại sau ít phút.",
   QUEUE_ERROR: "Hàng đợi công việc gặp sự cố. Vui lòng thử lại sau ít phút.",
+  ACCESS_FORBIDDEN: "Tài khoản của bạn không có quyền thực hiện thao tác này.",
+  ACCESS_REQUEST_NOT_FOUND: "Không tìm thấy yêu cầu truy cập tương ứng.",
+  TENANT_NOT_SELECTED: "Bạn chưa chọn công ty làm việc. Hãy chọn một công ty để tiếp tục.",
+  TENANT_LIMIT_REACHED:
+    "Bạn đã chạm giới hạn tạo công ty (tối đa 3 công ty, và không quá 1 công ty mỗi giờ). Liên hệ quản trị viên nếu cần thêm.",
+  SLUG_TAKEN: "Định danh (slug) này đã có công ty khác dùng. Hãy chọn một định danh khác.",
+  INVITE_INVALID: "Link mời không hợp lệ hoặc đã hết hạn. Hãy xin link mời mới.",
+  INVITE_ROLE_FORBIDDEN: "Vai trò của bạn không được phép mời tới vai trò này.",
+  LAST_OWNER: "Công ty phải còn ít nhất một owner — chuyển quyền trước.",
+  MEMBER_NOT_FOUND: "Không tìm thấy thành viên tương ứng trong công ty.",
+  RETIRED: "Tính năng này đã thay đổi — thành viên mới vào công ty bằng link mời.",
+  FORBIDDEN: "Vai trò của bạn trong công ty này không đủ quyền thực hiện thao tác.",
   JOB_PAYLOAD_INVALID: "Dữ liệu công việc nền không hợp lệ — công việc đã bị từ chối.",
   DRIVE_ERROR: "Không truy cập được Google Drive. Kiểm tra quyền Service Account hoặc thử lại sau.",
   SHEET_ERROR: "Không đọc được Google Sheet. Kiểm tra quyền Service Account hoặc thử lại sau.",
@@ -73,6 +152,16 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   MEDIA_NOT_FOUND: "Không tìm thấy ảnh/video cho sản phẩm này trên Drive.",
   OUT_OF_STOCK: "Sản phẩm đã hết hàng hoặc tồn kho không hợp lệ — bài đăng bị chặn.",
   SYNC_FAILED: "Đồng bộ dữ liệu từ Drive/Sheet thất bại. Xem nhật ký đồng bộ để biết chi tiết.",
+  SYNC_SOURCE_EMPTY:
+    "Nguồn Drive/Sheet không trả về dữ liệu nào trong khi hệ thống đang lưu dữ liệu cũ. Đã dừng đồng bộ để không xoá nhầm — kiểm tra quyền truy cập, hoặc chọn lại nguồn.",
+  GOOGLE_NOT_CONNECTED:
+    "Đơn vị chưa kết nối tài khoản Google. Vào màn Đồng bộ dữ liệu, bấm “Kết nối Google Drive”.",
+  GOOGLE_AUTH_EXPIRED:
+    "Kết nối Google của đơn vị đã hết hạn hoặc bị thu hồi. Vào màn Đồng bộ dữ liệu kết nối lại.",
+  GOOGLE_OAUTH_NOT_CONFIGURED:
+    "Hệ thống chưa cấu hình ứng dụng Google OAuth. Vui lòng liên hệ quản trị viên.",
+  GOOGLE_CONNECT_STATE_INVALID:
+    "Phiên kết nối Google đã hết hạn hoặc bị chặn cookie — hãy bấm “Kết nối Google Drive” lại.",
   AI_PROVIDER_ERROR: "Dịch vụ AI gặp sự cố. Hệ thống sẽ thử nhà cung cấp dự phòng.",
   AI_RESPONSE_INVALID: "Kết quả AI trả về không đúng định dạng — đã từ chối và ghi nhận.",
   AI_RATE_LIMITED: "Dịch vụ AI đang bị giới hạn tần suất. Vui lòng thử lại sau ít phút.",
@@ -80,6 +169,9 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   CAPTION_VALIDATION_FAILED: "Caption không qua được bước kiểm tra an toàn — cần chỉnh sửa hoặc tạo lại.",
   MODEL_NOT_CONFIGURED: "Chưa cấu hình model AI cho tác vụ này. Kiểm tra registry model.",
   PROMPT_NOT_FOUND: "Không tìm thấy prompt template cho tác vụ này.",
+  PROMPT_VERSION_NOT_FOUND: "Không tìm thấy phiên bản prompt này.",
+  BATCH_NOT_FOUND: "Không tìm thấy lô đăng bài này.",
+  CHANNEL_GROUP_NOT_FOUND: "Không tìm thấy nhóm kênh này.",
   META_ERROR: "Facebook trả về lỗi khi đăng bài. Xem chi tiết trong nhật ký đăng.",
   TOKEN_EXPIRED: "Token của kênh đã hết hạn hoặc bị thu hồi. Cần kết nối lại kênh.",
   UPLOAD_HOST_NOT_ALLOWED:
@@ -104,6 +196,17 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   UNAUTHORIZED: "Missing or invalid credentials",
   DB_ERROR: "Database operation failed",
   QUEUE_ERROR: "Job queue operation failed",
+  ACCESS_FORBIDDEN: "Operator is not allowed to perform this administrative action",
+  ACCESS_REQUEST_NOT_FOUND: "Access request not found in this tenant",
+  TENANT_NOT_SELECTED: "Signed-in account has not selected an active tenant",
+  TENANT_LIMIT_REACHED: "Self-service tenant creation limit reached for this account",
+  SLUG_TAKEN: "Another tenant already uses this slug",
+  INVITE_INVALID: "Invite token is unknown, expired, revoked or used up",
+  INVITE_ROLE_FORBIDDEN: "Inviter's role may not grant the requested role",
+  LAST_OWNER: "Change would leave the tenant with zero active owners",
+  MEMBER_NOT_FOUND: "No membership with that id in this tenant",
+  RETIRED: "Endpoint retired — members join through invite links",
+  FORBIDDEN: "Membership role is below the required role for this action",
   JOB_PAYLOAD_INVALID: "Job payload failed schema validation",
   DRIVE_ERROR: "Google Drive operation failed",
   SHEET_ERROR: "Google Sheets operation failed",
@@ -113,6 +216,11 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   MEDIA_NOT_FOUND: "No media assets found for product",
   OUT_OF_STOCK: "Product is out of stock or stock value invalid",
   SYNC_FAILED: "Catalog sync run failed",
+  SYNC_SOURCE_EMPTY: "Sync stopped: the source returned nothing while the catalog is not empty",
+  GOOGLE_NOT_CONNECTED: "Tenant has no connected Google account",
+  GOOGLE_AUTH_EXPIRED: "Google refresh token was revoked or expired",
+  GOOGLE_OAUTH_NOT_CONFIGURED: "Google OAuth app credentials are not configured",
+  GOOGLE_CONNECT_STATE_INVALID: "Google OAuth callback failed its CSRF/state check",
   AI_PROVIDER_ERROR: "AI provider call failed",
   AI_RESPONSE_INVALID: "AI response failed structured-output validation",
   AI_RATE_LIMITED: "AI provider rate limit hit",
@@ -120,6 +228,9 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   CAPTION_VALIDATION_FAILED: "Generated caption failed validation rules",
   MODEL_NOT_CONFIGURED: "No model configured for task in registry",
   PROMPT_NOT_FOUND: "Prompt template not found for task",
+  PROMPT_VERSION_NOT_FOUND: "Prompt version not found",
+  BATCH_NOT_FOUND: "Post batch not found for tenant",
+  CHANNEL_GROUP_NOT_FOUND: "Channel group not found for tenant",
   META_ERROR: "Graph API call failed",
   TOKEN_EXPIRED: "Channel access token expired or revoked",
   UPLOAD_HOST_NOT_ALLOWED: "Upload URL host is not in the allowlist",

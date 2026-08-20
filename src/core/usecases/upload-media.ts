@@ -11,6 +11,7 @@ import {
 import type { Logger } from "@/core/ports/infra";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaRepo } from "@/core/ports/product-repo";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E9.1 — take the files an operator supplied, keep the ones that can actually
@@ -36,7 +37,7 @@ export interface UploadedFile {
 }
 
 export interface UploadMediaInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly productCode: string;
   readonly files: readonly UploadedFile[];
   /** Indexes into `files`; index 0 becomes the cover. Absent = keep as sent. */
@@ -70,17 +71,18 @@ export interface UploadMediaDeps {
 export function makeUploadMedia(deps: UploadMediaDeps) {
   return async function uploadMedia(input: UploadMediaInput): Promise<UploadMediaResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
     const productCode =
       typeof input?.productCode === "string" ? input.productCode.trim().toUpperCase() : "";
 
-    if (!isTenantId(tenantId) || productCode.length === 0) {
+    if (!isTenantId(rawTenantId) || productCode.length === 0) {
       throw new AppError("INVALID_INPUT", {
         message: "uploadMedia requires a tenant UUID and a product code",
         userMessage: "Thiếu mã sản phẩm cho các file vừa tải lên.",
-        context: { tenant_id: tenantId || null, product_code: productCode || null },
+        context: { tenant_id: rawTenantId || null, product_code: productCode || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const files = Array.isArray(input?.files) ? input.files : [];
     // Throws on an empty album or one above the per-post cap, and validates the
@@ -264,7 +266,7 @@ export type UploadMedia = ReturnType<typeof makeUploadMedia>;
  */
 async function discardPreviousUploads(
   deps: UploadMediaDeps,
-  input: { tenantId: string; productCode: string; log: Logger },
+  input: { tenantId: TenantId; productCode: string; log: Logger },
 ): Promise<void> {
   const { tenantId, productCode, log } = input;
 
@@ -312,7 +314,7 @@ async function discardPreviousUploads(
  */
 function assertOneAlbumKind(
   usable: ReadonlyArray<{ kind: MediaKind; file: UploadedFile }>,
-  context: { tenantId: string; productCode: string },
+  context: { tenantId: TenantId; productCode: string },
 ): void {
   const kinds = new Set(usable.map((item) => item.kind));
 

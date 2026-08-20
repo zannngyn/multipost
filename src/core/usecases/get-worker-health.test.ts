@@ -10,6 +10,7 @@ import type {
 } from "@/core/ports/post-job-repo";
 
 import { makeGetWorkerHealth } from "./get-worker-health";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E11 worker-health probe. The ONE invariant every test here defends: this
@@ -21,7 +22,7 @@ import { makeGetWorkerHealth } from "./get-worker-health";
  * that the usecase hands the repo the instant it needs to do it.
  */
 
-const TENANT = "11111111-1111-4111-8111-111111111111";
+const TENANT = testTenantId("11111111-1111-4111-8111-111111111111");
 const NOW = new Date("2026-08-17T10:00:00.000Z");
 
 interface LogLine {
@@ -147,7 +148,7 @@ describe("getWorkerHealth — failures never escape", () => {
   ])("does not query jobs for a %s tenant id, and still does not throw", async (tenantId) => {
     const harness = makeHarness({ census: { workersOnline: 1, reachable: true } });
 
-    const health = await harness.getWorkerHealth({ tenantId });
+    const health = await harness.getWorkerHealth({ tenantId: testTenantId(tenantId) });
 
     expect(harness.queries).toHaveLength(0);
     expect(health).toMatchObject({
@@ -216,7 +217,7 @@ describe("getWorkerHealth — normal answers", () => {
   it("hands the repo the tenant and the instant that separates due from planned", async () => {
     const harness = makeHarness({ census: { workersOnline: 0, reachable: true } });
 
-    await harness.getWorkerHealth({ tenantId: `  ${TENANT}  ` });
+    await harness.getWorkerHealth({ tenantId: testTenantId(`  ${TENANT}  `) });
 
     expect(harness.queries).toEqual([{ tenantId: TENANT, now: NOW }]);
   });

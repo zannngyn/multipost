@@ -1,4 +1,5 @@
 import type { Tenant } from "@/core/domain/tenant";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Tenant persistence port. Core declares the need; adapters/db implements it.
@@ -11,5 +12,5 @@ import type { Tenant } from "@/core/domain/tenant";
  *   separate `health()` here (no dead port surface).
  */
 export interface TenantRepo {
-  findById(tenantId: string): Promise<Tenant | null>;
+  findById(tenantId: TenantId): Promise<Tenant | null>;
 }

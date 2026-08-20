@@ -23,6 +23,7 @@ import type {
   MediaByteCache,
   PutCachedMediaInput,
 } from "@/core/ports/media-byte-cache";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * `MediaByteCache` on the local filesystem — the same kind of Docker volume the
@@ -137,7 +138,7 @@ export function makeLocalMediaCache(options: LocalMediaCacheOptions): MediaByteC
   async function dropEntry(
     path: string,
     meta: {
-      tenantId: string;
+      tenantId: TenantId;
       assetId: string;
       sizeBytes: number;
       reason: string;

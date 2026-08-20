@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
@@ -21,7 +22,6 @@ import { AppError } from "@/core/domain/errors";
 const ROUTE = "GET /api/posts/scheduled";
 
 const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
   /** Inclusive lower bound. */
   from: z.iso.datetime({ error: "Khoảng thời gian lọc không hợp lệ." }).optional(),
   /** Exclusive upper bound; the usecase refuses a window that ends before it starts. */
@@ -41,9 +41,14 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // --- Refusals first: viewer / tier R (doc 10 §4.2) ----------------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+    });
+
     const query = new URL(request.url).searchParams;
     const parsed = QuerySchema.safeParse({
-      tenantId: query.get("tenantId") ?? undefined,
       from: query.get("from") ?? undefined,
       to: query.get("to") ?? undefined,
       channelId: query.get("channelId") ?? undefined,
@@ -66,8 +71,10 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    const { tenantId, ...filter } = parsed.data;
-    const result = await container.usecases.listScheduledJobs({ tenantId, filter });
+    const result = await container.usecases.listScheduledJobs({
+      tenantId: ctx.tenantId,
+      filter: parsed.data,
+    });
 
     return Response.json(result);
   } catch (error) {

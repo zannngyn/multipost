@@ -5,8 +5,10 @@ import { makeRedisAiCache, type AiCache } from "@/adapters/ai/cache/redis-cache"
 import { makeFakeLogger, makeTestPolicy } from "@/core/ai/testing";
 import { AppError } from "@/core/domain/errors";
 import type { ModelPolicyOverrideRepo, ModelPolicyStore } from "@/core/ports/ai";
+import type { TenantId } from "@/core/domain/tenant-context";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "33333333-3333-3333-3333-333333333333";
+const TENANT = testTenantId("33333333-3333-3333-3333-333333333333");
 const TASK = "facebook_content" as const;
 
 function escapeRegExp(value: string): string {
@@ -60,7 +62,7 @@ function overrideRepo(
 ): ModelPolicyOverrideRepo & { calls: number } {
   const state = {
     calls: 0,
-    async findOverride({ tenantId, task }: { tenantId: string; task: typeof TASK }) {
+    async findOverride({ tenantId, task }: { tenantId: TenantId; task: typeof TASK }) {
       state.calls += 1;
       return {
         tenantId,
@@ -77,7 +79,7 @@ function overrideRepo(
 describe("cached model policy store — edge cases", () => {
   it("rejects an empty tenantId instead of caching under a blank key", async () => {
     const store = makeCachedModelPolicyStore({ base: countingBase(), logger: makeFakeLogger() });
-    await expect(store.getPolicy({ tenantId: "  ", task: TASK })).rejects.toMatchObject({
+    await expect(store.getPolicy({ tenantId: testTenantId("  "), task: TASK })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
   });
@@ -185,7 +187,7 @@ describe("cached model policy store — caching", () => {
     });
 
     await store.getPolicy({ tenantId: TENANT, task: TASK });
-    await store.getPolicy({ tenantId: "44444444-4444-4444-4444-444444444444", task: TASK });
+    await store.getPolicy({ tenantId: testTenantId("44444444-4444-4444-4444-444444444444"), task: TASK });
 
     expect(cache.store.size).toBe(2);
     expect(base.calls).toBe(2);

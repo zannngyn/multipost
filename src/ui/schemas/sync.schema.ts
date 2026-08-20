@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import type { StatusTone } from "./post-batch.schema";
-import { tenantIdField } from "./tenant-health.schema";
 
 /**
  * Contracts of the "Đồng bộ dữ liệu" screen (E2 read model + trigger).
@@ -12,9 +11,6 @@ import { tenantIdField } from "./tenant-health.schema";
  * Any change there must be reflected here — the mirror is deliberate, and the
  * runtime parse in `http-client` is what makes a drift loud instead of silent.
  */
-
-export const SyncFormSchema = z.object({ tenantId: tenantIdField() });
-export type SyncFormValues = z.infer<typeof SyncFormSchema>;
 
 export const SYNC_RUN_STATUSES = ["running", "succeeded", "partial", "failed"] as const;
 export const SyncRunStatusSchema = z.enum(SYNC_RUN_STATUSES);
@@ -169,7 +165,7 @@ export type SyncIssueGuide = {
 /**
  * Guidance per `errorCode` written by the sync usecase
  * (`core/usecases/sync-catalog.ts` — SHEET_ERROR, SHEET_ROW_INVALID,
- * FILE_NAME_INVALID, PRODUCT_NOT_FOUND, MEDIA_NOT_FOUND).
+ * FILE_NAME_INVALID, PRODUCT_NOT_FOUND, MEDIA_NOT_FOUND, SOURCE_EMPTY).
  *
  * Deliberately NOT exhaustive: a new code added on the server must still show
  * up on the screen with a usable sentence rather than disappear, so
@@ -214,6 +210,17 @@ const SYNC_ISSUE_GUIDES: Record<string, SyncIssueGuide> = {
     severity: "warning",
     action:
       "Sheet có mã này nhưng Drive chưa có file nào khớp — tải ảnh lên rồi chạy lại. Mã này chưa đăng được.",
+  },
+  /**
+   * The only code here that STOPS the run instead of skipping one file or row:
+   * Drive answers "200, no files" for a folder the current identity cannot see,
+   * and a renamed tab parses to zero rows just as quietly. `error` is the top of
+   * the scale, and this one earns it — the alternative was deleting the catalog.
+   */
+  SOURCE_EMPTY: {
+    severity: "error",
+    action:
+      "Thư mục Drive hoặc bảng Sheet không trả về dòng nào trong khi hệ thống đang lưu dữ liệu — đồng bộ đã dừng để không xoá nhầm sản phẩm/ảnh. Kiểm tra nguồn còn tồn tại và tài khoản đang dùng còn quyền đọc không, hoặc chọn lại nguồn; nếu nguồn rỗng thật thì phải xoá dữ liệu bằng tay.",
   },
 };
 

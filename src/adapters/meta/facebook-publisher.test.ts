@@ -5,6 +5,7 @@ import type { ChannelConfig } from "@/core/ports/publisher";
 
 import { makeFacebookPublisher } from "./facebook-publisher";
 import { makeGraphClient } from "./graph-client";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Phase 2 video/reels against a MOCKED Graph API. A video still travels as a
@@ -65,7 +66,7 @@ describe("publishVideoPost — feed video", () => {
     const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
 
     const result = await publisher.publishVideoPost({
-      tenantId: "t-1",
+      tenantId: testTenantId("t-1"),
       channel: CHANNEL,
       caption: "Giannal – MỘT NGÀY DỊU DÀNG",
       videoUrl: VIDEO_URL,
@@ -91,7 +92,7 @@ describe("publishVideoPost — feed video", () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ id: "999" }));
     const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
     const result = await publisher.publishVideoPost({
-      tenantId: "t-1",
+      tenantId: testTenantId("t-1"),
       channel: CHANNEL,
       caption: "caption",
       videoUrl: VIDEO_URL,
@@ -113,7 +114,7 @@ describe("publishVideoPost — feed video", () => {
     const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
     await expect(
       publisher.publishVideoPost({
-        tenantId: "t-1",
+        tenantId: testTenantId("t-1"),
         channel: CHANNEL,
         caption: "caption",
         videoUrl: VIDEO_URL,
@@ -132,7 +133,7 @@ describe("publishVideoPost — feed video", () => {
     const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
     await expect(
       publisher.publishVideoPost({
-        tenantId: "t-1",
+        tenantId: testTenantId("t-1"),
         channel: CHANNEL,
         caption: "caption",
         videoUrl: VIDEO_URL,
@@ -147,7 +148,7 @@ describe("publishVideoPost — feed video", () => {
     const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
     await expect(
       publisher.publishVideoPost({
-        tenantId: "t-1",
+        tenantId: testTenantId("t-1"),
         channel: CHANNEL,
         caption: "caption",
         videoUrl: VIDEO_URL,
@@ -186,7 +187,7 @@ describe("publishVideoPost — reels (3 phases)", () => {
 
     const publisher = makePublisher(fetchImpl as unknown as typeof fetch);
     const result = await publisher.publishVideoPost({
-      tenantId: "t-1",
+      tenantId: testTenantId("t-1"),
       channel: CHANNEL,
       caption: "Reel caption",
       videoUrl: VIDEO_URL,
@@ -213,7 +214,7 @@ describe("publishVideoPost — reels (3 phases)", () => {
 
     await expect(
       publisher.publishVideoPost({
-        tenantId: "t-1",
+        tenantId: testTenantId("t-1"),
         channel: CHANNEL,
         caption: "Reel caption",
         videoUrl: VIDEO_URL,
@@ -231,7 +232,7 @@ describe("publishVideoPost — reels (3 phases)", () => {
 
     await expect(
       publisher.publishVideoPost({
-        tenantId: "t-1",
+        tenantId: testTenantId("t-1"),
         channel: CHANNEL,
         caption: "Reel caption",
         videoUrl: VIDEO_URL,
@@ -256,7 +257,7 @@ describe("publishVideoPost — reels (3 phases)", () => {
 
     await expect(
       publisher.publishVideoPost({
-        tenantId: "t-1",
+        tenantId: testTenantId("t-1"),
         channel: CHANNEL,
         caption: "Reel caption",
         videoUrl: VIDEO_URL,

@@ -2,6 +2,7 @@ import { AppError } from "@/core/domain/errors";
 import { isTenantId } from "@/core/domain/tenant";
 import type { CatalogConfigRepo, CatalogSourceConfig } from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E2 — "nguồn dữ liệu" panel: which Drive folder and which Sheet tab this
@@ -17,7 +18,7 @@ const DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/";
 const SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/";
 
 export interface GetCatalogSourceInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface CatalogSourceView {
@@ -38,14 +39,15 @@ export function makeGetCatalogSource(deps: GetCatalogSourceDeps) {
     input: GetCatalogSourceInput,
   ): Promise<CatalogSourceView | null> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
-    if (!isTenantId(tenantId)) {
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    if (!isTenantId(rawTenantId)) {
       throw new AppError("INVALID_INPUT", {
         message: "getCatalogSource requires a tenant UUID",
         userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-        context: { tenant_id: tenantId || null },
+        context: { tenant_id: rawTenantId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const source = await deps.catalogConfig.findCatalogSource(tenantId);
     if (!source) {

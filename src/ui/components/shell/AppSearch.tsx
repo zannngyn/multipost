@@ -6,7 +6,8 @@ import { Search } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { flattenNavItems, toSearchKey } from "@/ui/components/shell/nav-items";
+import { flattenNavItems, toSearchKey, visibleNavSections } from "@/ui/components/shell/nav-items";
+import { useMe } from "@/ui/hooks/useMe";
 
 /**
  * Jump-to-screen search in the top bar: a visible trigger plus the same palette
@@ -50,16 +51,22 @@ function createNavSource(items: readonly NavSearchItem[]): SearchSource<NavSearc
 export function AppSearch() {
   const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
+  const me = useMe();
+  // Same filter as the sidebar: hiding a section from the nav but leaving it
+  // findable in the palette would be hiding nothing at all (M3.2 / ticket N3).
+  const hasPlatformRole = (me.data?.account?.platformRole ?? null) !== null;
 
   const searchSource = useMemo(() => {
-    const items: NavSearchItem[] = flattenNavItems().map((item) => ({
-      id: item.href,
-      label: item.label,
-      auxiliaryData: { group: item.section, searchKey: toSearchKey(item.label) },
-    }));
+    const items: NavSearchItem[] = flattenNavItems(visibleNavSections({ hasPlatformRole })).map(
+      (item) => ({
+        id: item.href,
+        label: item.label,
+        auxiliaryData: { group: item.section, searchKey: toSearchKey(item.label) },
+      }),
+    );
 
     return createNavSource(items);
-  }, []);
+  }, [hasPlatformRole]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {

@@ -30,7 +30,6 @@ import {
  *    per offending variable, and those win.
  */
 export function PromptVersionForm({
-  tenantId,
   nextVersion,
   defaultValues,
   pending,
@@ -39,7 +38,6 @@ export function PromptVersionForm({
   onSubmit,
   onCancel,
 }: {
-  tenantId: string;
   nextVersion: number;
   defaultValues?: Partial<PromptVersionFormValues>;
   pending: boolean;
@@ -61,7 +59,6 @@ export function PromptVersionForm({
     mode: "onSubmit",
     reValidateMode: "onChange",
     defaultValues: {
-      tenantId,
       name: defaultValues?.name ?? "",
       systemPrompt: defaultValues?.systemPrompt ?? "",
       body: defaultValues?.body ?? "",

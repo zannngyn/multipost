@@ -3,6 +3,7 @@ import { z } from "zod";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { uuidField } from "@/app/api/_lib/ids";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
@@ -21,7 +22,6 @@ import { AppError } from "@/core/domain/errors";
 const ROUTE = "GET /api/posts/jobs";
 
 const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
   /** Validated against the domain state machine inside the usecase. */
   status: z.string().trim().min(1).max(32).optional(),
   /** A uuid column: a typo must be a 400, not a DB cast error (see _lib/ids). */
@@ -42,9 +42,14 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // --- Refusals first: viewer / tier R (doc 10 §4.2) ----------------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+    });
+
     const query = new URL(request.url).searchParams;
     const parsed = QuerySchema.safeParse({
-      tenantId: query.get("tenantId") ?? undefined,
       status: query.get("status") ?? undefined,
       batchId: query.get("batchId") ?? undefined,
       channelId: query.get("channelId") ?? undefined,
@@ -68,8 +73,10 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    const { tenantId, ...filter } = parsed.data;
-    const result = await container.usecases.listPostJobs({ tenantId, filter });
+    const result = await container.usecases.listPostJobs({
+      tenantId: ctx.tenantId,
+      filter: parsed.data,
+    });
 
     return Response.json(result);
   } catch (error) {

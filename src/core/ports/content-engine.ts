@@ -6,6 +6,8 @@
 
 import type { CaptionContent, CaptionInput, CaptionCoverImage } from "@/core/domain/caption";
 import type { AIProviderName, AITask, AITier } from "@/core/ports/ai";
+import type { TenantId } from "@/core/domain/tenant-context";
+import type { CaptionTone } from "@/shared/caption-tone";
 
 export type ContentPlatform = "facebook" | "tiktok" | "instagram" | "shopee" | "lazada" | "taobao";
 export type ContentType = "photo_post" | "video_post" | "reel";
@@ -27,7 +29,7 @@ export interface ContentConstraints {
 
 export interface ContentGenerationRequest {
   /** Multi-tenant from day one — every log line and budget check needs it. */
-  tenantId: string;
+  tenantId: TenantId;
   task: AITask;
   /** Whitelisted product facts only — the type makes leaking impossible. */
   product: CaptionInput;
@@ -36,6 +38,13 @@ export interface ContentGenerationRequest {
   vision: VisionInput;
   language: "vi";
   constraints: ContentConstraints;
+  /**
+   * Tone picked by the operator in the compose form. A KEY from a closed list,
+   * never text: the sentence the model reads is fixed in `shared/caption-tone`.
+   * Absent or `mac-dinh` = the prompt is exactly what it was before tones
+   * existed.
+   */
+  tone?: CaptionTone;
   /** Optional voice override on top of the prompt template. */
   brandVoice?: string;
   /** Captions already accepted for OTHER channels of the same post (D1 check). */

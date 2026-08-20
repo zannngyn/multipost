@@ -1,6 +1,7 @@
 import { AppError } from "@/core/domain/errors";
 import type { Logger } from "@/core/ports/infra";
 import type { UserRepo } from "@/core/ports/user-repo";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * "Ai đã bấm nút này?" — one answer, shared by every operator action that writes
@@ -24,7 +25,7 @@ export interface ResolveActorDeps {
 
 export async function resolveActorUserId(
   deps: ResolveActorDeps,
-  tenantId: string,
+  tenantId: TenantId,
   input: ActorInput,
   log: Logger,
 ): Promise<string | null> {

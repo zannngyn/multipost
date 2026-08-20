@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { systemTenantId } from "@/composition/system-tenant-id";
 import {
   PUBLISH_POST_JOB_NAME,
   type JobEnvelope,
@@ -77,7 +78,7 @@ export function makePublishPostHandler(deps: PublishPostHandlerDeps): JobHandler
 
     try {
       const result = await deps.publishPost({
-        tenantId: payload.tenantId,
+        tenantId: systemTenantId(payload, { component: "publish-post" }),
         postJobId: payload.postJobId,
         attempt: job.attempt,
         maxAttempts: job.maxAttempts,

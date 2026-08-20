@@ -11,7 +11,6 @@ import { Button } from "@/ui/components/ui/button";
 import { useBatchStatus } from "@/ui/hooks/usePostBatch";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Theo dõi lô đăng" (E7.5): component -> hook -> service -> internal API
@@ -28,9 +27,7 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  *             "đang cập nhật" line instead of blanking it
  */
 export function BatchStatusScreen({ batchId }: { batchId: string }) {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
-  const batch = useBatchStatus(tenantId, batchId);
+  const batch = useBatchStatus(batchId);
 
   const isFirstLoad = batch.isPending && batch.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);

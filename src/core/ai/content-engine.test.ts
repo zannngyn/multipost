@@ -18,6 +18,7 @@ import {
 import { AppError } from "@/core/domain/errors";
 import type { ResolvedModelPolicy } from "@/core/ports/ai";
 import type { ContentGenerationRequest } from "@/core/ports/content-engine";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -43,7 +44,7 @@ const priceyOutput = { ...goodOutput, body: "Đầm lụa mềm mát, chỉ 1.25
 
 function makeRequest(overrides: Partial<ContentGenerationRequest> = {}): ContentGenerationRequest {
   return {
-    tenantId: "tenant-1",
+    tenantId: testTenantId("tenant-1"),
     task: "facebook_content",
     product,
     platform: "facebook",
@@ -145,7 +146,7 @@ describe("ContentEngine — rejected before any provider call", () => {
   it("rejects a missing tenantId", async () => {
     const { deps, google } = makeHarness({ google: [{ kind: "ok", output: goodOutput }] });
     await expectAppError(
-      makeContentEngine(deps).generate(makeRequest({ tenantId: "  " })),
+      makeContentEngine(deps).generate(makeRequest({ tenantId: testTenantId("  ") })),
       "INVALID_INPUT",
     );
     expect(google.calls).toHaveLength(0);
@@ -399,7 +400,7 @@ describe("ContentEngine — happy path", () => {
 
     const logged = generationLog.entries[0];
     expect(logged).toMatchObject({
-      tenantId: "tenant-1",
+      tenantId: testTenantId("tenant-1"),
       task: "facebook_content",
       provider: "google",
       tier: "cheap",

@@ -11,6 +11,7 @@ import type {
 import { makeFacebookPublisher } from "./facebook-publisher";
 import { makeFakeChannelPublisher } from "./fake-publisher";
 import { makeGraphClient } from "./graph-client";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E7.5 — what a publisher tells the caller WHILE it works (design §5.5).
@@ -115,7 +116,7 @@ describe("a listener that misbehaves", () => {
     });
 
     const result = await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo(1), photo(2)],
@@ -140,7 +141,7 @@ describe("a listener that misbehaves", () => {
     });
 
     const result = await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo(1)],
@@ -161,7 +162,7 @@ describe("a listener that misbehaves", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "   ",
         media: [photo(1)],
@@ -189,7 +190,7 @@ describe("facebook-publisher — album of 10", () => {
     const media = Array.from({ length: 10 }, (_, index) => photo(index + 1));
 
     await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media,
@@ -228,7 +229,7 @@ describe("facebook-publisher — album of 10", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo(1), photo(2), photo(3)],
@@ -258,7 +259,7 @@ describe("facebook-publisher — album of 1", () => {
     });
 
     await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo(1)],
@@ -286,7 +287,7 @@ describe("facebook-publisher — schedulePost (E8.6)", () => {
     });
 
     await publisher.scheduled!.schedulePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo(1), photo(2)],
@@ -317,7 +318,7 @@ describe("fake-publisher — the same events in the same places", () => {
     const media = Array.from({ length: 10 }, (_, index) => photo(index + 1));
 
     await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media,
@@ -336,7 +337,7 @@ describe("fake-publisher — the same events in the same places", () => {
     const { trace, onProgress } = tracer();
 
     await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo(1)],
@@ -359,7 +360,7 @@ describe("fake-publisher — the same events in the same places", () => {
 
     await expect(
       publisher.publishImagePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo(1)],
@@ -375,7 +376,7 @@ describe("fake-publisher — the same events in the same places", () => {
     const publisher = makeFakeChannelPublisher();
 
     const result = await publisher.publishImagePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo(1)],

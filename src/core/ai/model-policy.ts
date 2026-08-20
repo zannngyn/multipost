@@ -16,6 +16,7 @@ import type {
   ModelPolicyOverride,
   ResolvedModelPolicy,
 } from "@/core/ports/ai";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /** Tier ladder actually walked for one generation: primary first, then escalations. */
 export function tierLadder(policy: ResolvedModelPolicy): AITier[] {
@@ -99,7 +100,7 @@ export function failureKindOf(error: unknown): AIFailureKind | undefined {
 export function applyPolicyOverride(
   base: ResolvedModelPolicy,
   override: ModelPolicyOverride,
-  context: { tenantId: string },
+  context: { tenantId: TenantId },
 ): ResolvedModelPolicy {
   if (!override || Object.keys(override).length === 0) return base;
 

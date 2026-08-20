@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 
 import { AppSideNav } from "@/ui/components/shell/AppSideNav";
 import { AppTopBar } from "@/ui/components/shell/AppTopBar";
+import { SupportModeBanner } from "@/ui/components/shell/SupportModeBanner";
 
 /**
  * The app's single client boundary for the shell (web-layout-shell). Pages stay
@@ -49,6 +50,10 @@ export function AppFrame({
           }
           sideNav={<AppSideNav />}
         >
+          {/* Above every screen, on purpose (M3.3): while MYSP staff are inside
+              a customer's company, no screen may look like their own. It pushes
+              content down instead of floating over it. */}
+          <SupportModeBanner />
           {children}
         </AppShell>
       </Theme>

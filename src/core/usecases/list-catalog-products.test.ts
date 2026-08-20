@@ -11,8 +11,10 @@ import type {
 } from "@/core/ports/product-repo";
 
 import { makeListCatalogProducts } from "./list-catalog-products";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
+import type { TenantId } from "@/core/domain/tenant-context";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -110,7 +112,7 @@ describe("listCatalogProducts — edge cases first", () => {
     "rejects a malformed tenant id (%p)",
     async (tenantId) => {
       const list = makeListCatalogProducts({ catalog: makeCatalog([]), logger: makeLogger() });
-      await expect(list({ tenantId: tenantId as unknown as string })).rejects.toMatchObject({
+      await expect(list({ tenantId: tenantId as unknown as TenantId })).rejects.toMatchObject({
         code: "INVALID_INPUT",
       });
     },

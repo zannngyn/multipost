@@ -11,9 +11,10 @@ import {
   validComposeDraftPayload,
 } from "./__fixtures__/post-draft";
 import { makeLoadPostDraft } from "./load-post-draft";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
-const OTHER_TENANT = "00000000-0000-0000-0000-000000000002";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
+const OTHER_TENANT = testTenantId("00000000-0000-0000-0000-000000000002");
 const OWNER = "00000000-0000-0000-0000-0000000000aa";
 const OTHER_OWNER = "00000000-0000-0000-0000-0000000000bb";
 const KIND = "compose";
@@ -42,7 +43,7 @@ describe("loadPostDraft — edge cases first", () => {
     "rejects tenant id %s before touching the repo",
     async (tenantId) => {
       const harness = makeHarness();
-      await expect(harness.run({ tenantId, ownerUserId: OWNER })).rejects.toMatchObject({
+      await expect(harness.run({ tenantId: testTenantId(tenantId), ownerUserId: OWNER })).rejects.toMatchObject({
         code: "INVALID_INPUT",
       });
       expect(harness.load).not.toHaveBeenCalled();
@@ -168,7 +169,7 @@ describe("loadPostDraft — happy path", () => {
       payload,
     });
 
-    const result = await harness.run({ tenantId: ` ${TENANT} `, ownerUserId: OWNER });
+    const result = await harness.run({ tenantId: testTenantId(` ${TENANT} `), ownerUserId: OWNER });
 
     expect(result).toMatchObject({ payload, schemaVersion: POST_DRAFT_SCHEMA_VERSION });
     expect(new Date(result?.updatedAt ?? "").toISOString()).toBe(result?.updatedAt);

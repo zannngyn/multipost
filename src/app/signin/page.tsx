@@ -38,6 +38,19 @@ const ERROR_MESSAGES: Record<string, string> = {
 const GENERIC_ERROR_MESSAGE =
   "Không hoàn tất được đăng nhập. Hãy thử lại. Nếu vẫn lỗi, gửi mã bên dưới cho quản trị viên.";
 
+/**
+ * NOT a failure, and deliberately NOT painted red: the account was recognised
+ * and recorded, it is simply waiting for an admin on /access. Someone who
+ * reads "bị từ chối" here will go ask for a new account instead of waiting five
+ * minutes (core-feedback-states: an error the user did not cause must not look
+ * like their mistake).
+ *
+ * PENDING(pending-approval-param): the exact query value is owned by the auth
+ * layer (`src/app/_auth/**`, another agent's file). `pending_approval` is the
+ * agreed name; if the backend lands a different one, only this constant moves.
+ */
+const PENDING_APPROVAL_ERROR = "pending_approval";
+
 function firstParam(value: string | string[] | undefined): string | null {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value[0] ?? null;
@@ -48,7 +61,9 @@ export default async function SignInPage(props: PageProps<"/signin">) {
   const searchParams = await props.searchParams;
   const returnUrl = safeReturnUrl(firstParam(searchParams.returnUrl));
   const errorCode = firstParam(searchParams.error);
-  const errorMessage = errorCode ? (ERROR_MESSAGES[errorCode] ?? GENERIC_ERROR_MESSAGE) : null;
+  const isPendingApproval = errorCode === PENDING_APPROVAL_ERROR;
+  const errorMessage =
+    errorCode && !isPendingApproval ? (ERROR_MESSAGES[errorCode] ?? GENERIC_ERROR_MESSAGE) : null;
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-8 px-6 py-16">
@@ -58,6 +73,19 @@ export default async function SignInPage(props: PageProps<"/signin">) {
           Công cụ nội bộ. Đăng nhập bằng tài khoản Google thuộc tên miền đã được cấp quyền.
         </p>
       </header>
+
+      {isPendingApproval ? (
+        // `role="status"`, not `alert`: nothing went wrong and nothing has to
+        // be fixed by this person. Neutral surface tokens, no destructive red.
+        <div role="status" className="border-border bg-muted/40 space-y-1 rounded-xl border p-4">
+          <p className="text-sm font-medium">Tài khoản đang chờ quản trị viên duyệt</p>
+          <p className="text-muted-foreground text-sm">
+            Yêu cầu truy cập của bạn đã được ghi nhận — đây không phải là bị từ chối. Khi quản trị
+            viên duyệt xong, bạn chỉ cần đăng nhập lại là vào được. Cần gấp thì báo trực tiếp cho
+            quản trị viên để duyệt sớm.
+          </p>
+        </div>
+      ) : null}
 
       {errorMessage ? (
         <div

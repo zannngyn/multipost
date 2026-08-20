@@ -15,6 +15,7 @@ import { lockIntegrationRow } from "./integration-lock";
 import { auditLogs, tenantIntegrations } from "./schema";
 import { findPlaintextSecretFields } from "./secret-box";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Reads the tenant's Drive/Sheet coordinates from `tenant_integration`
@@ -45,7 +46,7 @@ export class DrizzleCatalogConfigRepo implements CatalogConfigRepo {
     private readonly logger?: Logger,
   ) {}
 
-  async findCatalogConfig(tenantId: string): Promise<CatalogSourceConfig | null> {
+  async findCatalogConfig(tenantId: TenantId): Promise<CatalogSourceConfig | null> {
     const scope = forTenant(this.db, tenantId);
 
     let rows: Array<{ config: Record<string, unknown>; status: string }>;
@@ -116,7 +117,7 @@ export class DrizzleCatalogConfigRepo implements CatalogConfigRepo {
    * a row that exists but cannot be parsed is a different problem from no row
    * at all — the panel just does not need to say which.
    */
-  async findCatalogSource(tenantId: string): Promise<CatalogSourceConfig | null> {
+  async findCatalogSource(tenantId: TenantId): Promise<CatalogSourceConfig | null> {
     const scope = forTenant(this.db, tenantId);
 
     let rows: Array<{ config: Record<string, unknown>; status: string }>;
@@ -185,7 +186,7 @@ export class DrizzleCatalogConfigRepo implements CatalogConfigRepo {
   async saveCatalogSource(
     input: SaveCatalogSourceInput,
   ): Promise<{ previous: CatalogSourceConfig | null }> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const source = input?.source;
     if (
       !source ||

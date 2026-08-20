@@ -5,13 +5,17 @@ import { AppError } from "@/core/domain/errors";
 import type { Logger } from "@/core/ports/infra";
 import type { ReadSheetInput, SheetSnapshot, SheetSource } from "@/core/ports/sheet-source";
 
-import type { GoogleAuthClient } from "./service-account";
 import { buildSheetSnapshot } from "./sheet-values";
+import type { TenantGoogleAuth } from "./tenant-google-auth";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Sheets implementation of SheetSource (E2).
  * The API answers with a ragged array of arrays; it is validated here and
  * converted to name-addressed rows before core ever sees it (technical rule 2).
+ *
+ * Identity is per tenant (see tenant-google-auth): the tenant's own OAuth
+ * connection when they connected one, the Service Account otherwise.
  */
 
 /** Wide enough for the real tab (21 named + trailing unnamed columns). */
@@ -23,17 +27,18 @@ const ValuesResponseSchema = z.object({
 });
 
 export interface GoogleSheetSourceDeps {
-  auth: GoogleAuthClient;
+  auth: TenantGoogleAuth;
   logger: Logger;
 }
 
 export function makeGoogleSheetSource(deps: GoogleSheetSourceDeps): SheetSource {
-  const sheets = google.sheets({ version: "v4", auth: deps.auth });
+  const sheetsFor = async (tenantId: TenantId) =>
+    google.sheets({ version: "v4", auth: await deps.auth.forTenant(tenantId) });
 
   return {
     async readRows(input: ReadSheetInput): Promise<SheetSnapshot> {
       // --- Edge cases first --------------------------------------------------
-      const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+      const tenantId = normalizeTenantId(input.tenantId);
       const spreadsheetId =
         typeof input?.spreadsheetId === "string" ? input.spreadsheetId.trim() : "";
       const sheetName = typeof input?.sheetName === "string" ? input.sheetName.trim() : "";
@@ -48,6 +53,7 @@ export function makeGoogleSheetSource(deps: GoogleSheetSourceDeps): SheetSource 
       const log = deps.logger.child({ tenant_id: tenantId });
       const range = `'${sheetName.replace(/'/g, "''")}'!${RANGE_COLUMNS}`;
 
+      const sheets = await sheetsFor(tenantId);
       let payload: unknown;
       try {
         const response = await sheets.spreadsheets.values.get({
@@ -59,6 +65,10 @@ export function makeGoogleSheetSource(deps: GoogleSheetSourceDeps): SheetSource 
         });
         payload = response.data;
       } catch (error) {
+        // Same rule as Drive: a dead tenant connection is GOOGLE_AUTH_EXPIRED,
+        // never an empty snapshot that would blank the catalog.
+        const authError = await deps.auth.reportAuthFailure(tenantId, error);
+        if (authError) throw authError;
         throw AppError.from(error, "SHEET_ERROR", {
           tenant_id: tenantId || null,
           spreadsheet_id: spreadsheetId,

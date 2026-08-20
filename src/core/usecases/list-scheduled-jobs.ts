@@ -7,6 +7,7 @@ import {
 import { isTenantId } from "@/core/domain/tenant";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { PostJobRepo, ScheduledJobCursor } from "@/core/ports/post-job-repo";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E8.4 — "bài đã hẹn": what is going to publish, and when. READ ONLY.
@@ -33,7 +34,7 @@ export interface ListScheduledJobsFilter {
 }
 
 export interface ListScheduledJobsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly filter?: ListScheduledJobsFilter;
 }
 
@@ -60,7 +61,7 @@ export interface ScheduledJobEntry {
 }
 
 export interface ListScheduledJobsResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly items: readonly ScheduledJobEntry[];
   readonly nextCursor: string | null;
   readonly limit: number;
@@ -80,14 +81,15 @@ export function makeListScheduledJobs(deps: ListScheduledJobsDeps) {
     input: ListScheduledJobsInput,
   ): Promise<ListScheduledJobsResult> {
     // --- Edge cases first ---------------------------------------------------
-    const tenantId = str(input?.tenantId);
-    if (!isTenantId(tenantId)) {
+    const rawTenantId = str(input?.tenantId);
+    if (!isTenantId(rawTenantId)) {
       throw new AppError("INVALID_INPUT", {
         message: "listScheduledJobs requires a tenant UUID",
         userMessage: "Yêu cầu xem bài đã hẹn thiếu mã đơn vị.",
-        context: { tenant_id: tenantId || null },
+        context: { tenant_id: rawTenantId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const filter = input?.filter ?? {};
     const limit = normaliseLimit(filter.limit);
@@ -201,7 +203,7 @@ export function decodeScheduledCursor(
 
 // --- helpers ----------------------------------------------------------------
 
-function parseBound(value: unknown, field: string, tenantId: string): Date | null {
+function parseBound(value: unknown, field: string, tenantId: TenantId): Date | null {
   if (value === undefined || value === null || value === "") return null;
   const date = value instanceof Date ? value : new Date(String(value));
   if (!Number.isFinite(date.getTime())) {

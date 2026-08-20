@@ -8,8 +8,9 @@ import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { MediaRepo, ProductRepo } from "@/core/ports/product-repo";
 
 import { makeComposePost, VIDEO_NOT_CHECKED_WARNING } from "./compose-post";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const CHANNEL = "fb-page-1";
 
 /** E9 additions to MediaRepo; composing never calls them. */
@@ -18,9 +19,15 @@ const UPLOAD_STUBS = {
   listOrphanedUploads: async () => [],
   listUnreferencedUploadsForCode: async () => [],
   deleteUploads: async () => 0,
+  // Sync-only reader; composing a post never counts rows.
+  countDriveAssets: async () => 0,
 } satisfies Pick<
   MediaRepo,
-  "registerUpload" | "listOrphanedUploads" | "listUnreferencedUploadsForCode" | "deleteUploads"
+  | "registerUpload"
+  | "listOrphanedUploads"
+  | "listUnreferencedUploadsForCode"
+  | "deleteUploads"
+  | "countDriveAssets"
 >;
 
 function makeLogger(): Logger {
@@ -76,6 +83,7 @@ function harness(options: { product?: Product | null; media?: MediaAsset[] } = {
     findByCode: async () => (options.product === undefined ? product() : options.product),
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countAll: async () => 0,
   };
   const media: MediaRepo = {
     listByProductCode: async () => options.media ?? [],
@@ -93,7 +101,7 @@ const numbered = (numbers: number[], color = "KEM") =>
 
 describe("composePost — edge cases first", () => {
   it.each([
-    ["bad tenant", { tenantId: "nope", productCode: "MGKVX6310", channel: CHANNEL }],
+    ["bad tenant", { tenantId: testTenantId("nope"), productCode: "MGKVX6310", channel: CHANNEL }],
     ["empty code", { tenantId: TENANT, productCode: "  ", channel: CHANNEL }],
     ["empty channel", { tenantId: TENANT, productCode: "MGKVX6310", channel: "" }],
   ])("throws INVALID_INPUT on %s", async (_label, input) => {
@@ -128,6 +136,7 @@ describe("composePost — edge cases first", () => {
         product({ operational: { stockRaw: "0", noteRaw: "HẾT HÀNG", colorsRaw: "" } }),
       upsertMany: async () => 0,
       deleteStale: async () => 0,
+      countAll: async () => 0,
     };
     const media: MediaRepo = {
       listByProductCode,
@@ -397,6 +406,7 @@ function videoHarness(options: {
     findByCode: async () => product(),
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countAll: async () => 0,
   };
   const media: MediaRepo = {
     listByProductCode: async () => options.media ?? [clip(1)],
@@ -429,6 +439,7 @@ describe("composePost — video spec gate", () => {
       findByCode: async () => product({ operational: { stockRaw: "0", noteRaw: "", colorsRaw: "" } }),
       upsertMany: async () => 0,
       deleteStale: async () => 0,
+      countAll: async () => 0,
     };
     const probeAsset = vi.fn(async () => REELS_SPEC);
     const compose = makeComposePost({
@@ -594,6 +605,7 @@ describe("composePost — video spec gate", () => {
       findByCode: async () => product(),
       upsertMany: async () => 0,
       deleteStale: async () => 0,
+      countAll: async () => 0,
     };
     const compose = makeComposePost({
       products,

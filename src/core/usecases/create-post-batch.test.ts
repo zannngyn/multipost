@@ -19,8 +19,9 @@ import type {
 
 import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import { makeCreatePostBatch, type PostMediaInput } from "./create-post-batch";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 interface LogLine {
   level: string;
@@ -229,6 +230,7 @@ function harness(options: {
     findByCode: async () => (options.product === undefined ? makeProduct() : options.product),
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countAll: async () => 0,
   };
   const channels: ChannelConfigRepo = {
     findChannel: async (_tenantId, channelId) =>
@@ -270,7 +272,7 @@ const BASE_INPUT = {
 
 describe("createPostBatch — rejected calls", () => {
   it.each([
-    ["a malformed tenant id", { tenantId: "nope" }],
+    ["a malformed tenant id", { tenantId: testTenantId("nope") }],
     ["an empty product code", { productCode: "  " }],
     ["no channel", { channelIds: [] }],
     ["no media", { media: [] }],

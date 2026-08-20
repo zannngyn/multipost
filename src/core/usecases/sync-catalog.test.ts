@@ -14,8 +14,9 @@ import type {
 import type { SheetSnapshot, SheetSource } from "@/core/ports/sheet-source";
 
 import { makeSyncCatalog, MAX_ISSUE_EXAMPLES, MAX_STORED_ISSUES } from "./sync-catalog";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -76,6 +77,8 @@ interface Harness {
   writtenMedia: MediaAsset[];
   finished: FinishSyncRunInput[];
   logger: Logger;
+  /** Which repositories were asked to delete rows the run did not stamp. */
+  deletedStale: string[];
 }
 
 function makeHarness(options: {
@@ -84,10 +87,14 @@ function makeHarness(options: {
   config?: { driveFolderId: string; spreadsheetId: string; sheetName: string } | null;
   driveError?: unknown;
   sheetError?: unknown;
+  /** Rows the tenant already has — what an empty source would delete. */
+  existingProducts?: number;
+  existingMedia?: number;
 }): Harness {
   const writtenProducts: Product[] = [];
   const writtenMedia: MediaAsset[] = [];
   const finished: FinishSyncRunInput[] = [];
+  const deletedStale: string[] = [];
   const logger = makeLogger();
 
   const drive: DriveSource = {
@@ -121,7 +128,13 @@ function makeHarness(options: {
       writtenProducts.push(...items);
       return items.length;
     },
-    deleteStale: async () => 0,
+    // Recorded rather than stubbed to 0: "was it called at all" is the whole
+    // question of the empty-source tests below.
+    deleteStale: async () => {
+      deletedStale.push("products");
+      return 0;
+    },
+    countAll: async () => options.existingProducts ?? 0,
   };
   const media: MediaRepo = {
     listByProductCode: async () => [],
@@ -129,7 +142,11 @@ function makeHarness(options: {
       writtenMedia.push(...assets);
       return assets.length;
     },
-    deleteStale: async () => 0,
+    deleteStale: async () => {
+      deletedStale.push("media");
+      return 0;
+    },
+    countDriveAssets: async () => options.existingMedia ?? 0,
     // E9 additions; syncing never calls them.
     registerUpload: async () => {},
     listOrphanedUploads: async () => [],
@@ -164,6 +181,7 @@ function makeHarness(options: {
     writtenMedia,
     finished,
     logger,
+    deletedStale,
   };
 }
 
@@ -172,7 +190,7 @@ describe("syncCatalog — edge cases first", () => {
 
   it("rejects a malformed tenant id before touching any source", async () => {
     const harness = makeHarness({});
-    await expect(harness.run({ tenantId: "not-a-uuid" })).rejects.toMatchObject({
+    await expect(harness.run({ tenantId: testTenantId("not-a-uuid") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     expect(harness.finished).toHaveLength(0);
@@ -621,5 +639,126 @@ describe("syncCatalog — happy path", () => {
 
     await harness.run({ tenantId: TENANT });
     expect(harness.writtenMedia[0]).toMatchObject({ kind: "video", needsReview: true });
+  });
+});
+
+
+/**
+ * The most expensive bug this file guards against: a source that answers
+ * "nothing" while the catalog is full, and a `deleteStale` that takes it
+ * literally.
+ *
+ * Drive is the realistic case — `files.list` answers HTTP 200 with `files: []`
+ * for a folder the current identity cannot SEE (it does not 403 like
+ * `files.get`), so an un-shared folder, or a Google account connected without
+ * re-picking the source, reads exactly like "every photo was deleted". The
+ * Sheet half is the same story with a renamed/lost tab.
+ */
+describe("syncCatalog — an empty source must never delete a full catalog", () => {
+  it("stops before deleteStale when Drive returns nothing and the tenant has media", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: [],
+      existingMedia: 5500,
+      existingProducts: 40,
+    });
+
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({
+      code: "SYNC_SOURCE_EMPTY",
+      context: { empty_sources: ["drive"], drive_files_seen: 0 },
+    });
+
+    // The whole point: nothing was deleted, and nothing was written either.
+    expect(harness.deletedStale).toEqual([]);
+    expect(harness.finished[0]).toMatchObject({
+      status: "failed",
+      errorCode: "SYNC_SOURCE_EMPTY",
+    });
+    // Visible on the sync screen, with the numbers that justify the stop.
+    const issue = harness.finished[0]?.issues.find((item) => item.errorCode === "SOURCE_EMPTY");
+    expect(issue).toMatchObject({ reason: "DRIVE_EMPTY" });
+    expect(issue?.detail).toContain("5500");
+  });
+
+  it("stops the same way when the Sheet parses to zero products and the tenant has some", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([]),
+      files: [driveFile("MGKVX6310-KEM (1).jpg")],
+      existingProducts: 40,
+      existingMedia: 5500,
+    });
+
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({
+      code: "SYNC_SOURCE_EMPTY",
+      context: { empty_sources: ["sheet"], products_parsed: 0 },
+    });
+    expect(harness.deletedStale).toEqual([]);
+    expect(harness.finished[0]).toMatchObject({
+      status: "failed",
+      errorCode: "SYNC_SOURCE_EMPTY",
+    });
+  });
+
+  it("reports BOTH sources when both went empty", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([]),
+      files: [],
+      existingProducts: 40,
+      existingMedia: 5500,
+    });
+
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({
+      code: "SYNC_SOURCE_EMPTY",
+      context: { empty_sources: ["drive", "sheet"] },
+    });
+    expect(harness.deletedStale).toEqual([]);
+  });
+
+  it("does NOT block a brand-new tenant: empty source + empty database is a normal first run", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([]),
+      files: [],
+      existingProducts: 0,
+      existingMedia: 0,
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+
+    expect(result.status).toBe("succeeded");
+    expect(harness.deletedStale).toEqual(["products", "media"]);
+  });
+
+  it("still deletes stale rows on a normal run — the guard must not freeze the catalog", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: [driveFile("MGKVX6310-KEM (1).jpg")],
+      existingProducts: 40,
+      existingMedia: 5500,
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+
+    expect(result.status).toBe("succeeded");
+    expect(harness.deletedStale).toEqual(["products", "media"]);
+  });
+
+  it("deletes nothing when the connection died mid-run (GOOGLE_AUTH_EXPIRED)", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      driveError: new AppError("GOOGLE_AUTH_EXPIRED", { message: "refresh token revoked" }),
+      existingProducts: 40,
+      existingMedia: 5500,
+    });
+
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({
+      code: "GOOGLE_AUTH_EXPIRED",
+    });
+    // Locked by a test on purpose: today this holds because the listing throws
+    // before the persist block, and that ordering must not be refactored away.
+    expect(harness.deletedStale).toEqual([]);
+    expect(harness.finished[0]).toMatchObject({
+      status: "failed",
+      errorCode: "GOOGLE_AUTH_EXPIRED",
+    });
   });
 });

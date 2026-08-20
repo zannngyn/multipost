@@ -16,6 +16,26 @@ export interface ApiErrorBody {
 const STATUS_BY_CODE: Record<ErrorCode, number> = {
   INVALID_INPUT: 400,
   UNAUTHORIZED: 401,
+  // Signed in, but not allowed to decide who else gets in — 403, not 401: the
+  // session is fine, so the screen must not bounce the operator to /signin.
+  ACCESS_FORBIDDEN: 403,
+  ACCESS_REQUEST_NOT_FOUND: 404,
+  // Multi-tenant session (M1.2, doc 10 §3): 409 = "pick a tenant" (UI shows the
+  // picker); 403 = member but role too low. "No membership" is never 403 — it is
+  // TENANT_NOT_FOUND 404, so outsiders cannot probe which tenants exist.
+  TENANT_NOT_SELECTED: 409,
+  FORBIDDEN: 403,
+  // Onboarding (M2.1/M2.2). INVITE_INVALID is 404 for every refusal reason on
+  // purpose: an invite endpoint that answers differently for "revoked" vs
+  // "never existed" is a probing oracle.
+  TENANT_LIMIT_REACHED: 409,
+  SLUG_TAKEN: 409,
+  INVITE_INVALID: 404,
+  INVITE_ROLE_FORBIDDEN: 403,
+  // Members (M2.3) + retirement (M2.4)
+  LAST_OWNER: 409,
+  MEMBER_NOT_FOUND: 404,
+  RETIRED: 410,
   TENANT_NOT_FOUND: 404,
   INTERNAL: 500,
   DB_ERROR: 503,
@@ -29,6 +49,16 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   MEDIA_NOT_FOUND: 404,
   OUT_OF_STOCK: 409,
   SYNC_FAILED: 500,
+  // Not an outage and not a bad request: the run refused to delete a catalog
+  // the source stopped describing. The operator fixes the source, then retries.
+  SYNC_SOURCE_EMPTY: 409,
+  // All three are "state/config the operator must fix", not a bad request and
+  // not an outage — 409 keeps them out of the 401 handling of a dead session.
+  GOOGLE_NOT_CONNECTED: 409,
+  GOOGLE_AUTH_EXPIRED: 409,
+  GOOGLE_OAUTH_NOT_CONFIGURED: 409,
+  // The callback carried no usable state/code — the round trip must start over.
+  GOOGLE_CONNECT_STATE_INVALID: 400,
   AI_PROVIDER_ERROR: 502,
   AI_RESPONSE_INVALID: 502,
   AI_RATE_LIMITED: 429,
@@ -36,8 +66,14 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   CAPTION_VALIDATION_FAILED: 422,
   MODEL_NOT_CONFIGURED: 500,
   PROMPT_NOT_FOUND: 500,
+  PROMPT_VERSION_NOT_FOUND: 404,
+  BATCH_NOT_FOUND: 404,
+  CHANNEL_GROUP_NOT_FOUND: 404,
   META_ERROR: 502,
-  TOKEN_EXPIRED: 401,
+  // 409, not 401: after M1.2 a 401 means "no session" and bounces the operator
+  // to /signin — a Facebook Page token expiring must not do that (doc 10 B4).
+  // Same family as GOOGLE_AUTH_EXPIRED above.
+  TOKEN_EXPIRED: 409,
   // The platform's answer was unusable, not the caller's request.
   UPLOAD_HOST_NOT_ALLOWED: 502,
   CHANNEL_NOT_CONFIGURED: 409,

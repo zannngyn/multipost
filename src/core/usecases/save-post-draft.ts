@@ -6,6 +6,7 @@ import {
 } from "@/core/domain/post-draft";
 import type { Logger } from "@/core/ports/infra";
 import type { PostDraftRepo } from "@/core/ports/post-draft-repo";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E10 — autosave of the compose screen: store what the operator typed so a
@@ -21,7 +22,7 @@ import type { PostDraftRepo } from "@/core/ports/post-draft-repo";
  */
 
 export interface SavePostDraftInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** app_user.id of the operator. Resolved by the caller, never guessed here. */
   readonly ownerUserId: string;
   /** Defaults to 'compose'. */

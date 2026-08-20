@@ -7,13 +7,14 @@ import type { ChannelConfig, ChannelConfigRepo, ChannelGroupRepo } from "@/core/
 
 import { channelWriteStubs } from "./__fixtures__/channel-config-repo";
 import { makeManageChannelGroups } from "./manage-channel-groups";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E7.6 — channel presets. The rule that matters: a group can only ever hold
  * channels the tenant really has, otherwise a later fan-out silently drops a post.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const NOW = new Date("2026-08-13T02:00:00.000Z");
 
 function silentLogger(): Logger {
@@ -119,14 +120,14 @@ function harness(
 describe("channel groups — rejected writes", () => {
   it("rejects a malformed tenant id on every operation", async () => {
     const usecases = harness();
-    await expect(usecases.listChannelGroups({ tenantId: "nope" })).rejects.toMatchObject({
+    await expect(usecases.listChannelGroups({ tenantId: testTenantId("nope") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     await expect(
-      usecases.createChannelGroup({ tenantId: "nope", name: "A", channelIds: ["fbpage-a"] }),
+      usecases.createChannelGroup({ tenantId: testTenantId("nope"), name: "A", channelIds: ["fbpage-a"] }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     await expect(
-      usecases.deleteChannelGroup({ tenantId: "nope", groupId: "group-1" }),
+      usecases.deleteChannelGroup({ tenantId: testTenantId("nope"), groupId: "group-1" }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
@@ -228,7 +229,9 @@ describe("channel groups — rejected writes", () => {
     });
   });
 
-  it("reports update/delete of a group that does not exist", async () => {
+  // Bug B5 (doc 10 §7): "not this tenant's" and "does not exist" are one
+  // answer, and that answer is a 404 code — not INVALID_INPUT.
+  it("reports update/delete of a group that does not exist as CHANNEL_GROUP_NOT_FOUND", async () => {
     const usecases = harness();
     await expect(
       usecases.updateChannelGroup({
@@ -237,10 +240,16 @@ describe("channel groups — rejected writes", () => {
         name: "X",
         channelIds: ["fbpage-a"],
       }),
-    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { reason: "GROUP_NOT_FOUND" } });
+    ).rejects.toMatchObject({
+      code: "CHANNEL_GROUP_NOT_FOUND",
+      context: { reason: "GROUP_NOT_FOUND" },
+    });
     await expect(
       usecases.deleteChannelGroup({ tenantId: TENANT, groupId: "missing" }),
-    ).rejects.toMatchObject({ code: "INVALID_INPUT", context: { reason: "GROUP_NOT_FOUND" } });
+    ).rejects.toMatchObject({
+      code: "CHANNEL_GROUP_NOT_FOUND",
+      context: { reason: "GROUP_NOT_FOUND" },
+    });
   });
 
   it("validates membership on UPDATE too (a channel can disappear later)", async () => {

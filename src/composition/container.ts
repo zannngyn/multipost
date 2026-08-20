@@ -1,11 +1,21 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
+import type { TenantId } from "@/core/domain/tenant-context";
+import { DrizzleAccessRequestRepo } from "@/adapters/db/access-request-repo.drizzle";
+import { DrizzleAccountRepo } from "@/adapters/db/account-repo.drizzle";
+import { DrizzleInviteRepo } from "@/adapters/db/invite-repo.drizzle";
+import { DrizzleMemberRepo } from "@/adapters/db/member-repo.drizzle";
+import { DrizzlePlatformTenantRepo } from "@/adapters/db/platform-tenant-repo.drizzle";
+import { DrizzleSupportSessionRepo } from "@/adapters/db/support-session-repo.drizzle";
+import { DrizzleOAuthStateStore } from "@/adapters/db/oauth-state-store.drizzle";
+import { DrizzleTenantOnboardingRepo } from "@/adapters/db/tenant-onboarding-repo.drizzle";
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
 import { closeDbHandle, getDbHandle, type Database } from "@/adapters/db/client";
+import { DrizzleGoogleOAuthRepo } from "@/adapters/db/google-oauth-repo.drizzle";
 import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
 import { makeSecretBox, type SecretBox } from "@/adapters/db/secret-box";
 import { DrizzlePostDraftRepo } from "@/adapters/db/post-draft-repo.drizzle";
@@ -47,15 +57,51 @@ import type {
   ScheduledPublisher,
 } from "@/core/ports/publisher";
 import type { SheetSource } from "@/core/ports/sheet-source";
+import { makeBrowseGoogleDrive, type BrowseGoogleDrive } from "@/core/usecases/browse-google-drive";
+import {
+  makeCheckOperatorAccess,
+  type CheckOperatorAccess,
+} from "@/core/usecases/check-operator-access";
+import { makeCreateTenant, type CreateTenant } from "@/core/usecases/create-tenant";
+import {
+  makeGetOperatorOverview,
+  type GetOperatorOverview,
+} from "@/core/usecases/get-operator-overview";
+import {
+  makeJoinWithInvite,
+  type JoinWithInvite,
+} from "@/core/usecases/join-with-invite";
+import { makeManageInvites, type ManageInvites } from "@/core/usecases/manage-invites";
+import { makeManageMembers, type ManageMembers } from "@/core/usecases/manage-members";
+import { makePlatformTenants, type PlatformTenants } from "@/core/usecases/platform-tenants";
+import {
+  makeManageSupportSessions,
+  type ManageSupportSessions,
+} from "@/core/usecases/manage-support-sessions";
+import {
+  makeResolveOperatorAccount,
+} from "@/core/usecases/resolve-operator-account";
+import {
+  makeManageAccessRequests,
+  type AccessDecisionResult,
+  type DecideAccessRequestInput,
+  type ListAccessRequestsInput,
+  type ManageAccessRequests,
+} from "@/core/usecases/manage-access-requests";
 import { makeComposePost, type ComposePost } from "@/core/usecases/compose-post";
 import {
   makeConnectFacebookChannels,
   type ConnectFacebookChannels,
 } from "@/core/usecases/connect-facebook-channels";
+import {
+  makeConnectGoogleDrive,
+  type ConnectGoogleDrive,
+} from "@/core/usecases/connect-google-drive";
 import { makeManageChannels, type ManageChannels } from "@/core/usecases/manage-channels";
 import { makeCreatePostBatch, type CreatePostBatch } from "@/core/usecases/create-post-batch";
 import { makeGetBatchStatus, type GetBatchStatus } from "@/core/usecases/get-batch-status";
 import { makeGetMediaContent, type GetMediaContent } from "@/core/usecases/get-media-content";
+import { makeGetMediaPreview, type GetMediaPreview } from "@/core/usecases/get-media-preview";
 import { makeListPostJobs, type ListPostJobs } from "@/core/usecases/list-post-jobs";
 import {
   makeManageChannelGroups,
@@ -118,12 +164,18 @@ import {
   loadUploadConfig,
   loadMetaConfig,
   loadMetaOAuthConfig,
+  loadOnboardingConfig,
   loadSecretsConfig,
   loadVideoConfig,
   type Config,
   type EnvRecord,
 } from "./config";
 import { makeLazyGoogleSources } from "./google-sources";
+import { makeOperatorAccessGate, type OperatorAccessGate } from "./operator-access-gate";
+import { makeOAuthStateService, type OAuthStateService } from "./oauth-state-service";
+import { makeOperatorAccountGate, type OperatorAccountGate } from "./operator-account-gate";
+import { makeRequirePlatformAdmin, type RequirePlatformAdmin } from "./require-platform-admin";
+import { makeRequireTenant, type RequireTenant } from "./require-tenant";
 
 /**
  * Composition root — the ONLY place that knows both core and adapters.
@@ -169,14 +221,66 @@ export interface Usecases {
   /** E10 — drop the draft after a batch is created, or on "Xoá nháp". */
   discardPostDraft: DiscardPostDraft;
   /**
-   * E10 — session e-mail -> `app_user.id`, the owner every draft is addressed
-   * by. Exposed because the draft route (unlike retry/reschedule, which hand an
+   * E10 — `account.id` -> `app_user.id`, the owner every draft is addressed by.
+   * Exposed because the draft route (unlike retry/reschedule, which hand an
    * e-mail to a usecase that resolves it internally) needs the id BEFORE it can
    * call anything: a draft with no owner is tenant-shared, and two operators
-   * would overwrite each other. `null` for an unknown e-mail is NOT an error —
-   * the route answers "chỉ lưu trên máy này" and the screen says so.
+   * would overwrite each other.
+   *
+   * Keyed on the ACCOUNT, not the session e-mail (was `findOperatorUserId`):
+   * docs/09 §3.1 makes the address an attribute of an identity, so keying
+   * ownership on it means an operator who changes e-mail loses their drafts,
+   * and two identities of one person get two buckets. `requireTenant` has
+   * already authorised (account, tenant) before this is called.
+   *
+   * `null` for an account with no `app_user` row is NOT an error — the route
+   * answers "chỉ lưu trên máy này" and the screen says so.
    */
-  findOperatorUserId: (tenantId: string, email: string) => Promise<string | null>;
+  findDraftOwnerUserId: (tenantId: TenantId, accountId: string) => Promise<string | null>;
+  /**
+   * E1.4 — "ai được vào công cụ này", read on EVERY request (short-cached).
+   * `getOperatorSession` calls this: the session is a stateless JWT, so a block
+   * only bites if the status is re-read per request.
+   */
+  operatorAccess: OperatorAccessGate;
+  /** E1.4 — the approval screen: list who is waiting, approve with a role, block. */
+  accessRequests: ManageAccessRequests;
+  /**
+   * M1.2 — identity → account → membership, the session's source of truth
+   * (short-cached; a suspension is felt within ACCOUNT_CACHE_TTL_MS).
+   */
+  operatorAccounts: OperatorAccountGate;
+  /** M1.2 — `GET /api/me`: account + companies + active tenant. */
+  getOperatorOverview: GetOperatorOverview;
+  /**
+   * M1.3b — server-side OAuth state (doc 10 §6): the connect routes issue a
+   * nonce bound to (tenant, account); the callbacks claim it single-use.
+   * (`selectActiveTenant` retired here: /api/me/active-tenant now authorises
+   * through `requireTenant` directly — same fresh check, one code path.)
+   */
+  oauthStates: OAuthStateService;
+  /** M2.1 — self-service company creation; the creator becomes owner. */
+  createTenant: CreateTenant;
+  /** M2.2 — invite links: list / create (role ladder) / revoke. */
+  invites: ManageInvites;
+  /** M2.2 — `POST /api/join`: token → membership (NoMembership state's door). */
+  joinWithInvite: JoinWithInvite;
+  /** M2.3 — members screen: list / change role (ladder) / remove. */
+  members: ManageMembers;
+  /**
+   * M3.1 — the platform authoriser: `account.platform_role`, read FRESH per
+   * call (every platform op is tier S). No tenant context involved.
+   */
+  requirePlatformAdmin: RequirePlatformAdmin;
+  /** M3.2 — platform tenant administration: list / provision / (un)suspend. */
+  platformTenants: PlatformTenants;
+  /** M3.3 — support mode: audited visits into customer tenants, read-only. */
+  supportSessions: ManageSupportSessions;
+  /**
+   * M1.2 — THE tenant authoriser (docs/09 §3.3). Routes adopt it in M1.3;
+   * until then only /api/me* and tests touch it.
+   */
+  requireTenant: RequireTenant;
   /** E11.1 — operator job log. */
   listPostJobs: ListPostJobs;
   /** E11.1 — re-queue a failed/blocked job (stock recheck still applies). */
@@ -192,6 +296,10 @@ export interface Usecases {
   channels: ManageChannels;
   /** E5.1 — connect Fanpages: OAuth, or by pasting a User Access Token. */
   connectChannels: ConnectFacebookChannels;
+  /** E2 — connect the tenant's own Google account (OAuth) for Drive/Sheets. */
+  connectGoogleDrive: ConnectGoogleDrive;
+  /** E2 — browse that account's folders/spreadsheets from inside the app. */
+  browseGoogleDrive: BrowseGoogleDrive;
   /** E8.4 — "bài đã hẹn": what publishes next, soonest first. */
   listScheduledJobs: ListScheduledJobs;
   /** E8.4 — move a scheduled post to another time. */
@@ -205,6 +313,12 @@ export interface Usecases {
   /** E3.6 — serve one media asset to Meta's fetcher (called by /api/media). */
   getMediaContent: GetMediaContent;
   /**
+   * E3.6b — serve one IMAGE to a signed-in operator (called by
+   * /api/media/preview). Session + membership decide, not a signed URL: a
+   * bearer token must not travel in an `<img src>` (doc 10 §2).
+   */
+  getMediaPreview: GetMediaPreview;
+  /**
    * E3.6 — mint the public URL Graph API will fetch. Synchronous on purpose:
    * whoever builds a post batch needs one URL per photo, not a round trip.
    */
@@ -212,7 +326,7 @@ export interface Usecases {
 }
 
 export interface SignMediaUrlRequest {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Drive file id, i.e. `MediaAsset.driveFileId` / `PostJobMedia.driveFileId`. */
   readonly assetId: string;
   /** Public origin Meta will call, e.g. `https://mysp.example.com`. */
@@ -576,7 +690,15 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const postDrafts = new DrizzlePostDraftRepo(deps.db);
   // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
   const users = new DrizzleUserRepo(deps.db);
-  const google = makeLazyGoogleSources({ logger: deps.logger });
+  // E1.4 — who may sign in. Read on every request through `operatorAccess`.
+  const accessRequestRepo = new DrizzleAccessRequestRepo(deps.db, { logger: deps.logger });
+  // E2 — the tenant's own Google connection. Same secret box as the Meta
+  // tokens: the refresh token is sealed inside tenant_integration.config.
+  const googleOAuth = new DrizzleGoogleOAuthRepo(deps.db, {
+    box: makeTenantSecretBox(deps.logger),
+    logger: deps.logger,
+  });
+  const google = makeLazyGoogleSources({ logger: deps.logger, oauth: googleOAuth });
   const lazyQueue = makeLazyJobQueue(deps.config, deps.logger);
   const queue = overrides.queue ?? lazyQueue;
   const jobProgress = overrides.progress ?? makeLazyJobProgressStore(deps.config, deps.logger);
@@ -621,6 +743,109 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       sign: mediaSign,
     });
 
+  const checkOperatorAccess: CheckOperatorAccess = makeCheckOperatorAccess({
+    requests: accessRequestRepo,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  const operatorAccess = makeOperatorAccessGate({
+    access: checkOperatorAccess,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  const manageAccessRequests = makeManageAccessRequests({
+    requests: accessRequestRepo,
+    clock: deps.clock,
+    logger: deps.logger,
+    users,
+  });
+  // M1.2 — global identity (docs/09 §3.1): the session and the tenant
+  // authoriser both read these tables, each behind its own short cache.
+  const accountRepo = new DrizzleAccountRepo(deps.db, { logger: deps.logger });
+  const resolveOperatorAccount = makeResolveOperatorAccount({
+    accounts: accountRepo,
+    logger: deps.logger,
+  });
+  const operatorAccounts = makeOperatorAccountGate({
+    resolveAccount: resolveOperatorAccount,
+    // M3.1 — the one-time env→DB promotion (race-safe in the repo).
+    grantBootstrapPlatformRole: (accountId, sessionEmail) =>
+      accountRepo.grantBootstrapPlatformRole(accountId, sessionEmail),
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  const supportSessionRepo = new DrizzleSupportSessionRepo(deps.db, { logger: deps.logger });
+  const tenantGate = makeRequireTenant({
+    accounts: accountRepo,
+    // M3.3 — fresh liveness read; the session row IS the authorisation.
+    findSupportSession: (sessionId, accountId) =>
+      supportSessionRepo.findLive(sessionId, accountId, deps.clock.now()),
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  // M2.1/M2.2 — onboarding. Token hashing mirrors the oauth-state service:
+  // core owns no crypto, the port only ever sees hashes.
+  const hashInviteToken = (token: string): string =>
+    createHash("sha256").update(token).digest("hex");
+  const onboardingLimits = () => {
+    const cfg = loadOnboardingConfig();
+    return {
+      maxCreatedTotal: cfg.TENANT_CREATE_MAX_PER_ACCOUNT,
+      maxCreatedPerHour: cfg.TENANT_CREATE_MAX_PER_HOUR,
+    };
+  };
+  const baseCreateTenant = makeCreateTenant({
+    onboarding: new DrizzleTenantOnboardingRepo(deps.db, { logger: deps.logger }),
+    clock: deps.clock,
+    logger: deps.logger,
+    // Read per call, not at boot: the web process must start without these vars.
+    get limits() {
+      return onboardingLimits();
+    },
+    randomSuffix: () => randomBytes(2).toString("hex"),
+  });
+  const inviteRepo = new DrizzleInviteRepo(deps.db, { logger: deps.logger });
+  const baseJoinWithInvite = makeJoinWithInvite({
+    invites: inviteRepo,
+    clock: deps.clock,
+    logger: deps.logger,
+    hashToken: hashInviteToken,
+  });
+  const baseMembers = makeManageMembers({
+    members: new DrizzleMemberRepo(deps.db, { logger: deps.logger }),
+    logger: deps.logger,
+  });
+  const basePlatformTenants = makePlatformTenants({
+    platformTenants: new DrizzlePlatformTenantRepo(deps.db, { logger: deps.logger }),
+    invites: inviteRepo,
+    clock: deps.clock,
+    logger: deps.logger,
+    newToken: () => randomBytes(32).toString("hex"),
+    hashToken: hashInviteToken,
+    randomSuffix: () => randomBytes(2).toString("hex"),
+  });
+  /**
+   * The cache is dropped the instant a decision is written — wired HERE rather
+   * than inside the usecase so core stays free of caching, and so nobody can
+   * call `decide` through a path that forgets it. Without this the operator we
+   * just blocked would keep working for up to ACCESS_CACHE_TTL_MS.
+   */
+  const accessRequests: ManageAccessRequests = {
+    listAccessRequests: (input: ListAccessRequestsInput) =>
+      manageAccessRequests.listAccessRequests(input),
+    decideAccessRequest: async (
+      input: DecideAccessRequestInput,
+    ): Promise<AccessDecisionResult> => {
+      const result = await manageAccessRequests.decideAccessRequest(input);
+      operatorAccess.invalidateAll();
+      // The decision also wrote account/membership rows (M1.2) — every cache
+      // over them is stale the same instant.
+      operatorAccounts.invalidateAll();
+      tenantGate.invalidateAll();
+      return result;
+    },
+  };
+
   return {
     healthcheckTenant: makeHealthcheckTenant({
       tenants,
@@ -643,6 +868,11 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       catalogConfig,
       logger: deps.logger,
       users,
+      // Pointing the tenant at another folder/sheet invalidates the stored
+      // "can this account read it?" verdict — recompute it right away.
+      oauth: googleOAuth,
+      browser: google.browser,
+      clock: deps.clock,
     }),
     listCatalogProducts: makeListCatalogProducts({ catalog: products, logger: deps.logger }),
     composePost: makeComposePost({
@@ -688,6 +918,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       products,
       channels,
       queue,
+      // Bug B6 — turns the session e-mail into the `app_user.id` stored in
+      // `post_batch.created_by`; without it every batch is unattributed.
+      users,
       clock: deps.clock,
       logger: deps.logger,
       newId: () => randomUUID(),
@@ -699,6 +932,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       products,
       channels,
       publishers,
+      // Doc 10 §5.2 — a suspended tenant must not publish, and the worker has
+      // no session to check it for us.
+      tenants,
       queue,
       // E7.5 — where each step of this publish is reported (design §5.6).
       progress: jobProgress,
@@ -731,8 +967,88 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     savePostDraft: makeSavePostDraft({ drafts: postDrafts, logger: deps.logger }),
     loadPostDraft: makeLoadPostDraft({ drafts: postDrafts, logger: deps.logger }),
     discardPostDraft: makeDiscardPostDraft({ drafts: postDrafts, logger: deps.logger }),
-    findOperatorUserId: (tenantId: string, email: string) =>
-      users.findUserIdByEmail(tenantId, email),
+    findDraftOwnerUserId: (tenantId: TenantId, accountId: string) =>
+      users.findUserIdByAccount(tenantId, accountId),
+    operatorAccess,
+    accessRequests,
+    operatorAccounts,
+    getOperatorOverview: makeGetOperatorOverview({ accounts: accountRepo, logger: deps.logger }),
+    oauthStates: makeOAuthStateService({
+      store: new DrizzleOAuthStateStore(deps.db, { logger: deps.logger }),
+      clock: deps.clock,
+    }),
+    /**
+     * Both onboarding writes mint a NEW membership — every cache over accounts
+     * and memberships is stale the same instant, so the caches drop HERE (the
+     * same discipline as decideAccessRequest above). Without this, /api/me and
+     * requireTenant would not see the new company for up to a TTL.
+     */
+    createTenant: async (input) => {
+      const result = await baseCreateTenant(input);
+      operatorAccounts.invalidateAll();
+      tenantGate.invalidateAll();
+      return result;
+    },
+    invites: makeManageInvites({
+      invites: inviteRepo,
+      clock: deps.clock,
+      logger: deps.logger,
+      newToken: () => randomBytes(32).toString("hex"),
+      hashToken: hashInviteToken,
+    }),
+    joinWithInvite: async (input) => {
+      const result = await baseJoinWithInvite(input);
+      if (!result.alreadyMember) {
+        operatorAccounts.invalidateAll();
+        tenantGate.invalidateAll();
+      }
+      return result;
+    },
+    /**
+     * M2.3 — writes change memberships: every cache over them dies with the
+     * decision (same discipline as decide/join above). The version bump covers
+     * OTHER processes; this covers this one, instantly.
+     */
+    members: {
+      listMembers: (input) => baseMembers.listMembers(input),
+      changeRole: async (input) => {
+        const result = await baseMembers.changeRole(input);
+        operatorAccounts.invalidateAll();
+        tenantGate.invalidateAll();
+        return result;
+      },
+      removeMember: async (input) => {
+        const result = await baseMembers.removeMember(input);
+        operatorAccounts.invalidateAll();
+        tenantGate.invalidateAll();
+        return result;
+      },
+    },
+    requirePlatformAdmin: makeRequirePlatformAdmin({
+      accounts: accountRepo,
+      logger: deps.logger,
+    }),
+    /**
+     * M3.2 — a status flip changes what EVERY member of that tenant may do:
+     * the caches over memberships/accounts die with the decision (tier S sees
+     * the fresh row regardless; this closes the R/M window in this process).
+     */
+    platformTenants: {
+      listTenants: () => basePlatformTenants.listTenants(),
+      createTenant: (input) => basePlatformTenants.createTenant(input),
+      setTenantStatus: async (input) => {
+        const result = await basePlatformTenants.setTenantStatus(input);
+        operatorAccounts.invalidateAll();
+        tenantGate.invalidateAll();
+        return result;
+      },
+    },
+    supportSessions: makeManageSupportSessions({
+      sessions: supportSessionRepo,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+    requireTenant: tenantGate.requireTenant,
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
     retryPostJob: makeRetryPostJob({
       postJobs,
@@ -802,6 +1118,26 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       newState: () => randomBytes(32).toString("hex"),
       users,
     }),
+    connectGoogleDrive: makeConnectGoogleDrive({
+      oauth: googleOAuth,
+      client: google.oauthClient,
+      // Same object that resolves the per-tenant Drive/Sheet identity: a
+      // connect/disconnect must drop the client the next sync would reuse.
+      authCache: google.auth,
+      // Right after a connect, check whether the account that just arrived can
+      // read the source this tenant already had.
+      catalogConfig,
+      browser: google.browser,
+      clock: deps.clock,
+      logger: deps.logger,
+      newState: () => randomBytes(32).toString("hex"),
+      users,
+    }),
+    browseGoogleDrive: makeBrowseGoogleDrive({
+      browser: google.browser,
+      oauth: googleOAuth,
+      logger: deps.logger,
+    }),
     getMediaContent: makeGetMediaContent({
       drive,
       blobs,
@@ -809,6 +1145,15 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       mediaAssets: media,
       sign: mediaSign,
       clock: deps.clock,
+      logger: deps.logger,
+    }),
+    // Same sources, same cache — only the door differs (no `sign`, no `clock`:
+    // there is no signature to verify and no expiry to compare against).
+    getMediaPreview: makeGetMediaPreview({
+      drive,
+      blobs,
+      cache: mediaCache,
+      mediaAssets: media,
       logger: deps.logger,
     }),
     signMediaUrl: signMediaUrlFn,
@@ -862,6 +1207,41 @@ export { FACEBOOK_CONNECT_SCOPES } from "@/adapters/meta/facebook-oauth";
  * tenant mapping yet (PENDING: multi-tenant sign-in is a product decision).
  */
 export { DEMO_TENANT_ID } from "@/adapters/db/seed-constants";
+
+/**
+ * E1.4 — which tenant a brand-new sign-in identity is filed under.
+ *
+ * PENDING(tenant-mapping): a first sign-in cannot say which tenant the person
+ * belongs to, and this deployment has exactly one (the same assumption the
+ * Facebook channel import already makes). When multi-tenant sign-in lands, this
+ * becomes a lookup, not a constant — every caller already passes it explicitly.
+ */
+export { DEMO_TENANT_ID as ACCESS_REGISTRY_TENANT_ID } from "@/adapters/db/seed-constants";
+
+/**
+ * Access-registry vocabulary the thin routes need for their zod schemas. The
+ * app layer may not import `core/usecases` (docs/07 §2), and a second copy of
+ * these literals in a route would be a second thing to update.
+ */
+export { ACCESS_DECISIONS } from "@/core/usecases/manage-access-requests";
+export type {
+  AccessDecision,
+  AccessDecisionResult,
+  AccessRequestView,
+} from "@/core/usecases/manage-access-requests";
+export type { OperatorAccessState } from "@/core/usecases/check-operator-access";
+
+/**
+ * M1.2 vocabulary the app layer needs (it may not import core/usecases or
+ * core/domain/* except errors — docs/07 §2): session shape, overview DTO and
+ * the tenant-context types the routes will consume from M1.3.
+ */
+export type {
+  OperatorAccountState as OperatorAccountSessionState,
+} from "@/core/usecases/resolve-operator-account";
+export type { OperatorOverview } from "@/core/usecases/get-operator-overview";
+export type { PlatformRole } from "@/core/domain/account";
+export type { TenantContext, TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Drains the DB pool, any lazily built producer queue and the AI registry cache

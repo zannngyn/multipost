@@ -28,6 +28,7 @@ import {
   MAX_CANCEL_NOTE_LENGTH,
   makeCancelScheduledJob,
 } from "./cancel-scheduled-job";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E8.4 cancel. The rules under test: the database decides (optimistic guard),
@@ -35,7 +36,7 @@ import {
  * but harmless.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const JOB_ID = "11111111-1111-1111-1111-111111111111";
 const SCHEDULED_AT = new Date("2026-08-13T09:00:00.000Z");
 
@@ -263,7 +264,7 @@ function harness(
 
 describe("cancelScheduledJob — refusals", () => {
   it.each([
-    ["a malformed tenant id", { tenantId: "nope", postJobId: JOB_ID }],
+    ["a malformed tenant id", { tenantId: testTenantId("nope"), postJobId: JOB_ID }],
     ["an empty job id", { tenantId: TENANT, postJobId: "  " }],
   ])("rejects %s", async (_label, input) => {
     const { cancelScheduledJob, queue } = harness(makeJob());

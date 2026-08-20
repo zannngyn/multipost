@@ -17,6 +17,7 @@ import { isTenantId } from "@/core/domain/tenant";
 import type { Logger } from "@/core/ports/infra";
 import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E7.5 — the end-of-run table of brief §3 + §6: one line per channel plus the
@@ -87,12 +88,12 @@ export interface BatchTotals {
 }
 
 export interface GetBatchStatusInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId: string;
 }
 
 export interface GetBatchStatusResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId: string;
   readonly productCode: string;
   readonly color: string;
@@ -130,24 +131,26 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
     input: GetBatchStatusInput,
   ): Promise<GetBatchStatusResult> {
     // --- Edge cases first ---------------------------------------------------
-    const tenantId = str(input?.tenantId);
+    const rawTenantId = str(input?.tenantId);
     const batchId = str(input?.batchId);
-    if (!isTenantId(tenantId) || batchId.length === 0) {
+    if (!isTenantId(rawTenantId) || batchId.length === 0) {
       throw new AppError("INVALID_INPUT", {
         message: "getBatchStatus requires a tenant UUID and a batch id",
         userMessage: "Yêu cầu xem kết quả lô bài đăng thiếu thông tin định danh.",
-        context: { tenant_id: tenantId || null, batch_id: batchId || null },
+        context: { tenant_id: rawTenantId || null, batch_id: batchId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const summary = await deps.postJobs.getBatchSummary(tenantId, batchId);
     if (!summary) {
       // Also the "batch of another tenant" case: the repo is tenant-scoped, so a
       // foreign batch simply has no rows here — one code, no information leak
       // about whether it exists elsewhere.
-      // NOTE(orchestrator): a dedicated BATCH_NOT_FOUND code would map to 404
-      // more honestly; INVALID_INPUT + reason is the closest existing code.
-      throw new AppError("INVALID_INPUT", {
+      // Bug B5 (doc 10 §7): now its own 404 code. It used to be an
+      // INVALID_INPUT 400, which told the caller their REQUEST was malformed
+      // when the request was fine and the batch simply is not theirs.
+      throw new AppError("BATCH_NOT_FOUND", {
         message: "Post batch not found for this tenant",
         userMessage: "Không tìm thấy lô bài đăng này.",
         context: { tenant_id: tenantId, batch_id: batchId, reason: "BATCH_NOT_FOUND" },
@@ -283,7 +286,7 @@ function canShowProgress(status: PostJobStatus): boolean {
  */
 async function readProgress(
   deps: GetBatchStatusDeps,
-  input: { tenantId: string; batchId: string; postJobIds: readonly string[] },
+  input: { tenantId: TenantId; batchId: string; postJobIds: readonly string[] },
 ): Promise<ReadonlyMap<string, PostJobProgress>> {
   if (input.postJobIds.length === 0) return NO_PROGRESS;
 

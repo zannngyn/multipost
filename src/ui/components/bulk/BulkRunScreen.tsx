@@ -9,12 +9,15 @@ import { BulkCodesField } from "@/ui/components/bulk/BulkCodesField";
 import { BulkProgressTable } from "@/ui/components/bulk/BulkProgressTable";
 import { ChannelGroupPicker } from "@/ui/components/compose/ChannelGroupPicker";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { SchedulePicker } from "@/ui/components/scheduled/SchedulePicker";
 import { Button } from "@/ui/components/ui/button";
 import { Textarea } from "@/ui/components/ui/textarea";
 import { useBulkRun } from "@/ui/hooks/useBulkRun";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useScheduleChoice } from "@/ui/hooks/useScheduleChoice";
+import { writeGate } from "@/ui/hooks/read-only-gate";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import {
   BULK_CAPTION_MODES,
   BULK_CAPTION_MODE_LABELS,
@@ -25,7 +28,6 @@ import {
   renderCaptionTemplate,
   type BulkRunFormValues,
 } from "@/ui/schemas/bulk.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Chạy hàng loạt" (E10.5): component -> hook -> service -> internal API.
@@ -46,13 +48,11 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  * `content` object returned by compose.
  */
 export function BulkRunScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const codesId = useId();
   const templateId = useId();
   const captionModeId = useId();
 
-  const groups = useChannelGroups(tenantId);
+  const groups = useChannelGroups();
   const run = useBulkRun();
   const schedule = useScheduleChoice();
   const summaryRef = useRef<HTMLDivElement>(null);
@@ -66,7 +66,6 @@ export function BulkRunScreen() {
     mode: "onSubmit",
     reValidateMode: "onChange",
     defaultValues: {
-      tenantId,
       codesText: "",
       captionMode: "ai",
       captionTemplate: "",
@@ -86,6 +85,10 @@ export function BulkRunScreen() {
   const selectedIds = useMemo(() => [...selected], [selected]);
   const groupItems = groups.data?.groups ?? [];
   const { phase, summary, rows, isRunning } = run;
+
+  // Support mode is read-only (M3.3): a bulk run publishes to the customer's
+  // Pages, so the trigger goes off with its reason attached.
+  const gate = writeGate(useReadOnlyReason(), isRunning);
 
   // Focus the result summary when the run ends, instead of letting focus sit on
   // a now-disabled button (web-bulk-actions rule 5).
@@ -129,7 +132,6 @@ export function BulkRunScreen() {
     setRanScheduled(resolved.scheduledAt !== null);
 
     void run.start({
-      tenantId: values.tenantId,
       codes: parseBulkCodes(values.codesText).codes.map((item) => item.code),
       channelIds: selectedIds,
       captionMode: values.captionMode,
@@ -276,7 +278,10 @@ export function BulkRunScreen() {
         />
 
         <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-          <Button type="submit" disabled={isRunning}>
+          {/* A bulk run creates real posts on the customer's Pages; support
+              mode may not (M3.3). The rest of the form stays readable so staff
+              can still see what a customer had set up. */}
+          <Button type="submit" disabled={isRunning || gate.isDisabled}>
             {isRunning
               ? "Đang chạy…"
               : schedule.mode === "scheduled"
@@ -293,6 +298,7 @@ export function BulkRunScreen() {
               Xoá kết quả để chạy lượt mới
             </Button>
           ) : null}
+          <ReadOnlyNotice reason={gate.reason} className="basis-full" />
         </div>
       </form>
 

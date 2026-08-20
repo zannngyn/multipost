@@ -7,8 +7,11 @@ import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { PromptVersionForm } from "@/ui/components/prompts/PromptVersionForm";
 import { PromptVersionTable } from "@/ui/components/prompts/PromptVersionTable";
 import { Badge } from "@/ui/components/ui/badge";
+import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { writeGate } from "@/ui/hooks/read-only-gate";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import {
   useActivatePromptVersion,
   useCreatePromptVersion,
@@ -20,7 +23,6 @@ import {
   type PromptVersion,
   type PromptVersionFormValues,
 } from "@/ui/schemas/prompt.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Mẫu prompt" (E10.7): component -> hook -> service -> internal API.
@@ -39,12 +41,14 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  *   error   — 4xx vs 5xx via <ApiErrorNotice>
  */
 export function PromptTemplatesScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
 
-  const versions = usePromptVersions(tenantId, PROMPT_TASK, PROMPT_PLATFORM);
-  const create = useCreatePromptVersion(tenantId, PROMPT_TASK, PROMPT_PLATFORM);
-  const activate = useActivatePromptVersion(tenantId, PROMPT_TASK, PROMPT_PLATFORM);
+  const versions = usePromptVersions(PROMPT_TASK, PROMPT_PLATFORM);
+  const create = useCreatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
+  const activate = useActivatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
+  // Support mode is read-only (M3.3): a prompt version decides what the AI
+  // writes for the CUSTOMER's posts, so neither creating nor activating one is
+  // something MYSP staff do from inside a support session.
+  const gate = writeGate(useReadOnlyReason(), create.isPending);
 
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState<Partial<PromptVersionFormValues> | undefined>(undefined);
@@ -187,7 +191,9 @@ export function PromptTemplatesScreen() {
               title="Đơn vị này chưa có phiên bản riêng"
               description="Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Tạo phiên bản riêng khi muốn đổi giọng văn, độ dài hay cách gắn hashtag."
               action={
-                !formOpen ? (
+                gate.isDisabled ? (
+                  <ReadOnlyNotice reason={gate.reason} />
+                ) : !formOpen ? (
                   <Button type="button" onClick={openBlankForm}>
                     Tạo phiên bản đầu tiên
                   </Button>
@@ -201,7 +207,9 @@ export function PromptTemplatesScreen() {
               <h2 id="prompt-versions-heading" className="text-lg font-semibold">
                 Các phiên bản ({data.versions.length})
               </h2>
-              {!formOpen ? (
+              {gate.isDisabled ? (
+                <ReadOnlyNotice reason={gate.reason} />
+              ) : !formOpen ? (
                 <Button type="button" variant="outline" onClick={openBlankForm}>
                   Tạo phiên bản mới
                 </Button>
@@ -211,7 +219,7 @@ export function PromptTemplatesScreen() {
             <PromptVersionTable
               versions={data.versions}
               activatingVersion={activate.isPending ? (activate.variables?.version ?? null) : null}
-              disabled={create.isPending}
+              disabled={gate.isDisabled}
               onActivate={handleActivate}
               onReuse={reuse}
             />
@@ -221,7 +229,6 @@ export function PromptTemplatesScreen() {
             <section className="bg-card rounded-xl border p-5">
               <PromptVersionForm
                 key={draftKey}
-                tenantId={tenantId}
                 nextVersion={data.nextVersion}
                 defaultValues={draft}
                 pending={create.isPending}

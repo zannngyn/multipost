@@ -42,6 +42,7 @@
  */
 
 import { AppError } from "./errors";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export const POST_JOB_STATUSES = [
   "draft",
@@ -122,7 +123,7 @@ export interface PostJobMedia {
 
 export interface PostJob {
   readonly id: string;
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId: string;
   readonly productCode: string;
   /**
@@ -729,7 +730,7 @@ function toDate(value: unknown): Date | null {
 // --- Anti-duplicate key (business rule 4) -----------------------------------
 
 export interface PostJobKeyParts {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId: string;
   readonly productCode: string;
   readonly color: string;

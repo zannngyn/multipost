@@ -8,19 +8,10 @@ import {
 
 import { buildBaseAuthConfig } from "@/app/_auth/auth.config";
 import { isDevFakeSessionEnabled, warnDevFakeSession } from "@/app/_auth/dev-session";
+import { isPublicPath } from "@/app/_lib/public-paths";
+import { redactSensitivePath } from "@/app/_lib/redact-path";
 import { safeReturnUrl } from "@/app/_auth/return-url";
 import { AppError } from "@/core/domain/errors";
-
-/** Everything else requires a session. Prefix match, plus their sub-paths. */
-const PUBLIC_PREFIXES = [
-  "/signin", // the door itself — must stay outside the guard, or redirect loop
-  "/api/auth", // Auth.js flow endpoints
-  "/api/health", // liveness probe for Docker/Caddy, called without a session
-  // Signed media bridge (E3.6). Meta's fetcher downloads the photo with no
-  // cookie at all, so a session guard here would break every Facebook post.
-  // Its bearer is the HMAC in `?sig=`, verified inside `getMediaContent`.
-  "/api/media",
-] as const;
 
 /**
  * Session decoding only — no providers needed to read a JWT cookie.
@@ -48,12 +39,6 @@ function getGuard(): NextProxy {
   return cachedGuard;
 }
 
-function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
-}
-
 function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
 }
@@ -65,7 +50,10 @@ function logDenied(request: NextRequest, kind: "json" | "redirect"): void {
       time: new Date().toISOString(),
       message: "Request blocked: no valid session",
       error_code: "UNAUTHORIZED",
-      path: request.nextUrl.pathname,
+      // Redacted: `/join/<token>` reaches this deny path for every signed-out
+      // invitee, and the token is a bearer (see _lib/redact-path). The
+      // browser's returnUrl below keeps the full path — only the log loses it.
+      path: redactSensitivePath(request.nextUrl.pathname),
       method: request.method,
       response: kind,
     }),
@@ -79,10 +67,29 @@ function logDenied(request: NextRequest, kind: "json" | "redirect"): void {
  * Page -> redirect to /signin carrying returnUrl so the operator lands back
  * on the page they asked for.
  */
+/**
+ * The two OAuth callbacks are API paths the BROWSER navigates to top-level
+ * (doc 10 §3, option (a)): a session that expired during the consent screen
+ * must land the operator back on the screen they started from — with a reason
+ * — not on a white page showing 401 JSON. Deliberately NOT public prefixes:
+ * the guard still runs, only the refusal shape changes.
+ */
+const CALLBACK_RETURN_SCREENS: Record<string, string> = {
+  "/api/catalog/google/callback": "/sync?google=error&reason=SESSION_EXPIRED",
+  "/api/channels/callback": "/channels?connect=error&reason=SESSION_EXPIRED",
+};
+
 function deny(request: NextRequest): NextResponse {
   const error = new AppError("UNAUTHORIZED", {
-    context: { path: request.nextUrl.pathname },
+    // Same redaction as logDenied: AppError.context is log material.
+    context: { path: redactSensitivePath(request.nextUrl.pathname) },
   });
+
+  const callbackScreen = CALLBACK_RETURN_SCREENS[request.nextUrl.pathname];
+  if (callbackScreen) {
+    logDenied(request, "redirect");
+    return NextResponse.redirect(new URL(callbackScreen, request.nextUrl.origin));
+  }
 
   if (isApiPath(request.nextUrl.pathname)) {
     logDenied(request, "json");
@@ -111,7 +118,9 @@ export default async function proxy(
   // Dev bypass: checked before Auth.js runs, so a developer can exercise the
   // protected routes without Google credentials (see _auth/dev-session.ts).
   if (isDevFakeSessionEnabled()) {
-    warnDevFakeSession({ surface: "middleware", path: pathname });
+    // Redacted for the same reason as logDenied: this line fires for every
+    // request under the bypass, /join/<token> included.
+    warnDevFakeSession({ surface: "middleware", path: redactSensitivePath(pathname) });
     return NextResponse.next();
   }
 

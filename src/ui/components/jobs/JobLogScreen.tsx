@@ -13,6 +13,7 @@ import { presentWorkerHealth } from "@/ui/components/jobs/present-worker-health"
 import { Button } from "@/ui/components/ui/button";
 import { Select } from "@/ui/components/ui/select";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { usePostJobLog, useRetryPostJob } from "@/ui/hooks/usePostJobs";
 import { useWorkerHealth } from "@/ui/hooks/useWorkerHealth";
 import {
@@ -22,7 +23,6 @@ import {
   parseJobLogFilter,
   type PostJobStatus,
 } from "@/ui/schemas/post-batch.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Nhật ký đăng bài" (E11.1): component -> hook -> service -> internal API.
@@ -47,8 +47,6 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  * the four states above — it only adds a sentence on top of them.
  */
 export function JobLogScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -59,13 +57,16 @@ export function JobLogScreen() {
     [searchParams],
   );
 
-  const log = usePostJobLog(tenantId, filter);
-  const retry = useRetryPostJob(tenantId);
+  const log = usePostJobLog(filter);
+  const retry = useRetryPostJob();
+  // Support mode is read-only (M3.3): re-queueing a job posts to the customer's
+  // Page. The table shows the button disabled with this sentence beside it.
+  const readOnlyReason = useReadOnlyReason();
 
   // Separate query, separate failure: a job log that renders must not depend on
   // the health probe, and a dead queue must not blank the log (Partial state,
   // core-feedback-states §6).
-  const workerHealth = useWorkerHealth(tenantId);
+  const workerHealth = useWorkerHealth();
   const healthNotice = presentWorkerHealth({
     health: workerHealth.data,
     hasError: workerHealth.isError,
@@ -233,6 +234,7 @@ export function JobLogScreen() {
             items={items}
             onRetry={handleRetry}
             retryingJobId={retry.isPending ? (retry.variables?.postJobId ?? null) : null}
+            readOnlyReason={readOnlyReason}
           />
 
           {log.hasNextPage ? (

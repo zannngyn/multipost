@@ -5,6 +5,7 @@ import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 
 import { makeDrizzleGenerationLog } from "./ai-generation-log.drizzle";
 import type { Database } from "./client";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Row MAPPING without a database: the derivations that decide what a dashboard
@@ -12,7 +13,7 @@ import type { Database } from "./client";
  * would not check for us.
  */
 
-const TENANT = "66666666-6666-6666-6666-666666666666";
+const TENANT = testTenantId("66666666-6666-6666-6666-666666666666");
 
 interface LogLine {
   level: string;

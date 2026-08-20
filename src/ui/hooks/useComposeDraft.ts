@@ -6,6 +6,7 @@ import { useWatch } from "react-hook-form";
 import {
   buildComposeDraftPayload,
   draftContentKey,
+  draftProgressStep,
   isDraftWorthSaving,
   pickNewerDraft,
   type ComposeDraftSnapshot,
@@ -13,6 +14,7 @@ import {
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
 import type { PublishForm } from "@/ui/hooks/usePublishForm";
 import type { ComposeDraftPayload } from "@/ui/schemas/post-draft.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { TENANT_ID_PATTERN } from "@/ui/schemas/tenant-health.schema";
 import { ApiError } from "@/ui/services/api-error";
 import { ANONYMOUS_OWNER_KEY, composeDraftBuffer } from "@/ui/services/compose-draft-buffer";
@@ -156,21 +158,33 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
    */
   const watched = useWatch({
     control: form.control,
-    name: ["tenantId", "productCode", "color", "mediaKind", "videoTarget", "source"],
+    name: ["productCode", "color", "mediaKind", "videoTarget", "source"],
   });
   const values = form.getValues();
-  const [watchedTenantId, productCode, color, mediaKind, videoTarget, source] = watched;
+  const [productCode, color, mediaKind, videoTarget, source] = watched;
 
-  const tenantId = (watchedTenantId ?? values.tenantId ?? "").trim();
   /**
-   * The tenant field is editable, and half a UUID is not a tenant. Without this
-   * every keystroke in that field would fire a request that can only 400, and
-   * paint "Lưu nháp lỗi" over a form nobody has finished typing.
+   * The company is no longer typed into the form (M1.4): it comes from the
+   * session through `/api/me`. It is still needed HERE because the local buffer
+   * is partitioned by it — one browser profile may work in two companies, and a
+   * draft must never resurface under the wrong one.
+   */
+  const { tenantId: activeTenantId } = useActiveTenant();
+  const tenantId = (activeTenantId ?? "").trim();
+  /**
+   * Nothing is persisted until the company is known and looks like an id: until
+   * then a save could only 400, and it would paint "Lưu nháp lỗi" over a form
+   * the operator has not finished.
    */
   const canPersist = TENANT_ID_PATTERN.test(tenantId);
 
   const snapshot: ComposeDraftSnapshot = {
-    step: wizard.step.slug,
+    // Derived, not navigated to: the screen has no steps, but the stored
+    // payload still carries one so an older build can reopen the same row.
+    step: draftProgressStep({
+      composed: Boolean(wizard.composed),
+      everyCaption: wizard.hasEveryCaption,
+    }),
     composeKey: wizard.composedKey ?? "",
     productCode: productCode ?? "",
     color: color ?? "",
@@ -237,7 +251,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
 
       const attempt = (async () => {
         try {
-          const result = await saveComposeDraft({ tenantId, payload: next }, controller.signal);
+          const result = await saveComposeDraft({ payload: next }, controller.signal);
           if (!mountedRef.current || generationRef.current !== generation) return;
           lastSavedRef.current = next;
           everSavedRef.current = true;
@@ -319,7 +333,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       // are. Reading the buffer before that would mean reading a bucket we
       // cannot yet attribute to anybody.
       try {
-        const response = await fetchComposeDraft(tenantId);
+        const response = await fetchComposeDraft();
         server = response.draft;
         serverUpdatedAt = response.updatedAt;
         serverPersisted = response.persisted;
@@ -345,7 +359,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       if (ownerKey !== null && composeDraftBuffer.takePendingDiscard({ tenantId, ownerKey })) {
         server = null;
         serverUpdatedAt = null;
-        void discardComposeDraft(tenantId).catch((error: unknown) => {
+        void discardComposeDraft().catch((error: unknown) => {
           composeDraftBuffer.markPendingDiscard({ tenantId, ownerKey });
           console.warn("[useComposeDraft] retry of the post-publish cleanup failed", {
             scope: "ui/useComposeDraft",
@@ -495,7 +509,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       clearTimers();
       // Local first: it is synchronous and nothing can cancel it.
       mirrorLocally(next);
-      if (beaconComposeDraft({ tenantId, payload: next })) lastSavedRef.current = next;
+      if (beaconComposeDraft({ payload: next })) lastSavedRef.current = next;
     }
 
     function onVisibilityChange(): void {
@@ -529,7 +543,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
     clearTimers();
     composeDraftBuffer.clear({ tenantId, ownerKey });
 
-    void discardComposeDraft(tenantId).catch((error: unknown) => {
+    void discardComposeDraft().catch((error: unknown) => {
       // The lô exists, so this is not the operator's failure to see — but it is
       // NOT nothing either: the row left behind would be offered back as "nháp
       // đang soạn" of a post that has already gone out. The marker makes the
@@ -587,7 +601,7 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
       const pending = inFlightSaveRef.current ?? Promise.resolve();
       void pending
         .catch(() => undefined)
-        .then(() => discardComposeDraft(tenantId))
+        .then(() => discardComposeDraft())
         .catch((error: unknown) => {
           if (!mountedRef.current) return;
           // The operator asked for this one, so a failure is theirs to see —

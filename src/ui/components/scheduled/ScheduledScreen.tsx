@@ -15,6 +15,7 @@ import { Input } from "@/ui/components/ui/input";
 import { Select } from "@/ui/components/ui/select";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { useNowMs } from "@/ui/hooks/useNowMs";
 import {
   SCHEDULED_DIALOG_PARAMS,
@@ -27,7 +28,6 @@ import {
   timeZoneLabel,
   type ScheduledFilter,
 } from "@/ui/schemas/scheduled.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 import {
   useCancelScheduledJob,
   useReschedulePostJob,
@@ -53,8 +53,6 @@ import {
  *   error   — 4xx (sửa bộ lọc) vs 5xx (thử lại), via `presentApiError`
  */
 export function ScheduledScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -68,10 +66,13 @@ export function ScheduledScreen() {
     [searchParams],
   );
 
-  const list = useScheduledJobs(tenantId, filter);
-  const groups = useChannelGroups(tenantId);
-  const reschedule = useReschedulePostJob(tenantId);
-  const cancel = useCancelScheduledJob(tenantId);
+  const list = useScheduledJobs(filter);
+  const groups = useChannelGroups();
+  const reschedule = useReschedulePostJob();
+  const cancel = useCancelScheduledJob();
+  // Support mode is read-only (M3.3): a customer's schedule may be read, never
+  // moved or cancelled. The table folds this into its own per-row reason slot.
+  const readOnlyReason = useReadOnlyReason();
   const [notice, setNotice] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
@@ -342,6 +343,7 @@ export function ScheduledScreen() {
                           ? (cancel.variables?.postJobId ?? null)
                           : null
                     }
+                    readOnlyReason={readOnlyReason}
                   />
                 </section>
               );

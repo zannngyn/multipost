@@ -9,6 +9,7 @@ import {
   type PromptDetail,
   type PromptVersionListResponse,
 } from "@/ui/schemas/prompt.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import {
   activatePromptVersion,
@@ -27,14 +28,15 @@ import {
  */
 
 export function usePromptVersions(
-  tenantId: string,
   task: string = PROMPT_TASK,
   platform: string = PROMPT_PLATFORM,
 ) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<PromptVersionListResponse, ApiError>({
-    queryKey: promptKeys.versions(tenantId, task, platform),
-    queryFn: ({ signal }) => listPromptVersions({ tenantId, task, platform }, signal),
-    enabled: tenantId.length > 0,
+    queryKey: promptKeys.versions(tenantKey, task, platform),
+    queryFn: ({ signal }) => listPromptVersions({ task, platform }, signal),
+    enabled: isResolved,
     // A 4xx repeats the same bad request; only transport/5xx is worth retrying.
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
@@ -44,42 +46,42 @@ export function usePromptVersions(
 }
 
 export function useCreatePromptVersion(
-  tenantId: string,
   task: string = PROMPT_TASK,
   platform: string = PROMPT_PLATFORM,
 ) {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<
     CreatePromptVersionResponse,
     ApiError,
-    Omit<CreatePromptVersionParams, "tenantId" | "task" | "platform">
+    Omit<CreatePromptVersionParams, "task" | "platform">
   >({
-    mutationFn: (input) => createPromptVersion({ tenantId, task, platform, ...input }),
+    mutationFn: (input) => createPromptVersion({ task, platform, ...input }),
     // Never auto-retried: a second call would create a second version row.
     retry: false,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: promptKeys.versions(tenantId, task, platform) });
-      void queryClient.invalidateQueries({ queryKey: promptKeys.active(tenantId, task, platform) });
+      void queryClient.invalidateQueries({ queryKey: promptKeys.versions(tenantKey, task, platform) });
+      void queryClient.invalidateQueries({ queryKey: promptKeys.active(tenantKey, task, platform) });
     },
   });
 }
 
 export function useActivatePromptVersion(
-  tenantId: string,
   task: string = PROMPT_TASK,
   platform: string = PROMPT_PLATFORM,
 ) {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<PromptDetail, ApiError, { version: number }>({
-    mutationFn: ({ version }) => activatePromptVersion({ tenantId, task, platform, version }),
+    mutationFn: ({ version }) => activatePromptVersion({ task, platform, version }),
     retry: false,
     onSettled: () => {
       // Also on failure: the version may have been activated elsewhere, and the
       // screen must show what the server has, not what it hoped for.
-      void queryClient.invalidateQueries({ queryKey: promptKeys.versions(tenantId, task, platform) });
-      void queryClient.invalidateQueries({ queryKey: promptKeys.active(tenantId, task, platform) });
+      void queryClient.invalidateQueries({ queryKey: promptKeys.versions(tenantKey, task, platform) });
+      void queryClient.invalidateQueries({ queryKey: promptKeys.active(tenantKey, task, platform) });
     },
   });
 }

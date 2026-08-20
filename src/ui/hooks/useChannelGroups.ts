@@ -7,6 +7,7 @@ import type {
   ChannelGroupListResponse,
   DeleteChannelGroupResponse,
 } from "@/ui/schemas/channel-group.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import {
   channelGroupKeys,
@@ -23,11 +24,13 @@ import {
  * without a reload (core-component-reuse: share the rule, not just the widget).
  */
 
-export function useChannelGroups(tenantId: string) {
+export function useChannelGroups() {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<ChannelGroupListResponse, ApiError>({
-    queryKey: channelGroupKeys.list(tenantId),
-    queryFn: ({ signal }) => listChannelGroups(tenantId, signal),
-    enabled: tenantId.length > 0,
+    queryKey: channelGroupKeys.list(tenantKey),
+    queryFn: ({ signal }) => listChannelGroups(signal),
+    enabled: isResolved,
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
     retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 5_000),
@@ -41,40 +44,43 @@ export interface ChannelGroupInput {
 }
 
 /** Writes are never auto-retried: a duplicated group is a silent mess. */
-export function useCreateChannelGroup(tenantId: string) {
+export function useCreateChannelGroup() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<ChannelGroup, ApiError, ChannelGroupInput>({
-    mutationFn: (input) => createChannelGroup({ tenantId, ...input }),
+    mutationFn: (input) => createChannelGroup(input),
     retry: false,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: channelGroupKeys.list(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: channelGroupKeys.list(tenantKey) });
     },
   });
 }
 
-export function useUpdateChannelGroup(tenantId: string) {
+export function useUpdateChannelGroup() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<ChannelGroup, ApiError, ChannelGroupInput & { groupId: string }>({
-    mutationFn: (input) => updateChannelGroup({ tenantId, ...input }),
+    mutationFn: (input) => updateChannelGroup(input),
     retry: false,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: channelGroupKeys.list(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: channelGroupKeys.list(tenantKey) });
     },
   });
 }
 
-export function useDeleteChannelGroup(tenantId: string) {
+export function useDeleteChannelGroup() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<DeleteChannelGroupResponse, ApiError, { groupId: string }>({
-    mutationFn: ({ groupId }) => deleteChannelGroup({ tenantId, groupId }),
+    mutationFn: ({ groupId }) => deleteChannelGroup({ groupId }),
     retry: false,
     onSettled: () => {
       // Also on failure: the group may be gone already (another operator), and
       // the screen must show what the server has, not what it hoped for.
-      void queryClient.invalidateQueries({ queryKey: channelGroupKeys.list(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: channelGroupKeys.list(tenantKey) });
     },
   });
 }

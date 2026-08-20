@@ -4,6 +4,7 @@ import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
@@ -13,8 +14,10 @@ import { AppError } from "@/core/domain/errors";
  * PUT, not PATCH: the usecase replaces both fields at once (name + full member
  * list), so a partial body would be a lie about what the request does.
  *
- * A group of another tenant answers exactly like a group that does not exist
- * (INVALID_INPUT + `GROUP_NOT_FOUND`) — tenant scoping is inside the usecase.
+ * A group of another tenant answers exactly like a group that does not exist —
+ * now 404 CHANNEL_GROUP_NOT_FOUND (Bug B5); tenant scoping is in the usecase.
+ *
+ * M1.3b — editor / tier M for both verbs (doc 10 §4.2).
  */
 
 const ROUTE_PUT = "PUT /api/channel-groups/[groupId]";
@@ -25,10 +28,6 @@ const MAX_CHANNELS_PER_GROUP = 50;
 const MAX_NAME_LENGTH = 80;
 
 const UpdateSchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   name: z
     .string({ error: "Nhóm kênh phải có tên." })
     .trim()
@@ -38,11 +37,6 @@ const UpdateSchema = z.object({
     .array(z.string().trim().min(1, "Mã kênh không hợp lệ.").max(128, "Mã kênh quá dài."))
     .min(1, "Nhóm kênh phải có ít nhất một kênh.")
     .max(MAX_CHANNELS_PER_GROUP, `Một nhóm kênh chỉ chứa tối đa ${MAX_CHANNELS_PER_GROUP} kênh.`),
-});
-
-const DeleteRequestSchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
-  groupId: uuidField("Mã nhóm kênh không hợp lệ."),
 });
 
 /** A typo in the URL must be a 400, not a DB cast error (see _lib/ids). */
@@ -71,15 +65,21 @@ export async function PUT(
     const container = getContainer();
     logger = container.logger;
 
+    // --- Refusals first -----------------------------------------------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE_PUT}`,
+      tier: "M",
+      minRole: "editor",
+    });
+
     const { groupId } = await context.params;
-    // --- Edge case first ----------------------------------------------------
     const parsedId = GroupIdSchema.safeParse(groupId);
     if (!parsedId.success) throw invalidGroupId(ROUTE_PUT);
 
     const body = await readJsonBody(request, UpdateSchema, { route: ROUTE_PUT });
 
     const group = await container.usecases.channelGroups.updateChannelGroup({
-      tenantId: body.tenantId,
+      tenantId: ctx.tenantId,
       groupId: parsedId.data,
       name: body.name,
       channelIds: body.channelIds,
@@ -101,32 +101,20 @@ export async function DELETE(
     const container = getContainer();
     logger = container.logger;
 
-    const { groupId } = await context.params;
-    const url = new URL(request.url);
-    const parsed = DeleteRequestSchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
-      groupId,
+    // --- Refusals first -----------------------------------------------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE_DELETE}`,
+      tier: "M",
+      minRole: "editor",
     });
 
-    // --- Edge case first: no tenant / bad id, no delete ---------------------
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid request for channel group deletion",
-        userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã nhóm và mã đơn vị (tenant).",
-        context: {
-          route: ROUTE_DELETE,
-          group_id: groupId,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
-      });
-    }
+    const { groupId } = await context.params;
+    const parsedId = GroupIdSchema.safeParse(groupId);
+    if (!parsedId.success) throw invalidGroupId(ROUTE_DELETE);
 
     const result = await container.usecases.channelGroups.deleteChannelGroup({
-      tenantId: parsed.data.tenantId,
-      groupId: parsed.data.groupId,
+      tenantId: ctx.tenantId,
+      groupId: parsedId.data,
     });
 
     return Response.json(result);

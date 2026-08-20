@@ -13,6 +13,7 @@ import type {
 } from "@/core/ports/publisher";
 
 import { facebookChannelId, makeConnectFacebookChannels } from "./connect-facebook-channels";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E5.1 — both doors of "Kết nối Fanpage" with in-memory ports.
@@ -22,8 +23,8 @@ import { facebookChannelId, makeConnectFacebookChannels } from "./connect-facebo
  * ever reaches a log line or a returned channel.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
-const OTHER_TENANT = "00000000-0000-0000-0000-000000000002";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
+const OTHER_TENANT = testTenantId("00000000-0000-0000-0000-000000000002");
 const STATE = "a".repeat(64);
 const USER_TOKEN = "USER-TOKEN-SECRET";
 
@@ -222,13 +223,13 @@ describe("connect facebook — the CSRF gate decides before any network call", (
 
   it("refuses a tenant id that is not a UUID, on every entry point", async () => {
     const usecases = harness();
-    await expect(usecases.startFacebookConnect({ tenantId: "nope" })).rejects.toMatchObject({
+    await expect(usecases.startFacebookConnect({ tenantId: testTenantId("nope") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     await expect(
-      usecases.importChannels({ tenantId: "nope", userAccessToken: USER_TOKEN }),
+      usecases.importChannels({ tenantId: testTenantId("nope"), userAccessToken: USER_TOKEN }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-    await expect(usecases.refreshChannels({ tenantId: "nope" })).rejects.toMatchObject({
+    await expect(usecases.refreshChannels({ tenantId: testTenantId("nope") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     expect(usecases.calls.listedWith).toEqual([]);

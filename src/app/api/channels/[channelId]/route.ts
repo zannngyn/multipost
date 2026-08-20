@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
@@ -19,6 +19,10 @@ import { AppError } from "@/core/domain/errors";
  *
  * The actor comes from the SESSION, never from the body: a caller must not be
  * able to write someone else's name into the audit trail.
+ *
+ * M1.3b — admin / tier S for BOTH verbs (doc 10 §4.2). DELETE drops a stored
+ * Page token; PUT re-opens (or shuts) a door to a real Page, and an operator
+ * whose membership was revoked a second ago must not be able to open one.
  */
 
 const ROUTE_PUT = "PUT /api/channels/[channelId]";
@@ -26,15 +30,7 @@ const ROUTE_DELETE = "DELETE /api/channels/[channelId]";
 const MAX_CHANNEL_ID = 128;
 
 const UpdateSchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   status: z.enum(["active", "disabled"], { error: "Trạng thái kênh chỉ nhận bật hoặc tắt." }),
-});
-
-const DeleteRequestSchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
 });
 
 const ChannelIdSchema = z
@@ -63,19 +59,24 @@ export async function PUT(
     const container = getContainer();
     logger = container.logger;
 
+    // --- Refusals first ------------------------------------------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE_PUT}`,
+      tier: "S",
+      minRole: "admin",
+    });
+
     const { channelId } = await context.params;
-    // --- Edge case first ----------------------------------------------------
     const parsedId = ChannelIdSchema.safeParse(decodeURIComponent(channelId ?? ""));
     if (!parsedId.success) throw invalidChannelId(ROUTE_PUT);
 
     const body = await readJsonBody(request, UpdateSchema, { route: ROUTE_PUT });
-    const session = await getOperatorSession(`api:${ROUTE_PUT}`);
 
     const channel = await container.usecases.channels.setChannelStatus({
-      tenantId: body.tenantId,
+      tenantId: ctx.tenantId,
       channelId: parsedId.data,
       status: body.status,
-      actorEmail: session?.email ?? null,
+      actorEmail: session.email,
     });
 
     return Response.json({ channelId: channel.channelId, status: channel.status });
@@ -94,34 +95,21 @@ export async function DELETE(
     const container = getContainer();
     logger = container.logger;
 
-    const { channelId } = await context.params;
-    const url = new URL(request.url);
-    const parsedId = ChannelIdSchema.safeParse(decodeURIComponent(channelId ?? ""));
-    const parsed = DeleteRequestSchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
+    // --- Refusals first ------------------------------------------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE_DELETE}`,
+      tier: "S",
+      minRole: "admin",
     });
 
+    const { channelId } = await context.params;
+    const parsedId = ChannelIdSchema.safeParse(decodeURIComponent(channelId ?? ""));
     if (!parsedId.success) throw invalidChannelId(ROUTE_DELETE);
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid request for channel deletion",
-        userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant).",
-        context: {
-          route: ROUTE_DELETE,
-          channel: parsedId.data,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
-      });
-    }
 
-    const session = await getOperatorSession(`api:${ROUTE_DELETE}`);
     const result = await container.usecases.channels.removeChannel({
-      tenantId: parsed.data.tenantId,
+      tenantId: ctx.tenantId,
       channelId: parsedId.data,
-      actorEmail: session?.email ?? null,
+      actorEmail: session.email,
     });
 
     return Response.json(result);

@@ -2,6 +2,7 @@ import { isTenantId } from "@/core/domain/tenant";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { QueueWorkerRegistry } from "@/core/ports/job-queue";
 import type { UntouchedQueuedRepo } from "@/core/ports/post-job-repo";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E11 — "có ai đang xử lý hàng đợi không?".
@@ -28,7 +29,7 @@ import type { UntouchedQueuedRepo } from "@/core/ports/post-job-repo";
  */
 
 export interface WorkerHealthInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface WorkerHealth {
@@ -103,7 +104,10 @@ export function makeGetWorkerHealth(deps: GetWorkerHealthDeps) {
     let oldestUntouchedWaitMs: number | null = null;
     if (tenantOk) {
       try {
-        const untouched = await deps.postJobs.countUntouchedQueued({ tenantId, now: checkedAt });
+        const untouched = await deps.postJobs.countUntouchedQueued({
+          tenantId: normalizeTenantId(input.tenantId),
+          now: checkedAt,
+        });
         const total = untouched?.count;
         untouchedQueuedJobs =
           typeof total === "number" && Number.isFinite(total) && total > 0 ? Math.floor(total) : 0;

@@ -9,6 +9,7 @@ import type {
   PutBlobInput,
   StoredBlob,
 } from "@/core/ports/media-blob-store";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E9 — `MediaBlobStore` on the local filesystem, meant for a Docker volume on
@@ -120,7 +121,7 @@ export function makeLocalBlobStore(options: LocalBlobStoreOptions): MediaBlobSto
       }
     },
 
-    async delete(input: { tenantId: string; storageKey: string }): Promise<boolean> {
+    async delete(input: { tenantId: TenantId; storageKey: string }): Promise<boolean> {
       const path = resolveKey(root, input?.tenantId, input?.storageKey);
       if (!path) return false;
 

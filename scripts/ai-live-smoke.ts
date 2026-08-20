@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { deflateSync } from "node:zlib";
 
+import type { TenantId } from "@/core/domain/tenant-context";
+
 import { asc, eq } from "drizzle-orm";
 
 import { makeRedisAiCache } from "@/adapters/ai/cache/redis-cache";
@@ -359,7 +361,7 @@ async function main(): Promise<void> {
   const redis = createRedisConnection({ url: redisUrl, logger });
   const clock = makeSystemClock();
 
-  const tenantId = randomUUID();
+  const tenantId = randomUUID() as TenantId;
   await db.insert(tenants).values({ id: tenantId, name: "AI live smoke", status: "active" });
 
   let current: StepContext = { step: "init", purpose: "-" };
@@ -625,7 +627,7 @@ async function main(): Promise<void> {
 async function setTierOverride(
   db: ReturnType<typeof makeDbHandle>["db"],
   policies: CachedModelPolicyStore,
-  tenantId: string,
+  tenantId: TenantId,
   tier: AITier,
 ): Promise<void> {
   await db

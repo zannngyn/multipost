@@ -6,12 +6,20 @@ import type {
   CatalogSourceConfig,
   SaveCatalogSourceInput,
 } from "@/core/ports/drive-source";
+import type {
+  GoogleDriveBrowser,
+  GoogleOAuthRepo,
+  GoogleSourceAccessState,
+  SaveGoogleSourceAccessInput,
+} from "@/core/ports/google-oauth";
 import type { Logger } from "@/core/ports/infra";
 import type { UserRepo } from "@/core/ports/user-repo";
 
 import { makeUpdateCatalogSource } from "./update-catalog-source";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
+import type { TenantId } from "@/core/domain/tenant-context";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const FOLDER_ID = "1bA48sjugz9BczcoR0-zOc-VNlIYikp4v";
 const SHEET_ID = "1Qdhp9YS0mePn7G3focqAhqV3Mb1eymFqbX0EC1bFCVs";
 
@@ -48,6 +56,9 @@ function makeHarness(
   };
   const users: UserRepo = {
     findUserIdByEmail: async () => options.userId ?? null,
+    // This usecase names its actor by e-mail; the account arm exists only to
+    // satisfy the port (added for draft ownership, doc 10 §4.2).
+    findUserIdByAccount: async () => null,
   };
   return { saved, catalogConfig, logger: makeLogger(), users };
 }
@@ -60,7 +71,7 @@ describe("updateCatalogSource — edge cases first", () => {
       const update = makeUpdateCatalogSource(harness);
       await expect(
         update({
-          tenantId: tenantId as unknown as string,
+          tenantId: tenantId as unknown as TenantId,
           driveFolder: FOLDER_ID,
           spreadsheet: SHEET_ID,
           sheetName: "Mẫu 2026",
@@ -272,5 +283,88 @@ describe("updateCatalogSource — happy path", () => {
       }),
     ).resolves.toMatchObject({ driveFolderId: FOLDER_ID });
     expect(harness.saved[0]?.actorUserId).toBeNull();
+  });
+});
+
+
+/**
+ * Pointing the tenant at another folder/sheet makes the stored "can this
+ * account read it?" verdict describe the wrong thing. It is recomputed here —
+ * with a real probe even on the picker path, because a "đã duyệt rồi" flag
+ * would arrive from the browser and outside data is not trusted.
+ */
+describe("updateCatalogSource — the source-access verdict", () => {
+  const NOW = Date.UTC(2026, 7, 19, 4, 0, 0);
+  const clock = { now: () => new Date(NOW), nowMs: () => NOW };
+
+  function withProbe(options: {
+    previous?: CatalogSourceConfig | null;
+    state?: GoogleSourceAccessState;
+    probeError?: unknown;
+  }) {
+    const harness = makeHarness({ previous: options.previous ?? null });
+    const saved: SaveGoogleSourceAccessInput[] = [];
+    const checkSourceAccess = vi.fn(async () => {
+      if (options.probeError) throw options.probeError;
+      return options.state ?? "ok";
+    });
+    const browser = {
+      listFolders: vi.fn(),
+      listSpreadsheets: vi.fn(),
+      listSheetTabs: vi.fn(),
+      checkSourceAccess,
+    } as unknown as GoogleDriveBrowser;
+    const oauth = {
+      findConnection: vi.fn(),
+      findRefreshToken: vi.fn(),
+      saveConnection: vi.fn(),
+      deleteConnection: vi.fn(),
+      markConnectionExpired: vi.fn(),
+      saveSourceAccess: vi.fn(async (input: SaveGoogleSourceAccessInput) => {
+        saved.push(input);
+      }),
+    } as unknown as GoogleOAuthRepo;
+
+    const update = makeUpdateCatalogSource({ ...harness, oauth, browser, clock });
+    return { update, harness, saved, checkSourceAccess };
+  }
+
+  const input = {
+    tenantId: TENANT,
+    driveFolder: FOLDER_ID,
+    spreadsheet: SHEET_ID,
+    sheetName: "Mẫu 2026",
+  };
+
+  it("re-probes the source and stores the new verdict", async () => {
+    const { update, saved, checkSourceAccess } = withProbe({ state: "drive_unreadable" });
+
+    await update(input);
+
+    expect(checkSourceAccess).toHaveBeenCalledTimes(1);
+    expect(saved).toEqual([
+      {
+        tenantId: TENANT,
+        state: "drive_unreadable",
+        checkedAt: new Date(NOW).toISOString(),
+      },
+    ]);
+  });
+
+  it("saves the source even when the probe blows up — the save is not the probe's hostage", async () => {
+    const { update, harness, saved } = withProbe({ probeError: new Error("drive is down") });
+
+    await expect(update(input)).resolves.toMatchObject({ driveFolderId: FOLDER_ID });
+    expect(harness.saved).toHaveLength(1);
+    expect(saved[0]?.state).toBe("unknown");
+  });
+
+  it("skips the probe when nothing actually changed", async () => {
+    const { update, checkSourceAccess } = withProbe({
+      previous: { driveFolderId: FOLDER_ID, spreadsheetId: SHEET_ID, sheetName: "Mẫu 2026" },
+    });
+
+    await update(input);
+    expect(checkSourceAccess).not.toHaveBeenCalled();
   });
 });

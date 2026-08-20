@@ -15,10 +15,11 @@ import {
   encodePostJobCursor,
   makeListPostJobs,
 } from "./list-post-jobs";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /** E11.1 job log: filters, keyset paging and the Vietnamese explanation column. */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function silentLogger(): Logger {
   const logger: Logger = {
@@ -77,7 +78,7 @@ function harness(items: PostJobListItem[]) {
 describe("listPostJobs — rejected calls", () => {
   it("rejects a malformed tenant id", async () => {
     const { listPostJobs, queries } = harness([]);
-    await expect(listPostJobs({ tenantId: "nope" })).rejects.toMatchObject({
+    await expect(listPostJobs({ tenantId: testTenantId("nope") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     expect(queries).toHaveLength(0);

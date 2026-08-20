@@ -10,8 +10,10 @@ import type {
 } from "@/core/ports/product-repo";
 
 import { DEFAULT_RECENT_RUNS, makeGetSyncStatus, MAX_RECENT_RUNS } from "./get-sync-status";
+import type { TenantId } from "@/core/domain/tenant-context";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -106,7 +108,9 @@ describe("getSyncStatus — edge cases first", () => {
     "rejects tenant id %s (%s) before touching the repo",
     async (tenantId) => {
       const harness = makeHarness(summary);
-      await expect(harness.run({ tenantId })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      await expect(harness.run({ tenantId: testTenantId(tenantId) })).rejects.toMatchObject({
+        code: "INVALID_INPUT",
+      });
       expect(harness.syncRuns.findLatest).not.toHaveBeenCalled();
     },
   );
@@ -114,7 +118,7 @@ describe("getSyncStatus — edge cases first", () => {
   it("rejects a missing input object instead of throwing TypeError", async () => {
     const harness = makeHarness(summary);
     await expect(
-      harness.run(undefined as unknown as { tenantId: string }),
+      harness.run(undefined as unknown as { tenantId: TenantId }),
     ).rejects.toBeInstanceOf(AppError);
     expect(harness.syncRuns.findLatest).not.toHaveBeenCalled();
   });
@@ -230,7 +234,7 @@ describe("getSyncStatus — happy path", () => {
   it("returns the latest run with ISO dates and the uncapped issue counters", async () => {
     const harness = makeHarness(summary);
 
-    const result = await harness.run({ tenantId: `  ${TENANT}  ` });
+    const result = await harness.run({ tenantId: testTenantId(`  ${TENANT}  `) });
 
     expect(result).toEqual({
       tenantId: TENANT,

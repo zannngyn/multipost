@@ -1,5 +1,6 @@
 import { AppError } from "@/core/domain/errors";
 import { POST_DRAFT_SCHEMA_VERSION, type ComposeDraftPayload } from "@/core/domain/post-draft";
+import type { TenantId } from "@/core/domain/tenant-context";
 import type {
   PostDraftRepo,
   SavePostDraftRecord,
@@ -92,7 +93,7 @@ export function makeInMemoryPostDraftRepo(options: { now?: Date } = {}): InMemor
 /** Seeds a row the repo would never accept through `save` (older/hand-edited). */
 export async function seedRawDraft(
   repo: InMemoryPostDraftRepo,
-  input: { tenantId: string; ownerUserId: string; kind: string; payload: unknown; schemaVersion?: number },
+  input: { tenantId: TenantId; ownerUserId: string; kind: string; payload: unknown; schemaVersion?: number },
 ): Promise<void> {
   await repo.save({
     tenantId: input.tenantId,

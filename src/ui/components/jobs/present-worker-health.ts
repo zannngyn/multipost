@@ -70,7 +70,7 @@ export function presentWorkerHealth(input: PresentWorkerHealthInput): WorkerHeal
     };
   }
 
-  // The queue answered nothing, so `workersOnline` proves nothing either.
+  // The queue answered nothing, so `workersAvailable` proves nothing either.
   // This branch must stay ABOVE the worker branches: announcing "không có máy
   // nào chạy" from a reading we could not take would be a guess.
   if (!health.queueReachable) {
@@ -85,9 +85,6 @@ export function presentWorkerHealth(input: PresentWorkerHealthInput): WorkerHeal
     };
   }
 
-  // Defensive: the schema already rejects negatives, but a future field change
-  // must not turn a bad number into "mọi thứ bình thường".
-  const workersOnline = Number.isFinite(health.workersOnline) ? health.workersOnline : 0;
   // Somebody IS draining the queue. Deliberately silent even when
   // `oldestUntouchedWaitMs` is large: the publish spacing gate re-enqueues a
   // job without attempting it (core/usecases/publish-post), so a batch of N
@@ -95,7 +92,7 @@ export function presentWorkerHealth(input: PresentWorkerHealthInput): WorkerHeal
   // N × spacing (60s today). A "worker sống nhưng tắc" banner built on that
   // number would fire on every normal large batch. Telling a real backlog from
   // normal spacing needs a signal the health contract does not carry yet.
-  if (workersOnline > 0) return null;
+  if (health.workersAvailable) return null;
 
   const waiting = Number.isFinite(health.untouchedQueuedJobs)
     ? Math.max(0, health.untouchedQueuedJobs)

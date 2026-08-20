@@ -1,29 +1,26 @@
-import { z } from "zod";
-
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { buildStateCookie } from "@/app/api/channels/_lib/oauth-state-cookie";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
 /**
- * E5.1 step 1 — send the operator's browser to Facebook's OAuth dialog.
+ * E5.1 step 1 / M1.3b — send the operator's browser to Facebook's OAuth
+ * dialog.
  *
- * Answers a 302, not JSON: the browser is navigating. The CSRF nonce goes out
- * in an httpOnly cookie (see _lib/oauth-state-cookie) AND in the `state`
- * parameter; /callback only proceeds when the two match.
+ * Tenant + role come from `requireTenantContext` (tier S, admin — connecting a
+ * credential, doc 10 §4.2), never from the query string. The state is bound
+ * SERVER-SIDE: an `oauth_state` row freezes (tenant, account) at this moment,
+ * and the cookie carries only the opaque nonce (doc 10 §6).
  *
  * A Meta app that is not configured is NOT a 500: the usecase surfaces an
  * AppError naming the missing environment variables, and this route answers it
  * as JSON — the operator is still on the channels screen when they press the
- * button, so an error body is what they can read.
+ * button (doc 10 §3: `connect` keeps JSON for errors on purpose).
  */
 
 const ROUTE = "GET /api/channels/connect";
-
-const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
-});
 
 export const dynamic = "force-dynamic";
 
@@ -34,28 +31,31 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const url = new URL(request.url);
-    const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
+    // --- Edge cases first: authorise before any flow starts ------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "admin",
     });
-
-    // --- Edge case first: never start a flow we cannot finish ---------------
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid query string for the Facebook connect flow",
-        userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant).",
-        context: {
-          route: ROUTE,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
+    if (!session.accountId) {
+      // Unreachable in practice (requireTenant demands an account), belt only.
+      throw new AppError("UNAUTHORIZED", {
+        message: "Facebook connect needs a session backed by an account",
+        context: { route: ROUTE },
       });
     }
 
     const started = await container.usecases.connectChannels.startFacebookConnect({
-      tenantId: parsed.data.tenantId,
+      tenantId: ctx.tenantId,
+    });
+
+    // Server-side binding BEFORE the browser leaves: the row is what the
+    // callback will trust; the cookie below carries only the nonce.
+    await container.usecases.oauthStates.issue({
+      nonce: started.state,
+      tenantId: ctx.tenantId,
+      accountId: session.accountId,
+      purpose: "facebook_pages",
     });
 
     return new Response(null, {
@@ -63,7 +63,7 @@ export async function GET(request: Request): Promise<Response> {
       headers: {
         location: started.authorizeUrl,
         "set-cookie": buildStateCookie(
-          { state: started.state, tenantId: started.tenantId },
+          started.state,
           // Secure would make the cookie invisible over plain http on a dev box,
           // and every connect would then fail with "state mismatch".
           { secure: container.config.NODE_ENV === "production" },

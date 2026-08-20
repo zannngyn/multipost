@@ -6,6 +6,7 @@ import type { ChannelConfig, PublishMediaBytes, PublishMediaItem } from "@/core/
 
 import { makeFacebookPublisher } from "./facebook-publisher";
 import { makeGraphClient } from "./graph-client";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E8.6 — handing a post to Facebook's own scheduler, against a MOCKED Graph API.
@@ -102,7 +103,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
     await expect(
       scheduled.schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [item],
@@ -131,7 +132,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
     await expect(
       scheduled.schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d1", "1.jpg")],
@@ -151,7 +152,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
     await expect(
       scheduled.schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: { ...CHANNEL, platform: "tiktok" },
         caption: "x",
         media: [photo("d1", "1.jpg")],
@@ -162,7 +163,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
     await expect(
       scheduled.schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "   ",
         media: [photo("d1", "1.jpg")],
@@ -196,7 +197,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
     await expect(
       scheduled.schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d1", "1.jpg")],
@@ -230,7 +231,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
       const error = await scheduled
         .schedulePost({
-          tenantId: "t1",
+          tenantId: testTenantId("t1"),
           channel: CHANNEL,
           caption: "x",
           media: [photo("d1", "1.jpg")],
@@ -266,7 +267,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
       await expect(
         scheduled.schedulePost({
-          tenantId: "t1",
+          tenantId: testTenantId("t1"),
           channel: CHANNEL,
           caption: "x",
           media: [photo("d1", "1.jpg"), photo("d2", "2.jpg")],
@@ -298,7 +299,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
     await expect(
       scheduled.schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d1", "1.jpg")],
@@ -322,7 +323,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
     const error = await scheduled
       .schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d1", "1.jpg")],
@@ -344,7 +345,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
 
     await expect(
       scheduled.schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d1", "1.jpg")],
@@ -360,7 +361,7 @@ describe("schedulePost — refusals (nothing is uploaded)", () => {
     // a scheduled post nobody can see.
     const error = await scheduled
       .schedulePost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         caption: "x",
         media: [photo("d2", "2.jpg")],
@@ -390,7 +391,7 @@ describe("schedulePost — the handoff call", () => {
     const media = [photo("d1", "1.jpg"), photo("d2", "2.jpg")];
 
     const result = await scheduled.schedulePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "Giannal – MỘT NGÀY DỊU DÀNG",
       media,
@@ -425,7 +426,7 @@ describe("schedulePost — the handoff call", () => {
     const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     await scheduled.schedulePost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       caption: "x",
       media: [photo("d1", "1.jpg")],
@@ -452,7 +453,7 @@ describe("getPostState — the reconciliation read", () => {
     const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     const state = await scheduled.getPostState({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       postId: "555000111_777",
     });
@@ -472,7 +473,7 @@ describe("getPostState — the reconciliation read", () => {
     const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     const state = await scheduled.getPostState({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       postId: "555000111_777",
     });
@@ -489,7 +490,7 @@ describe("getPostState — the reconciliation read", () => {
     const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     const state = await scheduled.getPostState({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       postId: "555000111_777",
     });
@@ -513,7 +514,7 @@ describe("getPostState — the reconciliation read", () => {
     const { scheduled, logger } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     const state = await scheduled.getPostState({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       postId: "555000111_777",
     });
@@ -535,7 +536,7 @@ describe("getPostState — the reconciliation read", () => {
     const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     await expect(
-      scheduled.getPostState({ tenantId: "t1", channel: CHANNEL, postId: "555000111_777" }),
+      scheduled.getPostState({ tenantId: testTenantId("t1"), channel: CHANNEL, postId: "555000111_777" }),
     ).rejects.toMatchObject({ code: "TOKEN_EXPIRED" });
   });
 
@@ -544,7 +545,7 @@ describe("getPostState — the reconciliation read", () => {
     const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     await expect(
-      scheduled.getPostState({ tenantId: "t1", channel: CHANNEL, postId: "  " }),
+      scheduled.getPostState({ tenantId: testTenantId("t1"), channel: CHANNEL, postId: "  " }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -556,7 +557,7 @@ describe("deleteScheduledPost — taking the post back", () => {
     const { scheduled } = makePublisher(fetchImpl as unknown as typeof fetch);
 
     const deleted = await scheduled.deleteScheduledPost({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       channel: CHANNEL,
       postId: "555000111_777",
     });
@@ -581,7 +582,7 @@ describe("deleteScheduledPost — taking the post back", () => {
 
     await expect(
       scheduled.deleteScheduledPost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         postId: "555000111_777",
       }),
@@ -600,7 +601,7 @@ describe("deleteScheduledPost — taking the post back", () => {
 
     await expect(
       scheduled.deleteScheduledPost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         postId: "555000111_777",
       }),
@@ -613,7 +614,7 @@ describe("deleteScheduledPost — taking the post back", () => {
 
     await expect(
       scheduled.deleteScheduledPost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         postId: "555000111_777",
       }),
@@ -639,7 +640,7 @@ describe("deleteScheduledPost — taking the post back", () => {
 
     await expect(
       scheduled.deleteScheduledPost({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         channel: CHANNEL,
         postId: "555000111_777",
       }),

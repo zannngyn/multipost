@@ -28,13 +28,13 @@ import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { presentApiError, toApiError } from "@/ui/components/feedback/present-api-error";
 import { useChannels, useRemoveChannel, useSetChannelStatus } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import {
   parseConnectOutcome,
   type Channel,
   type ChannelStatus,
   type ConnectOutcome,
 } from "@/ui/schemas/channel.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Kênh" (E5.1): the Fanpages this tenant may publish to — the screen that has
@@ -56,15 +56,13 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  * URL, so F5 does not replay a stale message (web-auth-methods §4).
  */
 export function ConnectedChannelsScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const channels = useChannels(tenantId);
-  const setStatus = useSetChannelStatus(tenantId);
-  const remove = useRemoveChannel(tenantId);
+  const channels = useChannels();
+  const setStatus = useSetChannelStatus();
+  const remove = useRemoveChannel();
 
   const tokenInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -106,11 +104,23 @@ export function ConnectedChannelsScreen() {
 
   /**
    * Reading channels never touches the encryption key, so a server missing it
-   * looks completely healthy here while every write returns 400. Until the
-   * answer says otherwise, assume it is fine — an older server that does not
-   * send the flag must not be treated as broken.
+   * looks completely healthy here while every write returns 400.
+   *
+   * Only an EXPLICIT `false` blocks. Absent means the field was withheld from
+   * this role (M3.3) — an operator who cannot see the flag must not be shown a
+   * server-configuration warning they can neither confirm nor fix; the write
+   * itself still fails loudly if it comes to that.
    */
-  const areWritesBlocked = channels.data ? !channels.data.secretsConfigured : false;
+  const secretsMissing = channels.data?.secretsConfigured === false;
+  /**
+   * Support mode blocks the same buttons for a different reason (M3.3), and
+   * this screen already has the plumbing to disable every write with a tooltip
+   * — so it is reused rather than duplicated per button.
+   */
+  const readOnlyReason = useReadOnlyReason();
+  const areWritesBlocked = secretsMissing || readOnlyReason !== null;
+  /** Which sentence the tooltips carry. Secrets first: it is the harder stop. */
+  const writeBlockReason = secretsMissing ? undefined : (readOnlyReason ?? undefined);
 
   const busyChannelId = setStatus.isPending
     ? (setStatus.variables?.channelId ?? null)
@@ -158,7 +168,7 @@ export function ConnectedChannelsScreen() {
 
             {/* Before anything is typed, not after it fails: the whole point of
                 the flag is that this gap is invisible on the read path. */}
-            {areWritesBlocked ? (
+            {secretsMissing ? (
               <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
                 <SecretsNotConfiguredBanner />
               </Stack>
@@ -166,9 +176,9 @@ export function ConnectedChannelsScreen() {
 
             <Stack direction="vertical" padding={4}>
               <ChannelConnectPanel
-                tenantId={tenantId}
                 tokenInputRef={tokenInputRef}
                 areWritesBlocked={areWritesBlocked}
+                blockedReasonOverride={writeBlockReason}
               />
             </Stack>
 
@@ -208,6 +218,7 @@ export function ConnectedChannelsScreen() {
                     items={items}
                     busyChannelId={busyChannelId}
                     areWritesBlocked={areWritesBlocked}
+                    blockedReasonOverride={writeBlockReason}
                     onFocusTokenInput={() => tokenInputRef.current?.focus()}
                     onSetStatus={(channelId, status) => {
                       setStatus.reset();
@@ -311,6 +322,7 @@ function ChannelListBody({
   items,
   busyChannelId,
   areWritesBlocked,
+  blockedReasonOverride,
   onFocusTokenInput,
   onSetStatus,
   onRemove,
@@ -323,6 +335,8 @@ function ChannelListBody({
   items: readonly Channel[];
   busyChannelId: string | null;
   areWritesBlocked: boolean;
+  /** Set when writes are off for a reason OTHER than the missing key (M3.3). */
+  blockedReasonOverride?: string;
   onFocusTokenInput: () => void;
   onSetStatus: (channelId: string, status: ChannelStatus) => void;
   onRemove: (channelId: string) => void;
@@ -343,6 +357,21 @@ function ChannelListBody({
   if (items.length === 0) {
     // Telling someone to paste a token while the box that receives it is dead
     // would contradict the banner above. Same empty list, different next step.
+    //
+    // In support mode the sentence is different again: nothing is broken, the
+    // company simply has no Page and MYSP staff are not the ones to add it.
+    if (blockedReasonOverride) {
+      return (
+        <Stack direction="vertical" padding={4}>
+          <EmptyState
+            headingLevel={3}
+            title="Công ty này chưa kết nối Fanpage nào"
+            description={`Chưa có Page nào để đăng bài. ${blockedReasonOverride}`}
+          />
+        </Stack>
+      );
+    }
+
     if (areWritesBlocked) {
       return (
         <Stack direction="vertical" padding={4}>
@@ -396,6 +425,7 @@ function ChannelListBody({
           channels={items}
           busyChannelId={busyChannelId}
           areWritesBlocked={areWritesBlocked}
+          blockedReasonOverride={blockedReasonOverride}
           onSetStatus={onSetStatus}
           onRemove={onRemove}
         />

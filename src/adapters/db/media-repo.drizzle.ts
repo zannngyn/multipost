@@ -10,6 +10,7 @@ import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
 import { mediaAssets, type MediaAssetRow } from "./schema";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /** Postgres caps a statement at 65,535 bind parameters; 18 columns per row. */
 const CHUNK_SIZE = 400;
@@ -70,7 +71,7 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
    * tenant's folder, so a row that does not belong to `tenantId` must read as
    * "not found" rather than as a Drive permission question.
    */
-  async findByDriveFileId(tenantId: string, driveFileId: string): Promise<MediaAsset | null> {
+  async findByDriveFileId(tenantId: TenantId, driveFileId: string): Promise<MediaAsset | null> {
     const scope = forTenant(this.db, tenantId);
     const fileId = typeof driveFileId === "string" ? driveFileId.trim() : "";
     if (fileId.length === 0) {
@@ -100,7 +101,7 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
     return row ? toDomain(row) : null;
   }
 
-  async listByProductCode(tenantId: string, code: string): Promise<readonly MediaAsset[]> {
+  async listByProductCode(tenantId: TenantId, code: string): Promise<readonly MediaAsset[]> {
     const scope = forTenant(this.db, tenantId);
     const normalised = typeof code === "string" ? code.trim().toUpperCase() : "";
     if (normalised.length === 0) {
@@ -131,7 +132,7 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
   }
 
   async upsertMany(
-    tenantId: string,
+    tenantId: TenantId,
     assets: readonly MediaAsset[],
     syncRunId: string,
   ): Promise<number> {
@@ -214,7 +215,7 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
    * every file the operator uploaded the moment the next Drive sync ran, and
    * strand its bytes in the blob store.
    */
-  async deleteStale(tenantId: string, syncRunId: string): Promise<number> {
+  async deleteStale(tenantId: TenantId, syncRunId: string): Promise<number> {
     const scope = forTenant(this.db, tenantId);
     try {
       const deleted = await scope.db
@@ -237,9 +238,33 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
     }
   }
 
+  /**
+   * Counts exactly what `deleteStale` above may remove — Drive rows only. The
+   * sync compares it with the number of files the listing returned, so the two
+   * numbers must describe the same set or the comparison means nothing.
+   */
+  async countDriveAssets(tenantId: TenantId): Promise<number> {
+    const scope = forTenant(this.db, tenantId);
+    try {
+      const rows = await scope.db
+        .select({ count: sql<number>`count(*)` })
+        .from(mediaAssets)
+        .where(scope.where(mediaAssets, eq(mediaAssets.origin, "drive")));
+      const raw = rows[0]?.count;
+      const parsed = typeof raw === "string" ? Number.parseInt(raw, 10) : Number(raw);
+      return Number.isFinite(parsed) ? parsed : 0;
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "tenantId",
+        operation: "media.countDriveAssets",
+      });
+    }
+  }
+
   // --- E9 (mode B) ---------------------------------------------------------
 
-  async registerUpload(tenantId: string, asset: MediaAsset): Promise<void> {
+  async registerUpload(tenantId: TenantId, asset: MediaAsset): Promise<void> {
     const scope = forTenant(this.db, tenantId);
 
     if (asset.origin !== "upload" || !asset.storageKey) {
@@ -352,7 +377,7 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
   }
 
   async listUnreferencedUploadsForCode(
-    tenantId: string,
+    tenantId: TenantId,
     productCode: string,
   ): Promise<readonly OrphanedUpload[]> {
     const scope = forTenant(this.db, tenantId);
@@ -403,7 +428,7 @@ export class DrizzleMediaRepo implements MediaRepo, MediaAssetLookup {
     }
   }
 
-  async deleteUploads(tenantId: string, assetIds: readonly string[]): Promise<number> {
+  async deleteUploads(tenantId: TenantId, assetIds: readonly string[]): Promise<number> {
     const scope = forTenant(this.db, tenantId);
     const ids = [...new Set(assetIds ?? [])].filter(
       (id) => typeof id === "string" && id.length > 0,

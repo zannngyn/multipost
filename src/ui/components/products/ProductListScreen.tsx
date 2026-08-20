@@ -36,7 +36,6 @@ import {
   type ProductFilter,
   type ProductFilterStatus,
 } from "@/ui/schemas/catalog.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Sản phẩm" (E10): the list an operator checks before composing anything —
@@ -68,8 +67,6 @@ const SEARCH_DEBOUNCE_MS = 300;
 const SELECTED_PARAM = "chon";
 
 export function ProductListScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -84,7 +81,7 @@ export function ProductListScreen() {
   );
   const selectedCode = searchParams.get(SELECTED_PARAM);
 
-  const products = useCatalogProducts(tenantId, filter);
+  const products = useCatalogProducts(filter);
   const isFirstLoad = products.isPending && products.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
 

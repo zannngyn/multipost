@@ -11,6 +11,7 @@ import { GENERATED_CONTENT_JSON_SCHEMA } from "@/core/ai/generated-content";
 import { makeFakeLogger } from "@/core/ai/testing";
 import { AppError } from "@/core/domain/errors";
 import type { NormalizedAIRequest } from "@/core/ports/ai";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 const request: NormalizedAIRequest = {
   model: "gemini-test-flash-lite",
@@ -28,7 +29,7 @@ const request: NormalizedAIRequest = {
   maxOutputTokens: 900,
   timeoutMs: 5_000,
   temperature: 0.8,
-  metadata: { generationId: "gen-1", task: "facebook_content", tenantId: "tenant-1" },
+  metadata: { generationId: "gen-1", task: "facebook_content", tenantId: testTenantId("tenant-1") },
 };
 
 const content = {

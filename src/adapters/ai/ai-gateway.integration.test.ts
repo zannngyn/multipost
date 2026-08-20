@@ -22,6 +22,7 @@ import {
 import { buildCaptionText } from "@/core/domain/caption";
 import { AppError } from "@/core/domain/errors";
 import type { ContentGenerationRequest } from "@/core/ports/content-engine";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 const REGISTRY = join(process.cwd(), "config", "ai-models.yaml");
 
@@ -73,7 +74,7 @@ function makeStack(steps: Parameters<typeof makeScriptedProvider>[1]) {
 }
 
 const baseRequest: ContentGenerationRequest = {
-  tenantId: "tenant-1",
+  tenantId: testTenantId("tenant-1"),
   task: "facebook_content",
   product,
   platform: "facebook",

@@ -8,8 +8,10 @@ import type { MediaBlobStore, PutBlobInput } from "@/core/ports/media-blob-store
 import type { MediaRepo } from "@/core/ports/product-repo";
 
 import { makeUploadMedia, type UploadedFile } from "./upload-media";
+import type { TenantId } from "@/core/domain/tenant-context";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -50,7 +52,7 @@ function harness(
   options: {
     putError?: unknown;
     registerError?: unknown;
-    previous?: Array<{ tenantId: string; assetId: string; storageKey: string; fileName: string; sizeBytes: number | null }>;
+    previous?: Array<{ tenantId: TenantId; assetId: string; storageKey: string; fileName: string; sizeBytes: number | null }>;
     listPreviousError?: unknown;
   } = {},
 ) {
@@ -79,6 +81,7 @@ function harness(
     listByProductCode: async () => [],
     upsertMany: async () => 0,
     deleteStale: async () => 0,
+    countDriveAssets: async () => 0,
     registerUpload,
     listOrphanedUploads: async () => [],
     listUnreferencedUploadsForCode,
@@ -106,7 +109,7 @@ describe("uploadMedia — malformed calls throw", () => {
   it("rejects a missing tenant or product code", async () => {
     const { uploadMedia } = harness();
     await expect(
-      uploadMedia({ tenantId: "not-a-uuid", productCode: "MG1", files: [file()] }),
+      uploadMedia({ tenantId: testTenantId("not-a-uuid"), productCode: "MG1", files: [file()] }),
     ).rejects.toBeInstanceOf(AppError);
     await expect(
       uploadMedia({ tenantId: TENANT, productCode: "  ", files: [file()] }),

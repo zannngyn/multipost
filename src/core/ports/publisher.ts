@@ -8,6 +8,7 @@
 
 import type { ChannelGroup } from "@/core/domain/channel-group";
 import type { SignedMediaUrl } from "@/core/domain/media-url";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Mints the public, time-limited URL a platform fetches for one media asset
@@ -20,7 +21,7 @@ import type { SignedMediaUrl } from "@/core/domain/media-url";
  * PublishMediaItem).
  */
 export type SignMediaUrlFn = (input: {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Drive file id = `PostJobMedia.driveFileId`. */
   readonly assetId: string;
   /** Public origin Meta will call, e.g. `https://mysp.example.com`. */
@@ -123,7 +124,7 @@ export interface ChannelUpsert {
 }
 
 export interface UpsertChannelsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly channels: readonly ChannelUpsert[];
   /**
    * The USER token that listed these channels, kept (sealed) so "làm mới danh
@@ -142,7 +143,7 @@ export interface UpsertChannelsResult {
 }
 
 export interface SetChannelStatusInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly channelId: string;
   readonly status: ChannelStatus;
   readonly actorEmail?: string | null;
@@ -150,7 +151,7 @@ export interface SetChannelStatusInput {
 }
 
 export interface RemoveChannelInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly channelId: string;
   readonly actorEmail?: string | null;
   readonly actorUserId?: string | null;
@@ -158,10 +159,10 @@ export interface RemoveChannelInput {
 
 export interface ChannelConfigRepo {
   /** Null when the tenant has no such channel (-> CHANNEL_NOT_CONFIGURED). */
-  findChannel(tenantId: string, channelId: string): Promise<ChannelConfig | null>;
-  listChannels(tenantId: string): Promise<readonly ChannelConfig[]>;
+  findChannel(tenantId: TenantId, channelId: string): Promise<ChannelConfig | null>;
+  listChannels(tenantId: TenantId): Promise<readonly ChannelConfig[]>;
   /** Falls back to DEFAULT_PUBLISH_SETTINGS when the tenant set nothing. */
-  getPublishSettings(tenantId: string): Promise<PublishSettings>;
+  getPublishSettings(tenantId: TenantId): Promise<PublishSettings>;
 
   /**
    * Writes what the connect flow found (E5.1). Contract for every implementer:
@@ -182,7 +183,7 @@ export interface ChannelConfigRepo {
    * The stored USER token of the tenant, or null when nothing was ever saved.
    * Only the connect flow calls it; the value must never leave the server.
    */
-  findUserAccessToken(tenantId: string): Promise<string | null>;
+  findUserAccessToken(tenantId: TenantId): Promise<string | null>;
 
   /** Null when the tenant has no such channel (the caller reports "not found"). */
   setChannelStatus(input: SetChannelStatusInput): Promise<ChannelConfig | null>;
@@ -252,23 +253,23 @@ export interface ChannelConnectClient {
  * - driver failures surface as AppError('DB_ERROR').
  */
 export interface ChannelGroupRepo {
-  listGroups(tenantId: string): Promise<readonly ChannelGroup[]>;
-  findGroupById(tenantId: string, groupId: string): Promise<ChannelGroup | null>;
+  listGroups(tenantId: TenantId): Promise<readonly ChannelGroup[]>;
+  findGroupById(tenantId: TenantId, groupId: string): Promise<ChannelGroup | null>;
   createGroup(input: {
     readonly id: string;
-    readonly tenantId: string;
+    readonly tenantId: TenantId;
     readonly name: string;
     readonly channelIds: readonly string[];
   }): Promise<ChannelGroup>;
   /** Null when the group does not exist for this tenant (never a silent insert). */
   updateGroup(input: {
-    readonly tenantId: string;
+    readonly tenantId: TenantId;
     readonly groupId: string;
     readonly name: string;
     readonly channelIds: readonly string[];
   }): Promise<ChannelGroup | null>;
   /** False when nothing was deleted — the caller reports "not found". */
-  deleteGroup(tenantId: string, groupId: string): Promise<boolean>;
+  deleteGroup(tenantId: TenantId, groupId: string): Promise<boolean>;
 }
 
 /** Bytes of ONE media file plus the content type to declare for them. */
@@ -349,7 +350,7 @@ export type PublishProgressEvent =
 export type PublishProgressListener = (event: PublishProgressEvent) => void;
 
 export interface PublishImagePostInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly channel: ChannelConfig;
   /** Final approved caption for THIS channel (brief §7.2: one per channel). */
   readonly caption: string;
@@ -377,7 +378,7 @@ export const VIDEO_TARGETS = ["video", "reels"] as const;
 export type VideoTarget = (typeof VIDEO_TARGETS)[number];
 
 export interface PublishVideoPostInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly channel: ChannelConfig;
   readonly caption: string;
   /**
@@ -420,7 +421,7 @@ export interface SchedulePostResult {
 }
 
 export interface RemotePostQuery {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly channel: ChannelConfig;
   /** The id returned by `schedulePost`. */
   readonly postId: string;

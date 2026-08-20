@@ -24,11 +24,18 @@ export function JobLogTable({
   items,
   onRetry,
   retryingJobId,
+  readOnlyReason = null,
 }: {
   items: readonly PostJobLogEntry[];
   onRetry: (postJobId: string) => void;
   /** Job currently being re-queued — its button shows progress and is disabled. */
   retryingJobId: string | null;
+  /**
+   * Set while the whole app is read-only (support mode, M3.3). "Chạy lại"
+   * publishes to the customer's Page, so it goes off — with the reason on the
+   * row, next to the button it explains.
+   */
+  readOnlyReason?: string | null;
 }) {
   return (
     <div
@@ -132,7 +139,21 @@ export function JobLogTable({
                   </p>
                 </td>
                 <td className="px-3 py-2">
-                  {job.canRetry ? (
+                  {job.canRetry && readOnlyReason ? (
+                    // Shown and disabled WITH the reason rather than hidden:
+                    // this row IS retryable, and hiding the button would look
+                    // like the job was never eligible.
+                    <div className="space-y-1.5">
+                      <Button type="button" size="sm" variant="outline" disabled>
+                        Chạy lại
+                        <span className="sr-only">
+                          {" "}
+                          bài {job.productCode} trên kênh {job.channelId}
+                        </span>
+                      </Button>
+                      <p className="text-muted-foreground text-xs">{readOnlyReason}</p>
+                    </div>
+                  ) : job.canRetry ? (
                     <Button
                       type="button"
                       size="sm"

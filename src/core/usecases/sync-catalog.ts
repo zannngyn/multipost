@@ -22,6 +22,7 @@ import type {
   SyncRunStatus,
 } from "@/core/ports/product-repo";
 import type { SheetSource } from "@/core/ports/sheet-source";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E2 — one catalog sync: read Drive + Sheet, reconcile, persist, and record why
@@ -29,7 +30,10 @@ import type { SheetSource } from "@/core/ports/sheet-source";
  *
  * Nothing here throws for bad DATA: a broken file name or a broken sheet row is
  * an issue on the run, not the end of the run. It only throws when the run
- * itself cannot be done (no tenant config, Drive/Sheet unreachable, DB down).
+ * itself cannot be done (no tenant config, Drive/Sheet unreachable, DB down)
+ * — plus ONE deliberate refusal: a source that answers "nothing" while the
+ * database still holds rows stops the run instead of deleting them (see the
+ * safety net before the persist block).
  */
 
 /** A run must not write thousands of JSON rows; counts stay exact regardless. */
@@ -53,10 +57,26 @@ export const SYNC_ISSUE_CODES = {
   sheetRowInvalid: "SHEET_ROW_INVALID",
   productNotFound: "PRODUCT_NOT_FOUND",
   mediaNotFound: "MEDIA_NOT_FOUND",
+  /** The run refused to delete a catalog the source stopped describing. */
+  sourceEmpty: "SOURCE_EMPTY",
 } as const;
 
+/** One source that answered "nothing" while the database still holds rows. */
+interface EmptySource {
+  readonly source: "drive" | "sheet";
+  /** Rows currently stored — the number that would have been deleted. */
+  readonly existing: number;
+}
+
+/** Operator-facing sentence of the safety net. Vietnamese, with the numbers. */
+function emptySourceDetail(item: EmptySource): string {
+  return item.source === "drive"
+    ? `Thư mục Drive không trả về file nào trong khi hệ thống đang lưu ${item.existing} ảnh. Đã dừng đồng bộ để không xoá nhầm — kiểm tra quyền truy cập thư mục, hoặc chọn lại nguồn.`
+    : `Sheet không trả về dòng sản phẩm hợp lệ nào trong khi hệ thống đang lưu ${item.existing} sản phẩm. Đã dừng đồng bộ để không xoá nhầm — kiểm tra quyền truy cập bảng tính và tên tab, hoặc chọn lại nguồn.`;
+}
+
 export interface SyncCatalogInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface SyncCatalogResult {
@@ -85,18 +105,19 @@ export interface SyncCatalogDeps {
 export function makeSyncCatalog(deps: SyncCatalogDeps) {
   return async function syncCatalog(input: SyncCatalogInput): Promise<SyncCatalogResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
-    if (!isTenantId(tenantId)) {
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    if (!isTenantId(rawTenantId)) {
       deps.logger.warn("Catalog sync rejected: malformed tenant id", {
         error_code: "INVALID_INPUT",
-        tenant_id: tenantId || null,
+        tenant_id: rawTenantId || null,
       });
       throw new AppError("INVALID_INPUT", {
         message: "tenantId must be a UUID",
         userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-        context: { tenant_id: tenantId || null },
+        context: { tenant_id: rawTenantId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const log = deps.logger.child({ tenant_id: tenantId });
 
@@ -302,6 +323,71 @@ export function makeSyncCatalog(deps: SyncCatalogDeps) {
           ref: code,
           detail:
             "Sheet có mã này nhưng thư mục Drive chưa có file nào khớp — tải ảnh lên (đặt tên MÃSP-Màu (số)) rồi đồng bộ lại. Chưa đăng được.",
+        });
+      }
+
+      // --- Safety net: an empty source must not wipe a full catalog ---------
+      //
+      // Drive answers `files.list` with HTTP 200 and `files: []` when the
+      // identity currently in use cannot SEE the folder — unlike `files.get`,
+      // which answers 403/404. A sheet whose tab was renamed, emptied or is now
+      // unreadable parses to zero valid rows just as quietly. Both would reach
+      // `deleteStale` below, which removes every row this run did not stamp:
+      // the whole catalog, silently, with the run reported as `succeeded`.
+      //
+      // This check belongs to the usecase, not to the Drive adapter: it must
+      // also cover the Service Account tenants (a folder un-shared by mistake
+      // looks exactly the same from here), and only the usecase knows both
+      // numbers — what the source returned and what the database already holds.
+      //
+      // KNOWN TRADE-OFF, accepted by PM: a folder/sheet that was genuinely
+      // emptied is blocked too, and an operator has to clear the catalog by
+      // hand. An explicit "tôi biết, cứ xoá" override is a later ticket.
+      const emptied: EmptySource[] = [];
+      if (driveFiles.length === 0) {
+        // Counts only `origin='drive'` rows — exactly the set deleteStale may
+        // remove; uploaded assets (E9) belong to no sync run.
+        const existing = await deps.media.countDriveAssets(tenantId);
+        if (existing > 0) emptied.push({ source: "drive", existing });
+      }
+      if (productByCode.size === 0) {
+        const existing = await deps.products.countAll(tenantId);
+        if (existing > 0) emptied.push({ source: "sheet", existing });
+      }
+      if (emptied.length > 0) {
+        for (const item of emptied) {
+          addIssue({
+            errorCode: SYNC_ISSUE_CODES.sourceEmpty,
+            reason: item.source === "drive" ? "DRIVE_EMPTY" : "SHEET_EMPTY",
+            ref: item.source === "drive" ? config.driveFolderId : config.spreadsheetId,
+            detail: emptySourceDetail(item),
+          });
+        }
+        runLog.error("Catalog sync stopped: the source came back empty while the catalog is not", {
+          error_code: "SYNC_SOURCE_EMPTY",
+          empty_sources: emptied.map((item) => item.source),
+          drive_files_seen: driveFiles.length,
+          existing_media: emptied.find((item) => item.source === "drive")?.existing ?? null,
+          sheet_rows_seen: snapshot.rows.length,
+          products_parsed: productByCode.size,
+          existing_products: emptied.find((item) => item.source === "sheet")?.existing ?? null,
+          drive_folder_id: config.driveFolderId,
+          spreadsheet_id: config.spreadsheetId,
+          sheet_name: config.sheetName,
+        });
+        throw new AppError("SYNC_SOURCE_EMPTY", {
+          message: `Source returned nothing while the catalog is not empty: ${emptied
+            .map((item) => `${item.source}=0 vs db=${item.existing}`)
+            .join(", ")}`,
+          userMessage: emptied.map(emptySourceDetail).join(" "),
+          context: {
+            tenant_id: tenantId,
+            sync_run_id: syncRunId,
+            empty_sources: emptied.map((item) => item.source),
+            drive_files_seen: driveFiles.length,
+            products_parsed: productByCode.size,
+            existing: Object.fromEntries(emptied.map((item) => [item.source, item.existing])),
+          },
         });
       }
 

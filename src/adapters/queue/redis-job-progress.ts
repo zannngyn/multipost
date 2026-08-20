@@ -8,6 +8,7 @@ import {
 } from "@/core/domain/post-job-progress";
 import type { Logger } from "@/core/ports/infra";
 import type { JobProgressStore, ReportProgressInput } from "@/core/ports/job-progress";
+import { normalizeTenantId, unbrandTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E7.5 — live job progress in Redis (design §5.3).
@@ -147,7 +148,7 @@ export function makeRedisJobProgressStore(deps: RedisJobProgressDeps): JobProgre
       try {
         await withTimeout("SET", () =>
           deps.connection.set(
-            keyOf(tenantId, postJobId),
+            keyOf(normalizeTenantId(input.tenantId), postJobId),
             JSON.stringify(encode(progress)),
             "EX",
             ttlSeconds,
@@ -175,13 +176,13 @@ export function makeRedisJobProgressStore(deps: RedisJobProgressDeps): JobProgre
     },
 
     async read(
-      tenantId: string,
+      tenantId: TenantId,
       postJobIds: readonly string[],
     ): Promise<ReadonlyMap<string, PostJobProgress>> {
       const result = new Map<string, PostJobProgress>();
 
       // --- Edge cases first --------------------------------------------------
-      const tenant = str(tenantId);
+      const tenant = normalizeTenantId(tenantId);
       const ids = Array.isArray(postJobIds)
         ? [...new Set(postJobIds.map(str).filter((id) => id.length > 0))]
         : [];
@@ -220,8 +221,8 @@ export function makeRedisJobProgressStore(deps: RedisJobProgressDeps): JobProgre
       return result;
     },
 
-    async clear(tenantId: string, postJobId: string): Promise<void> {
-      const tenant = str(tenantId);
+    async clear(tenantId: TenantId, postJobId: string): Promise<void> {
+      const tenant = normalizeTenantId(tenantId);
       const jobId = str(postJobId);
       if (tenant.length === 0 || jobId.length === 0) {
         logger.warn("Progress clear ignored: missing identity", {
@@ -255,12 +256,12 @@ export function makeRedisJobProgressStore(deps: RedisJobProgressDeps): JobProgre
 }
 
 /** `mysp:progress:{tenantId}:{postJobId}` (design §5.3). */
-export function progressKey(tenantId: string, postJobId: string): string {
-  return keyOf(str(tenantId), str(postJobId));
+export function progressKey(tenantId: TenantId, postJobId: string): string {
+  return keyOf(normalizeTenantId(tenantId), str(postJobId));
 }
 
-function keyOf(tenantId: string, postJobId: string): string {
-  return `${KEY_PREFIX}:${tenantId}:${postJobId}`;
+function keyOf(tenantId: TenantId, postJobId: string): string {
+  return `${KEY_PREFIX}:${unbrandTenantId(tenantId)}:${postJobId}`;
 }
 
 /** snake_case + ISO strings: the value is read by tools other than this build. */
@@ -284,7 +285,7 @@ function encode(progress: PostJobProgress): StoredProgress {
  */
 function decode(
   raw: string,
-  ids: { tenantId: string; postJobId: string },
+  ids: { tenantId: TenantId; postJobId: string },
   logger: Logger,
 ): PostJobProgress | null {
   let parsedJson: unknown;
@@ -349,7 +350,7 @@ function decode(
   });
 }
 
-function snake(ids: { tenantId: string; postJobId: string }): Record<string, string> {
+function snake(ids: { tenantId: TenantId; postJobId: string }): Record<string, string> {
   return { tenant_id: ids.tenantId, post_job_id: ids.postJobId };
 }
 

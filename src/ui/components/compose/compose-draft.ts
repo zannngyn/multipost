@@ -109,22 +109,30 @@ export function shouldClearCaptions(
 }
 
 /**
- * Which step a restored draft may land on.
+ * How far the post has got, expressed in the three step slugs the STORED draft
+ * still uses.
  *
- * Two gates, both non-negotiable:
- *  - compose refused (hết hàng, không có ảnh, mã đã đổi) → step 1, always. Step
- *    2 and 3 describe a post that does not exist, and showing them with the old
- *    draft's data is exactly the "replay a stale answer" this feature forbids;
- *  - step 3 needs a caption for every channel, the same gate the footer uses.
+ * The compose screen has no steps any more (one page, ComposeFocus), but
+ * `post_draft.payload.step` is part of the persisted contract shared with
+ * `core/domain/post-draft.ts` and with rows written by earlier builds. Rather
+ * than change the stored shape — which would make every existing draft
+ * unreadable — the screen DERIVES the field from what it has:
+ *
+ *   nothing composed          → "san-pham"
+ *   composed, caption missing → "caption"
+ *   composed, every caption   → "xem-lai"
+ *
+ * Nothing reads it back on restore: one screen means the restored state is the
+ * screen, and how far it fills in follows from what compose answers. It is kept
+ * written, and written honestly, so an older build opening the same row still
+ * lands where the operator left off.
  */
-export function restoreTargetStep(input: {
+export function draftProgressStep(input: {
   composed: boolean;
-  draftStep: ComposeDraftStep;
   everyCaption: boolean;
 }): ComposeDraftStep {
   if (!input.composed) return "san-pham";
-  if (input.draftStep === "xem-lai" && !input.everyCaption) return "caption";
-  return input.draftStep;
+  return input.everyCaption ? "xem-lai" : "caption";
 }
 
 export interface ComposeDraftSnapshot {

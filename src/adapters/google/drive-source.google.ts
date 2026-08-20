@@ -11,13 +11,21 @@ import type {
 } from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
 
-import type { GoogleAuthClient } from "./service-account";
+import { escapeQueryValue } from "./drive-query";
+import type { TenantGoogleAuth } from "./tenant-google-auth";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Drive implementation of DriveSource (E2).
  * Everything Google returns is parsed through a schema before it becomes a
  * domain value: an entry without an id or a name is dropped here with a log
  * line, never handed upward as a half-built asset (technical rule 2).
+ *
+ * WHICH identity reads the folder is decided PER TENANT (see
+ * tenant-google-auth): the tenant's own OAuth connection when there is one, the
+ * Service Account otherwise. A dead connection surfaces as GOOGLE_AUTH_EXPIRED
+ * and stops the sync — it must never look like an empty folder, because the
+ * sync deletes what a listing no longer contains.
  */
 
 const FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -41,18 +49,20 @@ const DriveListResponseSchema = z.object({
 });
 
 export interface GoogleDriveSourceDeps {
-  auth: GoogleAuthClient;
+  auth: TenantGoogleAuth;
   logger: Logger;
 }
 
 export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource {
-  const drive = google.drive({ version: "v3", auth: deps.auth });
+  /** Per tenant, because the identity is per tenant. The client itself is cheap. */
+  const driveFor = async (tenantId: TenantId) =>
+    google.drive({ version: "v3", auth: await deps.auth.forTenant(tenantId) });
 
   return {
     async listFiles(input: ListDriveFilesInput): Promise<readonly DriveFile[]> {
       // --- Edge cases first --------------------------------------------------
       const folderId = typeof input?.folderId === "string" ? input.folderId.trim() : "";
-      const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+      const tenantId = normalizeTenantId(input.tenantId);
       if (folderId.length === 0) {
         throw new AppError("INVALID_INPUT", {
           message: "listFiles requires a Drive folder id",
@@ -62,6 +72,9 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
       }
 
       const log = deps.logger.child({ tenant_id: tenantId });
+      // Resolved BEFORE the loop: a revoked connection must stop the sync here,
+      // not hand back an empty list that reads as "the folder was emptied".
+      const drive = await driveFor(tenantId);
       const maxFiles = input?.maxFiles && input.maxFiles > 0 ? input.maxFiles : DEFAULT_MAX_FILES;
       const files: DriveFile[] = [];
       let pageToken: string | undefined;
@@ -74,7 +87,7 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
           const response = await drive.files.list({
             // Sub-folders are excluded: docs/05 section 3 keeps "Nghệ sĩ" and
             // "Ảnh hiển thị tiktok và shopee" out of the automated flow.
-            q: `'${folderId.replace(/'/g, "\\'")}' in parents and trashed = false and mimeType != '${FOLDER_MIME}'`,
+            q: `'${escapeQueryValue(folderId)}' in parents and trashed = false and mimeType != '${FOLDER_MIME}'`,
             fields: "nextPageToken, incompleteSearch, files(id, name, mimeType, size, modifiedTime)",
             pageSize: PAGE_SIZE,
             pageToken,
@@ -84,6 +97,10 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
           });
           payload = response.data;
         } catch (error) {
+          // An auth rejection of a CONNECTED tenant is its own story: the token
+          // died mid-listing, and "kết nối lại" is the only fix.
+          const authError = await deps.auth.reportAuthFailure(tenantId, error);
+          if (authError) throw authError;
           // One code for every transport/permission failure; context says which
           // folder and which tenant so the log answers "why is the picker empty".
           throw AppError.from(error, "DRIVE_ERROR", {
@@ -147,7 +164,7 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
     async download(input: DownloadDriveFileInput): Promise<DriveFileContent> {
       // --- Edge cases first --------------------------------------------------
       const fileId = typeof input?.fileId === "string" ? input.fileId.trim() : "";
-      const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+      const tenantId = normalizeTenantId(input.tenantId);
       if (fileId.length === 0) {
         throw new AppError("INVALID_INPUT", {
           message: "download requires a Drive file id",
@@ -156,6 +173,7 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
         });
       }
 
+      const drive = await driveFor(tenantId);
       let payload: unknown;
       let headerMime: string | null = null;
       try {
@@ -166,6 +184,8 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
         payload = response.data;
         headerMime = readHeaderMime(response.headers);
       } catch (error) {
+        const authError = await deps.auth.reportAuthFailure(tenantId, error);
+        if (authError) throw authError;
         const status = httpStatusOf(error);
         // 404 (deleted) and 403 (un-shared) are the same story for the operator:
         // this file is not reachable any more — that is not an outage.

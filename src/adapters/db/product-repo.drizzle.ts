@@ -14,6 +14,7 @@ import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
 import { mediaAssets, products, type ProductRow } from "./schema";
 import { forTenant, type TenantScopedDb } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Product persistence (E2). Every statement goes through the tenant scope, and
@@ -88,7 +89,7 @@ function mediaCountsSubquery(scope: TenantScopedDb) {
 export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
   constructor(private readonly db: Database) {}
 
-  async findByCode(tenantId: string, code: string): Promise<Product | null> {
+  async findByCode(tenantId: TenantId, code: string): Promise<Product | null> {
     const scope = forTenant(this.db, tenantId);
     const normalised = typeof code === "string" ? code.trim().toUpperCase() : "";
     if (normalised.length === 0) {
@@ -119,7 +120,7 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
   }
 
   async upsertMany(
-    tenantId: string,
+    tenantId: TenantId,
     items: readonly Product[],
     syncRunId: string,
   ): Promise<number> {
@@ -188,7 +189,7 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
    * page" without a second COUNT.
    */
   async listCatalog(query: ListCatalogProductsQuery): Promise<CatalogProductPage> {
-    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const scope = forTenant(this.db, query.tenantId);
     const limit = Number.isInteger(query?.limit) && query.limit > 0 ? query.limit : 50;
     const counts = mediaCountsSubquery(scope);
 
@@ -252,10 +253,10 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
    * re-implementing "hết hàng" in SQL is exactly the drift to avoid.
    */
   async aggregateCatalog(query: {
-    tenantId: string;
+    tenantId: TenantId;
     search?: string;
   }): Promise<readonly CatalogSignalGroup[]> {
-    const scope = forTenant(this.db, query?.tenantId ?? "");
+    const scope = forTenant(this.db, query.tenantId);
     const counts = mediaCountsSubquery(scope);
     const hasMedia = sql<boolean>`(coalesce(${counts.imageCount}, 0) + coalesce(${counts.videoCount}, 0)) > 0`;
 
@@ -297,7 +298,28 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
     }
   }
 
-  async deleteStale(tenantId: string, syncRunId: string): Promise<number> {
+  /**
+   * Row count of the tenant's catalog. `count(*)`, not a page of ids: the caller
+   * only compares it with "how many rows did the sheet parse to".
+   */
+  async countAll(tenantId: TenantId): Promise<number> {
+    const scope = forTenant(this.db, tenantId);
+    try {
+      const rows = await scope.db
+        .select({ count: sql<number>`count(*)` })
+        .from(products)
+        .where(scope.where(products));
+      return toInt(rows[0]?.count);
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "tenantId",
+        operation: "product.countAll",
+      });
+    }
+  }
+
+  async deleteStale(tenantId: TenantId, syncRunId: string): Promise<number> {
     const scope = forTenant(this.db, tenantId);
     try {
       const deleted = await scope.db

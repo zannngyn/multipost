@@ -4,6 +4,7 @@ import { makeFakeLogger } from "@/core/ai/testing";
 import { AppError } from "@/core/domain/errors";
 import type { ContentEngine, ContentGenerationRequest } from "@/core/ports/content-engine";
 import { makeGenerateCaptions, type GenerateCaptionsInput } from "@/core/usecases/generate-captions";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 const product = {
   name: "Penny",
@@ -22,7 +23,7 @@ const content = {
 
 function makeInput(overrides: Partial<GenerateCaptionsInput> = {}): GenerateCaptionsInput {
   return {
-    tenantId: "tenant-1",
+    tenantId: testTenantId("tenant-1"),
     product,
     channels: [
       { channelId: "page-A", platform: "facebook", contentType: "photo_post" },
@@ -81,7 +82,7 @@ describe("generateCaptions — invalid input", () => {
 
   it("rejects a missing tenantId", async () => {
     await expect(
-      makeGenerateCaptions(deps)(makeInput({ tenantId: " " })),
+      makeGenerateCaptions(deps)(makeInput({ tenantId: testTenantId(" ") })),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
@@ -108,6 +109,37 @@ describe("generateCaptions — invalid input", () => {
     await expect(
       makeGenerateCaptions(deps)(makeInput({ product: { name: "Penny", category: "Đầm" } })),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("rejects a tone outside the closed list instead of writing in the default voice", async () => {
+    await expect(
+      makeGenerateCaptions(deps)(makeInput({ tone: "giọng nào cũng được" })),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tone
+// ---------------------------------------------------------------------------
+
+describe("generateCaptions — tone", () => {
+  it("passes the chosen tone to the engine for every channel", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+
+    await makeGenerateCaptions({ contentEngine: engine, logger: makeFakeLogger() })(
+      makeInput({ tone: "sale-manh" }),
+    );
+
+    expect(engine.requests).toHaveLength(2);
+    for (const request of engine.requests) expect(request.tone).toBe("sale-manh");
+  });
+
+  it("falls back to the default tone key when none is given", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+
+    await makeGenerateCaptions({ contentEngine: engine, logger: makeFakeLogger() })(makeInput());
+
+    expect(engine.requests[0]?.tone).toBe("mac-dinh");
   });
 });
 

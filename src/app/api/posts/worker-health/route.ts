@@ -1,9 +1,7 @@
-import { z } from "zod";
-
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
-import { AppError } from "@/core/domain/errors";
 
 /**
  * E11 — "có ai đang xử lý hàng đợi không?" for the job log banner.
@@ -16,16 +14,31 @@ import { AppError } from "@/core/domain/errors";
  * banner needs. The usecase never throws for that reason — an error status here
  * would mean the check itself broke (bad input, container failing to build).
  *
- * Thin by contract (docs/07 §3.3): validate, delegate, map errors.
- * Auth: `proxy.ts` already requires a session on every /api/* path outside its
- * public list, so this handler only owns input validation.
+ * M1.3b — viewer / tier R (doc 10 §4.2). This route WAS Bug B7's headline case:
+ * it took `?tenantId=` from the query and only relied on `proxy.ts` for a
+ * session, so any signed-in operator could count another tenant's stuck jobs.
+ * The tenant now comes from the membership and there is no input left to parse.
+ *
+ * Field-level narrowing (doc 10 Q8.3) — BREAKING, agreed with ui-web:
+ *
+ *   `workersOnline` (a number) is gone from the tenant-facing body. It counts
+ *   the replicas of the SHARED MYSP fleet, so it is neither about this tenant
+ *   nor useful to it — but it IS a capacity probe: poll it from any tenant and
+ *   you learn how much the platform is running and when it is being scaled.
+ *   What the banner actually needs is "is anybody consuming?", so that is what
+ *   it now gets: `workersAvailable: boolean`.
+ *
+ *   The exact count survives for the people who operate the fleet:
+ *   `workersOnline` is added back only when the session carries a
+ *   `platformRole` (support or super_admin, docs/09 §3.5) — a PLATFORM
+ *   attribute of the person, not a role inside the tenant, so no tenant admin
+ *   can grant it to themselves.
+ *
+ * `queueReachable` stays visible to everyone on purpose: hiding "the queue is
+ * unreachable" would restore the exact silence this endpoint was built to end.
  */
 
 const ROUTE = "GET /api/posts/worker-health";
-
-const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
-});
 
 export const dynamic = "force-dynamic";
 
@@ -36,29 +49,28 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const query = new URL(request.url).searchParams;
-    const parsed = QuerySchema.safeParse({ tenantId: query.get("tenantId") ?? undefined });
+    // --- Refusals first: nothing is probed for a caller without a membership -
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+    });
 
-    // --- Edge case first: reject bad input before probing anything ----------
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid query string for the worker healthcheck",
-        userMessage: "Thiếu mã đơn vị (tenant) để kiểm tra tình trạng máy đăng bài.",
-        context: {
-          route: ROUTE,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
-      });
-    }
-
-    const result = await container.usecases.getWorkerHealth({ tenantId: parsed.data.tenantId });
+    const { workersOnline, ...health } = await container.usecases.getWorkerHealth({
+      tenantId: ctx.tenantId,
+    });
 
     // `checkedAt` is a Date; Response.json serialises it to the ISO string the
     // UI schema expects.
-    return Response.json(result);
+    return Response.json({
+      ...health,
+      // Derived from the count, not from `queueReachable`: an unreachable broker
+      // reports 0 workers, and "we could not ask" must not read as "nobody is
+      // working" — `queueReachable: false` is the field that says that.
+      workersAvailable: workersOnline > 0,
+      // Platform staff only (doc 10 Q8.3). A tenant `owner` is NOT platform
+      // staff, so the ladder inside the tenant cannot reach this.
+      ...(session.platformRole !== null ? { workersOnline } : {}),
+    });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });
   }

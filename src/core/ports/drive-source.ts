@@ -14,6 +14,7 @@
  */
 
 import type { MediaAsset } from "@/core/domain/product";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export interface DriveFile {
   /** Drive file id — the stable identity (1,499 names are ambiguous). */
@@ -28,14 +29,14 @@ export interface DriveFile {
 }
 
 export interface ListDriveFilesInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly folderId: string;
   /** Safety valve for tests/dev; the adapter still pages through Drive. */
   readonly maxFiles?: number;
 }
 
 export interface DownloadDriveFileInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Drive file id, never a name. */
   readonly fileId: string;
   /** Refuse anything bigger instead of buffering it. 0/undefined = no cap. */
@@ -72,7 +73,7 @@ export interface DriveSource {
  */
 export interface MediaAssetLookup {
   /** Null when the tenant has no synced asset with that Drive file id. */
-  findByDriveFileId(tenantId: string, driveFileId: string): Promise<MediaAsset | null>;
+  findByDriveFileId(tenantId: TenantId, driveFileId: string): Promise<MediaAsset | null>;
 }
 
 /**
@@ -88,7 +89,7 @@ export interface CatalogSourceConfig {
 
 export interface CatalogConfigRepo {
   /** Null when the tenant has no google integration row yet. */
-  findCatalogConfig(tenantId: string): Promise<CatalogSourceConfig | null>;
+  findCatalogConfig(tenantId: TenantId): Promise<CatalogSourceConfig | null>;
   /**
    * Read-model twin of `findCatalogConfig` for the "nguồn dữ liệu" panel.
    *
@@ -98,7 +99,7 @@ export interface CatalogConfigRepo {
    * "chưa cấu hình" (this returns null and logs a warning). Same row, two
    * audiences, two verdicts.
    */
-  findCatalogSource(tenantId: string): Promise<CatalogSourceConfig | null>;
+  findCatalogSource(tenantId: TenantId): Promise<CatalogSourceConfig | null>;
   /**
    * Writes the three coordinates and returns what was there before (null on a
    * first configuration), so the caller can log/show the change.
@@ -114,7 +115,7 @@ export interface CatalogConfigRepo {
 }
 
 export interface SaveCatalogSourceInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly source: CatalogSourceConfig;
   /** `app_user.id`, or null when the actor could not be resolved. */
   readonly actorUserId: string | null;

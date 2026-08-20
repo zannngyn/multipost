@@ -237,4 +237,156 @@ describe("presentApiError — video posts (E10.1 Phase 2)", () => {
     expect(view.canRetry).toBe(false);
     expect(view.hint).toBeTruthy();
   });
+
+  /**
+   * M1.4 / doc 10 §3 — the three answers a request can now get about WHICH
+   * company it belongs to. The rule under test: only one of them is an error
+   * the operator caused, and none of the three may offer a retry.
+   */
+  it("treats 409 TENANT_NOT_SELECTED as a fork in the road, not a failure", () => {
+    const view = presentApiError(
+      makeError({
+        code: "TENANT_NOT_SELECTED",
+        status: 409,
+        userMessage: "Bạn chưa chọn công ty để làm việc.",
+      }),
+    );
+    // A dedicated kind: the picker is what answers this, not a red box.
+    expect(view.kind).toBe("select-tenant");
+    expect(view.canRetry).toBe(false);
+    expect(view.title).toContain("Chưa chọn công ty");
+  });
+
+  it("does not blame the operator for a company they cannot open (404)", () => {
+    const view = presentApiError(
+      makeError({
+        code: "TENANT_NOT_FOUND",
+        status: 404,
+        userMessage: "Không tìm thấy công ty này.",
+      }),
+    );
+    expect(view.canRetry).toBe(false);
+    // Nobody types a company id any more, so "sai mã" would be nonsense advice.
+    expect(view.description).not.toContain("mã đơn vị");
+    expect(view.description).toContain("gỡ khỏi công ty");
+  });
+
+  it("says plainly that 403 is a missing role, and offers no retry", () => {
+    const view = presentApiError(
+      makeError({
+        code: "FORBIDDEN",
+        status: 403,
+        userMessage: "Bạn không đủ quyền cho thao tác này.",
+      }),
+    );
+    expect(view.kind).toBe("business");
+    expect(view.canRetry).toBe(false);
+    expect(view.title).toContain("không có quyền");
+  });
+
+  /**
+   * M2.1/M2.2 — the three refusals on the way INTO a company. None of them may
+   * offer a retry (the same request fails the same way), and only one of them
+   * is about something the operator typed.
+   */
+  it("does not speculate about which create limit was hit", () => {
+    const view = presentApiError(
+      makeError({
+        code: "TENANT_LIMIT_REACHED",
+        status: 409,
+        userMessage: "Bạn đã tạo 3 công ty — không tạo thêm được.",
+      }),
+    );
+    expect(view.canRetry).toBe(false);
+    // The count/window belongs to the server's sentence, not to a guess here.
+    expect(view.description).toBe("Bạn đã tạo 3 công ty — không tạo thêm được.");
+    expect(view.hint).toBeTruthy();
+  });
+
+  it("treats a taken slug as something to fix, not something to retry", () => {
+    const view = presentApiError(
+      makeError({
+        code: "SLUG_TAKEN",
+        status: 409,
+        userMessage: "Đường dẫn “nha-xe-an-anh” đã có người dùng.",
+      }),
+    );
+    expect(view.kind).toBe("input");
+    expect(view.canRetry).toBe(false);
+  });
+
+  it("keeps an invalid invite neutral and never guesses the reason", () => {
+    const view = presentApiError(
+      makeError({
+        code: "INVITE_INVALID",
+        status: 404,
+        userMessage: "Lời mời này không dùng được.",
+      }),
+    );
+    expect(view.canRetry).toBe(false);
+    expect(view.title).toContain("không còn hiệu lực");
+    // One code covers hết hạn / thu hồi / đã dùng — the copy says so instead of
+    // picking one and being wrong two times out of three.
+    expect(view.description).toContain("hết hạn");
+    expect(view.description).toContain("thu hồi");
+    expect(view.hint).toContain("link mời mới");
+  });
+
+  it("points a LAST_OWNER refusal at the fix, not at the operator's role", () => {
+    const view = presentApiError(
+      makeError({
+        code: "LAST_OWNER",
+        status: 409,
+        userMessage: "Công ty phải còn ít nhất một chủ sở hữu.",
+      }),
+    );
+    expect(view.canRetry).toBe(false);
+    // It is an invariant, not a permission — the next step is handing ownership
+    // over, and saying "bạn không có quyền" here would send someone to ask an
+    // admin for something no admin can grant.
+    expect(view.hint).toContain("Chủ sở hữu");
+    expect(view.title).toContain("ít nhất một chủ sở hữu");
+  });
+
+  /**
+   * M3.2 — the same code, a different screen. On the platform admin screen a
+   * refusal is about the PLATFORM role and about a company addressed by id, so
+   * the shared membership wording would send someone after the wrong problem.
+   */
+  it("re-words FORBIDDEN for the platform screen", () => {
+    const shared = presentApiError(
+      makeError({ code: "FORBIDDEN", status: 403, userMessage: "Không đủ quyền." }),
+    );
+    const platform = presentApiError(
+      makeError({ code: "FORBIDDEN", status: 403, userMessage: "Không đủ quyền." }),
+      { operation: "platform" },
+    );
+    expect(shared.description).toContain("công ty này");
+    expect(platform.description).toContain("super_admin");
+    expect(platform.canRetry).toBe(false);
+  });
+
+  it("re-words TENANT_NOT_FOUND for the platform screen", () => {
+    const platform = presentApiError(
+      makeError({
+        code: "TENANT_NOT_FOUND",
+        status: 404,
+        userMessage: "Không tìm thấy công ty.",
+      }),
+      { operation: "platform" },
+    );
+    // "Bạn đã bị gỡ khỏi công ty đó" is nonsense to a super_admin standing
+    // outside every company.
+    expect(platform.description).not.toContain("gỡ khỏi công ty");
+    expect(platform.hint).toContain("Tải lại danh sách");
+  });
+
+  it("leaves every other code alone on the platform screen", () => {
+    const platform = presentApiError(
+      makeError({ code: "DB_ERROR", status: 503, userMessage: "Lỗi CSDL." }),
+      { operation: "platform" },
+    );
+    expect(platform.kind).toBe("server");
+    expect(platform.canRetry).toBe(true);
+  });
 });

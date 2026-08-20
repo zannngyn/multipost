@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useState } from "react";
 
 import { cn } from "@/shared/utils";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
@@ -13,17 +13,16 @@ import { SyncRunRail } from "@/ui/components/sync/SyncRunRail";
 import { SyncRunningCard } from "@/ui/components/sync/SyncRunningCard";
 import { SyncRailSkeleton, SyncStatusSkeleton } from "@/ui/components/sync/SyncStatusSkeleton";
 import { Button } from "@/ui/components/ui/button";
-import { Input } from "@/ui/components/ui/input";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { useActiveTenant } from "@/ui/hooks/useMe";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { useRunCatalogSync, useSyncStatus } from "@/ui/hooks/useCatalogSync";
 import type { BadgeTone } from "@/ui/components/ui/badge";
 import {
   SYNC_STATUS_LABELS,
   SYNC_STATUS_TONES,
-  SyncFormSchema,
   type SyncRun,
 } from "@/ui/schemas/sync.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * Tone -> the tinted-notice surface. This is the paragraph equivalent of what
@@ -62,42 +61,23 @@ const NOTICE_TONE: Record<BadgeTone, string> = {
  *   pending  — the run panel reports work without blanking anything
  */
 export function SyncScreen() {
-  const inputId = useId();
-  const hintId = `${inputId}-hint`;
-  const errorId = `${inputId}-error`;
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const [tenantIdInput, setTenantIdInput] = useState(DEMO_TENANT_ID);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [activeTenantId, setActiveTenantId] = useState<string | null>(DEMO_TENANT_ID);
   /** Set right after a source change — the next sync is no longer optional. */
   const [sourceChanged, setSourceChanged] = useState(false);
 
-  const status = useSyncStatus(activeTenantId);
-  const run = useRunCatalogSync(activeTenantId);
+  /**
+   * The company is no longer typed in (M1.4): it comes from the session. Until
+   * `/api/me` answers, `isResolved` is false and every query below stays idle —
+   * that, not an empty text box, is this screen's idle state now.
+   */
+  const { isResolved } = useActiveTenant();
+  /** Support mode: reading a customer's catalogue is fine, rewriting it is not. */
+  const readOnlyReason = useReadOnlyReason();
+  const status = useSyncStatus();
+  const run = useRunCatalogSync();
 
   const isFirstLoad = status.isPending && status.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
   const latestRun = status.data?.state === "has_run" ? status.data.run : null;
-
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    // Validate at the boundary, before any request leaves the browser.
-    const parsed = SyncFormSchema.safeParse({ tenantId: tenantIdInput });
-    if (!parsed.success) {
-      setFormError(parsed.error.issues[0]?.message ?? "Mã đơn vị không hợp lệ.");
-      inputRef.current?.focus();
-      inputRef.current?.select();
-      return;
-    }
-
-    setFormError(null);
-    run.reset();
-    // The notice belongs to the tenant it was raised for, not to the screen.
-    setSourceChanged(false);
-    setActiveTenantId(parsed.data.tenantId);
-  }
 
   return (
     <div className="@container bg-background h-full min-h-0">
@@ -126,7 +106,8 @@ export function SyncScreen() {
                   run.mutate();
                 }}
                 isRunning={run.isPending}
-                disabled={activeTenantId === null}
+                disabled={!isResolved || readOnlyReason !== null}
+                disabledReason={readOnlyReason ?? undefined}
               />
             </div>
           </header>
@@ -143,38 +124,6 @@ export function SyncScreen() {
           </p>
 
           <div className="flex min-w-0 flex-col gap-5 px-6 py-5">
-            <form onSubmit={handleSubmit} noValidate className="flex flex-wrap items-end gap-3">
-              <div className="min-w-0 flex-1 basis-72 space-y-1.5">
-                <label htmlFor={inputId} className="text-sm font-medium">
-                  Mã đơn vị (tenant)
-                </label>
-                <Input
-                  id={inputId}
-                  ref={inputRef}
-                  name="tenantId"
-                  value={tenantIdInput}
-                  onChange={(event) => setTenantIdInput(event.target.value)}
-                  aria-invalid={formError !== null}
-                  aria-describedby={formError ? `${errorId} ${hintId}` : hintId}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="font-mono"
-                />
-                <p id={hintId} className="text-muted-foreground text-xs">
-                  Dạng UUID. Đơn vị mẫu đã được điền sẵn.
-                </p>
-                {formError ? (
-                  <p id={errorId} role="alert" className="text-destructive text-xs">
-                    {formError}
-                  </p>
-                ) : null}
-              </div>
-
-              <Button type="submit" variant="outline" size="lg">
-                Xem đơn vị này
-              </Button>
-            </form>
-
             {run.isPending ? <SyncRunningCard /> : null}
 
             {run.isError ? (
@@ -210,10 +159,7 @@ export function SyncScreen() {
 
             {/* Which folder / which tab — first, because every number below only
                 means something once the operator knows where it came from. */}
-            <CatalogSourceCard
-              tenantId={activeTenantId}
-              onSourceChanged={() => setSourceChanged(true)}
-            />
+            <CatalogSourceCard onSourceChanged={() => setSourceChanged(true)} />
 
             {sourceChanged ? (
               <p
@@ -227,7 +173,7 @@ export function SyncScreen() {
             ) : null}
 
             <SyncStatusResult
-              activeTenantId={activeTenantId}
+              isResolved={isResolved}
               isFirstLoad={isFirstLoad}
               showSkeleton={showSkeleton}
               status={status}
@@ -240,7 +186,7 @@ export function SyncScreen() {
           className="border-border bg-card shrink-0 border-t px-5 py-5 @5xl:w-90 @5xl:min-h-0 @5xl:overflow-y-auto @5xl:border-t-0 @5xl:border-l"
         >
           <SyncRailContent
-            activeTenantId={activeTenantId}
+            isResolved={isResolved}
             isFirstLoad={isFirstLoad}
             showSkeleton={showSkeleton}
             hasError={status.isError}
@@ -254,22 +200,23 @@ export function SyncScreen() {
 
 /** The rail keeps its width in every state — an empty column must not resize. */
 function SyncRailContent({
-  activeTenantId,
+  isResolved,
   isFirstLoad,
   showSkeleton,
   hasError,
   run,
 }: {
-  activeTenantId: string | null;
+  isResolved: boolean;
   isFirstLoad: boolean;
   showSkeleton: boolean;
   hasError: boolean;
   run: SyncRun | null;
 }) {
-  if (activeTenantId === null) {
+  // Still working out which company this session belongs to.
+  if (!isResolved) {
     return (
       <p className="text-muted-foreground text-sm">
-        Chọn một đơn vị để xem chi tiết lần chạy gần nhất.
+        Đang xác định công ty của bạn để đọc lần chạy gần nhất.
       </p>
     );
   }
@@ -298,23 +245,23 @@ function SyncRailContent({
 }
 
 function SyncStatusResult({
-  activeTenantId,
+  isResolved,
   isFirstLoad,
   showSkeleton,
   status,
 }: {
-  activeTenantId: string | null;
+  isResolved: boolean;
   isFirstLoad: boolean;
   showSkeleton: boolean;
   status: ReturnType<typeof useSyncStatus>;
 }) {
-  // --- Idle: no tenant selected yet ----------------------------------------
-  if (activeTenantId === null) {
+  // --- Idle: the session's company is not known yet -------------------------
+  if (!isResolved) {
     return (
       <EmptyState
         kind="idle"
-        title="Chưa chọn đơn vị"
-        description="Nhập mã đơn vị rồi bấm “Xem đơn vị này” để xem lần đồng bộ gần nhất."
+        title="Đang xác định công ty của bạn"
+        description="Số liệu đồng bộ thuộc về một công ty cụ thể, nên màn này chờ biết bạn đang làm việc ở công ty nào."
       />
     );
   }

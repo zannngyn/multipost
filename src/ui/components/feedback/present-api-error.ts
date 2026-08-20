@@ -18,6 +18,12 @@ export type ApiErrorKind =
   | "business"
   /** Session gone. */
   | "auth"
+  /**
+   * Signed in, but no company chosen (409 TENANT_NOT_SELECTED). Navigation,
+   * not an error: the next step is picking a company, so the UI shows the
+   * picker instead of a red box (doc 10 §3).
+   */
+  | "select-tenant"
   /** Server/transport problem — retrying is reasonable. */
   | "server";
 
@@ -32,7 +38,16 @@ export type ApiErrorKind =
  * Left out (`undefined`) keeps the publishing/reading wording every other screen
  * uses today.
  */
-export type ApiErrorOperation = "cancel";
+export type ApiErrorOperation =
+  | "cancel"
+  /**
+   * The platform admin screen (M3.2). The same codes mean something else
+   * there: `FORBIDDEN` is about the PLATFORM role, not a membership role, and
+   * `TENANT_NOT_FOUND` is "công ty này không tồn tại", not "bạn đã bị gỡ khỏi
+   * công ty đó" — telling a super_admin they lost their membership would send
+   * them looking for the wrong problem.
+   */
+  | "platform";
 
 export interface PresentApiErrorOptions {
   readonly operation?: ApiErrorOperation;
@@ -149,6 +164,41 @@ function presentCancelError(error: ApiError): ApiErrorView | null {
   }
 }
 
+/**
+ * Copy for errors raised on the PLATFORM admin screen (M3.2).
+ *
+ * Only the codes whose shared copy would point the operator the wrong way are
+ * listed; everything else falls through to the branch below, which stays the
+ * single owner of config/validation/session wording.
+ */
+function presentPlatformError(error: ApiError): ApiErrorView | null {
+  switch (error.code) {
+    // Not about a membership: this account's PLATFORM role is not enough. There
+    // is nothing to ask a company owner for, so the copy does not suggest it.
+    case "FORBIDDEN":
+      return {
+        kind: "business",
+        title: "Bạn không có quyền quản trị nền tảng",
+        description: `${error.userMessage} Tạo và khoá công ty chỉ dành cho quản trị nền tảng (super_admin); tài khoản hỗ trợ chỉ xem được danh sách.`,
+        canRetry: false,
+      };
+
+    // Addressed by id from outside every tenant, so "bạn đã bị gỡ khỏi công ty"
+    // would be nonsense here.
+    case "TENANT_NOT_FOUND":
+      return {
+        kind: "business",
+        title: "Không tìm thấy công ty này",
+        description: `${error.userMessage} Công ty có thể vừa bị xoá hoặc mã công ty không còn đúng.`,
+        hint: "Tải lại danh sách công ty để xem trạng thái mới nhất.",
+        canRetry: false,
+      };
+
+    default:
+      return null;
+  }
+}
+
 export function presentApiError(
   error: ApiError,
   options?: PresentApiErrorOptions,
@@ -179,6 +229,11 @@ export function presentApiError(
     if (cancelView) return cancelView;
   }
 
+  if (options?.operation === "platform") {
+    const platformView = presentPlatformError(error);
+    if (platformView) return platformView;
+  }
+
   switch (error.code) {
     case "INVALID_INPUT":
       return {
@@ -198,11 +253,108 @@ export function presentApiError(
         canRetry: false,
       };
 
+    /**
+     * 409 (doc 10 §3): there IS a session, no company is selected yet. Not a
+     * failure and not the operator's mistake — it is a fork in the road, so it
+     * gets its own kind and the picker, never a red box.
+     */
+    case "TENANT_NOT_SELECTED":
+      return {
+        kind: "select-tenant",
+        title: "Chưa chọn công ty để làm việc",
+        description: `${error.userMessage} Chọn công ty ở phía trên rồi thao tác lại — dữ liệu của mỗi công ty được tách riêng.`,
+        canRetry: false,
+      };
+
+    /**
+     * 404, deliberately indistinguishable from "không tồn tại" (doc 10 §3):
+     * the account has no membership in that company. Never says "sai mã" any
+     * more — the operator no longer types a tenant id anywhere.
+     */
     case "TENANT_NOT_FOUND":
       return {
+        kind: "business",
+        title: "Không mở được công ty này",
+        description: `${error.userMessage} Có thể bạn đã bị gỡ khỏi công ty đó, hoặc nó đã bị khoá. Chọn một công ty khác, hoặc nhờ quản trị viên mời lại.`,
+        canRetry: false,
+      };
+
+    /**
+     * 409 (M2.1): the account hit the create ceiling — three companies, or one
+     * in the last hour. The server's own sentence says WHICH, because only it
+     * knows; this side must not guess and must not offer a retry that would
+     * fail identically.
+     */
+    case "TENANT_LIMIT_REACHED":
+      return {
+        kind: "business",
+        title: "Chưa tạo thêm công ty được lúc này",
+        description: error.userMessage,
+        hint: "Nếu bạn cần thêm công ty, hãy liên hệ quản trị hệ thống. Bạn vẫn làm việc bình thường ở những công ty đang có.",
+        canRetry: false,
+      };
+
+    /**
+     * 409 (M2.1): the slug belongs to someone else. Field-level by nature — the
+     * form places it under the slug box (see `isCreateTenantField`), so the
+     * copy here only has to say what to change.
+     */
+    case "SLUG_TAKEN":
+      return {
         kind: "input",
-        title: "Không tìm thấy đơn vị",
-        description: `${error.userMessage} Kiểm tra lại mã đơn vị, hoặc hỏi quản trị viên mã đúng.`,
+        title: "Đường dẫn này đã có người dùng",
+        description: `${error.userMessage} Chọn một đường dẫn khác — ví dụ thêm tên chi nhánh hoặc năm.`,
+        canRetry: false,
+      };
+
+    /**
+     * 404 (M2.2): ONE code for every reason an invite fails — hết hạn, đã thu
+     * hồi, đã dùng, không tồn tại. Deliberately indistinguishable, so this copy
+     * must not speculate about which one it was.
+     */
+    case "INVITE_INVALID":
+      return {
+        kind: "business",
+        title: "Link mời không còn hiệu lực",
+        description: `${error.userMessage} Link mời có thể đã hết hạn, đã được dùng hoặc đã bị thu hồi.`,
+        hint: "Xin quản trị viên của công ty gửi lại một link mời mới.",
+        canRetry: false,
+      };
+
+    /**
+     * 404 (M2.3, verified against the running API): the membership is not in
+     * this company any more — almost always because somebody else removed it
+     * first. Retrying the same call cannot succeed; re-reading the list can.
+     */
+    case "MEMBER_NOT_FOUND":
+      return {
+        kind: "business",
+        title: "Không còn thành viên này trong công ty",
+        description: `${error.userMessage} Có thể người khác vừa gỡ họ trước bạn.`,
+        hint: "Tải lại danh sách thành viên để xem ai còn trong công ty.",
+        canRetry: false,
+      };
+
+    /**
+     * 409 (M2.3): the change would leave the company with no owner. Refused by
+     * the server as an invariant, not as a permission — so the wording points
+     * at the fix (hand ownership over first) instead of at the operator's role.
+     */
+    case "LAST_OWNER":
+      return {
+        kind: "business",
+        title: "Công ty phải còn ít nhất một chủ sở hữu",
+        description: error.userMessage,
+        hint: "Hãy cấp vai trò Chủ sở hữu cho một thành viên khác trước, rồi quay lại thao tác này.",
+        canRetry: false,
+      };
+
+    /** 403: has a membership, lacks the role. Retrying changes nothing. */
+    case "FORBIDDEN":
+      return {
+        kind: "business",
+        title: "Bạn không có quyền thao tác này",
+        description: `${error.userMessage} Vai trò hiện tại của bạn trong công ty này không đủ để làm việc đó — nhờ chủ sở hữu hoặc quản trị viên nâng quyền nếu bạn cần.`,
         canRetry: false,
       };
 

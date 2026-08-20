@@ -82,10 +82,20 @@ describe("ChannelListResponseSchema", () => {
     ).toBe(false);
   });
 
-  it("assumes secrets ARE configured when the server does not say", () => {
-    // An older server that never learned the flag must not lock the screen.
+  it("leaves the flag ABSENT when the server withholds it (M3.3)", () => {
+    // Field-level: only admin+ receives it. Absent must stay absent rather than
+    // become `true` or `false` — the screen decides "no field, no warning", and
+    // a default here would hide that decision inside the parser.
     const parsed = ChannelListResponseSchema.safeParse({ tenantId: "t-1", channels: [] });
-    expect(parsed.success && parsed.data.secretsConfigured).toBe(true);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.secretsConfigured).toBeUndefined();
+  });
+
+  it("still refuses a flag that is present but not a boolean", () => {
+    expect(
+      ChannelListResponseSchema.safeParse({ ...LIVE_LIST_PAYLOAD, secretsConfigured: "yes" })
+        .success,
+    ).toBe(false);
   });
 
   it("carries `secretsConfigured: false` through untouched", () => {

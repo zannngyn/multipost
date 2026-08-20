@@ -2,6 +2,7 @@
 
 import { SideNav, SideNavItem, SideNavSection } from "@astryxdesign/core";
 import {
+  Building2,
   CalendarClock,
   FolderSync,
   Layers,
@@ -12,11 +13,13 @@ import {
   ScrollText,
   Share2,
   Sparkles,
+  Users,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import type { ComponentType, SVGProps } from "react";
 
-import { NAV_SECTIONS, isNavItemActive } from "@/ui/components/shell/nav-items";
+import { isNavItemActive, visibleNavSections } from "@/ui/components/shell/nav-items";
+import { useMe } from "@/ui/hooks/useMe";
 
 /**
  * Primary navigation (core-accessibility): a landmark with grouped sections and
@@ -38,10 +41,26 @@ const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "/channels": Radio,
   "/channels/groups": Share2,
   "/prompts": Sparkles,
+  "/members": Users,
+  "/access": ScrollText,
+  "/platform": Building2,
 };
 
 export function AppSideNav() {
   const pathname = usePathname();
+  const me = useMe();
+
+  /**
+   * While `/api/me` is still loading this is false, so a privileged section is
+   * never rendered and then taken away — an item that blinks into existence is
+   * an item somebody clicks (core-auth-session: chống nháy hiện-rồi-biến-mất).
+   *
+   * The hiding is courtesy, not security: `/platform` guards itself on the
+   * server, because "ẩn khỏi menu nhưng gõ thẳng URL vẫn vào được" is the hole
+   * this rule exists to close.
+   */
+  const hasPlatformRole = (me.data?.account?.platformRole ?? null) !== null;
+  const sections = visibleNavSections({ hasPlatformRole });
 
   return (
     <SideNav
@@ -52,7 +71,7 @@ export function AppSideNav() {
       // Vietnamese UI names neither one usefully.
       aria-label="Điều hướng chính"
     >
-      {NAV_SECTIONS.map((section) => (
+      {sections.map((section) => (
         <SideNavSection key={section.title} title={section.title}>
           {section.items.map((item) => (
             <SideNavItem

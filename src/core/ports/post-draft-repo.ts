@@ -16,6 +16,7 @@
  */
 
 import type { ComposeDraftPayload } from "@/core/domain/post-draft";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export interface StoredPostDraft {
   /**
@@ -32,7 +33,7 @@ export interface StoredPostDraft {
 }
 
 export interface SavePostDraftRecord {
-  tenantId: string;
+  tenantId: TenantId;
   ownerUserId: string;
   kind: string;
   /** Already validated by the usecase — the repo never sees a raw client body. */
@@ -42,8 +43,8 @@ export interface SavePostDraftRecord {
 
 export interface PostDraftRepo {
   /** Null when this operator has no draft of that kind. */
-  load(tenantId: string, ownerUserId: string, kind: string): Promise<StoredPostDraft | null>;
+  load(tenantId: TenantId, ownerUserId: string, kind: string): Promise<StoredPostDraft | null>;
   /** Upsert on (tenant, owner, kind). Returns the row as written. */
   save(input: SavePostDraftRecord): Promise<StoredPostDraft>;
-  discard(tenantId: string, ownerUserId: string, kind: string): Promise<void>;
+  discard(tenantId: TenantId, ownerUserId: string, kind: string): Promise<void>;
 }

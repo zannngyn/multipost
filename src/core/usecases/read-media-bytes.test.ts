@@ -18,6 +18,7 @@ import type {
 } from "@/core/ports/media-byte-cache";
 
 import { makeReadMediaBytes } from "./read-media-bytes";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The publish path uploads photo bytes itself now, so this is where those bytes
@@ -26,7 +27,7 @@ import { makeReadMediaBytes } from "./read-media-bytes";
  * (code + reason + retryable) for publish-post to decide retry vs block?
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const ASSET = "drive-file-1";
 const BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
@@ -162,7 +163,7 @@ describe("readMediaBytes — refused calls", () => {
   it("rejects a malformed tenant id or asset id without touching any source", async () => {
     const { readMediaBytes, download, get, findByDriveFileId } = harness();
 
-    await expect(readMediaBytes({ tenantId: "nope", assetId: ASSET })).rejects.toMatchObject({
+    await expect(readMediaBytes({ tenantId: testTenantId("nope"), assetId: ASSET })).rejects.toMatchObject({
       code: "INVALID_INPUT",
       context: { reason: "INVALID_MEDIA_REQUEST", retryable: false },
     });

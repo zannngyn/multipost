@@ -11,6 +11,7 @@
  */
 
 import { AppError } from "@/core/domain/errors";
+import { captionToneInstruction, DEFAULT_CAPTION_TONE } from "@/shared/caption-tone";
 import { hashParts } from "@/core/ai/hash";
 import { buildPromptVariables, toWhitelistedProduct } from "@/core/ai/context";
 import { GENERATED_CONTENT_JSON_SCHEMA } from "@/core/ai/generated-content";
@@ -49,6 +50,7 @@ import type {
   ContentGenerationRequest,
   ContentGenerationResult,
 } from "@/core/ports/content-engine";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 export interface ContentEngineDeps {
   /** Wired in composition; a tier referencing an absent provider is a config error. */
@@ -70,14 +72,15 @@ async function generate(
   request: ContentGenerationRequest,
 ): Promise<ContentGenerationResult> {
   // --- Edge cases first (CLAUDE.md rule 1) ---------------------------------
-  const tenantId = typeof request?.tenantId === "string" ? request.tenantId.trim() : "";
-  if (!tenantId) {
+  const rawTenantId = typeof request?.tenantId === "string" ? request.tenantId.trim() : "";
+  if (!rawTenantId) {
     throw new AppError("INVALID_INPUT", {
       message: "ContentGenerationRequest.tenantId is required",
       userMessage: "Thiếu mã đơn vị (tenant) khi yêu cầu sinh nội dung.",
       context: { task: request?.task ?? null },
     });
   }
+  const tenantId = normalizeTenantId(request.tenantId);
   if (!request.task) {
     throw new AppError("INVALID_INPUT", {
       message: "ContentGenerationRequest.task is required",
@@ -220,7 +223,7 @@ interface TierRunInput {
   template: PromptTemplate;
   request: ContentGenerationRequest;
   product: CaptionInput;
-  tenantId: string;
+  tenantId: TenantId;
   generationId: string;
   validationContext: ValidationContext;
   state: RunState;
@@ -257,6 +260,10 @@ async function runTier(deps: ContentEngineDeps, input: TierRunInput): Promise<Ti
       image: request.vision.mode === "single" ? request.vision.image.ref : "",
       template: template.id,
       version: template.version,
+      // Two tones are NOT the same input: without this, `ai_generation` would
+      // claim identical inputs for prompts that differ. Added conditionally so
+      // the default tone keeps producing exactly the hashes it produced before.
+      ...(captionToneInstruction(request.tone) ? { tone: String(request.tone) } : {}),
     });
 
     const attemptLog = log.child({
@@ -264,6 +271,9 @@ async function runTier(deps: ContentEngineDeps, input: TierRunInput): Promise<Ti
       provider: entry.provider,
       model: entry.model,
       tier,
+      // `ai_generation` has no tone column (no migration in this change), so the
+      // log line is where "which tone produced this caption" is answered.
+      tone: request.tone ?? DEFAULT_CAPTION_TONE,
     });
 
     // --- budget ceiling BEFORE spending (docs/ai/cost-model.md §3) ---------

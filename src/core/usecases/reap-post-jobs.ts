@@ -12,6 +12,7 @@ import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ChannelConfigRepo } from "@/core/ports/publisher";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * The reaper — a periodic sweep for the two ways a post can go quiet forever.
@@ -77,7 +78,7 @@ export interface ReapPostJobsInput {
 
 export interface ReapedJob {
   readonly postJobId: string;
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId: string;
   readonly channelId: string;
   readonly outcome: "failed" | "requeued" | "skipped";

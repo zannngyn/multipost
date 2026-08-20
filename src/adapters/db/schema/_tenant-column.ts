@@ -1,5 +1,7 @@
 import { uuid } from "drizzle-orm/pg-core";
 
+import type { TenantId } from "@/core/domain/tenant-context";
+
 import { tenants } from "./tenant";
 
 /**
@@ -12,5 +14,6 @@ import { tenants } from "./tenant";
  */
 export const tenantIdColumn = () =>
   uuid("tenant_id")
+    .$type<TenantId>()
     .notNull()
     .references(() => tenants.id, { onDelete: "cascade" });

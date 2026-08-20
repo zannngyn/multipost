@@ -32,11 +32,12 @@ import {
   type PostJob,
   type PostJobStatus,
 } from "./post-job";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 function makeJob(overrides: Partial<PostJob> = {}): PostJob {
   return {
     id: "11111111-1111-1111-1111-111111111111",
-    tenantId: "00000000-0000-0000-0000-000000000001",
+    tenantId: testTenantId("00000000-0000-0000-0000-000000000001"),
     batchId: "22222222-2222-2222-2222-222222222222",
     productCode: "MGKVX6310",
     color: "TÍM",
@@ -232,7 +233,7 @@ describe("transitionPostJob — allowed edges", () => {
 describe("postJobDuplicateKey", () => {
   it("is the (tenant, batch, code, colour, channel, format) tuple, case-normalised", () => {
     const key = postJobDuplicateKey({
-      tenantId: "tenant-1",
+      tenantId: testTenantId("tenant-1"),
       batchId: "batch-1",
       productCode: " mgkvx6310 ",
       color: " tím ",
@@ -245,7 +246,7 @@ describe("postJobDuplicateKey", () => {
 
   it("separates two colours of the same code on the same channel", () => {
     const base = {
-      tenantId: "t",
+      tenantId: testTenantId("t"),
       batchId: "b",
       productCode: "X",
       channelId: "c",
@@ -264,8 +265,8 @@ describe("postJobDuplicateKey", () => {
       channelId: "c",
       format: "image_post",
     } as const;
-    expect(postJobDuplicateKey({ ...base, tenantId: "t1" })).not.toBe(
-      postJobDuplicateKey({ ...base, tenantId: "t2" }),
+    expect(postJobDuplicateKey({ ...base, tenantId: testTenantId("t1") })).not.toBe(
+      postJobDuplicateKey({ ...base, tenantId: testTenantId("t2") }),
     );
   });
 });

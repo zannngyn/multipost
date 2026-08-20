@@ -17,6 +17,17 @@ export interface NavItem {
 export interface NavSection {
   readonly title: string;
   readonly items: readonly NavItem[];
+  /**
+   * Only for accounts that hold a platform role (M3.2). This is the first
+   * permission-filtered part of the nav, and it closes ticket N3 ("nav hiện mục
+   * cho người không có quyền") for this section.
+   *
+   * HIDDEN, not disabled: an operator of a customer company has no business
+   * knowing MYSP has an internal admin screen, and there is nothing they could
+   * ask for to gain access (core-auth-session §cây quyết định: ẩn hoàn toàn khi
+   * biết nó tồn tại cũng là rò rỉ).
+   */
+  readonly requiresPlatformRole?: boolean;
 }
 
 export const NAV_SECTIONS: readonly NavSection[] = [
@@ -48,9 +59,43 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { href: "/channels", label: "Kênh", isExact: true },
       { href: "/channels/groups", label: "Nhóm kênh" },
       { href: "/prompts", label: "Mẫu prompt" },
+      { href: "/members", label: "Thành viên" },
+      // Read-only history since M2.4 — the label says so, so nobody opens it
+      // expecting to add someone.
+      { href: "/access", label: "Lịch sử duyệt" },
     ],
   },
+  {
+    title: "Nền tảng",
+    requiresPlatformRole: true,
+    items: [{ href: "/platform", label: "Công ty khách" }],
+  },
 ] as const;
+
+export interface NavVisibility {
+  /** `account.platformRole !== null` from /api/me. */
+  readonly hasPlatformRole: boolean;
+}
+
+/**
+ * The sections this account may see.
+ *
+ * Called with `hasPlatformRole: false` while `/api/me` is still loading, so the
+ * privileged group is never rendered and then yanked away — a menu item that
+ * appears for a moment is a menu item somebody clicks (core-auth-session: menu
+ * chờ biết quyền mới render, chống nháy hiện-rồi-biến-mất).
+ *
+ * Hiding is NOT the protection: `/platform` guards itself server-side, because
+ * "ẩn khỏi menu nhưng gõ thẳng URL vẫn vào được" is the classic hole.
+ */
+export function visibleNavSections(
+  visibility: NavVisibility,
+  sections: readonly NavSection[] = NAV_SECTIONS,
+): readonly NavSection[] {
+  return sections.filter(
+    (section) => !section.requiresPlatformRole || visibility.hasPlatformRole,
+  );
+}
 
 /**
  * A nav entry owns its own path and everything under it. `/batches/<id>` has no

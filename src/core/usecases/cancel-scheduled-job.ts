@@ -13,6 +13,7 @@ import type {
 import type { UserRepo } from "@/core/ports/user-repo";
 
 import { resolveActorUserId, type ActorInput } from "./resolve-actor";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E8.4 — "huỷ" a post before it goes out.
@@ -52,14 +53,14 @@ export const MAX_CANCEL_NOTE_LENGTH = 500;
 export const CANCELLED_AUDIT_ACTION = "post_job.cancelled";
 
 export interface CancelScheduledJobInput extends ActorInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   /** Free-text note from the operator, stored in the audit payload. */
   readonly note?: string | null;
 }
 
 export interface CancelScheduledJobResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   readonly batchId: string;
   readonly channelId: string;
@@ -87,15 +88,16 @@ export function makeCancelScheduledJob(deps: CancelScheduledJobDeps) {
     input: CancelScheduledJobInput,
   ): Promise<CancelScheduledJobResult> {
     // --- Edge cases first ---------------------------------------------------
-    const tenantId = str(input?.tenantId);
+    const rawTenantId = str(input?.tenantId);
     const postJobId = str(input?.postJobId);
-    if (!isTenantId(tenantId) || postJobId.length === 0) {
+    if (!isTenantId(rawTenantId) || postJobId.length === 0) {
       throw new AppError("INVALID_INPUT", {
         message: "cancelScheduledJob requires a tenant UUID and a post job id",
         userMessage: "Yêu cầu huỷ bài hẹn thiếu thông tin định danh.",
-        context: { tenant_id: tenantId || null, post_job_id: postJobId || null },
+        context: { tenant_id: rawTenantId || null, post_job_id: postJobId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const job = await deps.postJobs.findJobById(tenantId, postJobId);
     if (!job) {

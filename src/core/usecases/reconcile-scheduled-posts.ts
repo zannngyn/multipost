@@ -13,6 +13,7 @@ import type {
   ChannelPublisher,
   RemotePostState,
 } from "@/core/ports/publisher";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E8.6 — the sweep that closes the loop on a handed-over post.
@@ -80,7 +81,7 @@ export interface ReconcileScheduledPostsInput {
 
 export interface ReconciledJob {
   readonly postJobId: string;
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId: string;
   readonly channelId: string;
   /**

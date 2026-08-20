@@ -33,24 +33,11 @@ import { apiRequest } from "./http-client";
  */
 
 export const channelKeys = {
-  list: (tenantId: string) => ["channels", tenantId] as const,
+  list: (tenantKey: string) => ["channels", tenantKey] as const,
 };
 
 /** Reading Pages from Graph is slower than our own DB — give it real room. */
 const GRAPH_ROUNDTRIP_TIMEOUT_MS = 30_000;
-
-function requireTenantId(tenantId: string): string {
-  const trimmed = typeof tenantId === "string" ? tenantId.trim() : "";
-  if (trimmed.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "tenantId is required",
-      userMessage: "Chưa có mã đơn vị (tenant).",
-    });
-  }
-  return trimmed;
-}
 
 function requireChannelId(channelId: string): string {
   const trimmed = typeof channelId === "string" ? channelId.trim() : "";
@@ -71,17 +58,12 @@ function requireChannelId(channelId: string): string {
  * with `fetch` would either be blocked by CORS or land the login page in a
  * JSON parser (web-auth-methods §1: redirect, not popup, not XHR).
  */
-export function channelConnectHref(tenantId: string): string {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-  return `/api/channels/connect?${query.toString()}`;
+export function channelConnectHref(): string {
+  return "/api/channels/connect";
 }
 
-export async function listChannels(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<ChannelListResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-  return apiRequest(`/api/channels?${query.toString()}`, {
+export async function listChannels(signal?: AbortSignal): Promise<ChannelListResponse> {
+  return apiRequest("/api/channels", {
     schema: ChannelListResponseSchema,
     signal,
     malformedMessage:
@@ -90,12 +72,12 @@ export async function listChannels(
 }
 
 export async function setChannelStatus(
-  params: { tenantId: string; channelId: string; status: ChannelStatus },
+  params: { channelId: string; status: ChannelStatus },
   signal?: AbortSignal,
 ): Promise<SetChannelStatusResponse> {
   return apiRequest(`/api/channels/${encodeURIComponent(requireChannelId(params.channelId))}`, {
     method: "PUT",
-    body: { tenantId: requireTenantId(params.tenantId), status: params.status },
+    body: { status: params.status },
     schema: SetChannelStatusResponseSchema,
     signal,
     malformedMessage:
@@ -104,12 +86,11 @@ export async function setChannelStatus(
 }
 
 export async function removeChannel(
-  params: { tenantId: string; channelId: string },
+  params: { channelId: string },
   signal?: AbortSignal,
 ): Promise<RemoveChannelResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(params.tenantId) });
   return apiRequest(
-    `/api/channels/${encodeURIComponent(requireChannelId(params.channelId))}?${query.toString()}`,
+    `/api/channels/${encodeURIComponent(requireChannelId(params.channelId))}`,
     {
       method: "DELETE",
       schema: RemoveChannelResponseSchema,
@@ -120,7 +101,7 @@ export async function removeChannel(
 }
 
 export async function importChannels(
-  params: { tenantId: string; userAccessToken: string },
+  params: { userAccessToken: string },
   signal?: AbortSignal,
 ): Promise<ChannelImportResponse> {
   const token = typeof params.userAccessToken === "string" ? params.userAccessToken.trim() : "";
@@ -136,7 +117,7 @@ export async function importChannels(
 
   return apiRequest("/api/channels/import", {
     method: "POST",
-    body: { tenantId: requireTenantId(params.tenantId), userAccessToken: token },
+    body: { userAccessToken: token },
     schema: ChannelImportResponseSchema,
     signal,
     timeoutMs: GRAPH_ROUNDTRIP_TIMEOUT_MS,
@@ -145,13 +126,11 @@ export async function importChannels(
   });
 }
 
-export async function refreshChannels(
-  params: { tenantId: string },
-  signal?: AbortSignal,
-): Promise<ChannelImportResponse> {
+export async function refreshChannels(signal?: AbortSignal): Promise<ChannelImportResponse> {
   return apiRequest("/api/channels/refresh", {
     method: "POST",
-    body: { tenantId: requireTenantId(params.tenantId) },
+    // The company comes from the session; the route ignores a legacy body.
+    body: {},
     schema: ChannelImportResponseSchema,
     signal,
     timeoutMs: GRAPH_ROUNDTRIP_TIMEOUT_MS,

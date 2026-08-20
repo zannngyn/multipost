@@ -5,8 +5,10 @@ import type { CatalogConfigRepo, CatalogSourceConfig } from "@/core/ports/drive-
 import type { Logger } from "@/core/ports/infra";
 
 import { makeGetCatalogSource } from "./get-catalog-source";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
+import type { TenantId } from "@/core/domain/tenant-context";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -37,7 +39,7 @@ describe("getCatalogSource — edge cases first", () => {
     async (tenantId) => {
       const getCatalogSource = makeGetCatalogSource(makeDeps(null));
       await expect(
-        getCatalogSource({ tenantId: tenantId as unknown as string }),
+        getCatalogSource({ tenantId: tenantId as unknown as TenantId }),
       ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     },
   );
@@ -95,7 +97,7 @@ describe("getCatalogSource — happy path", () => {
       spreadsheetId: "sheet",
       sheetName: "Tab",
     });
-    await expect(makeGetCatalogSource(deps)({ tenantId: `  ${TENANT}  ` })).resolves.toMatchObject({
+    await expect(makeGetCatalogSource(deps)({ tenantId: testTenantId(`  ${TENANT}  `) })).resolves.toMatchObject({
       driveFolderId: "folder",
     });
   });
