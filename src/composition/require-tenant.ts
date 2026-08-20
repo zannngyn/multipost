@@ -27,6 +27,14 @@ import type { OperatorRole } from "@/shared/operator-access";
 /** Cache tiers (docs/09 §3.4). The tier is the CALLER's claim about the route. */
 export type AuthzTier = "S" | "M" | "R";
 
+/**
+ * Re-exported for the app layer: routes receive a TenantContext from
+ * requireTenantContext() but may not import core/domain/tenant-context
+ * directly (ESLint one-way rule — app sees core types only through
+ * composition).
+ */
+export type { TenantContext, TenantId } from "@/core/domain/tenant-context";
+
 export const TENANT_CONTEXT_CACHE_TTL_MS = 60_000;
 
 export interface RequireTenantSession {
