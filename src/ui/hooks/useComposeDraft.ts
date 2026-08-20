@@ -6,6 +6,7 @@ import { useWatch } from "react-hook-form";
 import {
   buildComposeDraftPayload,
   draftContentKey,
+  draftProgressStep,
   isDraftWorthSaving,
   pickNewerDraft,
   type ComposeDraftSnapshot,
@@ -178,7 +179,12 @@ export function useComposeDraft(wizard: ComposeWizard, publish: PublishForm): Co
   const canPersist = TENANT_ID_PATTERN.test(tenantId);
 
   const snapshot: ComposeDraftSnapshot = {
-    step: wizard.step.slug,
+    // Derived, not navigated to: the screen has no steps, but the stored
+    // payload still carries one so an older build can reopen the same row.
+    step: draftProgressStep({
+      composed: Boolean(wizard.composed),
+      everyCaption: wizard.hasEveryCaption,
+    }),
     composeKey: wizard.composedKey ?? "",
     productCode: productCode ?? "",
     color: color ?? "",

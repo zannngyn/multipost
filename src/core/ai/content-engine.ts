@@ -11,6 +11,7 @@
  */
 
 import { AppError } from "@/core/domain/errors";
+import { captionToneInstruction, DEFAULT_CAPTION_TONE } from "@/shared/caption-tone";
 import { hashParts } from "@/core/ai/hash";
 import { buildPromptVariables, toWhitelistedProduct } from "@/core/ai/context";
 import { GENERATED_CONTENT_JSON_SCHEMA } from "@/core/ai/generated-content";
@@ -259,6 +260,10 @@ async function runTier(deps: ContentEngineDeps, input: TierRunInput): Promise<Ti
       image: request.vision.mode === "single" ? request.vision.image.ref : "",
       template: template.id,
       version: template.version,
+      // Two tones are NOT the same input: without this, `ai_generation` would
+      // claim identical inputs for prompts that differ. Added conditionally so
+      // the default tone keeps producing exactly the hashes it produced before.
+      ...(captionToneInstruction(request.tone) ? { tone: String(request.tone) } : {}),
     });
 
     const attemptLog = log.child({
@@ -266,6 +271,9 @@ async function runTier(deps: ContentEngineDeps, input: TierRunInput): Promise<Ti
       provider: entry.provider,
       model: entry.model,
       tier,
+      // `ai_generation` has no tone column (no migration in this change), so the
+      // log line is where "which tone produced this caption" is answered.
+      tone: request.tone ?? DEFAULT_CAPTION_TONE,
     });
 
     // --- budget ceiling BEFORE spending (docs/ai/cost-model.md §3) ---------

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ChannelGroupForm } from "@/ui/components/channels/ChannelGroupForm";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import {
@@ -16,6 +17,8 @@ import {
 } from "@/ui/hooks/useChannelGroups";
 import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { writeGate } from "@/ui/hooks/read-only-gate";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { formatDateTime } from "@/ui/schemas/post-batch.schema";
 
 /**
@@ -61,6 +64,12 @@ export function ChannelGroupsScreen() {
     onRetry: () => void channels.refetch(),
   };
 
+  // Support mode is read-only (M3.3): creating, editing and deleting a group
+  // all answer 403, so the controls go off with the reason attached rather
+  // than staying live to fail.
+  const readOnlyReason = useReadOnlyReason();
+  const gate = writeGate(readOnlyReason);
+
   return (
     <section className="space-y-6" aria-labelledby="channels-heading">
       <header className="space-y-1">
@@ -80,16 +89,22 @@ export function ChannelGroupsScreen() {
         <h2 id="channels-create-heading" className="text-base font-semibold">
           Tạo nhóm mới
         </h2>
-        <ChannelGroupForm
-          mode="create"
-          channels={pickableChannels}
-          pending={create.isPending}
-          error={create.isError ? create.error : undefined}
-          onSubmit={(values) => {
-            create.reset();
-            create.mutate(values);
-          }}
-        />
+        {gate.isDisabled ? (
+          // The whole form goes, not just its button: a form nobody can submit
+          // invites typing that gets thrown away.
+          <ReadOnlyNotice reason={gate.reason} />
+        ) : (
+          <ChannelGroupForm
+            mode="create"
+            channels={pickableChannels}
+            pending={create.isPending}
+            error={create.isError ? create.error : undefined}
+            onSubmit={(values) => {
+              create.reset();
+              create.mutate(values);
+            }}
+          />
+        )}
         {create.isSuccess ? (
           <p
             role="status"
@@ -216,11 +231,12 @@ export function ChannelGroupsScreen() {
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
                     size="sm"
                     variant="outline"
+                    disabled={gate.isDisabled}
                     onClick={() => {
                       update.reset();
                       setConfirmingId(null);
@@ -234,6 +250,7 @@ export function ChannelGroupsScreen() {
                     type="button"
                     size="sm"
                     variant="ghost"
+                    disabled={gate.isDisabled}
                     onClick={() => {
                       remove.reset();
                       setEditingId(null);
@@ -243,6 +260,8 @@ export function ChannelGroupsScreen() {
                     Xoá
                     <span className="sr-only"> nhóm {group.name}</span>
                   </Button>
+                  {/* One line per row, next to the buttons it explains. */}
+                  <ReadOnlyNotice reason={gate.reason} className="basis-full text-xs" />
                 </div>
               )}
             </li>

@@ -23,6 +23,7 @@ import type {
 } from "@/core/ports/content-engine";
 import type { Logger } from "@/core/ports/infra";
 import { HASHTAG_MAX, HASHTAG_MIN } from "@/core/domain/caption";
+import { DEFAULT_CAPTION_TONE, isCaptionTone, type CaptionTone } from "@/shared/caption-tone";
 import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 export interface CaptionChannelRequest {
@@ -40,6 +41,12 @@ export interface GenerateCaptionsInput {
   channels: readonly CaptionChannelRequest[];
   vision: VisionInput;
   constraints?: Partial<ContentConstraints>;
+  /**
+   * Tone key from the compose form. Validated here even though the route parses
+   * it too: a worker payload is an equally untrusted boundary, and an unknown
+   * key must fail loudly instead of quietly generating the default tone.
+   */
+  tone?: unknown;
   brandVoice?: string;
   requestId?: string;
   postJobId?: string;
@@ -154,6 +161,21 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
       });
     }
 
+    // A tone key that is not in the closed list is a caller bug: refuse it
+    // instead of silently writing in the default voice (CLAUDE.md rule 2).
+    if (input.tone !== undefined && !isCaptionTone(input.tone)) {
+      log.warn("Caption generation rejected: unknown tone key", {
+        error_code: "INVALID_INPUT",
+        tone: String(input.tone),
+      });
+      throw new AppError("INVALID_INPUT", {
+        message: `Unknown caption tone: ${String(input.tone)}`,
+        userMessage: "Tông giọng không hợp lệ.",
+        context: { tenant_id: tenantId, tone: String(input.tone) },
+      });
+    }
+    const tone: CaptionTone = isCaptionTone(input.tone) ? input.tone : DEFAULT_CAPTION_TONE;
+
     const constraints: ContentConstraints = {
       hashtagMin: input.constraints?.hashtagMin ?? HASHTAG_MIN,
       hashtagMax: input.constraints?.hashtagMax ?? HASHTAG_MAX,
@@ -195,6 +217,7 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
         vision: input.vision,
         language: "vi",
         constraints,
+        tone,
         brandVoice: input.brandVoice,
         existingCaptions: [...acceptedCaptions],
         requestId: input.requestId,
@@ -232,6 +255,7 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
 
         channelLog.info("Caption generated", {
           generation_id: result.generationId,
+          tone,
           provider: result.metadata.provider,
           model: result.metadata.model,
           tier: result.metadata.tier,

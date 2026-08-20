@@ -5,6 +5,7 @@ import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors"
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
+import { CAPTION_TONES } from "@/shared/caption-tone";
 
 /**
  * Step 2 of the wizard: one caption per channel (E4). Thin by contract.
@@ -65,6 +66,13 @@ const BodySchema = z.object({
   channels: z
     .array(z.enum(Object.keys(CHANNEL_CATALOG) as [ChannelId, ...ChannelId[]]))
     .min(1, "Chưa chọn kênh nào để viết caption."),
+  /**
+   * Tone dropdown of the compose form. A CLOSED enum, never free text: the
+   * client picks a key, the Vietnamese sentence it maps to lives server-side in
+   * `shared/caption-tone` (ADR-001 — a client must not be able to write part of
+   * a prompt). Absent = `mac-dinh` = today's prompt, unchanged.
+   */
+  tone: z.enum(CAPTION_TONES, { error: "Tông giọng không hợp lệ." }).optional(),
 });
 
 export const dynamic = "force-dynamic";
@@ -99,6 +107,9 @@ export async function POST(request: Request): Promise<Response> {
       // resized bytes (ADR-001 §4: exactly ONE cover image, never the album).
       // The web layer must not download from Drive itself.
       vision: { mode: "none" },
+      // Omitted entirely when the client sent nothing, so the usecase sees the
+      // same input it saw before tones existed.
+      ...(body.tone ? { tone: body.tone } : {}),
     });
 
     return Response.json({

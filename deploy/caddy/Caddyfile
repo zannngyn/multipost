@@ -4,13 +4,46 @@
 # On the VPS: replace `:80` with the real hostname (e.g. `dangbai.example.com`)
 # and map 80:80 + 443:443 in docker-compose.yml — Caddy then gets a certificate
 # automatically. Keep the /api/health passthrough for uptime checks.
+
+# Global options: the `default` logger carries runtime AND per-request error
+# entries (`http.log.error.*`, e.g. "no upstreams available" when web is down),
+# and those error entries embed the full request — URI and headers — so they
+# leak the same bearers the access-log filter below scrubs. Same filter here;
+# entries without a `request` field pass through untouched.
+{
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "(/join/)[^/?]+|([?&](?:sig|token)=)[^&]*" "${1}${2}<redacted>"
+				request>headers>Referer regexp "(/join/)[^/?]+|([?&](?:sig|token)=)[^&]*" "${1}${2}<redacted>"
+			}
+		}
+	}
+}
+
 :80 {
 	encode zstd gzip
 
 	# Structured access logs, same spirit as pino output.
+	#
+	# The format is `filter` around json because two URL shapes carry bearer
+	# credentials and must never land verbatim in the log:
+	#   /join/<token>        single-use invite token (possession = membership)
+	#   ...?sig=<hmac>       signed media URL (possession = the file bytes)
+	# The app layer already redacts its own logs (src/app/_lib/redact-path.ts);
+	# this closes the remaining layer, the edge access log. One regexp handles
+	# both shapes; Referer gets the same treatment because a browser leaving
+	# the /join page repeats the full URL there.
 	log {
 		output stdout
-		format json
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "(/join/)[^/?]+|([?&](?:sig|token)=)[^&]*" "${1}${2}<redacted>"
+				request>headers>Referer regexp "(/join/)[^/?]+|([?&](?:sig|token)=)[^&]*" "${1}${2}<redacted>"
+			}
+		}
 	}
 
 	reverse_proxy web:3000 {

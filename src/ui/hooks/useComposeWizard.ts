@@ -2,73 +2,72 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 
+import { DEFAULT_CAPTION_TONE, type CaptionTone } from "@/shared/caption-tone";
 import {
   COMPOSE_CHANNELS,
   ComposeWizardSchema,
   STEP_PRODUCT_FIELDS,
-  type CaptionsResponse,
   type ComposeResponse,
   type ComposeWizardValues,
   type UploadRejection,
   type UploadResponse,
 } from "@/ui/schemas/compose.schema";
-import {
-  applyAlbumOrder,
-  restoreTargetStep,
-  shouldClearCaptions,
-} from "@/ui/components/compose/compose-draft";
+import type { CaptionTarget } from "@/ui/components/compose/caption-targets";
+import { applyAlbumOrder, shouldClearCaptions } from "@/ui/components/compose/compose-draft";
 import type { QueuedFile } from "@/ui/components/compose/upload-queue";
 import type { ComposeDraftPayload } from "@/ui/schemas/post-draft.schema";
 import { ApiError } from "@/ui/services/api-error";
-import { composePost, generateCaptions, uploadMedia } from "@/ui/services/post.api";
+import {
+  composePost,
+  generateCaptions,
+  uploadMedia,
+  type GenerateCaptionsResult,
+} from "@/ui/services/post.api";
 
 /**
- * Logic layer of the compose wizard (docs/07 §4.1 + core-wizard).
+ * Logic layer of the compose screen (docs/07 §4.1).
+ *
+ * ONE SCREEN, no steps. The approved ComposeFocus design puts the whole post on
+ * a single card: the code resolves, and the colours, the album, the caption and
+ * the channels appear underneath it in that order. The BUSINESS order is
+ * untouched (CLAUDE.md rule 1 — sheet → tồn kho → media → AI → duyệt → đăng);
+ * what went away is the three-screen presentation, and with it `?step=`,
+ * `goToStep` and the "which step may I be on" arithmetic.
  *
  * Decisions worth knowing before reading the code:
- *  - ONE form object and ONE schema for the whole flow; each step validates its
- *    own fields only, and step 3 re-checks everything before the final action.
- *  - The step lives in the URL (`?step=`), so browser Back walks one step back
- *    instead of leaving the flow, and F5 does not jump to a random step.
- *  - The composed result is NOT in the URL (web-wizard rule 4: never put data in
- *    a query string). A reload therefore loses it — and E10's draft is what
- *    brings it back: `restoreDraft()` re-fills the INPUT and re-runs compose for
- *    real (Sheet lookup + stock gate), so a restored screen is never a replay of
- *    yesterday's answer. Where that fails, the operator stays on step 1 with the
- *    server's own reason instead of a half-empty step 2.
+ *  - ONE form object and ONE schema; `submitProduct()` validates the lookup
+ *    fields only, and the publish action re-checks everything before it fires.
+ *  - Nothing about the post lives in the URL except `?code=` (a deep link from
+ *    the product list). A reload therefore loses the composed post, and E10's
+ *    draft is what brings it back: `restoreDraft()` re-fills the INPUT and
+ *    re-runs compose for real (Sheet lookup + stock gate), so a restored screen
+ *    is never a replay of yesterday's answer. Where that fails, the typed input
+ *    stays on screen with the server's own reason next to it.
  */
-
-export const COMPOSE_STEPS = [
-  { slug: "san-pham", index: 1, title: "Chọn sản phẩm" },
-  { slug: "caption", index: 2, title: "Duyệt caption" },
-  { slug: "xem-lai", index: 3, title: "Xem lại" },
-] as const;
-
-export type ComposeStepSlug = (typeof COMPOSE_STEPS)[number]["slug"];
 
 /** "idle" = nothing to restore (yet); "done" covers success AND refusal. */
 export type ComposeRestorePhase = "idle" | "restoring" | "done";
 
-/** What the step-1 action did: composed, refused by validation, or failed. */
+/**
+ * What the lookup action did: composed, refused by field validation, or refused
+ * by the server. The failure carries the server's error so the caller can put
+ * the reason exactly where it belongs — `null` when the throw was not an
+ * `ApiError` (a bug, not a business refusal).
+ */
 export type ProductStepOutcome =
   | { ok: true; composed: ComposeResponse }
-  | { ok: false; reason: "invalid" | "failed" };
+  | { ok: false; reason: "invalid" }
+  | { ok: false; reason: "failed"; error: ApiError | null };
 
 export interface ComposeRestoreOutcome {
   /** True only when the post was re-composed for real (Sheet + stock gate). */
   readonly composed: boolean;
   /** What changed on the way back: cleared captions, dropped order, files. */
   readonly notices: readonly string[];
-}
-
-const FIRST_STEP = COMPOSE_STEPS[0];
-
-function stepFromSlug(value: string | null): (typeof COMPOSE_STEPS)[number] {
-  return COMPOSE_STEPS.find((step) => step.slug === value) ?? FIRST_STEP;
 }
 
 /**
@@ -94,8 +93,6 @@ function emptyCaptions(): Record<string, string> {
 }
 
 export function useComposeWizard() {
-  const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const form = useForm<ComposeWizardValues>({
@@ -128,57 +125,13 @@ export function useComposeWizard() {
   /** Render-visible copy of `composedKeyRef` — the draft is stamped with it. */
   const [composedKey, setComposedKey] = useState<string | null>(null);
   /**
-   * True when this mount started on a step past the first one — i.e. a reload
-   * or a shared link, with no composed post in memory to back it. Computed once
-   * in the initialiser: nothing is composed at mount time, so the check cannot
-   * be wrong, and no effect has to write state for it.
+   * Where the draft restore has got to. `markRestoreSettled()` is how the draft
+   * hook says "nothing is coming"; the screen reads it to tell "chưa tra mã
+   * nào" apart from "đang mở lại nháp", which look identical otherwise.
    */
-  const [arrivedPastFirstStep, setArrivedPastFirstStep] = useState(
-    () => searchParams.get("step") !== null,
-  );
-  /**
-   * Where the draft restore has got to.
-   *
-   * It starts at "restoring" when the URL already claims an inner step, because
-   * that is exactly the reload a draft is meant to survive: the effect below
-   * would otherwise strip `?step=` within the first frame — long before the
-   * draft has been read — and the operator would watch the screen fall back to
-   * an empty step 1 while the restore was still in flight.
-   * `markRestoreSettled()` is how the draft hook says "nothing is coming".
-   */
-  const [restorePhase, setRestorePhase] = useState<ComposeRestorePhase>(() =>
-    searchParams.get("step") !== null ? "restoring" : "idle",
-  );
+  const [restorePhase, setRestorePhase] = useState<ComposeRestorePhase>("idle");
   /** Set when re-composing another code cleared captions typed for the old one. */
   const [captionsCleared, setCaptionsCleared] = useState(false);
-
-  const requestedStep = stepFromSlug(searchParams.get("step"));
-  // A step beyond 1 is only valid once there is something composed; otherwise
-  // the operator would review a post that does not exist.
-  const step = composed ? requestedStep : FIRST_STEP;
-
-  // Sync the URL with reality — the only thing this effect does is navigate.
-  // `replace`: an unreachable step must not stay in history for Back to find.
-  // It WAITS for the restore: a step is only unreachable once we know no draft
-  // is going to bring it back.
-  useEffect(() => {
-    if (composed || requestedStep.index === FIRST_STEP.index) return;
-    if (restorePhase === "restoring") return;
-    router.replace(pathname, { scroll: false });
-  }, [composed, requestedStep.index, restorePhase, router, pathname]);
-
-  const goToStep = useCallback(
-    (slug: ComposeStepSlug) => {
-      setArrivedPastFirstStep(false);
-      const params = new URLSearchParams(searchParams.toString());
-      if (slug === FIRST_STEP.slug) params.delete("step");
-      else params.set("step", slug);
-      const query = params.toString();
-      // `push`, not replace: Back inside the wizard must go one step back.
-      router.push(query ? `${pathname}?${query}` : pathname, { scroll: false });
-    },
-    [pathname, router, searchParams],
-  );
 
   // --- E9 mode B ------------------------------------------------------------
   // The queue holds files chosen but not yet sent. It is NOT form state: a File
@@ -241,11 +194,11 @@ export function useComposeWizard() {
       // drop photos the operator can now see or resurrect ones that are gone.
       // A restored draft re-applies its own order AFTER this, by asset id.
       setAlbum(result.media);
-      setArrivedPastFirstStep(false);
     },
     onError: () => {
-      // Blocked/failed compose invalidates the current post: step 2 and 3 must
-      // not stay reachable with stale data from the previous product.
+      // Blocked/failed compose invalidates the current post: the caption block,
+      // the album and the publish bar must not stay on screen showing the
+      // previous product's data.
       setComposed(null);
       setAlbum([]);
       composedKeyRef.current = null;
@@ -253,33 +206,61 @@ export function useComposeWizard() {
     },
   });
 
-  const captions = useMutation<CaptionsResponse, ApiError, void>({
+  /**
+   * Tông giọng asked of the writer. State, not form state: it is not part of
+   * the post — it only shapes the next request, and it never travels to the
+   * publish payload or into a draft.
+   */
+  const [tone, setTone] = useState<CaptionTone>(DEFAULT_CAPTION_TONE);
+  /** Set when the server refused `tone` and the call was retried without it. */
+  const [toneDropped, setToneDropped] = useState(false);
+
+  /**
+   * "Nhờ AI viết" / "Viết lại", for ONE target at a time.
+   *
+   * The target is a variable, not a second mutation, so the screen can ask
+   * `captions.variables` which tab is currently writing and which one failed —
+   * a per-channel spinner needs exactly that and nothing more.
+   *
+   * The REQUEST is the same either way: `POST /api/posts/captions` takes the
+   * platform channel catalogue (`facebook`), not a Fanpage id — the prompt is
+   * built from the product alone, so there is nothing Fanpage-specific to send.
+   * Asking again simply produces another variation, which is precisely what a
+   * per-channel "Viết lại" is for. Where the text LANDS is the caller's call:
+   * only a shared target is written here, and a channel target is handed back
+   * so `usePublishForm` can put it on that channel's own caption.
+   */
+  const captions = useMutation<GenerateCaptionsResult, ApiError, CaptionTarget>({
     mutationFn: () => {
       if (!composed) {
         throw new ApiError({
           code: "INVALID_INPUT",
           status: 0,
           message: "generateCaptions called before compose",
-          userMessage: "Chưa có dữ liệu bài đăng. Hãy quay lại bước 1 và tra mã sản phẩm.",
+          userMessage: "Chưa có dữ liệu bài đăng. Hãy tra mã sản phẩm trước.",
         });
       }
       return generateCaptions({
         content: composed.content,
         channels: COMPOSE_CHANNELS.map((channel) => channel.id),
+        tone,
       });
     },
     retry: false,
-    onSuccess: (result) => {
+    onSuccess: (result, target) => {
+      setToneDropped(result.toneDropped);
+      if (target.kind !== "shared") return;
       for (const item of result.generated) {
         form.setValue(`captions.${item.channelId}`, item.text, { shouldDirty: true });
       }
     },
+    onError: () => setToneDropped(false),
   });
 
   /**
-   * Validates ONLY the fields of step 1 (core-wizard: never validate a step the
-   * operator has not reached), then composes. On failure the focus moves to the
-   * first invalid field so a keyboard user is not left guessing.
+   * Validates ONLY the lookup fields — the caption is not filled in yet and
+   * must not be reported as missing — then composes. On failure the focus moves
+   * to the first invalid field so a keyboard user is not left guessing.
    */
   const submitProductStep = useCallback(async (): Promise<ProductStepOutcome> => {
     const valid = await form.trigger([...STEP_PRODUCT_FIELDS]);
@@ -293,8 +274,16 @@ export function useComposeWizard() {
       // `onError` still runs; the throw is caught here rather than left to
       // become an unhandled rejection.
       return { ok: true, composed: await compose.mutateAsync() };
-    } catch {
-      return { ok: false, reason: "failed" };
+    } catch (error) {
+      // The error is HANDED BACK, not just swallowed into a boolean: the caller
+      // pins the server's own sentence on the colour chip that caused it, and
+      // reading it from `compose.error` instead would be a stale closure — the
+      // callback was created before this failure existed.
+      return {
+        ok: false,
+        reason: "failed",
+        error: ApiError.is(error) ? error : null,
+      };
     }
   }, [compose, form]);
 
@@ -305,11 +294,15 @@ export function useComposeWizard() {
    *  1. re-fill the INPUT fields (nothing else is stored, by design);
    *  2. re-run compose FOR REAL — the Sheet is read again and the stock gate
    *     runs again (business rule 3). A draft never resurrects an answer;
-   *  3. only then decide which step to show, and say what changed on the way.
+   *  3. say what changed on the way.
+   *
+   * There is no longer a step to choose: one screen means the restored state IS
+   * the screen, and how far it fills in follows from what compose answered.
    *
    * Compose refusing (hết hàng, không có ảnh, mã đã đổi) is a normal outcome,
    * not a restore failure: the typed input stays on screen, the operator reads
-   * the server's own sentence under step 1, and nothing pretends to be composed.
+   * the server's own sentence under the field, and nothing pretends to be
+   * composed.
    */
   const restoreDraft = useCallback(
     async (draft: ComposeDraftPayload): Promise<ComposeRestoreOutcome> => {
@@ -341,7 +334,7 @@ export function useComposeWizard() {
         );
       }
 
-      // Nothing to look up yet — the draft was saved on a half-typed step 1.
+      // Nothing to look up yet — the draft was saved on a half-typed code.
       if (draft.productCode.trim().length === 0) return finish(false);
 
       const draftHadCaptions = Object.values(draft.captions).some(
@@ -358,19 +351,13 @@ export function useComposeWizard() {
       // this build refuses, and that has to be visible, not swallowed.
       const outcome = await submitProductStep();
       if (!outcome.ok) {
+        // Compose refused (hết hàng, thiếu ảnh…): nothing below the field is
+        // drawn, and `compose.error` under it carries the real sentence.
         notices.push(
           outcome.reason === "invalid"
-            ? "Nháp cũ có mã sản phẩm không còn hợp lệ. Hãy sửa lại ở bước 1 rồi tra lại."
+            ? "Nháp cũ có mã sản phẩm không còn hợp lệ. Hãy sửa lại rồi tra lại."
             : "Không mở lại được bài đang soạn — lý do ở ngay bên dưới. Nội dung bạn đã gõ vẫn còn, hãy sửa rồi tra lại.",
         );
-        // Compose refused (hết hàng, thiếu ảnh…): step 1 is the only honest
-        // place to be, and `compose.error` under it carries the real sentence.
-        const blockedTarget = restoreTargetStep({
-          composed: false,
-          draftStep: draft.step,
-          everyCaption: false,
-        });
-        if (blockedTarget !== requestedStep.slug) goToStep(blockedTarget);
         return finish(false);
       }
 
@@ -384,25 +371,9 @@ export function useComposeWizard() {
       if (arranged.album) setAlbum(arranged.album);
       if (arranged.notice) notices.push(arranged.notice);
 
-      // Step 3 is only reachable with a caption for every channel; a restore
-      // must respect that gate, not walk around it.
-      const restoredCaptions = form.getValues().captions ?? {};
-      const target = restoreTargetStep({
-        composed: true,
-        draftStep: draft.step,
-        everyCaption: COMPOSE_CHANNELS.every(
-          (channel) => (restoredCaptions[channel.id] ?? "").trim().length > 0,
-        ),
-      });
-      // After a reload the URL usually already says the right step; navigating
-      // to it again would push a duplicate history entry for a move nobody made.
-      // The comparison also covers the reverse: a URL claiming step 2 while the
-      // draft says step 1 must be corrected, not left showing the wrong screen.
-      if (target !== requestedStep.slug) goToStep(target);
-
       return finish(true);
     },
-    [form, goToStep, requestedStep.slug, submitProductStep],
+    [form, submitProductStep],
   );
 
   /** Called by the draft hook when no restore is coming (or none was possible). */
@@ -414,8 +385,8 @@ export function useComposeWizard() {
    * "Xoá nháp" — back to an empty screen, in one action.
    *
    * Clearing the stored copy alone would be a lie: autosave would put the very
-   * same content back a second later. Discarding a draft means starting over
-   * (core-wizard: always offer "bỏ để làm lại"), so the wizard itself resets.
+   * same content back a second later. Discarding a draft means starting over,
+   * so the screen itself resets.
    */
   const resetWizard = useCallback(() => {
     form.reset({
@@ -432,25 +403,26 @@ export function useComposeWizard() {
     setComposedKey(null);
     setCaptionsCleared(false);
     setRestorePhase("done");
+    setTone(DEFAULT_CAPTION_TONE);
+    setToneDropped(false);
     setUploadQueue([]);
     setUploadedCount(0);
     setUploadRejections([]);
     compose.reset();
     captions.reset();
     upload.reset();
-    goToStep(FIRST_STEP.slug);
-  }, [captions, compose, form, goToStep, upload]);
+  }, [captions, compose, form, upload]);
 
   /**
    * Deep link from the product list: `/compose?code=MGKVX6310&color=TRẮNG`
-   * prefills step 1 and looks the code up straight away, so "Soạn bài" on a row
-   * lands on the composed post instead of a form the operator must re-submit.
+   * prefills the field and looks the code up straight away, so "Soạn bài" on a
+   * row lands on the composed post instead of a form to re-submit.
    *
    * Guards (an auto-submitting effect is a loop waiting to happen):
    *  - it runs ONCE per code — the ref is written BEFORE the request, so a
    *    blocked/failed compose does not retry itself forever;
-   *  - it never fires on top of an existing composed post, so re-rendering on
-   *    step 2 cannot silently recompose;
+   *  - it never fires on top of an existing composed post, so a re-render
+   *    cannot silently recompose;
    *  - it is a shortcut, not a bypass: the same validation and the same stock
    *    gate run as if the operator had typed the code and pressed the button.
    */
@@ -482,9 +454,6 @@ export function useComposeWizard() {
   return {
     form,
     captionValues,
-    step,
-    steps: COMPOSE_STEPS,
-    goToStep,
     composed,
     /** The album in publish order — use this, never `composed.media`. */
     album,
@@ -505,19 +474,17 @@ export function useComposeWizard() {
      * stored draft — the draft hook skips restoring when this is true.
      */
     deepLinked: (searchParams.get("code") ?? "").trim().length > 0,
-    /**
-     * True while the operator is looking at step 1 after landing on an inner
-     * step with nothing composed — a reload, or a shared link, that the draft
-     * could not (or was not asked to) bring back.
-     */
-    rewound: arrivedPastFirstStep && !composed && restorePhase !== "restoring",
     captionsCleared,
+    /** Tông giọng asked of the writer, and whether the server refused it. */
+    tone,
+    setTone,
+    toneDropped,
     upload,
     uploadQueue,
     setUploadQueue,
     uploadedCount,
     uploadRejections,
-    /** True once every channel has a non-empty caption (step 3 gate). */
+    /** True once every channel has a non-empty caption (the publish gate). */
     hasEveryCaption: COMPOSE_CHANNELS.every(
       (channel) => (captionValues?.[channel.id] ?? "").trim().length > 0,
     ),

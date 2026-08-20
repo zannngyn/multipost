@@ -7,6 +7,12 @@ import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useCreatePostBatch } from "@/ui/hooks/usePostBatch";
 import { useScheduleChoice } from "@/ui/hooks/useScheduleChoice";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
+import {
+  missingCaptionChannelIds,
+  resolveCaption,
+  seedOverridesFromBase,
+  type CaptionSources,
+} from "@/ui/components/compose/caption-targets";
 import { COMPOSE_CHANNELS, postFormatForVideo } from "@/ui/schemas/compose.schema";
 
 /**
@@ -40,7 +46,17 @@ export function usePublishForm(wizard: ComposeWizard) {
   const schedule = useScheduleChoice();
 
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set<string>());
-  const [shareCaption, setShareCaption] = useState(true);
+  /**
+   * Per-channel is the DEFAULT (brief §7.2 + validator D1): several Fanpages
+   * carrying the identical caption is what a platform reads as spam, and the
+   * server measures it. Sharing one caption is the shortcut an operator opts
+   * into, not the shape the screen starts in.
+   *
+   * Until a tab is actually edited nothing changes for a one-channel post:
+   * `resolveCaption` falls back to the shared caption for a channel with no
+   * text of its own.
+   */
+  const [shareCaption, setShareCaption] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   /**
    * Per-channel edits, kept OUT of the wizard form on purpose: a channel id is
@@ -56,9 +72,25 @@ export function usePublishForm(wizard: ComposeWizard) {
   const selectedIds = useMemo(() => [...selected], [selected]);
   const groupItems = groups.data?.groups ?? [];
 
+  /**
+   * The two halves of "one caption per channel", in one object so the editor
+   * and the payload cannot disagree about what a channel is going to publish
+   * (`caption-targets.ts` owns the rule; this hook owns the state).
+   */
+  const captionSources: CaptionSources = useMemo(
+    () => ({ shareCaption, base: baseCaption, overrides: captionOverrides }),
+    [shareCaption, baseCaption, captionOverrides],
+  );
+
   const captionFor = useCallback(
-    (channelId: string): string => (captionOverrides[channelId] ?? baseCaption).trim(),
-    [captionOverrides, baseCaption],
+    (channelId: string): string => resolveCaption(captionSources, channelId).trim(),
+    [captionSources],
+  );
+
+  /** Ticked channels that would go out with no text at all — publish blockers. */
+  const missingCaptionIds = useMemo(
+    () => missingCaptionChannelIds(captionSources, selectedIds),
+    [captionSources, selectedIds],
   );
 
   const toggleChannel = useCallback((channelId: string, checked: boolean) => {
@@ -69,6 +101,19 @@ export function usePublishForm(wizard: ComposeWizard) {
       else next.delete(channelId);
       return next;
     });
+  }, []);
+
+  /**
+   * Replaces the whole selection in one go — what the channel modal applies
+   * when "Xong" is pressed.
+   *
+   * A replace, not a merge: the modal shows the complete picture while it is
+   * open, so what it hands back IS the answer. Merging would resurrect a
+   * channel the operator just unticked in there.
+   */
+  const setSelectedChannels = useCallback((channelIds: readonly string[]) => {
+    setFormError(null);
+    setSelected(new Set(channelIds));
   }, []);
 
   const toggleGroup = useCallback((channelIds: readonly string[], checked: boolean) => {
@@ -87,10 +132,28 @@ export function usePublishForm(wizard: ComposeWizard) {
     setCaptionOverrides((current) => ({ ...current, [channelId]: text }));
   }, []);
 
-  const setShare = useCallback((next: boolean) => {
-    setFormError(null);
-    setShareCaption(next);
-  }, []);
+  /**
+   * Switches between "dùng chung" and per-channel.
+   *
+   * Turning it OFF seeds each ticked channel from the caption on screen — five
+   * empty boxes is not a starting point. Turning it ON drops the per-channel
+   * copies, and the CALLER is the one that asked the operator first: this hook
+   * never destroys typed text on its own.
+   */
+  const setShare = useCallback(
+    (next: boolean, options?: { seedFrom?: readonly string[] }) => {
+      setFormError(null);
+      setShareCaption(next);
+      if (next) {
+        setCaptionOverrides({});
+        return;
+      }
+      const seedIds = options?.seedFrom;
+      if (!seedIds || seedIds.length === 0) return;
+      setCaptionOverrides((current) => seedOverridesFromBase(current, seedIds, baseCaption));
+    },
+    [baseCaption],
+  );
 
   /**
    * E10 — puts the publish half of a stored draft back on screen.
@@ -124,7 +187,7 @@ export function usePublishForm(wizard: ComposeWizard) {
   const reset = useCallback(() => {
     setFormError(null);
     setSelected(new Set<string>());
-    setShareCaption(true);
+    setShareCaption(false);
     setCaptionOverrides({});
     schedule.reset();
     createBatch.reset();
@@ -136,17 +199,17 @@ export function usePublishForm(wizard: ComposeWizard) {
 
     // --- Edge cases first: nothing leaves the browser until they all pass ---
     if (!composed) {
-      setFormError("Chưa có dữ liệu bài đăng. Hãy quay lại bước 1 và tra mã sản phẩm.");
+      setFormError("Chưa có dữ liệu bài đăng. Hãy tra mã sản phẩm trước.");
       return;
     }
     if (selectedIds.length === 0) {
       setFormError("Chọn ít nhất một kênh để đăng.");
       return;
     }
-    if (baseCaption.length === 0) {
-      setFormError("Chưa có caption. Quay lại bước 2 để viết hoặc nhập caption.");
-      return;
-    }
+    // NOT "the shared caption is empty": with per-channel captions a channel can
+    // carry its own text while the shared box is blank. The real question is
+    // whether every TICKED channel resolves to something, and it is asked below
+    // once, by the same rule the editor shows.
 
     // Format follows what was COMPOSED, never the radio on step 1: the album on
     // screen is the one being approved (business rule 6 — no surprise content).
@@ -155,19 +218,20 @@ export function usePublishForm(wizard: ComposeWizard) {
     // response — those are the same length today, and this guard should keep
     // holding if that ever stops being true.
     if (composed.video && wizard.album.length !== 1) {
-      setFormError("Bài video chỉ đăng được đúng một clip. Hãy quay lại bước 1 và soạn lại bài.");
+      setFormError("Bài video chỉ đăng được đúng một clip. Hãy soạn lại bài.");
       return;
     }
 
+    // EVERY ticked channel gets an entry, in both modes: "dùng chung" copies the
+    // approved caption to each one, per-channel sends each channel's own text
+    // (falling back to the shared one where nothing was written for it). The
+    // server refuses a missing channel by name, so a gap here is never silent.
     const captionByChannel: Record<string, string> = {};
-    const missing: string[] = [];
     for (const channelId of selectedIds) {
-      const text = shareCaption ? baseCaption : captionFor(channelId);
-      if (text.length === 0) missing.push(channelId);
-      else captionByChannel[channelId] = text;
+      captionByChannel[channelId] = captionFor(channelId);
     }
-    if (missing.length > 0) {
-      setFormError(`Các kênh sau chưa có caption: ${missing.join(", ")}.`);
+    if (missingCaptionIds.length > 0) {
+      setFormError(`Các kênh sau chưa có caption: ${missingCaptionIds.join(", ")}.`);
       return;
     }
     // The schedule is validated LAST, against the clock at this instant: the
@@ -203,14 +267,13 @@ export function usePublishForm(wizard: ComposeWizard) {
       },
     );
   }, [
-    baseCaption,
     captionFor,
     composed,
     createBatch,
+    missingCaptionIds,
     router,
     schedule,
     selectedIds,
-    shareCaption,
     wizard.album,
     wizard.form,
   ]);
@@ -222,6 +285,7 @@ export function usePublishForm(wizard: ComposeWizard) {
     schedule,
     selected,
     selectedIds,
+    setSelectedChannels,
     toggleChannel,
     toggleGroup,
     shareCaption,
@@ -229,6 +293,11 @@ export function usePublishForm(wizard: ComposeWizard) {
     captionOverrides,
     setCaptionOverride,
     baseCaption,
+    /** Shared + per-channel captions, as  reads them. */
+    captionSources,
+    captionFor,
+    /** Ticked channels with no text at all — named by the action bar. */
+    missingCaptionIds,
     formError,
     submit,
     /** E10 — draft restore / "Xoá nháp". */
@@ -239,18 +308,30 @@ export function usePublishForm(wizard: ComposeWizard) {
      * It is a hint, not the gate: `submit` still checks everything and explains
      * what is missing, because a disabled button that says nothing is worse.
      */
+    /**
+     * A preset group is NOT part of this any more (ComposeFocus, 20/08/2026):
+     * channels are ticked one by one in the picker modal, which lists the
+     * tenant's Pages straight from `/api/channels`. Groups became the shortcut
+     * they were always meant to be, so a tenant that never made one could no
+     * longer publish at all — that was the bug this line used to encode.
+     */
     canSubmit:
       Boolean(composed) &&
-      groupItems.length > 0 &&
       selectedIds.length > 0 &&
-      baseCaption.length > 0 &&
+      missingCaptionIds.length === 0 &&
       !createBatch.isPending,
     isPending: createBatch.isPending,
+    /**
+     * Wording of the one black action at the bottom of the card (ComposeFocus
+     * template line 129). "Đăng luôn" is literal: pressing it creates the lô and
+     * the worker publishes straight away. Nothing auto-publishes — the label
+     * describes what THIS press does, which is the whole point of the screen.
+     */
     submitLabel: createBatch.isPending
       ? "Đang tạo lô…"
       : schedule.mode === "scheduled"
-        ? "Tạo lô hẹn giờ"
-        : "Tạo lô đăng",
+        ? "Hẹn lịch đăng"
+        : "Đăng luôn",
   };
 }
 

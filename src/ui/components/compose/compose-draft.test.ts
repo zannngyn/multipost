@@ -9,7 +9,7 @@ import {
   draftContentKey,
   isDraftWorthSaving,
   pickNewerDraft,
-  restoreTargetStep,
+  draftProgressStep,
   shouldClearCaptions,
   type ComposeDraftSnapshot,
 } from "./compose-draft";
@@ -123,30 +123,43 @@ describe("shouldClearCaptions", () => {
 });
 
 /**
- * Contract test 2: "restore mà compose bị chặn → ở lại bước 1".
+ * CHANGED with the ComposeFocus redesign (PM, 20/08/2026).
+ *
+ * These tests used to cover `restoreTargetStep` — "restore mà compose bị chặn →
+ * ở lại bước 1". There are no steps any more: the compose screen is one page,
+ * so a restore has no step to navigate to and that function no longer exists.
+ *
+ * What it is replaced by, and why these tests still earn their place: the
+ * STORED payload keeps its `step` field (`post_draft.payload`, shared with
+ * core/domain/post-draft and with rows written by earlier builds), and the
+ * screen now DERIVES it from progress. The rule that used to protect the
+ * restore now protects the stored row: a draft with nothing composed must never
+ * claim to be further along than "san-pham", and one without a full set of
+ * captions must never claim "xem-lai".
  */
-describe("restoreTargetStep", () => {
-  it("stays on step 1 when compose was refused, whatever the draft said", () => {
-    for (const draftStep of ["san-pham", "caption", "xem-lai"] as const) {
-      expect(restoreTargetStep({ composed: false, draftStep, everyCaption: true })).toBe(
-        "san-pham",
-      );
+describe("draftProgressStep", () => {
+  it("says san-pham whenever nothing is composed, however many captions exist", () => {
+    expect(draftProgressStep({ composed: false, everyCaption: true })).toBe("san-pham");
+    expect(draftProgressStep({ composed: false, everyCaption: false })).toBe("san-pham");
+  });
+
+  it("says caption once a post is composed but a channel is still empty", () => {
+    expect(draftProgressStep({ composed: true, everyCaption: false })).toBe("caption");
+  });
+
+  it("only says xem-lai when every channel has a caption", () => {
+    expect(draftProgressStep({ composed: true, everyCaption: true })).toBe("xem-lai");
+  });
+
+  it("always produces a value the stored payload accepts", () => {
+    for (const composed of [true, false]) {
+      for (const everyCaption of [true, false]) {
+        const stored = parseComposeDraftPayload(
+          payload({ step: draftProgressStep({ composed, everyCaption }) }),
+        );
+        expect(stored.ok).toBe(true);
+      }
     }
-  });
-
-  it("returns to the step the draft was on when compose succeeded", () => {
-    expect(restoreTargetStep({ composed: true, draftStep: "caption", everyCaption: false })).toBe(
-      "caption",
-    );
-    expect(restoreTargetStep({ composed: true, draftStep: "xem-lai", everyCaption: true })).toBe(
-      "xem-lai",
-    );
-  });
-
-  it("holds step 3 back until every channel has a caption", () => {
-    expect(restoreTargetStep({ composed: true, draftStep: "xem-lai", everyCaption: false })).toBe(
-      "caption",
-    );
   });
 });
 

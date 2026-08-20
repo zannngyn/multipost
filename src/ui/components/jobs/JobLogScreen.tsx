@@ -13,6 +13,7 @@ import { presentWorkerHealth } from "@/ui/components/jobs/present-worker-health"
 import { Button } from "@/ui/components/ui/button";
 import { Select } from "@/ui/components/ui/select";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { usePostJobLog, useRetryPostJob } from "@/ui/hooks/usePostJobs";
 import { useWorkerHealth } from "@/ui/hooks/useWorkerHealth";
 import {
@@ -58,6 +59,9 @@ export function JobLogScreen() {
 
   const log = usePostJobLog(filter);
   const retry = useRetryPostJob();
+  // Support mode is read-only (M3.3): re-queueing a job posts to the customer's
+  // Page. The table shows the button disabled with this sentence beside it.
+  const readOnlyReason = useReadOnlyReason();
 
   // Separate query, separate failure: a job log that renders must not depend on
   // the health probe, and a dead queue must not blank the log (Partial state,
@@ -230,6 +234,7 @@ export function JobLogScreen() {
             items={items}
             onRetry={handleRetry}
             retryingJobId={retry.isPending ? (retry.variables?.postJobId ?? null) : null}
+            readOnlyReason={readOnlyReason}
           />
 
           {log.hasNextPage ? (

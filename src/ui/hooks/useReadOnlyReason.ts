@@ -15,7 +15,7 @@ import { useActiveTenant } from "@/ui/hooks/useMe";
  * It is UX, not protection: the server refuses regardless.
  */
 export const SUPPORT_MODE_READ_ONLY_REASON =
-  "Đang trong phiên hỗ trợ — chỉ đọc dữ liệu của khách, không thay đổi được gì. Thoát hỗ trợ ở thanh trên cùng để làm việc lại ở công ty của bạn.";
+  "Chế độ hỗ trợ chỉ được xem — bạn đang xem dữ liệu của khách, không thay đổi được gì. Thoát hỗ trợ ở thanh trên cùng để làm việc lại ở công ty của bạn.";
 
 export function useReadOnlyReason(): string | null {
   const { isSupportMode } = useActiveTenant();

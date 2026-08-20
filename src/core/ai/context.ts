@@ -13,6 +13,7 @@ import type { PromptVariableName, PromptVariables } from "@/core/ai/prompt-rende
 import { describeFailures } from "@/core/ai/validation";
 import type { ValidationFailure } from "@/core/ai/validation/types";
 import type { ContentGenerationRequest } from "@/core/ports/content-engine";
+import { captionToneInstruction } from "@/shared/caption-tone";
 
 /** Whitelisted fields, re-derived from the schema so the two cannot drift. */
 export const WHITELISTED_PRODUCT_FIELDS = ["name", "description", "category", "season"] as const;
@@ -48,6 +49,23 @@ function renderConstraints(request: ContentGenerationRequest): string {
   if (constraints.forbiddenWords && constraints.forbiddenWords.length > 0) {
     lines.push(`- Không dùng các từ: ${constraints.forbiddenWords.join(", ")}.`);
   }
+  /**
+   * Tone rides in the constraints block rather than in a new `{{tone}}`
+   * variable, and that is a deliberate choice:
+   *   - `constraints` is REQUIRED for the generation tasks (prompt-render.ts),
+   *     so the tone reaches the model through EVERY template — including the
+   *     tenant-authored ones already stored. A new variable would only work in
+   *     templates rewritten to use it, i.e. the dropdown would silently do
+   *     nothing for any tenant on a custom prompt;
+   *   - templates are immutable per version, so a new variable would also mean
+   *     shipping a new built-in version just to carry it.
+   * The whitelist of template variables is therefore untouched.
+   *
+   * Appended LAST so that with no tone (or `mac-dinh`) this block is byte-for-
+   * byte what it was before the feature.
+   */
+  const tone = captionToneInstruction(request.tone);
+  if (tone.length > 0) lines.push(`- Giọng bài viết: ${tone}`);
   return lines.join("\n");
 }
 

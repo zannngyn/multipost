@@ -47,6 +47,8 @@ export function ProductPicker({
   disabled = false,
   invalid = false,
   describedBy,
+  placeholder = "Nhập mã sản phẩm, ví dụ MGKVX6310",
+  inputClassName,
 }: {
   id: string;
   /** The RHF registration of `productCode` — keeps validation and `setFocus`. */
@@ -59,6 +61,12 @@ export function ProductPicker({
   disabled?: boolean;
   invalid?: boolean;
   describedBy?: string;
+  placeholder?: string;
+  /**
+   * Skin only — appended last, so the caller can restate size and radius. The
+   * ARIA contract above is NOT a caller's business and cannot be overridden.
+   */
+  inputClassName?: string;
 }) {
   const listId = useId();
   const [open, setOpen] = useState(false);
@@ -159,10 +167,10 @@ export function ProductPicker({
           aria-activedescendant={activeId}
           aria-invalid={invalid}
           aria-describedby={describedBy}
-          placeholder="Nhập mã sản phẩm, ví dụ MGKVX6310"
+          placeholder={placeholder}
           autoComplete="off"
           spellCheck={false}
-          className="h-12 font-mono text-base uppercase"
+          className={cn("h-12 font-mono text-base uppercase", inputClassName)}
         />
 
         {open ? (
