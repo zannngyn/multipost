@@ -7,6 +7,7 @@
  */
 
 import type { ClaimField } from "@/core/domain/caption";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 // ---------------------------------------------------------------------------
 // Routing vocabulary
@@ -85,7 +86,7 @@ export interface NormalizedAIRequest {
   maxOutputTokens: number;
   timeoutMs: number;
   temperature?: number;
-  metadata: { generationId: string; task: AITask; tenantId: string };
+  metadata: { generationId: string; task: AITask; tenantId: TenantId };
 }
 
 export interface AIUsage {
@@ -176,7 +177,7 @@ export interface ResolvedModelPolicy {
 
 export interface ModelPolicyStore {
   /** Throws AppError('MODEL_NOT_CONFIGURED') when the task has no usable policy. */
-  getPolicy(query: { tenantId: string; task: AITask }): Promise<ResolvedModelPolicy>;
+  getPolicy(query: { tenantId: TenantId; task: AITask }): Promise<ResolvedModelPolicy>;
 }
 
 /**
@@ -200,7 +201,7 @@ export interface ModelPolicyOverride {
 }
 
 export interface ModelPolicyOverrideRecord {
-  tenantId: string;
+  tenantId: TenantId;
   task: AITask;
   override: ModelPolicyOverride;
   note: string | null;
@@ -210,7 +211,7 @@ export interface ModelPolicyOverrideRecord {
 export interface ModelPolicyOverrideRepo {
   /** null = this tenant runs the YAML registry unchanged. */
   findOverride(query: {
-    tenantId: string;
+    tenantId: TenantId;
     task: AITask;
   }): Promise<ModelPolicyOverrideRecord | null>;
 }
@@ -226,7 +227,7 @@ export interface PromptTemplate {
   task: AITask;
   platform: string;
   /** null = built-in template shared by every tenant. */
-  tenantId: string | null;
+  tenantId: TenantId | null;
   version: number;
   status: PromptStatus;
   systemPrompt: string;
@@ -237,7 +238,7 @@ export interface PromptTemplate {
 export interface PromptStore {
   /** Returns null when no active template exists — caller raises PROMPT_NOT_FOUND. */
   getActive(query: {
-    tenantId: string;
+    tenantId: TenantId;
     task: AITask;
     platform: string;
   }): Promise<PromptTemplate | null>;
@@ -257,7 +258,7 @@ export interface PromptTemplateRecord extends PromptTemplate {
 }
 
 export interface PromptTemplateQuery {
-  tenantId: string;
+  tenantId: TenantId;
   task: AITask;
   platform: string;
 }
@@ -309,7 +310,7 @@ export interface GenerationLogEntry {
   generationId: string;
   attemptNo: number;
   requestId?: string;
-  tenantId: string;
+  tenantId: TenantId;
   task: AITask;
   postJobId?: string;
   channelId?: string;

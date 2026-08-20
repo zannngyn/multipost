@@ -34,9 +34,8 @@ const BASE_CHANNEL_ID = COMPOSE_CHANNELS[0].id;
 export function usePublishForm(wizard: ComposeWizard) {
   const router = useRouter();
   const { composed } = wizard;
-  const tenantId = composed?.tenantId ?? "";
 
-  const groups = useChannelGroups(tenantId);
+  const groups = useChannelGroups();
   const createBatch = useCreatePostBatch();
   const schedule = useScheduleChoice();
 
@@ -178,7 +177,6 @@ export function usePublishForm(wizard: ComposeWizard) {
 
     createBatch.mutate(
       {
-        tenantId: composed.tenantId,
         productCode: composed.content.code,
         color: wizard.form.getValues().color,
         format,

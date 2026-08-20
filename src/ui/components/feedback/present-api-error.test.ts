@@ -237,4 +237,50 @@ describe("presentApiError — video posts (E10.1 Phase 2)", () => {
     expect(view.canRetry).toBe(false);
     expect(view.hint).toBeTruthy();
   });
+
+  /**
+   * M1.4 / doc 10 §3 — the three answers a request can now get about WHICH
+   * company it belongs to. The rule under test: only one of them is an error
+   * the operator caused, and none of the three may offer a retry.
+   */
+  it("treats 409 TENANT_NOT_SELECTED as a fork in the road, not a failure", () => {
+    const view = presentApiError(
+      makeError({
+        code: "TENANT_NOT_SELECTED",
+        status: 409,
+        userMessage: "Bạn chưa chọn công ty để làm việc.",
+      }),
+    );
+    // A dedicated kind: the picker is what answers this, not a red box.
+    expect(view.kind).toBe("select-tenant");
+    expect(view.canRetry).toBe(false);
+    expect(view.title).toContain("Chưa chọn công ty");
+  });
+
+  it("does not blame the operator for a company they cannot open (404)", () => {
+    const view = presentApiError(
+      makeError({
+        code: "TENANT_NOT_FOUND",
+        status: 404,
+        userMessage: "Không tìm thấy công ty này.",
+      }),
+    );
+    expect(view.canRetry).toBe(false);
+    // Nobody types a company id any more, so "sai mã" would be nonsense advice.
+    expect(view.description).not.toContain("mã đơn vị");
+    expect(view.description).toContain("gỡ khỏi công ty");
+  });
+
+  it("says plainly that 403 is a missing role, and offers no retry", () => {
+    const view = presentApiError(
+      makeError({
+        code: "FORBIDDEN",
+        status: 403,
+        userMessage: "Bạn không đủ quyền cho thao tác này.",
+      }),
+    );
+    expect(view.kind).toBe("business");
+    expect(view.canRetry).toBe(false);
+    expect(view.title).toContain("không có quyền");
+  });
 });

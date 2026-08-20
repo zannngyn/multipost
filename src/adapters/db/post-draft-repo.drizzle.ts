@@ -8,6 +8,7 @@ import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
 import { postDrafts, type PostDraftRow } from "./schema";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * post_draft persistence (E10). Tenant-scoped like every repo here.
@@ -32,7 +33,7 @@ function toDomain(row: PostDraftRow): StoredPostDraft {
   };
 }
 
-function missingOwner(tenantId: string, operation: string): AppError {
+function missingOwner(tenantId: TenantId, operation: string): AppError {
   return new AppError("INVALID_INPUT", {
     message: `${operation} requires an owner user id`,
     userMessage: "Không xác định được người dùng sở hữu bản nháp.",
@@ -47,7 +48,7 @@ function str(value: unknown): string {
 export class DrizzlePostDraftRepo implements PostDraftRepo {
   constructor(private readonly db: Database) {}
 
-  async load(tenantId: string, ownerUserId: string, kind: string): Promise<StoredPostDraft | null> {
+  async load(tenantId: TenantId, ownerUserId: string, kind: string): Promise<StoredPostDraft | null> {
     const scope = forTenant(this.db, tenantId);
     const owner = str(ownerUserId);
     if (owner.length === 0) throw missingOwner(scope.tenantId, "postDraft.load");
@@ -78,7 +79,7 @@ export class DrizzlePostDraftRepo implements PostDraftRepo {
   }
 
   async save(input: SavePostDraftRecord): Promise<StoredPostDraft> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const owner = str(input?.ownerUserId);
     if (owner.length === 0) throw missingOwner(scope.tenantId, "postDraft.save");
     const draftKind = str(input?.kind) || POST_DRAFT_KIND_COMPOSE;
@@ -130,7 +131,7 @@ export class DrizzlePostDraftRepo implements PostDraftRepo {
     }
   }
 
-  async discard(tenantId: string, ownerUserId: string, kind: string): Promise<void> {
+  async discard(tenantId: TenantId, ownerUserId: string, kind: string): Promise<void> {
     const scope = forTenant(this.db, tenantId);
     const owner = str(ownerUserId);
     if (owner.length === 0) throw missingOwner(scope.tenantId, "postDraft.discard");

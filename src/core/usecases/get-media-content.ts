@@ -10,6 +10,7 @@ import type { DriveSource, MediaAssetLookup } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaByteCache } from "@/core/ports/media-byte-cache";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E3.6 — serve one media asset's bytes to an UNAUTHENTICATED caller.
@@ -42,7 +43,7 @@ import type { MediaByteCache } from "@/core/ports/media-byte-cache";
  */
 
 export interface GetMediaContentInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Drive file id — the media asset identity carried by post_job.media. */
   readonly mediaAssetId: string;
   /** Expiry from the query string; a numeric string is accepted. */
@@ -101,7 +102,11 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
 
     if (!verdict.ok) throw unauthorized(deps, input, verdict.reason);
 
-    const { tenantId, assetId } = verdict.claims;
+    // The claim tenant is a raw string (tier P, media-url.ts). The signature just
+    // proved it equals the branded tenant this request came in with, so re-brand
+    // from input rather than minting one off the verified-but-unbranded claim.
+    const { assetId } = verdict.claims;
+    const tenantId = normalizeTenantId(input.tenantId);
     const log = deps.logger.child({ tenant_id: tenantId });
     const maxBytes = positive(deps.maxBytes) ?? DEFAULT_MAX_BYTES;
 
@@ -225,7 +230,7 @@ interface MediaBytes {
  */
 async function readCache(
   deps: GetMediaContentDeps,
-  input: { tenantId: string; assetId: string; maxBytes: number },
+  input: { tenantId: TenantId; assetId: string; maxBytes: number },
 ): Promise<MediaBytes | null> {
   try {
     return await deps.cache.get(input);
@@ -248,7 +253,7 @@ async function readCache(
  */
 async function writeCache(
   deps: GetMediaContentDeps,
-  input: { tenantId: string; assetId: string; bytes: Uint8Array; mimeType: string | null },
+  input: { tenantId: TenantId; assetId: string; bytes: Uint8Array; mimeType: string | null },
 ): Promise<void> {
   try {
     await deps.cache.put(input);
@@ -272,7 +277,7 @@ async function writeCache(
  */
 async function readUploadedBlob(
   deps: GetMediaContentDeps,
-  input: { tenantId: string; assetId: string; asset: MediaAsset; maxBytes: number },
+  input: { tenantId: TenantId; assetId: string; asset: MediaAsset; maxBytes: number },
 ): Promise<{ bytes: Uint8Array; mimeType: string | null }> {
   const { tenantId, assetId, asset, maxBytes } = input;
 
@@ -305,7 +310,7 @@ async function readUploadedBlob(
   return blob;
 }
 
-function missingUpload(tenantId: string, assetId: string, reason: string): AppError {
+function missingUpload(tenantId: TenantId, assetId: string, reason: string): AppError {
   return new AppError("MEDIA_NOT_FOUND", {
     message: "Uploaded media asset has no readable bytes",
     userMessage: "File đã tải lên không còn nữa — hãy tải lại file cho bài này.",
@@ -340,7 +345,7 @@ function unauthorized(
 }
 
 function tooLarge(
-  tenantId: string,
+  tenantId: TenantId,
   assetId: string,
   sizeBytes: number,
   maxBytes: number,

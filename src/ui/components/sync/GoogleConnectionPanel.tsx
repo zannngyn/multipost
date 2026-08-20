@@ -41,14 +41,12 @@ import { googleConnectHref } from "@/ui/services/google-drive.api";
  * (web-auth-methods §1: redirect, not popup, not XHR).
  */
 export function GoogleConnectionPanel({
-  tenantId,
   connection,
   outcome,
   onDismissOutcome,
   onPickSource,
   isPicking,
 }: {
-  tenantId: string;
   connection: GoogleConnectionQuery;
   /** Result of the OAuth round trip, read once from the URL by the screen. */
   outcome: GoogleConnectOutcome | null;
@@ -57,7 +55,7 @@ export function GoogleConnectionPanel({
   onPickSource: () => void;
   isPicking: boolean;
 }) {
-  const disconnect = useDisconnectGoogle(tenantId);
+  const disconnect = useDisconnectGoogle();
   const confirmRef = useRef<HTMLButtonElement>(null);
   const [isConfirmingDisconnect, setIsConfirmingDisconnect] = useState(false);
 
@@ -95,12 +93,11 @@ export function GoogleConnectionPanel({
           error={connection.error}
           onRetry={() => void connection.refetch()}
           extraAction={
-            <ConnectLink tenantId={tenantId} label="Kết nối Google Drive" variant="outline" />
+            <ConnectLink label="Kết nối Google Drive" variant="outline" />
           }
         />
       ) : connection.data ? (
         <ConnectionFacts
-          tenantId={tenantId}
           data={connection.data}
           isPicking={isPicking}
           isDisconnecting={disconnect.isPending}
@@ -159,7 +156,6 @@ export function GoogleConnectionPanel({
 
 /** The data state, split out so each `state` narrows on its own. */
 function ConnectionFacts({
-  tenantId,
   data,
   isPicking,
   isDisconnecting,
@@ -167,7 +163,6 @@ function ConnectionFacts({
   onPickSource,
   onAskDisconnect,
 }: {
-  tenantId: string;
   data: GoogleConnection;
   isPicking: boolean;
   isDisconnecting: boolean;
@@ -185,7 +180,7 @@ function ConnectionFacts({
             quyền đọc Drive và Google Sheet của tài khoản bạn chọn.
           </p>
         </div>
-        <ConnectLink tenantId={tenantId} label="Kết nối Google Drive" />
+        <ConnectLink label="Kết nối Google Drive" />
       </div>
     );
   }
@@ -204,7 +199,7 @@ function ConnectionFacts({
           ảnh đã có vẫn giữ nguyên, nhưng sẽ không được cập nhật.
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          <ConnectLink tenantId={tenantId} label="Kết nối lại Google Drive" />
+          <ConnectLink label="Kết nối lại Google Drive" />
           <Button
             type="button"
             variant="outline"
@@ -301,17 +296,15 @@ function SourceAccessNotice({
  * on a real anchor, so middle-click, "mở tab mới" and the status bar all work.
  */
 function ConnectLink({
-  tenantId,
   label,
   variant = "default",
 }: {
-  tenantId: string;
   label: string;
   variant?: "default" | "outline";
 }) {
   return (
     <Button asChild variant={variant}>
-      <a href={googleConnectHref(tenantId)}>{label}</a>
+      <a href={googleConnectHref()}>{label}</a>
     </Button>
   );
 }

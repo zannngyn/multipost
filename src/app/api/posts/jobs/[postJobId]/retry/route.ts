@@ -1,10 +1,7 @@
-import { z } from "zod";
-
-import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { uuidField } from "@/app/api/_lib/ids";
-import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
@@ -26,16 +23,13 @@ import { AppError } from "@/core/domain/errors";
  * usecase logs a warning and writes the audit row with no actor. Refusing to
  * re-queue a post because we cannot name the operator would trade a real
  * problem (the post is not live) for a bookkeeping one.
+ *
+ * M1.3b — editor / tier S (doc 10 §4.2). The body is now empty: the only field
+ * it ever carried was `tenantId`, and the tenant comes from the membership. A
+ * client still POSTing that body is fine — it is simply never read.
  */
 
 const ROUTE = "POST /api/posts/jobs/[postJobId]/retry";
-
-const BodySchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
-});
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +42,14 @@ export async function POST(
   try {
     const container = getContainer();
     logger = container.logger;
+
+    // --- Refusals first: editor / tier S (doc 10 §4.2). A retry publishes for
+    // real, so the membership is re-read from the database ------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "editor",
+    });
 
     const { postJobId } = await context.params;
     // --- Edge case first: a typo in the URL is a 400, not a DB cast error ---
@@ -63,26 +65,22 @@ export async function POST(
       });
     }
 
-    const body = await readJsonBody(request, BodySchema, { route: ROUTE });
-    // Defence in depth: middleware already guards /api, but the actor must come
-    // from the real session, not from a hopeful client.
-    const session = await getOperatorSession(`api:${ROUTE}`);
-
     const result = await container.usecases.retryPostJob({
-      tenantId: body.tenantId,
+      tenantId: ctx.tenantId,
       postJobId: parsedId.data,
-      actorEmail: session?.email ?? null,
+      // The actor comes from the real session, never from a hopeful client.
+      actorEmail: session.email,
     });
 
     container.logger.info("Post job re-queued from the operator UI", {
       route: ROUTE,
-      tenant_id: body.tenantId,
+      tenant_id: ctx.tenantId,
       job_id: result.postJobId,
       batch_id: result.batchId,
       channel: result.channelId,
       product_code: result.productCode,
       previous_status: result.previousStatus,
-      actor_email: session?.email ?? null,
+      actor_email: session.email,
     });
 
     return Response.json(result);

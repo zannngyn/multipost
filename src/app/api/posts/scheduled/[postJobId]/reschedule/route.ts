@@ -1,10 +1,10 @@
 import { z } from "zod";
 
-import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
@@ -28,10 +28,6 @@ import { AppError } from "@/core/domain/errors";
 const ROUTE = "POST /api/posts/scheduled/[postJobId]/reschedule";
 
 const BodySchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   /** An INSTANT. The browser converts the operator's wall clock into it. */
   scheduledAt: z.iso.datetime({ error: "Giờ hẹn đăng không hợp lệ." }),
 });
@@ -48,6 +44,13 @@ export async function POST(
     const container = getContainer();
     logger = container.logger;
 
+    // --- Refusals first: editor / tier S (doc 10 §4.2) ---------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "editor",
+    });
+
     const { postJobId } = await context.params;
     // --- Edge case first: a typo in the URL is a 400, not a DB cast error ---
     const parsedId = uuidField("Mã bài đăng không hợp lệ.").safeParse(postJobId);
@@ -63,27 +66,24 @@ export async function POST(
     }
 
     const body = await readJsonBody(request, BodySchema, { route: ROUTE });
-    // Defence in depth: middleware already guards /api, but the actor must come
-    // from the real session, not from a hopeful client.
-    const session = await getOperatorSession(`api:${ROUTE}`);
 
     const result = await container.usecases.reschedulePostJob({
-      tenantId: body.tenantId,
+      tenantId: ctx.tenantId,
       postJobId: parsedId.data,
       newScheduledAt: new Date(body.scheduledAt),
-      actorEmail: session?.email ?? null,
+      actorEmail: session.email,
     });
 
     container.logger.info("Scheduled post moved from the operator UI", {
       route: ROUTE,
-      tenant_id: body.tenantId,
+      tenant_id: ctx.tenantId,
       job_id: result.postJobId,
       batch_id: result.batchId,
       channel: result.channelId,
       previous_scheduled_at: result.previousScheduledAt?.toISOString() ?? null,
       scheduled_at: result.scheduledAt.toISOString(),
       previous_queue_entry_removed: result.previousQueueEntryRemoved,
-      actor_email: session?.email ?? null,
+      actor_email: session.email,
     });
 
     return Response.json(result);

@@ -55,8 +55,14 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   CAPTION_VALIDATION_FAILED: 422,
   MODEL_NOT_CONFIGURED: 500,
   PROMPT_NOT_FOUND: 500,
+  PROMPT_VERSION_NOT_FOUND: 404,
+  BATCH_NOT_FOUND: 404,
+  CHANNEL_GROUP_NOT_FOUND: 404,
   META_ERROR: 502,
-  TOKEN_EXPIRED: 401,
+  // 409, not 401: after M1.2 a 401 means "no session" and bounces the operator
+  // to /signin — a Facebook Page token expiring must not do that (doc 10 B4).
+  // Same family as GOOGLE_AUTH_EXPIRED above.
+  TOKEN_EXPIRED: 409,
   // The platform's answer was unusable, not the caller's request.
   UPLOAD_HOST_NOT_ALLOWED: 502,
   CHANNEL_NOT_CONFIGURED: 409,

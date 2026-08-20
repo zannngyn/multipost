@@ -6,6 +6,7 @@
 
 import type { CaptionContent, CaptionInput, CaptionCoverImage } from "@/core/domain/caption";
 import type { AIProviderName, AITask, AITier } from "@/core/ports/ai";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export type ContentPlatform = "facebook" | "tiktok" | "instagram" | "shopee" | "lazada" | "taobao";
 export type ContentType = "photo_post" | "video_post" | "reel";
@@ -27,7 +28,7 @@ export interface ContentConstraints {
 
 export interface ContentGenerationRequest {
   /** Multi-tenant from day one — every log line and budget check needs it. */
-  tenantId: string;
+  tenantId: TenantId;
   task: AITask;
   /** Whitelisted product facts only — the type makes leaking impossible. */
   product: CaptionInput;

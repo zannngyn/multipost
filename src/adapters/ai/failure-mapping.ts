@@ -10,12 +10,13 @@
 
 import { AppError, type ErrorCode } from "@/core/domain/errors";
 import type { AIFailureKind, AIProviderName } from "@/core/ports/ai";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export interface ProviderErrorContext {
   provider: AIProviderName;
   model: string;
   generationId: string;
-  tenantId: string;
+  tenantId: TenantId;
   task: string;
   status?: number;
   /**

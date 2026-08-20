@@ -5,6 +5,7 @@ import type { ChannelConfig } from "@/core/ports/publisher";
 
 import { makeTikTokClient } from "./tiktok-client";
 import { makeTikTokPublisher, truncateUtf16 } from "./tiktok-publisher";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The E6 adapter against a MOCKED TikTok API (fetch is the seam). It proves the
@@ -66,7 +67,7 @@ function makePublisher(fetchImpl: typeof fetch) {
 
 function input(overrides: Partial<Parameters<ReturnType<typeof makePublisher>["publishVideoPost"]>[0]> = {}) {
   return {
-    tenantId: "00000000-0000-0000-0000-000000000001",
+    tenantId: testTenantId("00000000-0000-0000-0000-000000000001"),
     channel: CHANNEL,
     caption: "Giannal – MỘT NGÀY DỊU DÀNG",
     videoUrl: VIDEO_URL,
@@ -132,7 +133,7 @@ describe("TikTok publisher — refused before any call", () => {
     const publisher = makePublisher(scriptedFetch({}) as unknown as typeof fetch);
     await expect(
       publisher.publishImagePost({
-        tenantId: "t",
+        tenantId: testTenantId("t"),
         channel: CHANNEL,
         caption: "x",
         media: [

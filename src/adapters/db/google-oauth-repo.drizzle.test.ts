@@ -5,6 +5,7 @@ import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { Database } from "./client";
 import { DrizzleGoogleOAuthRepo } from "./google-oauth-repo.drizzle";
 import { makeSecretBox } from "./secret-box";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The read path of the Google connection, without a database: the query builder
@@ -16,7 +17,7 @@ import { makeSecretBox } from "./secret-box";
  * tenant_integration.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 /** 32 bytes, base64. Test-only key. */
 const TEST_KEY = Buffer.alloc(32, 5).toString("base64");
 

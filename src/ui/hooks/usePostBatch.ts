@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { isSettledBatchStatus, type BatchStatusResponse } from "@/ui/schemas/post-batch.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import {
   createPostBatch,
@@ -51,11 +52,13 @@ export function batchPollInterval(
   return Math.min(MAX_POLL_MS, MIN_POLL_MS + updateCount * 1_000);
 }
 
-export function useBatchStatus(tenantId: string, batchId: string) {
+export function useBatchStatus(batchId: string) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<BatchStatusResponse, ApiError>({
-    queryKey: postKeys.batch(tenantId, batchId),
-    queryFn: ({ signal }) => fetchBatchStatus(tenantId, batchId, signal),
-    enabled: tenantId.length > 0 && batchId.length > 0,
+    queryKey: postKeys.batch(tenantKey, batchId),
+    queryFn: ({ signal }) => fetchBatchStatus(batchId, signal),
+    enabled: isResolved && batchId.length > 0,
     // 4xx (batch không tồn tại) repeats the same mistake — do not retry it.
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
@@ -73,14 +76,19 @@ export function useBatchStatus(tenantId: string, batchId: string) {
  */
 export function useCreatePostBatch() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<CreateBatchResponse, ApiError, CreatePostBatchParams>({
     mutationFn: (params) => createPostBatch(params),
     retry: false,
-    onSuccess: (result) => {
+    onSuccess: () => {
       // Seed nothing, invalidate everything the new jobs appear in: the log is
       // the audit trail and must not keep showing the state before this batch.
-      void queryClient.invalidateQueries({ queryKey: ["posts", result.tenantId, "jobs"] });
+      //
+      // Keyed by the ACTIVE company rather than by the echoed `result.tenantId`:
+      // the cache is partitioned by what the session says, and letting those two
+      // drift apart is how one company's log ends up under another's name.
+      void queryClient.invalidateQueries({ queryKey: ["posts", tenantKey, "jobs"] });
     },
   });
 }

@@ -11,6 +11,7 @@ import { makeFakeLogger, makeFixedClock } from "@/core/ai/testing";
 
 import { buildProviders, makeAiPolicyStore, tierModelsVariant } from "./ai-engine";
 import { loadAiConfig } from "./config";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 const OPENAI_ONLY = { OPENAI_API_KEY: "sk-openai" };
 
@@ -124,14 +125,14 @@ describe("makeAiPolicyStore", () => {
     });
 
   it("resolves the shipped ladder when nothing is overridden", async () => {
-    const policy = await build({}).getPolicy({ tenantId: "t1", task: "facebook_content" });
+    const policy = await build({}).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" });
 
     expect(policy.tiers.cheap[0].model).toBe("gpt-4.1-mini");
   });
 
   it("routes to the model named by AI_MODEL_CHEAP", async () => {
     const policy = await build({ AI_MODEL_CHEAP: "openai:gpt-4o-mini" }).getPolicy({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       task: "facebook_content",
     });
 
@@ -142,10 +143,10 @@ describe("makeAiPolicyStore", () => {
     const cache = memoryCache();
 
     await build({ AI_MODEL_CHEAP: "openai:gpt-4o-mini" }, cache).getPolicy({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       task: "facebook_content",
     });
-    await build({}, cache).getPolicy({ tenantId: "t1", task: "facebook_content" });
+    await build({}, cache).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" });
 
     expect(cache.store.size).toBe(2);
     const [swapped, plain] = [...cache.store.keys()].sort();
@@ -155,7 +156,7 @@ describe("makeAiPolicyStore", () => {
 
   it("rejects a model key that is not in the registry", async () => {
     await expect(
-      build({ AI_MODEL_TOP: "openai:nope" }).getPolicy({ tenantId: "t1", task: "facebook_content" }),
+      build({ AI_MODEL_TOP: "openai:nope" }).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" }),
     ).rejects.toMatchObject({ code: "MODEL_NOT_CONFIGURED" });
   });
 });

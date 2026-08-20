@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * M1.2 — the boundary contract of `GET /api/me`: it serves EVERY signed-in
@@ -26,7 +27,7 @@ vi.mock("@/app/_auth/session", () => ({
 const { GET } = await import("./route");
 const { ACTIVE_TENANT_COOKIE } = await import("@/app/_lib/active-tenant-cookie");
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function request(cookie?: string): Request {
   const headers = new Headers();
@@ -36,8 +37,13 @@ function request(cookie?: string): Request {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getOperatorSession.mockResolvedValue({ email: "worker@gmail.com", accountId: "acc-1" });
+  getOperatorSession.mockResolvedValue({
+    email: "worker@gmail.com",
+    accountId: "acc-1",
+    isBootstrapAdmin: false,
+  });
   getOperatorOverview.mockResolvedValue({
+    isBootstrapAdmin: false,
     account: { id: "acc-1", displayName: "Worker", platformRole: null },
     tenants: [{ id: TENANT, name: "Demo", slug: "demo", plan: "internal", role: "editor" }],
     activeTenantId: TENANT,
@@ -79,7 +85,33 @@ describe("GET /api/me — answers", () => {
     });
     expect(getOperatorOverview).toHaveBeenCalledWith({
       sessionEmail: "worker@gmail.com",
+      isBootstrapAdmin: false,
       cookieTenantId: TENANT,
+    });
+  });
+
+  it("hands the SESSION's bootstrap flag to the usecase — N6, the UI's only tell", async () => {
+    getOperatorSession.mockResolvedValue({
+      email: "boss@mysp.vn",
+      accountId: null,
+      isBootstrapAdmin: true,
+    });
+    getOperatorOverview.mockResolvedValue({
+      isBootstrapAdmin: true,
+      account: null,
+      tenants: [],
+      activeTenantId: null,
+    });
+
+    const response = await GET(request());
+
+    expect(getOperatorOverview).toHaveBeenCalledWith(
+      expect.objectContaining({ isBootstrapAdmin: true }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      isBootstrapAdmin: true,
+      account: null,
+      tenants: [],
     });
   });
 
@@ -88,17 +120,24 @@ describe("GET /api/me — answers", () => {
 
     expect(getOperatorOverview).toHaveBeenCalledWith({
       sessionEmail: "worker@gmail.com",
+      isBootstrapAdmin: false,
       cookieTenantId: null,
     });
   });
 
   it("stays 200 for a NoMembership answer — the UI needs it to draw the picker", async () => {
-    getOperatorOverview.mockResolvedValue({ account: null, tenants: [], activeTenantId: null });
+    getOperatorOverview.mockResolvedValue({
+      isBootstrapAdmin: false,
+      account: null,
+      tenants: [],
+      activeTenantId: null,
+    });
 
     const response = await GET(request());
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
+      isBootstrapAdmin: false,
       account: null,
       tenants: [],
       activeTenantId: null,

@@ -9,13 +9,14 @@ import {
   progressKey,
   type ProgressRedisClient,
 } from "./redis-job-progress";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The store is decoration (design §3.1): every test below asks the same
  * question in a different way — "does a broken store break anything?".
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const NOW = new Date("2026-08-17T09:00:00.000Z");
 
 interface LogLine {
@@ -341,9 +342,9 @@ describe("identity guards", () => {
     const client = fakeRedis();
     const { store, lines } = makeStore(client);
 
-    await store.report({ tenantId: "  ", postJobId: "job-1", progress: UPLOADING });
+    await store.report({ tenantId: testTenantId("  "), postJobId: "job-1", progress: UPLOADING });
     await store.report({ tenantId: TENANT, postJobId: "", progress: UPLOADING });
-    await store.clear("", "job-1");
+    await store.clear(testTenantId(""), "job-1");
 
     expect(client.set).not.toHaveBeenCalled();
     expect(client.del).not.toHaveBeenCalled();
@@ -418,7 +419,7 @@ describe("report / read / clear", () => {
   it("keeps tenants apart", async () => {
     const client = fakeRedis();
     const { store } = makeStore(client);
-    const other = "00000000-0000-0000-0000-000000000002";
+    const other = testTenantId("00000000-0000-0000-0000-000000000002");
     await store.report({ tenantId: TENANT, postJobId: "job-1", progress: UPLOADING });
 
     expect((await store.read(other, ["job-1"])).size).toBe(0);

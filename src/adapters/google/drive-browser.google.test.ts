@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "@/core/ports/infra";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The in-app Drive picker (E2) against fixtures shaped like Drive v3 answers.
@@ -24,7 +25,7 @@ vi.mock("googleapis", () => ({
 const { makeGoogleDriveBrowser } = await import("./drive-browser.google");
 const { escapeQueryValue } = await import("./drive-query");
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {
@@ -389,7 +390,7 @@ describe("checkSourceAccess", () => {
 
   it("refuses an empty tenant id", async () => {
     await expect(
-      build().checkSourceAccess({ tenantId: " ", driveFolderId: "f", spreadsheetId: "s" }),
+      build().checkSourceAccess({ tenantId: testTenantId(" "), driveFolderId: "f", spreadsheetId: "s" }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 });

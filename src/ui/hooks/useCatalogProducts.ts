@@ -9,6 +9,7 @@ import {
   type CatalogSourceFormValues,
   type ProductFilter,
 } from "@/ui/schemas/catalog.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import {
   catalogKeys,
@@ -22,12 +23,14 @@ import {
  * (docs/07 §4.1): fetch policy and cache keys live here, transport does not.
  */
 
-/** `tenantId === null` = no tenant picked yet (idle), so nothing is fetched. */
-export function useCatalogSource(tenantId: string | null) {
+/** Nothing is fetched until `/api/me` says which company we are in (M1.4). */
+export function useCatalogSource() {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<CatalogSourceResponse, ApiError>({
-    queryKey: catalogKeys.source(tenantId ?? "none"),
-    queryFn: ({ signal }) => fetchCatalogSource(tenantId ?? "", signal),
-    enabled: tenantId !== null,
+    queryKey: catalogKeys.source(tenantKey),
+    queryFn: ({ signal }) => fetchCatalogSource(signal),
+    enabled: isResolved,
     // 4xx means the request itself is wrong — retrying repeats the mistake.
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
@@ -44,23 +47,23 @@ export function useCatalogSource(tenantId: string | null) {
  * product table on screen after the source changed would show 299 codes that
  * came from a folder nobody reads any more.
  */
-export function useUpdateCatalogSource(tenantId: string | null) {
+export function useUpdateCatalogSource() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<CatalogSourceResponse, ApiError, CatalogSourceFormValues>({
-    mutationFn: (values) => updateCatalogSource({ tenantId: tenantId ?? "", ...values }),
+    mutationFn: (values) => updateCatalogSource(values),
     retry: false,
     onSuccess: (result) => {
       // Write the fresh source straight into the cache so the card cannot
       // flash the previous folder while the refetch is in flight.
-      queryClient.setQueryData(catalogKeys.source(tenantId ?? "none"), result);
+      queryClient.setQueryData(catalogKeys.source(tenantKey), result);
     },
     onSettled: () => {
-      const id = tenantId ?? "none";
-      void queryClient.invalidateQueries({ queryKey: catalogKeys.source(id) });
-      void queryClient.invalidateQueries({ queryKey: catalogKeys.syncStatus(id) });
+      void queryClient.invalidateQueries({ queryKey: catalogKeys.source(tenantKey) });
+      void queryClient.invalidateQueries({ queryKey: catalogKeys.syncStatus(tenantKey) });
       // Prefix key: every filter/search combination of the product list.
-      void queryClient.invalidateQueries({ queryKey: ["catalog", id, "products"] });
+      void queryClient.invalidateQueries({ queryKey: ["catalog", tenantKey, "products"] });
     },
   });
 }
@@ -73,13 +76,17 @@ export function useUpdateCatalogSource(tenantId: string | null) {
  * The query key comes from the same `filter` object the URL produced, so
  * changing a filter starts a new list instead of appending to the old one.
  */
-export function useCatalogProducts(tenantId: string, filter: ProductFilter) {
+export function useCatalogProducts(filter: ProductFilter) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useInfiniteQuery<CatalogProductsResponse, ApiError>({
-    queryKey: catalogKeys.products(tenantId, filter),
+    // The company is part of the key, so switching company starts a NEW list:
+    // a cursor minted for company A can never be replayed against company B
+    // (docs/11 §4).
+    queryKey: catalogKeys.products(tenantKey, filter),
     queryFn: ({ pageParam, signal }) =>
       listCatalogProducts(
         {
-          tenantId,
           filter,
           cursor: typeof pageParam === "string" ? pageParam : null,
           limit: PRODUCTS_DEFAULT_LIMIT,
@@ -88,7 +95,7 @@ export function useCatalogProducts(tenantId: string, filter: ProductFilter) {
       ),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    enabled: tenantId.length > 0,
+    enabled: isResolved,
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
     retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 5_000),

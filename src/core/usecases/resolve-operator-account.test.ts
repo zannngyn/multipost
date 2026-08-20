@@ -4,6 +4,7 @@ import type { LogBindings, Logger } from "@/core/ports/infra";
 
 import { accountRecord, makeFakeAccountRepo, membershipRow } from "./__fixtures__/account-repo";
 import { makeResolveOperatorAccount } from "./resolve-operator-account";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /** M1.2 — the account source of "được vào", including the placeholder patch. */
 
@@ -185,7 +186,7 @@ describe("forSession", () => {
   it("carries only ACTIVE memberships", async () => {
     const { usecase } = harness([
       accountRecord({
-        memberships: [membershipRow(), membershipRow({ tenantId: "00000000-0000-0000-0000-00000000000b", status: "removed" })],
+        memberships: [membershipRow(), membershipRow({ tenantId: testTenantId("00000000-0000-0000-0000-00000000000b"), status: "removed" })],
       }),
     ]);
     const state = await usecase.forSession("worker@gmail.com");

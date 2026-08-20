@@ -1,4 +1,5 @@
 import { AppError } from "@/core/domain/errors";
+import { normalizeTenantId } from "@/core/domain/tenant-context";
 import type { VideoSpec } from "@/core/domain/video-spec";
 import type { DriveSource } from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
@@ -38,14 +39,15 @@ export function makeDriveVideoProbe(deps: DriveVideoProbeDeps): VideoAssetProbe 
   return {
     async probeAsset(input: ProbeVideoAssetInput): Promise<VideoSpec> {
       // --- Edge cases first --------------------------------------------------
-      const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+      const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
       const asset = input?.asset;
-      if (tenantId.length === 0 || !asset || typeof asset.driveFileId !== "string") {
+      if (rawTenantId.length === 0 || !asset || typeof asset.driveFileId !== "string") {
         throw new AppError("INVALID_INPUT", {
           message: "probeAsset requires a tenant id and a media asset with a Drive file id",
-          context: { reason: "PROBE_INPUT_INVALID", tenant_id: tenantId || null },
+          context: { reason: "PROBE_INPUT_INVALID", tenant_id: rawTenantId || null },
         });
       }
+      const tenantId = normalizeTenantId(input.tenantId);
 
       const log = deps.logger.child({
         tenant_id: tenantId,

@@ -18,6 +18,12 @@ export type ApiErrorKind =
   | "business"
   /** Session gone. */
   | "auth"
+  /**
+   * Signed in, but no company chosen (409 TENANT_NOT_SELECTED). Navigation,
+   * not an error: the next step is picking a company, so the UI shows the
+   * picker instead of a red box (doc 10 §3).
+   */
+  | "select-tenant"
   /** Server/transport problem — retrying is reasonable. */
   | "server";
 
@@ -198,11 +204,38 @@ export function presentApiError(
         canRetry: false,
       };
 
+    /**
+     * 409 (doc 10 §3): there IS a session, no company is selected yet. Not a
+     * failure and not the operator's mistake — it is a fork in the road, so it
+     * gets its own kind and the picker, never a red box.
+     */
+    case "TENANT_NOT_SELECTED":
+      return {
+        kind: "select-tenant",
+        title: "Chưa chọn công ty để làm việc",
+        description: `${error.userMessage} Chọn công ty ở phía trên rồi thao tác lại — dữ liệu của mỗi công ty được tách riêng.`,
+        canRetry: false,
+      };
+
+    /**
+     * 404, deliberately indistinguishable from "không tồn tại" (doc 10 §3):
+     * the account has no membership in that company. Never says "sai mã" any
+     * more — the operator no longer types a tenant id anywhere.
+     */
     case "TENANT_NOT_FOUND":
       return {
-        kind: "input",
-        title: "Không tìm thấy đơn vị",
-        description: `${error.userMessage} Kiểm tra lại mã đơn vị, hoặc hỏi quản trị viên mã đúng.`,
+        kind: "business",
+        title: "Không mở được công ty này",
+        description: `${error.userMessage} Có thể bạn đã bị gỡ khỏi công ty đó, hoặc nó đã bị khoá. Chọn một công ty khác, hoặc nhờ quản trị viên mời lại.`,
+        canRetry: false,
+      };
+
+    /** 403: has a membership, lacks the role. Retrying changes nothing. */
+    case "FORBIDDEN":
+      return {
+        kind: "business",
+        title: "Bạn không có quyền thao tác này",
+        description: `${error.userMessage} Vai trò hiện tại của bạn trong công ty này không đủ để làm việc đó — nhờ chủ sở hữu hoặc quản trị viên nâng quyền nếu bạn cần.`,
         canRetry: false,
       };
 

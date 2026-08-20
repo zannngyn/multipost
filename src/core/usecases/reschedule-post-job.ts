@@ -15,6 +15,7 @@ import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
 import { resolveActorUserId, type ActorInput } from "./resolve-actor";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E8.4 — "đổi giờ" a post that has not gone out yet.
@@ -37,13 +38,13 @@ import { resolveActorUserId, type ActorInput } from "./resolve-actor";
  */
 
 export interface ReschedulePostJobInput extends ActorInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   readonly newScheduledAt: Date | string;
 }
 
 export interface ReschedulePostJobResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   readonly channelId: string;
   readonly batchId: string;
@@ -70,15 +71,16 @@ export function makeReschedulePostJob(deps: ReschedulePostJobDeps) {
     input: ReschedulePostJobInput,
   ): Promise<ReschedulePostJobResult> {
     // --- Edge cases first ---------------------------------------------------
-    const tenantId = str(input?.tenantId);
+    const rawTenantId = str(input?.tenantId);
     const postJobId = str(input?.postJobId);
-    if (!isTenantId(tenantId) || postJobId.length === 0) {
+    if (!isTenantId(rawTenantId) || postJobId.length === 0) {
       throw new AppError("INVALID_INPUT", {
         message: "reschedulePostJob requires a tenant UUID and a post job id",
         userMessage: "Yêu cầu đổi giờ đăng thiếu thông tin định danh.",
-        context: { tenant_id: tenantId || null, post_job_id: postJobId || null },
+        context: { tenant_id: rawTenantId || null, post_job_id: postJobId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const nowMs = deps.clock.nowMs();
     const verdict = evaluateScheduledAt(input?.newScheduledAt, nowMs);

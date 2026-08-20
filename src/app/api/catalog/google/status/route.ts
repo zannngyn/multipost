@@ -1,9 +1,7 @@
-import { z } from "zod";
-
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
-import { AppError } from "@/core/domain/errors";
 
 /**
  * E2 — "đã kết nối Google chưa?" for the sync screen.
@@ -13,14 +11,17 @@ import { AppError } from "@/core/domain/errors";
  * refresh token Google rejected, which reads differently to a human than "never
  * connected" even though both end at the same button.
  *
- * Auth: enforced by `middleware.ts` for every non-public /api path.
+ * Auth (M1.3b, doc 10 §4.1): viewer, tier R. The query string carries nothing
+ * any more — a `tenantId` an old UI build still appends is simply not read
+ * (transition rule, docs/11 §3.2).
+ *
+ * TODO(M1.4): field-level visibility. Doc 10 §4.1 + Q8.3 say a viewer sees only
+ * `state`, while `email` / `scopes` / `sourceAccess` belong to admin+. The whole
+ * view still goes out here; splitting it needs the UI to stop expecting those
+ * fields, which lands with the rest of the screen work in M1.4.
  */
 
 const ROUTE = "GET /api/catalog/google/status";
-
-const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
-});
 
 export const dynamic = "force-dynamic";
 
@@ -31,28 +32,15 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const url = new URL(request.url);
-    const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
+    // --- Edge case first: no membership, no answer (doc 10 §3) --------------
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+      minRole: "viewer",
     });
 
-    // --- Edge case first: reject bad input before touching the DB -----------
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid query string for the Google connection status",
-        userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant).",
-        context: {
-          route: ROUTE,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
-      });
-    }
-
     const view = await container.usecases.connectGoogleDrive.getGoogleConnection({
-      tenantId: parsed.data.tenantId,
+      tenantId: ctx.tenantId,
     });
 
     return Response.json(view, { headers: { "cache-control": "no-store" } });

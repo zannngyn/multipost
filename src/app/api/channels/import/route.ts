@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 
 /**
@@ -24,10 +24,6 @@ const ROUTE = "POST /api/channels/import";
 const MAX_TOKEN_LENGTH = 4096;
 
 const ImportSchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   userAccessToken: z
     .string({ error: "Thiếu User Access Token của Facebook." })
     .trim()
@@ -44,17 +40,25 @@ export async function POST(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const body = await readJsonBody(request, ImportSchema, { route: ROUTE });
-    const session = await getOperatorSession(`api:${ROUTE}`);
-
-    const result = await container.usecases.connectChannels.importChannels({
-      tenantId: body.tenantId,
-      userAccessToken: body.userAccessToken,
-      actorEmail: session?.email ?? null,
+    // --- Refusals first: admin / tier S (doc 10 §4.2). A raw credential is
+    // about to be sealed into this tenant, so the membership is read fresh ---
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "admin",
     });
 
+    const body = await readJsonBody(request, ImportSchema, { route: ROUTE });
+
+    const result = await container.usecases.connectChannels.importChannels({
+      tenantId: ctx.tenantId,
+      userAccessToken: body.userAccessToken,
+      actorEmail: session.email,
+    });
+
+    // Response shape unchanged (docs/11 §2): the UI still reads `tenantId`.
     return Response.json({
-      tenantId: result.tenantId,
+      tenantId: ctx.tenantId,
       imported: result.imported,
       updated: result.updated,
       skipped: result.skipped,

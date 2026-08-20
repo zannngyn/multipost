@@ -5,6 +5,7 @@ import type {
   OperatorAccessState,
   RegisterAccessRequestInput,
 } from "@/core/usecases/check-operator-access";
+import { unbrandTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Per-request access check, with a short cache in front of it (E1.4).
@@ -38,7 +39,7 @@ export interface OperatorAccessGate {
    * failing open here would mean "the DB is down, so everyone is allowed", and
    * the env bootstrap admins (checked before this gate) still get in to fix it.
    */
-  readState(tenantId: string, sessionEmail: string): Promise<OperatorAccessState>;
+  readState(tenantId: TenantId, sessionEmail: string): Promise<OperatorAccessState>;
   /**
    * Sign-in path: file an unknown identity as `pending` and report its status.
    * Throws (unlike `readState`) — a sign-in that cannot reach the registry must
@@ -67,7 +68,7 @@ export function makeOperatorAccessGate(deps: OperatorAccessGateDeps): OperatorAc
       const email = typeof sessionEmail === "string" ? sessionEmail.trim().toLowerCase() : "";
       if (email.length === 0) return DENIED;
 
-      const key = `${tenantId}:${email}`;
+      const key = `${unbrandTenantId(tenantId)}:${email}`;
       const now = deps.clock.nowMs();
       const cached = cache.get(key);
       if (cached && cached.expiresAt > now) return cached.state;

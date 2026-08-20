@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { makeYamlModelPolicyStore } from "@/adapters/ai/registry-store/yaml-model-policy-store";
 import { makeFakeLogger, makeFixedClock } from "@/core/ai/testing";
 import { AppError } from "@/core/domain/errors";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 const REAL_REGISTRY = join(process.cwd(), "config", "ai-models.yaml");
 const tempDir = mkdtempSync(join(tmpdir(), "mysp-registry-"));
@@ -55,13 +56,13 @@ async function expectModelNotConfigured(promise: Promise<unknown>): Promise<AppE
 describe("YAML model policy store — invalid registries", () => {
   it("fails when the file does not exist", async () => {
     const store = makeStore(join(tempDir, "missing.yaml"));
-    await expectModelNotConfigured(store.getPolicy({ tenantId: "t1", task: "facebook_content" }));
+    await expectModelNotConfigured(store.getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" }));
   });
 
   it("fails on malformed YAML", async () => {
     const path = writeTemp("broken.yaml", "tiers: [unclosed\n  - x");
     await expectModelNotConfigured(
-      makeStore(path).getPolicy({ tenantId: "t1", task: "facebook_content" }),
+      makeStore(path).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" }),
     );
   });
 
@@ -88,7 +89,7 @@ tasks:
 `,
     );
     const error = await expectModelNotConfigured(
-      makeStore(path).getPolicy({ tenantId: "t1", task: "facebook_content" }),
+      makeStore(path).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" }),
     );
     expect(JSON.stringify(error.context.issues)).toContain("budget");
   });
@@ -119,7 +120,7 @@ budget:
 `,
     );
     const error = await expectModelNotConfigured(
-      makeStore(path).getPolicy({ tenantId: "t1", task: "facebook_content" }),
+      makeStore(path).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" }),
     );
     expect(JSON.stringify(error.context.problems)).toContain("openai:ghost");
   });
@@ -150,7 +151,7 @@ budget:
 `,
     );
     await expectModelNotConfigured(
-      makeStore(path).getPolicy({ tenantId: "t1", task: "facebook_content" }),
+      makeStore(path).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" }),
     );
   });
 
@@ -180,7 +181,7 @@ budget:
 `,
     );
     await expectModelNotConfigured(
-      makeStore(path).getPolicy({ tenantId: "t1", task: "facebook_content" }),
+      makeStore(path).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" }),
     );
   });
 });
@@ -192,7 +193,7 @@ budget:
 describe("YAML model policy store — config/ai-models.yaml", () => {
   it("resolves facebook_content on the single-provider (OpenAI) registry", async () => {
     const policy = await makeStore(REAL_REGISTRY).getPolicy({
-      tenantId: "tenant-1",
+      tenantId: testTenantId("tenant-1"),
       task: "facebook_content",
     });
 
@@ -216,7 +217,7 @@ describe("YAML model policy store — config/ai-models.yaml", () => {
    */
   it("ships no tier pointing at a provider other than OpenAI", async () => {
     const policy = await makeStore(REAL_REGISTRY).getPolicy({
-      tenantId: "tenant-1",
+      tenantId: testTenantId("tenant-1"),
       task: "facebook_content",
     });
 
@@ -269,7 +270,7 @@ describe("YAML model policy store — config/ai-models.yaml", () => {
 
   it("still asks for the temperature it wants — dropping it is the engine's job", async () => {
     const policy = await makeStore(REAL_REGISTRY).getPolicy({
-      tenantId: "tenant-1",
+      tenantId: testTenantId("tenant-1"),
       task: "facebook_content",
     });
 
@@ -283,7 +284,7 @@ describe("YAML model policy store — config/ai-models.yaml", () => {
    */
   it("gives the caption task enough output budget for a reasoning model", async () => {
     const policy = await makeStore(REAL_REGISTRY).getPolicy({
-      tenantId: "tenant-1",
+      tenantId: testTenantId("tenant-1"),
       task: "facebook_content",
     });
 
@@ -293,7 +294,7 @@ describe("YAML model policy store — config/ai-models.yaml", () => {
   it("serves every declared task", async () => {
     const store = makeStore(REAL_REGISTRY);
     for (const task of ["facebook_content", "product_understanding", "caption_dedupe_check", "difficult_content"] as const) {
-      const policy = await store.getPolicy({ tenantId: "tenant-1", task });
+      const policy = await store.getPolicy({ tenantId: testTenantId("tenant-1"), task });
       expect(policy.task).toBe(task);
     }
   });
@@ -324,7 +325,7 @@ budget:
 `,
     );
     await expectModelNotConfigured(
-      makeStore(path).getPolicy({ tenantId: "t1", task: "difficult_content" }),
+      makeStore(path).getPolicy({ tenantId: testTenantId("t1"), task: "difficult_content" }),
     );
   });
 
@@ -354,11 +355,11 @@ budget:
 `,
     );
     const store = makeStore(path);
-    await store.getPolicy({ tenantId: "t1", task: "facebook_content" });
+    await store.getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" });
 
     // Corrupt the file: a cached read must not notice within the TTL.
     writeFileSync(path, "not: [valid", "utf8");
-    const second = await store.getPolicy({ tenantId: "t1", task: "facebook_content" });
+    const second = await store.getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" });
     expect(second.registryVersion).toBe(7);
   });
 });
@@ -370,7 +371,7 @@ budget:
 describe("YAML model policy store — env tier override", () => {
   it("replaces the named tier with the chosen model", async () => {
     const policy = await makeStore(REAL_REGISTRY, { cheap: "openai:gpt-4o-mini" }).getPolicy({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       task: "facebook_content",
     });
 
@@ -382,11 +383,11 @@ describe("YAML model policy store — env tier override", () => {
 
   it("carries the overridden model's own capabilities, not the replaced one's", async () => {
     const muted = await makeStore(REAL_REGISTRY, { cheap: "openai:gpt-5-mini" }).getPolicy({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       task: "facebook_content",
     });
     const free = await makeStore(REAL_REGISTRY, { cheap: "openai:gpt-4.1-mini" }).getPolicy({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       task: "facebook_content",
     });
 
@@ -399,7 +400,7 @@ describe("YAML model policy store — env tier override", () => {
       cheap: "openai:gpt-4.1-mini",
       mid: "openai:gpt-4.1-mini",
       top: "openai:gpt-4.1-mini",
-    }).getPolicy({ tenantId: "t1", task: "facebook_content" });
+    }).getPolicy({ tenantId: testTenantId("t1"), task: "facebook_content" });
 
     expect((["cheap", "mid", "top"] as const).map((tier) => policy.tiers[tier][0]?.model)).toEqual([
       "gpt-4.1-mini",
@@ -413,7 +414,7 @@ describe("YAML model policy store — env tier override", () => {
   it("refuses a model key that is not declared, and lists the ones that are", async () => {
     const error = await expectModelNotConfigured(
       makeStore(REAL_REGISTRY, { mid: "openai:gpt-6-turbo" }).getPolicy({
-        tenantId: "t1",
+        tenantId: testTenantId("t1"),
         task: "facebook_content",
       }),
     );
@@ -426,7 +427,7 @@ describe("YAML model policy store — env tier override", () => {
 
   it("ignores blank and absent values instead of emptying a tier", async () => {
     const policy = await makeStore(REAL_REGISTRY, { cheap: "   ", top: undefined }).getPolicy({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       task: "facebook_content",
     });
 
@@ -436,7 +437,7 @@ describe("YAML model policy store — env tier override", () => {
 
   it("can promote a model the shipped ladder deliberately leaves out", async () => {
     const policy = await makeStore(REAL_REGISTRY, { top: "openai:gpt-5" }).getPolicy({
-      tenantId: "t1",
+      tenantId: testTenantId("t1"),
       task: "facebook_content",
     });
 

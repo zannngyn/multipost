@@ -68,7 +68,13 @@ export const ERROR_CODES = [
   "CAPTION_VALIDATION_FAILED",
   "MODEL_NOT_CONFIGURED",
   "PROMPT_NOT_FOUND",
+  /** Activating a prompt version that does not exist — caller input, not a broken catalog (doc 10 B3). */
+  "PROMPT_VERSION_NOT_FOUND",
   // Publishing (E5/E7)
+  /** Batch id this tenant does not own — behaves as "does not exist" (doc 10 §3, B5). */
+  "BATCH_NOT_FOUND",
+  /** Channel group id this tenant does not own (doc 10 B5). */
+  "CHANNEL_GROUP_NOT_FOUND",
   "META_ERROR",
   "TOKEN_EXPIRED",
   /** An upload URL the platform handed us points somewhere we will not send a token. */
@@ -131,6 +137,9 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   CAPTION_VALIDATION_FAILED: "Caption không qua được bước kiểm tra an toàn — cần chỉnh sửa hoặc tạo lại.",
   MODEL_NOT_CONFIGURED: "Chưa cấu hình model AI cho tác vụ này. Kiểm tra registry model.",
   PROMPT_NOT_FOUND: "Không tìm thấy prompt template cho tác vụ này.",
+  PROMPT_VERSION_NOT_FOUND: "Không tìm thấy phiên bản prompt này.",
+  BATCH_NOT_FOUND: "Không tìm thấy lô đăng bài này.",
+  CHANNEL_GROUP_NOT_FOUND: "Không tìm thấy nhóm kênh này.",
   META_ERROR: "Facebook trả về lỗi khi đăng bài. Xem chi tiết trong nhật ký đăng.",
   TOKEN_EXPIRED: "Token của kênh đã hết hạn hoặc bị thu hồi. Cần kết nối lại kênh.",
   UPLOAD_HOST_NOT_ALLOWED:
@@ -180,6 +189,9 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   CAPTION_VALIDATION_FAILED: "Generated caption failed validation rules",
   MODEL_NOT_CONFIGURED: "No model configured for task in registry",
   PROMPT_NOT_FOUND: "Prompt template not found for task",
+  PROMPT_VERSION_NOT_FOUND: "Prompt version not found",
+  BATCH_NOT_FOUND: "Post batch not found for tenant",
+  CHANNEL_GROUP_NOT_FOUND: "Channel group not found for tenant",
   META_ERROR: "Graph API call failed",
   TOKEN_EXPIRED: "Channel access token expired or revoked",
   UPLOAD_HOST_NOT_ALLOWED: "Upload URL host is not in the allowlist",

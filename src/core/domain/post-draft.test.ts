@@ -11,8 +11,9 @@ import {
   POST_DRAFT_SCHEMA_VERSION,
   type ComposeDraftPayload,
 } from "./post-draft";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const OWNER = "00000000-0000-0000-0000-0000000000aa";
 
 function valid(overrides: Partial<ComposeDraftPayload> = {}): ComposeDraftPayload {
@@ -299,7 +300,7 @@ describe("normalisePostDraftKind", () => {
 });
 
 describe("assertPostDraftAddress", () => {
-  it.each([undefined, null, {}, { tenantId: "" }, { tenantId: "not-a-uuid" }])(
+  it.each([undefined, null, {}, { tenantId: testTenantId("") }, { tenantId: testTenantId("not-a-uuid") }])(
     "rejects a malformed tenant id: %s",
     (input) => {
       expectThrows(() => assertPostDraftAddress(input as never), {
@@ -320,7 +321,7 @@ describe("assertPostDraftAddress", () => {
   );
 
   it("trims and defaults the kind", () => {
-    expect(assertPostDraftAddress({ tenantId: ` ${TENANT} `, ownerUserId: ` ${OWNER} ` })).toEqual({
+    expect(assertPostDraftAddress({ tenantId: testTenantId(` ${TENANT} `), ownerUserId: ` ${OWNER} ` })).toEqual({
       tenantId: TENANT,
       ownerUserId: OWNER,
       kind: POST_DRAFT_KIND_COMPOSE,

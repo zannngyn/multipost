@@ -17,6 +17,7 @@ import type { Logger } from "@/core/ports/infra";
 
 import { escapeQueryValue } from "./drive-query";
 import type { TenantGoogleAuth } from "./tenant-google-auth";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * The in-app Drive picker (E2), on Drive API v3 `files.list` / `files.get` and
@@ -74,14 +75,14 @@ export interface GoogleDriveBrowserDeps {
 }
 
 export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriveBrowser {
-  const driveFor = async (tenantId: string) =>
+  const driveFor = async (tenantId: TenantId) =>
     google.drive({ version: "v3", auth: await deps.auth.forTenant(tenantId) });
-  const sheetsFor = async (tenantId: string) =>
+  const sheetsFor = async (tenantId: TenantId) =>
     google.sheets({ version: "v4", auth: await deps.auth.forTenant(tenantId) });
 
   /** One mapping for every Drive failure of this file. Never leaks googleapis. */
   async function driveError(
-    tenantId: string,
+    tenantId: TenantId,
     operation: string,
     error: unknown,
     context: Record<string, unknown> = {},
@@ -111,7 +112,7 @@ export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriv
 
   /** Shared body of both listings: same shape, different `q` and ordering. */
   async function listEntries(args: {
-    tenantId: string;
+    tenantId: TenantId;
     query: string;
     orderBy: string;
     pageToken: string | null;
@@ -187,7 +188,7 @@ export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriv
    * parents stay invisible is normal, and a breadcrumb is navigation, not data.
    */
   async function buildBreadcrumb(
-    tenantId: string,
+    tenantId: TenantId,
     parentId: string,
   ): Promise<GoogleDriveEntry[]> {
     const root: GoogleDriveEntry = { id: ROOT_ID, name: ROOT_NAME };
@@ -268,7 +269,7 @@ export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriv
   return {
     async listFolders(input: ListGoogleFoldersInput): Promise<ListGoogleFoldersResult> {
       // --- Edge cases first --------------------------------------------------
-      const tenantId = trim(input?.tenantId);
+      const tenantId = normalizeTenantId(input.tenantId);
       const parentId = trim(input?.parentId) || ROOT_ID;
       if (tenantId.length === 0) throw missingTenant("listFolders");
 
@@ -297,7 +298,7 @@ export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriv
     async listSpreadsheets(
       input: ListGoogleSpreadsheetsInput,
     ): Promise<ListGoogleSpreadsheetsResult> {
-      const tenantId = trim(input?.tenantId);
+      const tenantId = normalizeTenantId(input.tenantId);
       if (tenantId.length === 0) throw missingTenant("listSpreadsheets");
       const parentId = trim(input?.parentId);
 
@@ -319,7 +320,7 @@ export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriv
     },
 
     async listSheetTabs(input: ListGoogleSheetTabsInput): Promise<readonly string[]> {
-      const tenantId = trim(input?.tenantId);
+      const tenantId = normalizeTenantId(input.tenantId);
       const spreadsheetId = trim(input?.spreadsheetId);
       if (tenantId.length === 0) throw missingTenant("listSheetTabs");
       if (spreadsheetId.length === 0) {
@@ -386,7 +387,7 @@ export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriv
 
     async checkSourceAccess(input: CheckGoogleSourceAccessInput): Promise<GoogleSourceAccessState> {
       // --- Edge cases first --------------------------------------------------
-      const tenantId = trim(input?.tenantId);
+      const tenantId = normalizeTenantId(input.tenantId);
       if (tenantId.length === 0) throw missingTenant("checkSourceAccess");
       const folderId = trim(input?.driveFolderId);
       const spreadsheetId = trim(input?.spreadsheetId);
@@ -414,7 +415,7 @@ export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriv
   };
 
   async function probeDriveFolder(
-    tenantId: string,
+    tenantId: TenantId,
     folderId: string,
     log: Logger,
   ): Promise<ProbeResult> {
@@ -434,7 +435,7 @@ export function makeGoogleDriveBrowser(deps: GoogleDriveBrowserDeps): GoogleDriv
   }
 
   async function probeSpreadsheet(
-    tenantId: string,
+    tenantId: TenantId,
     spreadsheetId: string,
     log: Logger,
   ): Promise<ProbeResult> {

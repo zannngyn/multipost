@@ -8,6 +8,7 @@ import type {
   SyncRunRepo,
   SyncRunStatus,
 } from "@/core/ports/product-repo";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E2 — read model for the sync status panel: "when did we last read Drive/Sheet
@@ -29,7 +30,7 @@ export const DEFAULT_RECENT_RUNS = 6;
 export const MAX_RECENT_RUNS = 20;
 
 export interface GetSyncStatusInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /**
    * How many history rows to read. Integer 1..MAX_RECENT_RUNS; defaults to
    * DEFAULT_RECENT_RUNS (6, because the list includes the run being described).
@@ -50,7 +51,7 @@ export interface RecentSyncRun {
 }
 
 export interface GetSyncStatusResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly syncRunId: string;
   readonly status: SyncRunStatus;
   /** ISO-8601. */
@@ -82,19 +83,20 @@ export function makeGetSyncStatus(deps: GetSyncStatusDeps) {
     input: GetSyncStatusInput,
   ): Promise<GetSyncStatusResult | null> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
-    if (!isTenantId(tenantId)) {
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    if (!isTenantId(rawTenantId)) {
       // No logger.child: there is no trustworthy tenant_id to bind yet.
       deps.logger.warn("Sync status rejected: malformed tenant id", {
         error_code: "INVALID_INPUT",
-        tenant_id: tenantId || null,
+        tenant_id: rawTenantId || null,
       });
       throw new AppError("INVALID_INPUT", {
         message: "tenantId must be a UUID",
         userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-        context: { tenant_id: tenantId || null },
+        context: { tenant_id: rawTenantId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     // An out-of-range limit is a caller bug, not something to silently clamp:
     // clamping would hide a UI that asks for 500 rows every render.

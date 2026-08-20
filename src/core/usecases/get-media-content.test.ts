@@ -21,6 +21,8 @@ import type {
 } from "@/core/ports/media-byte-cache";
 
 import { makeGetMediaContent } from "./get-media-content";
+import type { TenantId } from "@/core/domain/tenant-context";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The media route is the only UNAUTHENTICATED door in the app (Meta's fetcher
@@ -28,8 +30,8 @@ import { makeGetMediaContent } from "./get-media-content";
  * expired link, a valid link of ANOTHER tenant, an asset that is not synced.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
-const OTHER_TENANT = "00000000-0000-0000-0000-000000000002";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
+const OTHER_TENANT = testTenantId("00000000-0000-0000-0000-000000000002");
 const ASSET = "drive-file-1";
 const NOW = Date.UTC(2026, 7, 12, 9, 0, 0);
 const SECRET = "media-signing-secret-at-least-32-chars";
@@ -159,7 +161,7 @@ function harness(options: HarnessOptions = {}) {
   };
 }
 
-function link(overrides: { tenantId?: string; assetId?: string; ttlMs?: number } = {}) {
+function link(overrides: { tenantId?: TenantId; assetId?: string; ttlMs?: number } = {}) {
   const result = signMediaUrl({
     tenantId: overrides.tenantId ?? TENANT,
     assetId: overrides.assetId ?? ASSET,

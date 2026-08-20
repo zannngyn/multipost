@@ -20,7 +20,6 @@ import {
   type PromptVersion,
   type PromptVersionFormValues,
 } from "@/ui/schemas/prompt.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Mẫu prompt" (E10.7): component -> hook -> service -> internal API.
@@ -39,12 +38,10 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  *   error   — 4xx vs 5xx via <ApiErrorNotice>
  */
 export function PromptTemplatesScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
 
-  const versions = usePromptVersions(tenantId, PROMPT_TASK, PROMPT_PLATFORM);
-  const create = useCreatePromptVersion(tenantId, PROMPT_TASK, PROMPT_PLATFORM);
-  const activate = useActivatePromptVersion(tenantId, PROMPT_TASK, PROMPT_PLATFORM);
+  const versions = usePromptVersions(PROMPT_TASK, PROMPT_PLATFORM);
+  const create = useCreatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
+  const activate = useActivatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
 
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState<Partial<PromptVersionFormValues> | undefined>(undefined);
@@ -221,7 +218,6 @@ export function PromptTemplatesScreen() {
             <section className="bg-card rounded-xl border p-5">
               <PromptVersionForm
                 key={draftKey}
-                tenantId={tenantId}
                 nextVersion={data.nextVersion}
                 defaultValues={draft}
                 pending={create.isPending}

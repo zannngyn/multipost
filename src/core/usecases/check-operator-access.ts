@@ -4,6 +4,7 @@ import { isTenantId } from "@/core/domain/tenant";
 import type { AccessRequestRepo } from "@/core/ports/access-request-repo";
 import type { Clock, Logger } from "@/core/ports/infra";
 import { normaliseEmail, type AccessStatus, type OperatorRole } from "@/shared/operator-access";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E1.4 — the two questions the auth layer asks the registry:
@@ -29,11 +30,11 @@ export interface OperatorAccessState {
 const UNKNOWN: OperatorAccessState = { status: "unknown", role: null, displayName: null };
 
 export interface RegisterAccessRequestInput extends RawOperatorIdentity {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface SessionAccessInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly sessionEmail: string;
 }
 
@@ -140,14 +141,17 @@ function toState(
   return { status, role: status === "approved" ? role : null, displayName };
 }
 
-function requireTenant(value: unknown, operation: string): string {
-  const tenantId = typeof value === "string" ? value.trim() : "";
-  if (!isTenantId(tenantId)) {
+function requireTenant(value: TenantId | undefined, operation: string): TenantId {
+  if (typeof value !== "string" || !isTenantId(value.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: `${operation} requires a tenant id`,
       userMessage: "Thiếu mã đơn vị (tenant) hợp lệ.",
-      context: { operation, tenant_id: tenantId || null, field: "tenantId" },
+      context: {
+        operation,
+        tenant_id: (typeof value === "string" ? value.trim() : "") || null,
+        field: "tenantId",
+      },
     });
   }
-  return tenantId;
+  return normalizeTenantId(value);
 }

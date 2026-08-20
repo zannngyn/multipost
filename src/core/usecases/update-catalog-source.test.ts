@@ -16,8 +16,10 @@ import type { Logger } from "@/core/ports/infra";
 import type { UserRepo } from "@/core/ports/user-repo";
 
 import { makeUpdateCatalogSource } from "./update-catalog-source";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
+import type { TenantId } from "@/core/domain/tenant-context";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const FOLDER_ID = "1bA48sjugz9BczcoR0-zOc-VNlIYikp4v";
 const SHEET_ID = "1Qdhp9YS0mePn7G3focqAhqV3Mb1eymFqbX0EC1bFCVs";
 
@@ -66,7 +68,7 @@ describe("updateCatalogSource — edge cases first", () => {
       const update = makeUpdateCatalogSource(harness);
       await expect(
         update({
-          tenantId: tenantId as unknown as string,
+          tenantId: tenantId as unknown as TenantId,
           driveFolder: FOLDER_ID,
           spreadsheet: SHEET_ID,
           sheetName: "Mẫu 2026",

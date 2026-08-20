@@ -9,6 +9,7 @@ import type { UserRepo } from "@/core/ports/user-repo";
 import { checkAndRecordSourceAccess } from "./check-google-source-access";
 import { toCatalogSourceView, type CatalogSourceView } from "./get-catalog-source";
 import { resolveActorUserId } from "./resolve-actor";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E2 — point this tenant at another Drive folder / Sheet from the UI.
@@ -38,7 +39,7 @@ import { resolveActorUserId } from "./resolve-actor";
 const MAX_SHEET_NAME_LENGTH = 100;
 
 export interface UpdateCatalogSourceInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Drive folder URL or bare id. */
   readonly driveFolder: string;
   /** Spreadsheet URL or bare id. */
@@ -70,14 +71,15 @@ export function makeUpdateCatalogSource(deps: UpdateCatalogSourceDeps) {
     input: UpdateCatalogSourceInput,
   ): Promise<CatalogSourceView> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = str(input?.tenantId);
-    if (!isTenantId(tenantId)) {
+    const rawTenantId = str(input?.tenantId);
+    if (!isTenantId(rawTenantId)) {
       throw new AppError("INVALID_INPUT", {
         message: "updateCatalogSource requires a tenant UUID",
         userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-        context: { tenant_id: tenantId || null },
+        context: { tenant_id: rawTenantId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     // Each throws INVALID_INPUT naming its own field, so the form can highlight
     // the box the operator pasted into.
@@ -157,7 +159,7 @@ export function makeUpdateCatalogSource(deps: UpdateCatalogSourceDeps) {
 
 export type UpdateCatalogSource = ReturnType<typeof makeUpdateCatalogSource>;
 
-function normaliseSheetName(raw: unknown, tenantId: string): string {
+function normaliseSheetName(raw: unknown, tenantId: TenantId): string {
   const value = str(raw);
   if (value.length === 0) {
     throw new AppError("INVALID_INPUT", {

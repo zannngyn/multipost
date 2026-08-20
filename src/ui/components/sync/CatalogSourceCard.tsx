@@ -38,10 +38,8 @@ import {
  * failing must not blank the other.
  */
 export function CatalogSourceCard({
-  tenantId,
   onSourceChanged,
 }: {
-  tenantId: string | null;
   /** Lets the screen point at "Chạy đồng bộ" right after a source change. */
   onSourceChanged?: () => void;
 }) {
@@ -54,8 +52,8 @@ export function CatalogSourceCard({
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const source = useCatalogSource(tenantId);
-  const connection = useGoogleConnection(tenantId);
+  const source = useCatalogSource();
+  const connection = useGoogleConnection();
 
   const [isPicking, setIsPicking] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
@@ -124,9 +122,6 @@ export function CatalogSourceCard({
     setIsManualOpen(true);
   }
 
-  // --- Idle: no tenant picked yet ------------------------------------------
-  if (tenantId === null) return null;
-
   function finishSourceChange() {
     setIsPicking(false);
     setIsManualOpen(false);
@@ -170,7 +165,6 @@ export function CatalogSourceCard({
       </div>
 
       <GoogleConnectionPanel
-        tenantId={tenantId}
         connection={connection}
         outcome={outcome}
         onDismissOutcome={() => setOutcome(null)}
@@ -185,7 +179,6 @@ export function CatalogSourceCard({
             bước cuối, sau khi bạn xác nhận.
           </p>
           <GoogleDrivePicker
-            tenantId={tenantId}
             onSaved={finishSourceChange}
             onCancel={() => setIsPicking(false)}
           />
@@ -210,7 +203,6 @@ export function CatalogSourceCard({
         onToggle={() => setIsManualOpen((open) => !open)}
       >
         <CatalogSourceForm
-          tenantId={tenantId}
           current={configured ?? undefined}
           onSaved={finishSourceChange}
           onCancel={() => setIsManualOpen(false)}

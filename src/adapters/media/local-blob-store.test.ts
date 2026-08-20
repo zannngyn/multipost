@@ -6,9 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT_A = "00000000-0000-0000-0000-000000000001";
-const TENANT_B = "00000000-0000-0000-0000-000000000002";
+const TENANT_A = testTenantId("00000000-0000-0000-0000-000000000001");
+const TENANT_B = testTenantId("00000000-0000-0000-0000-000000000002");
 
 let root: string;
 let store: MediaBlobStore;

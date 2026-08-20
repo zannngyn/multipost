@@ -9,6 +9,7 @@ import type {
   PromptTemplateRepo,
 } from "@/core/ports/ai";
 import { makeManagePromptTemplates } from "@/core/usecases/manage-prompt-templates";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Edge cases first: a body that cannot render, a version that does not exist,
@@ -16,7 +17,7 @@ import { makeManagePromptTemplates } from "@/core/usecases/manage-prompt-templat
  * after, because that is the order the rules matter in.
  */
 
-const TENANT = "22222222-2222-2222-2222-222222222222";
+const TENANT = testTenantId("22222222-2222-2222-2222-222222222222");
 const TARGET = { tenantId: TENANT, task: "facebook_content" as const, platform: "facebook" };
 
 const VALID_BODY =
@@ -154,10 +155,12 @@ describe("manage-prompt-templates — rejections", () => {
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("refuses to activate a version that does not exist", async () => {
+  // Doc 10 B3: this is a 404 answer to a bad request, and must stay
+  // distinguishable from the 500 `PROMPT_NOT_FOUND` of a missing built-in.
+  it("refuses to activate a version that does not exist, as PROMPT_VERSION_NOT_FOUND", async () => {
     const usecase = makeUsecase(makeMemoryRepo());
     await expect(usecase.activateVersion({ ...TARGET, version: 9 })).rejects.toMatchObject({
-      code: "PROMPT_NOT_FOUND",
+      code: "PROMPT_VERSION_NOT_FOUND",
     });
   });
 });

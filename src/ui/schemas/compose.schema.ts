@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import type { PostFormat } from "./post-batch.schema";
-import { tenantIdField } from "./tenant-health.schema";
 
 /**
  * Contracts of the "Soạn bài" wizard (E3 compose + E4 captions).
@@ -129,7 +128,8 @@ export function postFormatForVideo(video: { target: VideoTarget } | null): PostF
 const PRODUCT_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export const ComposeWizardSchema = z.object({
-  tenantId: tenantIdField(),
+  // No `tenantId` (M1.4): the company comes from the session, so there is
+  // nothing for the operator to type and nothing for the form to validate.
   productCode: z
     .string()
     .trim()
@@ -152,7 +152,6 @@ export type ComposeWizardValues = z.infer<typeof ComposeWizardSchema>;
 
 /** Fields step 1 owns — `trigger()` must not validate steps not reached yet. */
 export const STEP_PRODUCT_FIELDS = [
-  "tenantId",
   "productCode",
   "color",
   "mediaKind",

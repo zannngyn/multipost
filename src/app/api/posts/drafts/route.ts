@@ -2,12 +2,12 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
-import { AppError } from "@/core/domain/errors";
+import type { TenantId } from "@/composition/require-tenant";
 
 /**
  * E10 — the compose screen's draft: read it back, autosave it, throw it away.
@@ -21,6 +21,10 @@ import { AppError } from "@/core/domain/errors";
  * Identity: the owner is read from the SESSION, never from the body. A draft
  * addressed by tenant alone would be tenant-SHARED, and two operators on the
  * same tenant would silently overwrite each other's work.
+ *
+ * M1.3b — editor, tier R to read and M to write (doc 10 §4.2). There is
+ * deliberately NO parameter naming another owner: a draft is "chỉ chính chủ",
+ * admin and owner included, so the route physically cannot address one.
  *
  * "No app_user row for this e-mail" is NOT an error. It is a real state of a
  * dev/demo environment, and it answers `persisted: false` so the screen can say
@@ -49,16 +53,8 @@ function ownerKeyFor(tenantId: string, ownerUserId: string): string {
   return createHash("sha256").update(`${tenantId}:${ownerUserId}`).digest("hex").slice(0, 16);
 }
 
-const TenantQuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
-});
-
 const SaveSchema = z
   .object({
-    tenantId: z
-      .string({ error: "Thiếu mã đơn vị (tenant)." })
-      .trim()
-      .min(1, "Thiếu mã đơn vị (tenant)."),
     /**
      * Deliberately `unknown`: the draft shape is core's business, and validating
      * it twice with two slightly different schemas is how the two drift apart.
@@ -73,41 +69,21 @@ const SaveSchema = z
 
 export const dynamic = "force-dynamic";
 
-function parseTenantQuery(request: Request, route: string): string {
-  const url = new URL(request.url);
-  const parsed = TenantQuerySchema.safeParse({
-    tenantId: url.searchParams.get("tenantId") ?? undefined,
-  });
-
-  if (!parsed.success) {
-    throw new AppError("INVALID_INPUT", {
-      message: `Invalid query string for ${route}`,
-      userMessage: "Tham số không hợp lệ. Vui lòng kiểm tra lại mã đơn vị (tenant).",
-      context: {
-        route,
-        issues: parsed.error.issues.map((issue) => ({
-          path: issue.path.join(".") || "tenantId",
-          message: issue.message,
-        })),
-      },
-    });
-  }
-
-  return parsed.data.tenantId;
-}
-
 /**
- * `app_user.id` of the caller, or null when there is no session or no row.
+ * `app_user.id` of the caller, or null when the session e-mail matches no row.
  *
- * Not an authorisation check — middleware already guards `/api`. This is the
- * ownership key, and refusing to guess it is the point.
+ * Not an authorisation check — `requireTenantContext` already did that. This is
+ * the ownership key, and refusing to guess it is the point.
+ *
+ * TODO(M1.4): resolve through `account_id` -> membership -> app_user instead of
+ * the session e-mail. Doc 10 §4.2 says the owner is an ACCOUNT; e-mail is only a
+ * lookup key and doc 09 §3.1 makes it an attribute, not an identity.
  */
-async function resolveOwnerUserId(tenantId: string, route: string): Promise<string | null> {
-  const session = await getOperatorSession(`api:${route}`);
-  const email = session?.email?.trim() ?? "";
-  if (email.length === 0) return null;
+async function resolveOwnerUserId(tenantId: TenantId, email: string): Promise<string | null> {
+  const trimmed = email.trim();
+  if (trimmed.length === 0) return null;
 
-  return getContainer().usecases.findOperatorUserId(tenantId, email);
+  return getContainer().usecases.findOperatorUserId(tenantId, trimmed);
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -117,14 +93,19 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const tenantId = parseTenantQuery(request, ROUTE_GET);
-    const ownerUserId = await resolveOwnerUserId(tenantId, ROUTE_GET);
+    // --- Refusals first -----------------------------------------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE_GET}`,
+      tier: "R",
+      minRole: "editor",
+    });
+    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.email);
 
-    // --- Edge case first: no owner means no server-side draft, not a failure --
+    // No owner means no server-side draft, not a failure.
     if (ownerUserId === null) {
       logger.warn("Draft read without a resolvable operator", {
         route: ROUTE_GET,
-        tenant_id: tenantId,
+        tenant_id: ctx.tenantId,
         reason: NO_USER_REASON,
       });
       // `ownerKey: null` tells the client to use its anonymous bucket instead of
@@ -132,13 +113,16 @@ export async function GET(request: Request): Promise<Response> {
       return Response.json({ draft: null, updatedAt: null, persisted: false, ownerKey: null });
     }
 
-    const stored = await container.usecases.loadPostDraft({ tenantId, ownerUserId });
+    const stored = await container.usecases.loadPostDraft({
+      tenantId: ctx.tenantId,
+      ownerUserId,
+    });
 
     return Response.json({
       draft: stored?.payload ?? null,
       updatedAt: stored?.updatedAt ?? null,
       persisted: true,
-      ownerKey: ownerKeyFor(tenantId, ownerUserId),
+      ownerKey: ownerKeyFor(ctx.tenantId, ownerUserId),
     });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE_GET } });
@@ -152,16 +136,22 @@ export async function PUT(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
+    // --- Refusals first -----------------------------------------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE_PUT}`,
+      tier: "M",
+      minRole: "editor",
+    });
+
     // `readJsonBody` parses the body itself, so a `text/plain` beacon body is
     // read exactly like an `application/json` one.
     const body = await readJsonBody(request, SaveSchema, { route: ROUTE_PUT });
-    const ownerUserId = await resolveOwnerUserId(body.tenantId, ROUTE_PUT);
+    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.email);
 
-    // --- Edge case first ----------------------------------------------------
     if (ownerUserId === null) {
       logger.warn("Draft autosave without a resolvable operator", {
         route: ROUTE_PUT,
-        tenant_id: body.tenantId,
+        tenant_id: ctx.tenantId,
         reason: NO_USER_REASON,
       });
       // 200, not an error: nothing went wrong, the draft simply has nowhere to
@@ -170,7 +160,7 @@ export async function PUT(request: Request): Promise<Response> {
     }
 
     const saved = await container.usecases.savePostDraft({
-      tenantId: body.tenantId,
+      tenantId: ctx.tenantId,
       ownerUserId,
       payload: body.payload,
     });
@@ -195,17 +185,22 @@ export async function DELETE(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const tenantId = parseTenantQuery(request, ROUTE_DELETE);
-    const ownerUserId = await resolveOwnerUserId(tenantId, ROUTE_DELETE);
+    // --- Refusals first -----------------------------------------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE_DELETE}`,
+      tier: "M",
+      minRole: "editor",
+    });
+    const ownerUserId = await resolveOwnerUserId(ctx.tenantId, session.email);
 
     // No owner = no row addressed to anyone; "already gone" is the same outcome
     // the caller asked for, so it answers 204 rather than inventing a failure.
     if (ownerUserId !== null) {
-      await container.usecases.discardPostDraft({ tenantId, ownerUserId });
+      await container.usecases.discardPostDraft({ tenantId: ctx.tenantId, ownerUserId });
     } else {
       logger.warn("Draft discard without a resolvable operator", {
         route: ROUTE_DELETE,
-        tenant_id: tenantId,
+        tenant_id: ctx.tenantId,
         reason: NO_USER_REASON,
       });
     }

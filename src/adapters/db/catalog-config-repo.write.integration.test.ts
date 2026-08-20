@@ -9,6 +9,7 @@ import { DrizzleCatalogConfigRepo, GOOGLE_PROVIDER } from "./catalog-config-repo
 import { makeDbHandle } from "./client";
 import { integrationLockKey } from "./integration-lock";
 import { auditLogs, tenantIntegrations, tenants } from "./schema";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * `saveCatalogSource` writes the same table as the channel repo (provider
@@ -51,7 +52,7 @@ describe.skipIf(!url)("DrizzleCatalogConfigRepo — two first saves at once", ()
   // >= 3: the test holds one connection open while the repo works on another.
   const handle = makeDbHandle({ url: url ?? "postgres://unused", maxPoolSize: 5 });
   const repo = new DrizzleCatalogConfigRepo(handle.db, recordingLogger([]));
-  const tenantId = randomUUID();
+  const tenantId = testTenantId(randomUUID());
 
   beforeAll(async () => {
     await handle.db

@@ -9,6 +9,8 @@ import type { PostJobStatus } from "@/core/domain/post-job";
 import { makeDbHandle } from "./client";
 import { DrizzlePostJobRepo } from "./post-job-repo.drizzle";
 import { postBatches, postJobs, tenants } from "./schema";
+import type { TenantId } from "@/core/domain/tenant-context";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * `countUntouchedQueued` against a REAL Postgres. The whole value of this query
@@ -38,13 +40,13 @@ const MINUTE = 60_000;
 describe.skipIf(!url)("DrizzlePostJobRepo.countUntouchedQueued (real database)", () => {
   const handle = makeDbHandle({ url: url ?? "postgres://unused", maxPoolSize: 3 });
   const repo = new DrizzlePostJobRepo(handle.db);
-  const tenantA = randomUUID();
-  const tenantB = randomUUID();
+  const tenantA = testTenantId(randomUUID());
+  const tenantB = testTenantId(randomUUID());
   const batchA = randomUUID();
   const batchB = randomUUID();
 
   interface JobSeed {
-    readonly tenantId: string;
+    readonly tenantId: TenantId;
     readonly batchId: string;
     readonly channelId: string;
     readonly status?: PostJobStatus;
@@ -203,8 +205,8 @@ describe.skipIf(!url)("DrizzlePostJobRepo.countUntouchedQueued (real database)",
   });
 
   it.each([
-    ["a malformed tenant id", { tenantId: "not-a-uuid", now: NOW }],
-    ["a missing clock", { tenantId: "00000000-0000-4000-8000-000000000000", now: undefined }],
+    ["a malformed tenant id", { tenantId: testTenantId("not-a-uuid"), now: NOW }],
+    ["a missing clock", { tenantId: testTenantId("00000000-0000-4000-8000-000000000000"), now: undefined }],
   ])("rejects %s with INVALID_INPUT", async (_label, query) => {
     const error = await repo
       .countUntouchedQueued(query as never)

@@ -4,6 +4,7 @@ import { makeFakeLogger } from "@/core/ai/testing";
 import { AppError } from "@/core/domain/errors";
 import type { ContentEngine, ContentGenerationRequest } from "@/core/ports/content-engine";
 import { makeGenerateCaptions, type GenerateCaptionsInput } from "@/core/usecases/generate-captions";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 const product = {
   name: "Penny",
@@ -22,7 +23,7 @@ const content = {
 
 function makeInput(overrides: Partial<GenerateCaptionsInput> = {}): GenerateCaptionsInput {
   return {
-    tenantId: "tenant-1",
+    tenantId: testTenantId("tenant-1"),
     product,
     channels: [
       { channelId: "page-A", platform: "facebook", contentType: "photo_post" },
@@ -81,7 +82,7 @@ describe("generateCaptions — invalid input", () => {
 
   it("rejects a missing tenantId", async () => {
     await expect(
-      makeGenerateCaptions(deps)(makeInput({ tenantId: " " })),
+      makeGenerateCaptions(deps)(makeInput({ tenantId: testTenantId(" ") })),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 

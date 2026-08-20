@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "@/core/ports/infra";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * Drive/Sheets adapters against fixtures shaped like the real API payloads
@@ -25,7 +26,7 @@ const { makeGoogleDriveSource } = await import("./drive-source.google");
 const { makeGoogleSheetSource } = await import("./sheet-source.google");
 const { makeGoogleAuth } = await import("./service-account");
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 function makeLogger(): Logger {
   const logger: Logger = {

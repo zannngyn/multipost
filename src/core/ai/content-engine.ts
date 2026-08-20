@@ -49,6 +49,7 @@ import type {
   ContentGenerationRequest,
   ContentGenerationResult,
 } from "@/core/ports/content-engine";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 export interface ContentEngineDeps {
   /** Wired in composition; a tier referencing an absent provider is a config error. */
@@ -70,14 +71,15 @@ async function generate(
   request: ContentGenerationRequest,
 ): Promise<ContentGenerationResult> {
   // --- Edge cases first (CLAUDE.md rule 1) ---------------------------------
-  const tenantId = typeof request?.tenantId === "string" ? request.tenantId.trim() : "";
-  if (!tenantId) {
+  const rawTenantId = typeof request?.tenantId === "string" ? request.tenantId.trim() : "";
+  if (!rawTenantId) {
     throw new AppError("INVALID_INPUT", {
       message: "ContentGenerationRequest.tenantId is required",
       userMessage: "Thiếu mã đơn vị (tenant) khi yêu cầu sinh nội dung.",
       context: { task: request?.task ?? null },
     });
   }
+  const tenantId = normalizeTenantId(request.tenantId);
   if (!request.task) {
     throw new AppError("INVALID_INPUT", {
       message: "ContentGenerationRequest.task is required",
@@ -220,7 +222,7 @@ interface TierRunInput {
   template: PromptTemplate;
   request: ContentGenerationRequest;
   product: CaptionInput;
-  tenantId: string;
+  tenantId: TenantId;
   generationId: string;
   validationContext: ValidationContext;
   state: RunState;

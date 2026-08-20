@@ -25,7 +25,6 @@ import {
   renderCaptionTemplate,
   type BulkRunFormValues,
 } from "@/ui/schemas/bulk.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Chạy hàng loạt" (E10.5): component -> hook -> service -> internal API.
@@ -46,13 +45,11 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  * `content` object returned by compose.
  */
 export function BulkRunScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const codesId = useId();
   const templateId = useId();
   const captionModeId = useId();
 
-  const groups = useChannelGroups(tenantId);
+  const groups = useChannelGroups();
   const run = useBulkRun();
   const schedule = useScheduleChoice();
   const summaryRef = useRef<HTMLDivElement>(null);
@@ -66,7 +63,6 @@ export function BulkRunScreen() {
     mode: "onSubmit",
     reValidateMode: "onChange",
     defaultValues: {
-      tenantId,
       codesText: "",
       captionMode: "ai",
       captionTemplate: "",
@@ -129,7 +125,6 @@ export function BulkRunScreen() {
     setRanScheduled(resolved.scheduledAt !== null);
 
     void run.start({
-      tenantId: values.tenantId,
       codes: parseBulkCodes(values.codesText).codes.map((item) => item.code),
       channelIds: selectedIds,
       captionMode: values.captionMode,

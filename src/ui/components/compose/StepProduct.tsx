@@ -65,23 +65,6 @@ export function StepProduct({ wizard }: { wizard: ComposeWizard }) {
       >
         <div className="grid gap-4 @xl:grid-cols-2 @3xl:grid-cols-3">
           <Field
-            id={`${fieldId}-tenant`}
-            label="Mã đơn vị (tenant)"
-            hint="Dạng UUID. Đơn vị mẫu đã được điền sẵn."
-            error={errors.tenantId?.message}
-          >
-            {(props) => (
-              <Input
-                {...form.register("tenantId")}
-                {...props}
-                autoComplete="off"
-                spellCheck={false}
-                className="font-mono text-xs"
-              />
-            )}
-          </Field>
-
-          <Field
             id={`${fieldId}-code`}
             label="Mã sản phẩm"
             hint="Ví dụ: MGKVX6310. Mã phải có trên Sheet và đã được đồng bộ."

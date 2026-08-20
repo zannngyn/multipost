@@ -18,6 +18,7 @@ import {
   users,
 } from "./schema";
 import { makeGlobalIdentityTestLock } from "./__fixtures__/global-identity-lock";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * M1.2 write paths a stubbed query builder cannot honestly fake:
@@ -53,8 +54,8 @@ describe.skipIf(!url)("DrizzleAccountRepo + decide provisioning — the write pa
   const accountRepo = new DrizzleAccountRepo(handle.db, { logger: silentLogger() });
   const accessRepo = new DrizzleAccessRequestRepo(handle.db, { logger: silentLogger() });
 
-  const tenantId = randomUUID();
-  const tenantIdB = randomUUID();
+  const tenantId = testTenantId(randomUUID());
+  const tenantIdB = testTenantId(randomUUID());
   /** Unique per run so parallel/leftover rows can never collide. */
   const suffix = randomUUID().slice(0, 8);
   const email = (name: string) => `${name}-${suffix}@example.org`;

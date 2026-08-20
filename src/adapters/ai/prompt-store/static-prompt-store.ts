@@ -13,6 +13,7 @@ import {
   FACEBOOK_CONTENT_TEMPLATE_V1,
   FACEBOOK_CONTENT_TEMPLATE_V2,
 } from "@/adapters/ai/prompt-store/templates/facebook-content";
+import { unbrandTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /** Retired versions stay listed: the catalog is also the audit trail. */
 export const BUILT_IN_TEMPLATES: readonly PromptTemplate[] = [
@@ -20,8 +21,8 @@ export const BUILT_IN_TEMPLATES: readonly PromptTemplate[] = [
   FACEBOOK_CONTENT_TEMPLATE_V2,
 ];
 
-function keyOf(task: AITask, platform: string, tenantId: string | null): string {
-  return `${tenantId ?? "*"}|${task}|${platform}`;
+function keyOf(task: AITask, platform: string, tenantId: TenantId | null): string {
+  return `${tenantId ? unbrandTenantId(tenantId) : "*"}|${task}|${platform}`;
 }
 
 /**

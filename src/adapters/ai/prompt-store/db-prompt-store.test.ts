@@ -5,8 +5,9 @@ import { makeStaticPromptStore } from "@/adapters/ai/prompt-store/static-prompt-
 import { makeFakeLogger, TEST_PROMPT_TEMPLATE } from "@/core/ai/testing";
 import { AppError } from "@/core/domain/errors";
 import type { PromptTemplateRecord, PromptTemplateRepo } from "@/core/ports/ai";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "55555555-5555-5555-5555-555555555555";
+const TENANT = testTenantId("55555555-5555-5555-5555-555555555555");
 const QUERY = { tenantId: TENANT, task: "facebook_content" as const, platform: "facebook" };
 
 function repoReturning(
@@ -52,7 +53,7 @@ describe("db prompt store", () => {
       builtIn: makeStaticPromptStore([TEST_PROMPT_TEMPLATE]),
       logger: makeFakeLogger(),
     });
-    await expect(store.getActive({ ...QUERY, tenantId: " " })).rejects.toMatchObject({
+    await expect(store.getActive({ ...QUERY, tenantId: testTenantId(" ") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
   });

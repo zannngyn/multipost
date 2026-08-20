@@ -27,6 +27,7 @@ import {
   REAPER_REQUEUED_AUDIT_ACTION,
   makeReapPostJobs,
 } from "./reap-post-jobs";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The safety net. Two rules dominate every test here:
@@ -35,7 +36,7 @@ import {
  *     worker always wins the race.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const NOW = Date.parse("2026-08-13T02:00:00.000Z");
 const CLOCK: Clock = { now: () => new Date(NOW), nowMs: () => NOW };
 

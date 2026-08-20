@@ -6,6 +6,7 @@ import {
 } from "@/core/domain/post-draft";
 import type { Logger } from "@/core/ports/infra";
 import type { PostDraftRepo } from "@/core/ports/post-draft-repo";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E10 — reads back the compose draft when the screen mounts.
@@ -22,7 +23,7 @@ import type { PostDraftRepo } from "@/core/ports/post-draft-repo";
  */
 
 export interface LoadPostDraftInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly ownerUserId: string;
   /** Defaults to 'compose'. */
   readonly kind?: string;

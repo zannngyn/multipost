@@ -15,10 +15,11 @@ import {
   encodeScheduledCursor,
   makeListScheduledJobs,
 } from "./list-scheduled-jobs";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /** E8.4 "bài đã hẹn": filters, ordering by time, and the overdue signal. */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const NOW = Date.parse("2026-08-13T02:00:00.000Z");
 const CLOCK: Clock = { now: () => new Date(NOW), nowMs: () => NOW };
 
@@ -82,7 +83,7 @@ function harness(items: PostJobListItem[]) {
 describe("listScheduledJobs — rejected calls", () => {
   it("rejects a malformed tenant id", async () => {
     const { listScheduledJobs, queries } = harness([]);
-    await expect(listScheduledJobs({ tenantId: "nope" })).rejects.toMatchObject({
+    await expect(listScheduledJobs({ tenantId: testTenantId("nope") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     expect(queries).toHaveLength(0);

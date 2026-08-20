@@ -23,6 +23,7 @@ import type {
 } from "@/core/ports/content-engine";
 import type { Logger } from "@/core/ports/infra";
 import { HASHTAG_MAX, HASHTAG_MIN } from "@/core/domain/caption";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 export interface CaptionChannelRequest {
   channelId: string;
@@ -33,7 +34,7 @@ export interface CaptionChannelRequest {
 }
 
 export interface GenerateCaptionsInput {
-  tenantId: string;
+  tenantId: TenantId;
   /** Whitelisted product facts — validated here, at the usecase boundary. */
   product: unknown;
   channels: readonly CaptionChannelRequest[];
@@ -93,13 +94,14 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
     input: GenerateCaptionsInput,
   ): Promise<GenerateCaptionsResult> {
     // --- Edge cases first (CLAUDE.md rule 1) -------------------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
-    if (!tenantId) {
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    if (!rawTenantId) {
       throw new AppError("INVALID_INPUT", {
         message: "generateCaptions requires a tenantId",
         userMessage: "Thiếu mã đơn vị (tenant) khi yêu cầu viết caption.",
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const log = deps.logger.child({
       tenant_id: tenantId,

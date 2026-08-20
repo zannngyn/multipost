@@ -21,11 +21,12 @@ import type {
   PostJobStatus,
 } from "@/core/domain/post-job";
 import type { PostJobStage } from "@/core/domain/post-job-progress";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export interface NewPostBatch {
   /** Caller-supplied id = the idempotency scope of the anti-duplicate lock. */
   readonly id: string;
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly productCode: string;
   /** "" means "every colour of this code" — never null (see PostJob.color). */
   readonly color: string;
@@ -37,7 +38,7 @@ export interface NewPostBatch {
 
 export interface NewPostJob {
   readonly id: string;
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId: string;
   readonly productCode: string;
   readonly color: string;
@@ -49,7 +50,7 @@ export interface NewPostJob {
 }
 
 export interface ApplyTransitionInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   /** Status the row MUST still have — the optimistic guard. */
   readonly from: PostJobStatus;
@@ -74,7 +75,7 @@ export interface ApplyTransitionInput {
 
 /** E8.4 — change the publish time of a job that has not run yet. */
 export interface RescheduleJobInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   readonly scheduledAt: Date;
   /** New queue entry id; replaces the stored one. */
@@ -93,7 +94,7 @@ export interface ScheduledJobCursor {
 }
 
 export interface ListScheduledJobsQuery {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Inclusive lower bound on scheduled_at. */
   readonly from?: Date;
   /** Exclusive upper bound on scheduled_at. */
@@ -110,7 +111,7 @@ export interface ScheduledJobPage {
 
 export interface PostBatchSummary {
   readonly batchId: string;
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly productCode: string;
   readonly status: PostBatchStatus;
   readonly total: number;
@@ -145,7 +146,7 @@ export interface PostJobCursor {
 }
 
 export interface ListPostJobsQuery {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly batchId?: string;
   readonly status?: PostJobStatus;
   readonly channelId?: string;
@@ -185,7 +186,7 @@ export interface OverdueScanQuery {
  * STAGE changes, never per photo: roughly 6-8 rows per post.
  */
 export interface PostJobEventInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly postJobId: string;
   readonly batchId: string;
   readonly stage: PostJobStage;
@@ -208,7 +209,7 @@ export interface PostJobEventInput {
  * jobs with no scheduled time, or whose time has already come, are symptoms.
  */
 export interface UntouchedQueuedQuery {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Instant the check is made; a `scheduled_at` after it is excluded. */
   readonly now: Date;
 }
@@ -244,9 +245,9 @@ export interface PostJobRepo {
     readonly jobs: readonly NewPostJob[];
   }): Promise<{ readonly batchId: string; readonly jobs: readonly PostJob[] }>;
 
-  findJobById(tenantId: string, postJobId: string): Promise<PostJob | null>;
+  findJobById(tenantId: TenantId, postJobId: string): Promise<PostJob | null>;
 
-  listJobsByBatch(tenantId: string, batchId: string): Promise<readonly PostJob[]>;
+  listJobsByBatch(tenantId: TenantId, batchId: string): Promise<readonly PostJob[]>;
 
   /**
    * E11.1 job log. Filters are AND-ed; `limit` is read as given (the usecase
@@ -264,7 +265,7 @@ export interface PostJobRepo {
    * publish-post. False = the row was no longer `queued`.
    */
   setQueueJobId(input: {
-    readonly tenantId: string;
+    readonly tenantId: TenantId;
     readonly postJobId: string;
     readonly queueJobId: string | null;
     /** When given, an audit row is written in the SAME transaction. */
@@ -314,12 +315,12 @@ export interface PostJobRepo {
    * `published_at` of the newest published job on that channel — the input of
    * the spacing gate. Null when the channel never published.
    */
-  findLastPublishedAt(tenantId: string, channelId: string): Promise<Date | null>;
+  findLastPublishedAt(tenantId: TenantId, channelId: string): Promise<Date | null>;
 
   /** Recomputes and stores post_batch.status from its jobs; returns the summary. */
-  refreshBatchStatus(tenantId: string, batchId: string): Promise<PostBatchSummary>;
+  refreshBatchStatus(tenantId: TenantId, batchId: string): Promise<PostBatchSummary>;
 
-  getBatchSummary(tenantId: string, batchId: string): Promise<PostBatchSummary | null>;
+  getBatchSummary(tenantId: TenantId, batchId: string): Promise<PostBatchSummary | null>;
 
   /**
    * E7.5 — appends ONE progress milestone (design §5.4). Not part of the

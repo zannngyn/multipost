@@ -25,6 +25,7 @@ import type {
 } from "@/core/ports/ai";
 import type { Logger } from "@/core/ports/infra";
 import type { AiCache } from "@/adapters/ai/cache/redis-cache";
+import { normalizeTenantId, unbrandTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /** Bump when the cached JSON shape changes — old entries then simply miss. */
 const CACHE_NAMESPACE = "ai:policy:v1";
@@ -62,7 +63,7 @@ export interface CacheStats {
 
 export interface CachedModelPolicyStore extends ModelPolicyStore {
   /** Call after writing an override row: TTL alone would keep stale routing. */
-  invalidate(query: { tenantId: string; task?: AITask }): Promise<void>;
+  invalidate(query: { tenantId: TenantId; task?: AITask }): Promise<void>;
   /** Observability for smoke scripts and the admin dashboard. */
   stats(): CacheStats;
 }
@@ -73,8 +74,8 @@ function normaliseVariant(variant: string | undefined): string {
   return trimmed && trimmed.length > 0 ? trimmed : "default";
 }
 
-function cacheKey(variant: string, tenantId: string, task: AITask): string {
-  return `${CACHE_NAMESPACE}:${variant}:${tenantId}:${task}`;
+function cacheKey(variant: string, tenantId: TenantId, task: AITask): string {
+  return `${CACHE_NAMESPACE}:${variant}:${unbrandTenantId(tenantId)}:${task}`;
 }
 
 export function makeCachedModelPolicyStore(
@@ -84,7 +85,7 @@ export function makeCachedModelPolicyStore(
   const variant = normaliseVariant(options.variant);
   const stats: CacheStats = { hits: 0, misses: 0, corrupt: 0 };
 
-  async function readCache(key: string, tenantId: string, task: AITask) {
+  async function readCache(key: string, tenantId: TenantId, task: AITask) {
     if (!options.cache) return null;
     const raw = await options.cache.get(key);
     if (!raw) return null;
@@ -109,14 +110,15 @@ export function makeCachedModelPolicyStore(
   return {
     async getPolicy({ tenantId, task }): Promise<ResolvedModelPolicy> {
       // --- Edge cases first --------------------------------------------------
-      const tenant = typeof tenantId === "string" ? tenantId.trim() : "";
-      if (!tenant) {
+      const rawTenant = typeof tenantId === "string" ? tenantId.trim() : "";
+      if (!rawTenant) {
         throw new AppError("INVALID_INPUT", {
           message: "getPolicy requires a tenantId",
           userMessage: "Thiếu mã đơn vị (tenant) khi tra cấu hình model.",
           context: { task: task ?? null },
         });
       }
+      const tenant = normalizeTenantId(tenantId);
 
       const key = cacheKey(variant, tenant, task);
       const cached = await readCache(key, tenant, task);

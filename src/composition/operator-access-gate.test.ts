@@ -5,13 +5,14 @@ import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra"
 import type { CheckOperatorAccess, OperatorAccessState } from "@/core/usecases/check-operator-access";
 
 import { makeOperatorAccessGate } from "./operator-access-gate";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The cache is what makes a per-request status check affordable — and what
  * would make "Chặn" arrive late if it were never dropped. Both halves tested.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const EMAIL = "fb-992710700450296@facebook.local";
 
 const APPROVED: OperatorAccessState = { status: "approved", role: "editor", displayName: "A" };

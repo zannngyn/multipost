@@ -7,6 +7,7 @@ import { DrizzleMediaRepo } from "./media-repo.drizzle";
 import { DrizzleProductRepo } from "./product-repo.drizzle";
 import { DEMO_TENANT_ID } from "./seed-constants";
 import { DrizzleSyncRunRepo } from "./sync-run-repo.drizzle";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The 22P02 mapping against a REAL Postgres: only the server can decide that
@@ -24,7 +25,7 @@ const NOT_A_UUID = "not-a-uuid";
  * failure mode is "deletes the whole catalogue" — the destructive shape stays
  * covered without a real tenant's data standing under it.
  */
-const EMPTY_TENANT_ID = "00000000-0000-0000-0000-0000000000ff";
+const EMPTY_TENANT_ID = testTenantId("00000000-0000-0000-0000-0000000000ff");
 
 describe.skipIf(!url)("repos map Postgres 22P02 to INVALID_INPUT (real database)", () => {
   const handle = makeDbHandle({ url: url ?? "postgres://unused", maxPoolSize: 2 });
@@ -138,7 +139,9 @@ describe.skipIf(!url)("repos map Postgres 22P02 to INVALID_INPUT (real database)
   });
 
   it("a malformed TENANT id is still refused before any SQL is built", async () => {
-    const error = await products.deleteStale(NOT_A_UUID, DEMO_TENANT_ID).catch((e: unknown) => e);
+    const error = await products
+      .deleteStale(testTenantId(NOT_A_UUID), DEMO_TENANT_ID)
+      .catch((e: unknown) => e);
     expect((error as AppError).code).toBe("INVALID_INPUT");
     // Rejected by the tenant scope, so there is no SQLSTATE at all.
     expect((error as AppError).context).not.toHaveProperty("pg_code");

@@ -9,14 +9,17 @@ import { ACCESS_STATUSES } from "@/shared/operator-access";
 import { requireAccessAdmin } from "./_lib/admin-guard";
 
 /**
- * E1.4 — the approval queue: `GET /api/access-requests?tenantId=&status=`.
- * Thin by contract (docs/07 §3.3): validate -> usecase -> mapAppErrorToHttp.
+ * E1.4 / M1.3b — the approval queue: `GET /api/access-requests?status=`.
+ *
+ * The tenant comes from the GUARD (bootstrap → registry tenant; member →
+ * their active tenant, admin+, tier R), never from the query string. A
+ * `tenantId` param an old client still sends is ignored (transition rule,
+ * docs/11 §3.2). Thin by contract (docs/07 §3.3).
  */
 
 const ROUTE_GET = "GET /api/access-requests";
 
 const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
   /** Absent means `pending` — the only list an admin normally acts on. */
   status: z.enum([...ACCESS_STATUSES, "all"], { error: "Bộ lọc trạng thái không hợp lệ." }).optional(),
 });
@@ -32,11 +35,13 @@ export async function GET(request: Request): Promise<Response> {
 
     // Authorisation BEFORE anything is read: an unauthorised caller must not be
     // able to learn even that a tenant id exists.
-    const admin = await requireAccessAdmin(ROUTE_GET);
+    const { session, tenantId } = await requireAccessAdmin(request, {
+      route: ROUTE_GET,
+      tier: "R",
+    });
 
     const url = new URL(request.url);
     const parsed = QuerySchema.safeParse({
-      tenantId: url.searchParams.get("tenantId") ?? undefined,
       status: url.searchParams.get("status") ?? undefined,
     });
 
@@ -56,14 +61,14 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const items = await container.usecases.accessRequests.listAccessRequests({
-      tenantId: parsed.data.tenantId,
+      tenantId,
       status: parsed.data.status,
     });
 
     container.logger.debug("Access requests read", {
       route: ROUTE_GET,
-      tenant_id: parsed.data.tenantId,
-      actor_email: admin.email,
+      tenant_id: tenantId,
+      actor_email: session.email,
       row_count: items.length,
     });
 

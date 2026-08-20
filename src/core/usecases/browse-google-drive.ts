@@ -7,6 +7,7 @@ import type {
   ListGoogleSpreadsheetsResult,
 } from "@/core/ports/google-oauth";
 import type { Logger } from "@/core/ports/infra";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E2 — the in-app Drive picker behind "Kết nối Google Drive": browse folders,
@@ -24,14 +25,14 @@ export const DRIVE_ROOT_ID = "root";
 const MAX_QUERY_LENGTH = 128;
 
 export interface BrowseGoogleDriveInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly parentId?: string | null;
   readonly pageToken?: string | null;
   readonly q?: string | null;
 }
 
 export interface ListSheetTabsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly spreadsheetId: string;
 }
 
@@ -54,7 +55,7 @@ export function makeBrowseGoogleDrive(deps: BrowseGoogleDriveDeps): BrowseGoogle
    * code the screen turns into "kết nối lại", instead of a Drive 401 nobody can
    * read.
    */
-  async function requireConnection(tenantId: string, operation: string): Promise<void> {
+  async function requireConnection(tenantId: TenantId, operation: string): Promise<void> {
     const connection = await deps.oauth.findConnection(tenantId);
     if (!connection) {
       throw new AppError("GOOGLE_NOT_CONNECTED", {
@@ -147,7 +148,7 @@ export function makeBrowseGoogleDrive(deps: BrowseGoogleDriveDeps): BrowseGoogle
 
 // --- helpers ----------------------------------------------------------------
 
-function requireQuery(raw: unknown, tenantId: string, operation: string): string | null {
+function requireQuery(raw: unknown, tenantId: TenantId, operation: string): string | null {
   const q = str(raw);
   if (q.length === 0) return null;
   if (q.length > MAX_QUERY_LENGTH) {
@@ -160,16 +161,15 @@ function requireQuery(raw: unknown, tenantId: string, operation: string): string
   return q;
 }
 
-function requireTenant(raw: unknown, operation: string): string {
-  const tenantId = str(raw);
-  if (!isTenantId(tenantId)) {
+function requireTenant(raw: TenantId | undefined, operation: string): TenantId {
+  if (typeof raw !== "string" || !isTenantId(raw.trim())) {
     throw new AppError("INVALID_INPUT", {
       message: "Browsing Google Drive requires a tenant UUID",
       userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-      context: { tenant_id: tenantId || null, operation },
+      context: { tenant_id: (typeof raw === "string" ? raw.trim() : "") || null, operation },
     });
   }
-  return tenantId;
+  return normalizeTenantId(raw);
 }
 
 function str(value: unknown): string {

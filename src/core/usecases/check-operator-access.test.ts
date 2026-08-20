@@ -11,6 +11,7 @@ import {
   TEST_TENANT,
 } from "./__fixtures__/access-request-repo";
 import { makeCheckOperatorAccess } from "./check-operator-access";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /** E1.4 — the sign-in gate and the per-request status read. */
 
@@ -33,7 +34,7 @@ describe("registerAndCheck — refusals", () => {
     const { usecase } = harness();
     await expect(
       usecase.registerAndCheck({
-        tenantId: "not-a-uuid",
+        tenantId: testTenantId("not-a-uuid"),
         provider: "facebook",
         providerAccountId: "1",
       }),
@@ -204,7 +205,7 @@ describe("statusForSessionEmail", () => {
 
   it("does not leak an identity across tenants", async () => {
     const { usecase } = harness([
-      accessRow({ tenantId: "00000000-0000-0000-0000-0000000000ff", status: "approved" }),
+      accessRow({ tenantId: testTenantId("00000000-0000-0000-0000-0000000000ff"), status: "approved" }),
     ]);
     const state = await usecase.statusForSessionEmail({
       tenantId: TEST_TENANT,

@@ -22,6 +22,7 @@ import { makeRetryPostJob } from "@/core/usecases/retry-post-job";
 
 import { makeFacebookPublisher } from "@/adapters/meta/facebook-publisher";
 import { makeGraphClient } from "@/adapters/meta/graph-client";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The REAL Graph adapter wired into the REAL publish usecase, with only the HTTP
@@ -34,7 +35,7 @@ import { makeGraphClient } from "@/adapters/meta/graph-client";
  * this repo's optimistic-write semantics would let the two answers drift.
  */
 
-export const TENANT = "00000000-0000-0000-0000-000000000001";
+export const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 export const NOW = Date.parse("2026-08-13T02:00:00.000Z");
 /** Inside the handoff window (T-30..T-12), so a handoff is what runs. */
 export const SCHEDULED_AT = new Date(NOW + 20 * 60_000);
@@ -264,6 +265,9 @@ export function harness(
     postJobs: repo,
     products: makeProducts(),
     channels,
+    // Doc 10 §5.2 — active tenant, so these boundary tests keep exercising the
+    // Graph half rather than the suspension gate.
+    tenants: { findById: async () => ({ id: TENANT, name: "Demo", status: "active" }) },
     publishers: { facebook, ...(options.publishers ?? {}) },
     queue,
     progress,

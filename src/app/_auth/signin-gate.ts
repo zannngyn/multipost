@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { TenantId } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
 import { evaluateEnvAllowList, PENDING_APPROVAL_REDIRECT } from "./auth.config";
@@ -58,7 +59,7 @@ export interface SignInGateLogger {
 }
 
 export interface RegisterIdentityInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly provider: string;
   readonly providerAccountId: string;
   readonly email: string | null;
@@ -75,7 +76,7 @@ export interface AccountSignInAnswer {
 }
 
 export interface SignInGateDeps {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /**
    * `usecases.operatorAccounts.signIn` — identity → account → membership, and
    * the placeholder-sub patch as a side effect (M1.1 obligation).

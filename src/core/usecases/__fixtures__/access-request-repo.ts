@@ -6,6 +6,7 @@ import type {
 } from "@/core/ports/access-request-repo";
 import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { AccessStatus, OperatorProvider } from "@/shared/operator-access";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * In-memory `access_request` store for usecase tests. It mirrors the two
@@ -13,7 +14,7 @@ import type { AccessStatus, OperatorProvider } from "@/shared/operator-access";
  * and `createPending` is idempotent.
  */
 
-export const TEST_TENANT = "00000000-0000-0000-0000-000000000001";
+export const TEST_TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 export function silentLogger(): Logger {
   const logger: Logger = {

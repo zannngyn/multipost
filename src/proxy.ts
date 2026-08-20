@@ -79,10 +79,28 @@ function logDenied(request: NextRequest, kind: "json" | "redirect"): void {
  * Page -> redirect to /signin carrying returnUrl so the operator lands back
  * on the page they asked for.
  */
+/**
+ * The two OAuth callbacks are API paths the BROWSER navigates to top-level
+ * (doc 10 §3, option (a)): a session that expired during the consent screen
+ * must land the operator back on the screen they started from — with a reason
+ * — not on a white page showing 401 JSON. Deliberately NOT public prefixes:
+ * the guard still runs, only the refusal shape changes.
+ */
+const CALLBACK_RETURN_SCREENS: Record<string, string> = {
+  "/api/catalog/google/callback": "/sync?google=error&reason=SESSION_EXPIRED",
+  "/api/channels/callback": "/channels?connect=error&reason=SESSION_EXPIRED",
+};
+
 function deny(request: NextRequest): NextResponse {
   const error = new AppError("UNAUTHORIZED", {
     context: { path: request.nextUrl.pathname },
   });
+
+  const callbackScreen = CALLBACK_RETURN_SCREENS[request.nextUrl.pathname];
+  if (callbackScreen) {
+    logDenied(request, "redirect");
+    return NextResponse.redirect(new URL(callbackScreen, request.nextUrl.origin));
+  }
 
   if (isApiPath(request.nextUrl.pathname)) {
     logDenied(request, "json");

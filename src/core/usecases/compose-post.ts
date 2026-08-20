@@ -18,6 +18,7 @@ import {
 import type { Logger } from "@/core/ports/infra";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { MediaRepo, ProductRepo } from "@/core/ports/product-repo";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E3 — the data half of composing a post: look the product up, run the stock
@@ -50,7 +51,7 @@ export const VIDEO_NOT_CHECKED_WARNING =
   "Chưa kiểm được thông số video ở bước soạn bài — hệ thống sẽ kiểm lại trước khi đăng";
 
 export interface ComposePostInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly productCode: string;
   /** Target channel id — carried through for logging/fan-out (E5). */
   readonly channel: string;
@@ -85,7 +86,7 @@ export interface ComposeBlock {
 }
 
 export interface ComposeResult {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly productCode: string;
   readonly channel: string;
   /** Caption-safe fields. Null whenever the post is blocked. */
@@ -120,23 +121,24 @@ export interface ComposePostDeps {
 export function makeComposePost(deps: ComposePostDeps) {
   return async function composePost(input: ComposePostInput): Promise<ComposeResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
     const productCode =
       typeof input?.productCode === "string" ? input.productCode.trim().toUpperCase() : "";
     const channel = typeof input?.channel === "string" ? input.channel.trim() : "";
 
-    if (!isTenantId(tenantId) || productCode.length === 0 || channel.length === 0) {
+    if (!isTenantId(rawTenantId) || productCode.length === 0 || channel.length === 0) {
       deps.logger.warn("Compose rejected: malformed input", {
         error_code: "INVALID_INPUT",
-        tenant_id: tenantId || null,
+        tenant_id: rawTenantId || null,
         product_code: productCode || null,
         channel: channel || null,
       });
       throw new AppError("INVALID_INPUT", {
         message: "composePost requires a tenant UUID, a product code and a channel",
-        context: { tenant_id: tenantId || null, product_code: productCode || null, channel },
+        context: { tenant_id: rawTenantId || null, product_code: productCode || null, channel },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const sequences = normaliseSequences(input?.sequences);
     if (sequences === null) {
@@ -403,7 +405,7 @@ export type ComposePost = ReturnType<typeof makeComposePost>;
 
 interface VideoGateInput {
   probe: VideoAssetProbe | undefined;
-  tenantId: string;
+  tenantId: TenantId;
   asset: MediaAsset;
   target: VideoTarget;
   log: Logger;

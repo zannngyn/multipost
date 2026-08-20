@@ -9,6 +9,7 @@ import type {
   RemoveChannelResponse,
   SetChannelStatusResponse,
 } from "@/ui/schemas/channel.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import {
   channelKeys,
@@ -30,11 +31,13 @@ import {
  * timeout would act twice on a request the server may already have accepted.
  */
 
-export function useChannels(tenantId: string) {
+export function useChannels() {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<ChannelListResponse, ApiError>({
-    queryKey: channelKeys.list(tenantId),
-    queryFn: ({ signal }) => listChannels(tenantId, signal),
-    enabled: tenantId.length > 0,
+    queryKey: channelKeys.list(tenantKey),
+    queryFn: ({ signal }) => listChannels(signal),
+    enabled: isResolved,
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
     retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 5_000),
@@ -42,30 +45,32 @@ export function useChannels(tenantId: string) {
   });
 }
 
-export function useSetChannelStatus(tenantId: string) {
+export function useSetChannelStatus() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<SetChannelStatusResponse, ApiError, { channelId: string; status: ChannelStatus }>(
     {
-      mutationFn: (input) => setChannelStatus({ tenantId, ...input }),
+      mutationFn: (input) => setChannelStatus(input),
       retry: false,
       onSettled: () => {
         // Also on failure: another operator may have changed the same channel,
         // and the screen must show what the server has, not what it hoped for.
-        void queryClient.invalidateQueries({ queryKey: channelKeys.list(tenantId) });
+        void queryClient.invalidateQueries({ queryKey: channelKeys.list(tenantKey) });
       },
     },
   );
 }
 
-export function useRemoveChannel(tenantId: string) {
+export function useRemoveChannel() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<RemoveChannelResponse, ApiError, { channelId: string }>({
-    mutationFn: ({ channelId }) => removeChannel({ tenantId, channelId }),
+    mutationFn: ({ channelId }) => removeChannel({ channelId }),
     retry: false,
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: channelKeys.list(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: channelKeys.list(tenantKey) });
     },
   });
 }
@@ -78,27 +83,29 @@ export function useRemoveChannel(tenantId: string) {
  * key list. The caller resets this mutation right after success so the value
  * does not linger in the mutation cache (see `ChannelConnectPanel`).
  */
-export function useImportChannels(tenantId: string) {
+export function useImportChannels() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<ChannelImportResponse, ApiError, { userAccessToken: string }>({
-    mutationFn: ({ userAccessToken }) => importChannels({ tenantId, userAccessToken }),
+    mutationFn: ({ userAccessToken }) => importChannels({ userAccessToken }),
     retry: false,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: channelKeys.list(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: channelKeys.list(tenantKey) });
     },
   });
 }
 
 /** Re-reads the Pages with the token the server already stored. */
-export function useRefreshChannels(tenantId: string) {
+export function useRefreshChannels() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<ChannelImportResponse, ApiError, void>({
-    mutationFn: () => refreshChannels({ tenantId }),
+    mutationFn: () => refreshChannels(),
     retry: false,
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: channelKeys.list(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: channelKeys.list(tenantKey) });
     },
   });
 }

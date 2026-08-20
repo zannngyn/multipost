@@ -1,9 +1,7 @@
-import { z } from "zod";
-
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
-import { AppError } from "@/core/domain/errors";
 
 /**
  * E11 — "có ai đang xử lý hàng đợi không?" for the job log banner.
@@ -16,16 +14,17 @@ import { AppError } from "@/core/domain/errors";
  * banner needs. The usecase never throws for that reason — an error status here
  * would mean the check itself broke (bad input, container failing to build).
  *
- * Thin by contract (docs/07 §3.3): validate, delegate, map errors.
- * Auth: `proxy.ts` already requires a session on every /api/* path outside its
- * public list, so this handler only owns input validation.
+ * M1.3b — viewer / tier R (doc 10 §4.2). This route WAS Bug B7's headline case:
+ * it took `?tenantId=` from the query and only relied on `proxy.ts` for a
+ * session, so any signed-in operator could count another tenant's stuck jobs.
+ * The tenant now comes from the membership and there is no input left to parse.
+ *
+ * TODO(M1.4, doc 10 Q8.3): `workersOnline` is a FLEET-wide replica count and
+ * belongs to admin+/platform; a tenant caller should see a boolean instead. The
+ * response shape is frozen here on purpose — the UI schema lands with M1.4.
  */
 
 const ROUTE = "GET /api/posts/worker-health";
-
-const QuerySchema = z.object({
-  tenantId: z.string({ error: "Thiếu tham số tenantId." }).trim().min(1, "Thiếu tham số tenantId."),
-});
 
 export const dynamic = "force-dynamic";
 
@@ -36,25 +35,13 @@ export async function GET(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const query = new URL(request.url).searchParams;
-    const parsed = QuerySchema.safeParse({ tenantId: query.get("tenantId") ?? undefined });
+    // --- Refusals first: nothing is probed for a caller without a membership -
+    const { ctx } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "R",
+    });
 
-    // --- Edge case first: reject bad input before probing anything ----------
-    if (!parsed.success) {
-      throw new AppError("INVALID_INPUT", {
-        message: "Invalid query string for the worker healthcheck",
-        userMessage: "Thiếu mã đơn vị (tenant) để kiểm tra tình trạng máy đăng bài.",
-        context: {
-          route: ROUTE,
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.join(".") || "tenantId",
-            message: issue.message,
-          })),
-        },
-      });
-    }
-
-    const result = await container.usecases.getWorkerHealth({ tenantId: parsed.data.tenantId });
+    const result = await container.usecases.getWorkerHealth({ tenantId: ctx.tenantId });
 
     // `checkedAt` is a Date; Response.json serialises it to the ISO string the
     // UI schema expects.

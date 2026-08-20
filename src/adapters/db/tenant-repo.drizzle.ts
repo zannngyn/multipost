@@ -6,6 +6,7 @@ import type { Database } from "./client";
 import { wrapDbError } from "./db-errors";
 import { tenants } from "./schema";
 import { forTenant } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /** Row -> domain. The DB enum can drift from the domain union across migrations. */
 function toDomain(row: { id: string; name: string; status: string }): Tenant {
@@ -22,7 +23,7 @@ function toDomain(row: { id: string; name: string; status: string }): Tenant {
 export class DrizzleTenantRepo implements TenantRepo {
   constructor(private readonly db: Database) {}
 
-  async findById(tenantId: string): Promise<Tenant | null> {
+  async findById(tenantId: TenantId): Promise<Tenant | null> {
     // Throws INVALID_INPUT on a malformed id before any SQL is built.
     const scope = forTenant(this.db, tenantId);
 

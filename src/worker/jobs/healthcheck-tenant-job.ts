@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { systemTenantId } from "@/composition/system-tenant-id";
 import type { JobEnvelope, JobHandler, Logger, Usecases } from "@/composition/worker-container";
 import { AppError } from "@/core/domain/errors";
 
@@ -74,7 +75,9 @@ export function makeHealthcheckTenantHandler(deps: HealthcheckTenantHandlerDeps)
     });
 
     try {
-      const result = await deps.healthcheckTenant({ tenantId: payload.tenantId });
+      const result = await deps.healthcheckTenant({
+        tenantId: systemTenantId(payload, { component: "healthcheck-tenant" }),
+      });
       // tenant_id is already bound on `log` — repeating it would emit the key
       // twice in one JSON line.
       log.info("healthcheck-tenant job done", {

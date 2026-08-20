@@ -1,10 +1,10 @@
 import { z } from "zod";
 
-import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
 
@@ -30,10 +30,6 @@ const ROUTE = "POST /api/posts/scheduled/[postJobId]/cancel";
 const MAX_NOTE_LENGTH = 500;
 
 const BodySchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
   note: z.string().trim().max(MAX_NOTE_LENGTH, "Ghi chú quá dài.").optional(),
 });
 
@@ -48,6 +44,14 @@ export async function POST(
   try {
     const container = getContainer();
     logger = container.logger;
+
+    // --- Refusals first: editor / tier S (doc 10 §4.2). Cancelling decides
+    // whether a public post happens at all ----------------------------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "editor",
+    });
 
     const { postJobId } = await context.params;
     // --- Edge case first: a typo in the URL is a 400, not a DB cast error ---
@@ -64,26 +68,25 @@ export async function POST(
     }
 
     const body = await readJsonBody(request, BodySchema, { route: ROUTE });
-    const session = await getOperatorSession(`api:${ROUTE}`);
     const note = body.note?.trim() ?? "";
 
     const result = await container.usecases.cancelScheduledJob({
-      tenantId: body.tenantId,
+      tenantId: ctx.tenantId,
       postJobId: parsedId.data,
-      actorEmail: session?.email ?? null,
+      actorEmail: session.email,
       note: note.length > 0 ? note : null,
     });
 
     container.logger.info("Scheduled post cancelled from the operator UI", {
       route: ROUTE,
-      tenant_id: body.tenantId,
+      tenant_id: ctx.tenantId,
       job_id: result.postJobId,
       batch_id: result.batchId,
       channel: result.channelId,
       scheduled_at: result.scheduledAt?.toISOString() ?? null,
       queue_entry_removed: result.queueEntryRemoved,
       has_note: note.length > 0,
-      actor_email: session?.email ?? null,
+      actor_email: session.email,
     });
 
     return Response.json(result);

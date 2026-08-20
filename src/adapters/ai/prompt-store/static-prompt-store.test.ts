@@ -13,6 +13,7 @@ import {
 import { extractVariables } from "@/core/ai/prompt-render";
 import { SHEET_COLUMNS } from "@/core/domain/product";
 import { AppError } from "@/core/domain/errors";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 describe("static prompt store — catalog integrity", () => {
   it("rejects a template missing a required variable", () => {
@@ -39,7 +40,7 @@ describe("static prompt store — catalog integrity", () => {
       { ...FACEBOOK_CONTENT_TEMPLATE_V2, version: 0, status: "retired" },
     ]);
     const template = await store.getActive({
-      tenantId: "tenant-1",
+      tenantId: testTenantId("tenant-1"),
       task: "facebook_content",
       platform: "facebook",
     });
@@ -49,17 +50,17 @@ describe("static prompt store — catalog integrity", () => {
   it("returns null for a task without an active template", async () => {
     const store = makeStaticPromptStore();
     expect(
-      await store.getActive({ tenantId: "t1", task: "difficult_content", platform: "facebook" }),
+      await store.getActive({ tenantId: testTenantId("t1"), task: "difficult_content", platform: "facebook" }),
     ).toBeNull();
   });
 
   it("prefers a tenant-owned template over the built-in one", async () => {
     const store = makeStaticPromptStore([
       FACEBOOK_CONTENT_TEMPLATE_V2,
-      { ...FACEBOOK_CONTENT_TEMPLATE_V2, id: "tenant-1-fb", tenantId: "tenant-1", version: 9 },
+      { ...FACEBOOK_CONTENT_TEMPLATE_V2, id: "tenant-1-fb", tenantId: testTenantId("tenant-1"), version: 9 },
     ]);
     const template = await store.getActive({
-      tenantId: "tenant-1",
+      tenantId: testTenantId("tenant-1"),
       task: "facebook_content",
       platform: "facebook",
     });

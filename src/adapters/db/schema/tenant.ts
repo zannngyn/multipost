@@ -1,5 +1,7 @@
 import { pgEnum, pgTable, text, unique, uuid } from "drizzle-orm/pg-core";
 
+import type { TenantId } from "@/core/domain/tenant-context";
+
 import { timestamps } from "./_columns";
 import { accounts } from "./account";
 
@@ -23,7 +25,7 @@ export const tenantPlanEnum = pgEnum("tenant_plan", ["internal", "standard"]);
 export const tenants = pgTable(
   "tenant",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: uuid("id").$type<TenantId>().primaryKey().defaultRandom(),
     name: text("name").notNull(),
     status: tenantStatusEnum("status").notNull().default("active"),
     /**

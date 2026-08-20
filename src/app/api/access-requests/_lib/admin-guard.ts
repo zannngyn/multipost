@@ -1,35 +1,53 @@
 import { getOperatorSession } from "@/app/_auth/session";
-import { canManageAccess, type OperatorSession } from "@/app/_auth/operator-session";
+import type { OperatorSession } from "@/app/_auth/operator-session";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
+import { ACCESS_REGISTRY_TENANT_ID, type TenantId } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
+import type { AuthzTier } from "@/composition/require-tenant";
 
 /**
- * Who may read and decide access requests.
+ * Who may read and decide access requests (M1.3b edition).
  *
- * Middleware only proves "has a session cookie"; deciding who else gets in is
- * an administrative act, so it is gated again here — an approved `viewer` must
- * not be able to approve anybody. `getOperatorSession` has already re-read the
- * status from the registry, so a blocked operator never reaches this function
- * with a usable session.
+ * Two doors, deliberately:
+ *   1. ENV BOOTSTRAP ADMINS — the escape hatch. They may hold no account row
+ *      at all (their grant lives in env, not in the database), so
+ *      `requireTenant` would answer 401 for exactly the people this screen
+ *      exists to serve when the registry is empty/broken. They keep the legacy
+ *      path: authority from `isBootstrapAdmin`, tenant fixed to the registry
+ *      tenant (today's demo tenant — where every `access_request` row lives).
+ *      This door retires with the whole screen at M2.4.
+ *   2. EVERYONE ELSE — `requireTenantContext` with minRole admin: the acting
+ *      tenant comes from their membership, checked at the caller's tier. With
+ *      today's data that IS the demo tenant, so semantics are unchanged.
  *
- * Two distinct refusals on purpose: 401 sends the caller back to /signin, 403
- * does not (the session is fine, the person simply is not an admin).
+ * The route then operates on the returned `tenantId` — never on one from the
+ * query string or body (those are ignored as of M1.3b).
  */
-export async function requireAccessAdmin(route: string): Promise<OperatorSession> {
-  const session = await getOperatorSession(`api:${route}`);
+export async function requireAccessAdmin(
+  request: Request,
+  options: { readonly route: string; readonly tier: AuthzTier },
+): Promise<{ session: OperatorSession; tenantId: TenantId }> {
+  const surface = `api:${options.route}`;
 
+  const session = await getOperatorSession(surface);
   if (!session) {
     throw new AppError("UNAUTHORIZED", {
       message: "Access administration requires a signed-in operator",
-      context: { route, reason: "NO_SESSION" },
+      context: { route: options.route, reason: "NO_SESSION" },
     });
   }
 
-  if (!canManageAccess(session)) {
-    throw new AppError("ACCESS_FORBIDDEN", {
-      message: "Operator role may not decide access requests",
-      context: { route, actor_email: session.email, actor_role: session.role },
-    });
+  // Door 1 — the env escape hatch (see the header). Checked FIRST so a broken
+  // account table can never lock the repair crew out of the repair screen.
+  if (session.isBootstrapAdmin) {
+    return { session, tenantId: ACCESS_REGISTRY_TENANT_ID };
   }
 
-  return session;
+  // Door 2 — membership-based, role admin+ (doc 10 §4.4).
+  const { ctx } = await requireTenantContext(request, {
+    surface,
+    tier: options.tier,
+    minRole: "admin",
+  });
+  return { session, tenantId: ctx.tenantId };
 }

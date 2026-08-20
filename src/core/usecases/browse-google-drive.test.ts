@@ -8,13 +8,14 @@ import type {
 import type { Logger } from "@/core/ports/infra";
 
 import { makeBrowseGoogleDrive } from "./browse-google-drive";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E2 — the in-app Drive picker. The gate is the point of this usecase: nothing
  * may reach Drive on behalf of a tenant that has no live Google connection.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 const ACTIVE: GoogleOAuthConnection = {
   email: "shop@gmail.com",
@@ -99,7 +100,7 @@ describe("browseGoogleDrive — the connection gate", () => {
 describe("browseGoogleDrive — input validation", () => {
   it("refuses a tenant id that is not a UUID", async () => {
     const { usecase, oauth } = build(ACTIVE);
-    await expect(usecase.listFolders({ tenantId: "nope" })).rejects.toMatchObject({
+    await expect(usecase.listFolders({ tenantId: testTenantId("nope") })).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
     expect(oauth.findConnection).not.toHaveBeenCalled();

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import { and, eq } from "drizzle-orm";
 
+import type { TenantId } from "@/core/domain/tenant-context";
+
 import { makeRedisAiCache } from "@/adapters/ai/cache/redis-cache";
 import { makeDbPromptStore } from "@/adapters/ai/prompt-store/db-prompt-store";
 import {
@@ -103,7 +105,7 @@ async function main(): Promise<void> {
   const redis = createRedisConnection({ url: redisUrl, logger });
   const clock = makeSystemClock();
 
-  const tenantId = randomUUID();
+  const tenantId = randomUUID() as TenantId;
   await db.insert(tenants).values({ id: tenantId, name: TENANT_NAME, status: "active" });
 
   try {
@@ -128,7 +130,7 @@ async function main(): Promise<void> {
       },
     };
     const countingOverrides = {
-      findOverride: (query: { tenantId: string; task: typeof TASK }) => {
+      findOverride: (query: { tenantId: TenantId; task: typeof TASK }) => {
         overrideReads += 1;
         return overrideRepo.findOverride(query);
       },

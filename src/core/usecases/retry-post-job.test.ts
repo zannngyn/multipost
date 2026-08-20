@@ -21,13 +21,14 @@ import type { UserRepo } from "@/core/ports/user-repo";
 
 import { PUBLISH_POST_JOB_NAME } from "./publish-post";
 import { makeRetryPostJob } from "./retry-post-job";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E11.1 "chạy lại". The rule under test is what it REFUSES: a published job must
  * never be re-queued, and a retry must not skip any publish gate.
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 interface LogLine {
   level: string;
@@ -241,7 +242,7 @@ function harness(
 
 describe("retryPostJob — refusals", () => {
   it.each([
-    ["a malformed tenant id", { tenantId: "nope", postJobId: "job-1" }],
+    ["a malformed tenant id", { tenantId: testTenantId("nope"), postJobId: "job-1" }],
     ["an empty job id", { tenantId: TENANT, postJobId: "  " }],
   ])("rejects %s", async (_label, input) => {
     const { retryPostJob, queue } = harness([makeJob()]);

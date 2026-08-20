@@ -1,3 +1,4 @@
+import type { TenantId } from "@/core/domain/tenant-context";
 /**
  * Google Drive OAuth port (E2 — "Kết nối Google Drive" on the sync screen).
  * Core declares the need; adapters/google + adapters/db implement it.
@@ -80,7 +81,7 @@ export interface GoogleOAuthTokens {
 }
 
 export interface SaveGoogleConnectionInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** SECRET — implementers MUST seal it before it touches the database. */
   readonly refreshToken: string;
   readonly email: string;
@@ -92,19 +93,19 @@ export interface SaveGoogleConnectionInput {
 }
 
 export interface DeleteGoogleConnectionInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly actorUserId: string | null;
   readonly actorEmail: string | null;
 }
 
 export interface GoogleOAuthRepo {
   /** Null when the tenant never connected (or already disconnected). */
-  findConnection(tenantId: string): Promise<GoogleOAuthConnection | null>;
+  findConnection(tenantId: TenantId): Promise<GoogleOAuthConnection | null>;
   /**
    * SECRET. Only the auth resolver may call this. Null = no connection, which
    * means "fall back to the Service Account", not "fail".
    */
-  findRefreshToken(tenantId: string): Promise<string | null>;
+  findRefreshToken(tenantId: TenantId): Promise<string | null>;
   /**
    * Writes (or replaces) the oauth part of `tenant_integration.config`, KEEPING
    * every other key of the blob, and writes the audit row in the SAME
@@ -125,7 +126,7 @@ export interface GoogleOAuthRepo {
    * Implementers MUST NOT park a row that carries no connection any more: a
    * tenant who just pressed "Ngắt kết nối" is `not_connected`, not `expired`.
    */
-  markConnectionExpired(tenantId: string, reason: string): Promise<void>;
+  markConnectionExpired(tenantId: TenantId, reason: string): Promise<void>;
   /**
    * Records the verdict of the last source-access check inside the oauth blob.
    * A no-op when the tenant has no connection: the key only ever describes a
@@ -136,7 +137,7 @@ export interface GoogleOAuthRepo {
 }
 
 export interface SaveGoogleSourceAccessInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly state: GoogleSourceAccessState;
   readonly checkedAt: string;
 }
@@ -167,7 +168,7 @@ export interface GoogleOAuthClient {
  * previous account's token.
  */
 export interface GoogleAuthCache {
-  invalidate(tenantId: string): void;
+  invalidate(tenantId: TenantId): void;
 }
 
 // --- Drive browser (the in-app folder picker) --------------------------------
@@ -179,7 +180,7 @@ export interface GoogleDriveEntry {
 }
 
 export interface ListGoogleFoldersInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** `root` = "Drive của tôi"; anything else is a folder id. */
   readonly parentId: string;
   readonly pageToken?: string | null;
@@ -195,7 +196,7 @@ export interface ListGoogleFoldersResult {
 }
 
 export interface ListGoogleSpreadsheetsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Absent/null = search the whole Drive, most recently modified first. */
   readonly parentId?: string | null;
   readonly pageToken?: string | null;
@@ -208,12 +209,12 @@ export interface ListGoogleSpreadsheetsResult {
 }
 
 export interface ListGoogleSheetTabsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly spreadsheetId: string;
 }
 
 export interface CheckGoogleSourceAccessInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /** Null/empty = not configured; that half of the check is skipped. */
   readonly driveFolderId: string | null;
   readonly spreadsheetId: string | null;

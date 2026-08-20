@@ -27,6 +27,14 @@ import type { OperatorRole } from "@/shared/operator-access";
 /** Cache tiers (docs/09 §3.4). The tier is the CALLER's claim about the route. */
 export type AuthzTier = "S" | "M" | "R";
 
+/**
+ * Re-exported for the app layer: routes receive a TenantContext from
+ * requireTenantContext() but may not import core/domain/tenant-context
+ * directly (ESLint one-way rule — app sees core types only through
+ * composition).
+ */
+export type { TenantContext, TenantId } from "@/core/domain/tenant-context";
+
 export const TENANT_CONTEXT_CACHE_TTL_MS = 60_000;
 
 export interface RequireTenantSession {
@@ -75,7 +83,7 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
 
   async function readMembership(
     accountId: string,
-    tenantId: string,
+    tenantId: TenantId,
     tier: AuthzTier,
   ): Promise<MembershipWithTenant | null> {
     // Tier S: credentials/publishing/membership ops — always the fresh row.
@@ -145,9 +153,11 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
         cookie_length: rawSelected.length,
       });
     }
-    const selected = cookieIsUsable ? rawSelected : "";
+    // Blessed cast site (see core/domain/tenant-context.ts): rawSelected passed
+    // isTenantId above, and only a membership-checked value leaves this function.
+    const selected: TenantId | "" = cookieIsUsable ? (rawSelected as TenantId) : "";
 
-    if (selected.length === 0) {
+    if (selected === "") {
       const activeMemberships = await deps.accounts.listMembershipsWithTenant(accountId);
       const usable = activeMemberships.filter((m) => m.tenantStatus === "active");
       if (usable.length === 1) {

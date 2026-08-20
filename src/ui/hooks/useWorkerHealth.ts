@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import type { WorkerHealth } from "@/ui/schemas/worker-health.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import { fetchWorkerHealth, postKeys } from "@/ui/services/post.api";
 
@@ -16,11 +17,13 @@ import { fetchWorkerHealth, postKeys } from "@/ui/services/post.api";
  */
 const POLL_INTERVAL_MS = 30_000;
 
-export function useWorkerHealth(tenantId: string) {
+export function useWorkerHealth() {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<WorkerHealth, ApiError>({
-    queryKey: postKeys.workerHealth(tenantId),
-    queryFn: ({ signal }) => fetchWorkerHealth({ tenantId }, signal),
-    enabled: tenantId.length > 0,
+    queryKey: postKeys.workerHealth(tenantKey),
+    queryFn: ({ signal }) => fetchWorkerHealth(signal),
+    enabled: isResolved,
     // 4xx means the request itself is wrong — retrying repeats the mistake.
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,

@@ -22,30 +22,20 @@ import { apiRequest } from "./http-client";
  */
 
 export const promptKeys = {
-  versions: (tenantId: string, task: string, platform: string) =>
-    ["prompts", tenantId, task, platform, "versions"] as const,
-  active: (tenantId: string, task: string, platform: string) =>
-    ["prompts", tenantId, task, platform, "active"] as const,
+  versions: (tenantKey: string, task: string, platform: string) =>
+    ["prompts", tenantKey, task, platform, "versions"] as const,
+  active: (tenantKey: string, task: string, platform: string) =>
+    ["prompts", tenantKey, task, platform, "active"] as const,
 };
 
 export interface PromptTarget {
-  tenantId: string;
   task?: string;
   platform?: string;
 }
 
+/** Task + platform only — the company comes from the session (M1.4). */
 function targetQuery(target: PromptTarget): URLSearchParams {
-  const tenantId = typeof target?.tenantId === "string" ? target.tenantId.trim() : "";
-  if (tenantId.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "prompt.api requires a tenantId",
-      userMessage: "Chưa có mã đơn vị (tenant).",
-    });
-  }
   return new URLSearchParams({
-    tenantId,
     task: target.task ?? PROMPT_TASK,
     platform: target.platform ?? PROMPT_PLATFORM,
   });
@@ -93,7 +83,6 @@ export async function createPromptVersion(
   return apiRequest("/api/prompts", {
     method: "POST",
     body: {
-      tenantId: query.get("tenantId"),
       task: query.get("task"),
       platform: query.get("platform"),
       name: params.name,
@@ -127,7 +116,6 @@ export async function activatePromptVersion(
   return apiRequest(`/api/prompts/versions/${version}/activate`, {
     method: "POST",
     body: {
-      tenantId: query.get("tenantId"),
       task: query.get("task"),
       platform: query.get("platform"),
     },

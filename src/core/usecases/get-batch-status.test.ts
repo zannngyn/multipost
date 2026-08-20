@@ -12,13 +12,14 @@ import type { JobProgressStore } from "@/core/ports/job-progress";
 import type { PostBatchSummary, PostJobRepo } from "@/core/ports/post-job-repo";
 
 import { makeGetBatchStatus } from "./get-batch-status";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * E7.5 — the per-channel result table + batch totals. Read-only, so every test
  * is about WHAT the operator sees, especially "vì sao bài này không lên".
  */
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const BATCH = "22222222-2222-2222-2222-222222222222";
 const STARTED_AT = new Date("2026-08-13T02:00:00.000Z");
 const FINISHED_AT = new Date("2026-08-13T02:04:00.000Z");
@@ -143,17 +144,19 @@ function harness(summary: PostBatchSummary | null, progress?: JobProgressStore) 
 
 describe("getBatchStatus — rejected calls", () => {
   it.each([
-    ["a malformed tenant id", { tenantId: "nope", batchId: BATCH }],
+    ["a malformed tenant id", { tenantId: testTenantId("nope"), batchId: BATCH }],
     ["an empty batch id", { tenantId: TENANT, batchId: "   " }],
   ])("rejects %s", async (_label, input) => {
     const { getBatchStatus } = harness(summaryOf([job()]));
     await expect(getBatchStatus(input)).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("reports an unknown batch (or one of another tenant) as not found", async () => {
+  // Bug B5 (doc 10 §7): its OWN code, so the route can answer 404 instead of
+  // telling the caller their well-formed request was malformed.
+  it("reports an unknown batch (or one of another tenant) as BATCH_NOT_FOUND", async () => {
     const { getBatchStatus } = harness(null);
     await expect(getBatchStatus({ tenantId: TENANT, batchId: BATCH })).rejects.toMatchObject({
-      code: "INVALID_INPUT",
+      code: "BATCH_NOT_FOUND",
       context: { reason: "BATCH_NOT_FOUND", batch_id: BATCH },
     });
   });

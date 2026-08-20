@@ -22,6 +22,7 @@ import type {
   SyncRunStatus,
 } from "@/core/ports/product-repo";
 import type { SheetSource } from "@/core/ports/sheet-source";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E2 — one catalog sync: read Drive + Sheet, reconcile, persist, and record why
@@ -75,7 +76,7 @@ function emptySourceDetail(item: EmptySource): string {
 }
 
 export interface SyncCatalogInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
 }
 
 export interface SyncCatalogResult {
@@ -104,18 +105,19 @@ export interface SyncCatalogDeps {
 export function makeSyncCatalog(deps: SyncCatalogDeps) {
   return async function syncCatalog(input: SyncCatalogInput): Promise<SyncCatalogResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
-    if (!isTenantId(tenantId)) {
+    const rawTenantId = typeof input?.tenantId === "string" ? input.tenantId.trim() : "";
+    if (!isTenantId(rawTenantId)) {
       deps.logger.warn("Catalog sync rejected: malformed tenant id", {
         error_code: "INVALID_INPUT",
-        tenant_id: tenantId || null,
+        tenant_id: rawTenantId || null,
       });
       throw new AppError("INVALID_INPUT", {
         message: "tenantId must be a UUID",
         userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-        context: { tenant_id: tenantId || null },
+        context: { tenant_id: rawTenantId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const log = deps.logger.child({ tenant_id: tenantId });
 

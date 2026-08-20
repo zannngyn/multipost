@@ -9,6 +9,7 @@ import type {
   AccessRequestListResponse,
   AccessRole,
 } from "@/ui/schemas/access-request.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import {
   accessRequestKeys,
@@ -28,11 +29,13 @@ import {
  * act twice on a request the server may already have accepted.
  */
 
-export function useAccessRequests(tenantId: string, status: AccessFilterStatus) {
+export function useAccessRequests(status: AccessFilterStatus) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<AccessRequestListResponse, ApiError>({
-    queryKey: accessRequestKeys.list(tenantId, status),
-    queryFn: ({ signal }) => listAccessRequests(tenantId, status, signal),
-    enabled: tenantId.length > 0,
+    queryKey: accessRequestKeys.list(tenantKey, status),
+    queryFn: ({ signal }) => listAccessRequests(status, signal),
+    enabled: isResolved,
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
     retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 5_000),
@@ -50,11 +53,12 @@ export interface AccessDecisionInput {
   role?: AccessRole;
 }
 
-export function useDecideAccessRequest(tenantId: string) {
+export function useDecideAccessRequest() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<AccessDecisionResponse, ApiError, AccessDecisionInput>({
-    mutationFn: (input) => decideAccessRequest({ tenantId, ...input }),
+    mutationFn: (input) => decideAccessRequest(input),
     retry: false,
     onSettled: () => {
       // Every filter, not just the one on screen: an approval moves a row from
@@ -63,7 +67,7 @@ export function useDecideAccessRequest(tenantId: string) {
       // Also on failure: another admin may have decided the same request a
       // second earlier, and the screen must show what the server has rather
       // than what this tab hoped for.
-      void queryClient.invalidateQueries({ queryKey: accessRequestKeys.all(tenantId) });
+      void queryClient.invalidateQueries({ queryKey: accessRequestKeys.all(tenantKey) });
     },
   });
 }

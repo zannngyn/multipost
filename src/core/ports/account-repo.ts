@@ -1,6 +1,7 @@
 import type { AccountStatus, MembershipStatus, PlatformRole } from "@/core/domain/account";
 import type { TenantStatus } from "@/core/domain/tenant";
 import type { OperatorProvider, OperatorRole } from "@/shared/operator-access";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * Global identity persistence (M1.2, docs/09 §3.1–3.3). Types only (docs/07 §2).
@@ -28,7 +29,7 @@ export interface OperatorIdentityRecord {
 
 /** One active membership as the session/gate needs it — no tenant join. */
 export interface AccountMembership {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly role: OperatorRole;
   readonly version: number;
 }
@@ -45,7 +46,7 @@ export interface OperatorAccountSummary {
 
 /** Membership + the tenant columns every authorisation decision needs. */
 export interface MembershipWithTenant {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly role: OperatorRole;
   readonly status: MembershipStatus;
   readonly version: number;
@@ -75,13 +76,13 @@ export interface AccountRepo {
   attachProviderAccountId(input: AttachProviderAccountIdInput): Promise<boolean>;
 
   /** Fresh read (tier S). Null when the pair has no membership row at all. */
-  findMembership(accountId: string, tenantId: string): Promise<MembershipWithTenant | null>;
+  findMembership(accountId: string, tenantId: TenantId): Promise<MembershipWithTenant | null>;
 
   /**
    * Cheap fresh read for tier M: just the version (null = no row). Comparing it
    * against a cached row detects a revoke/role change across processes.
    */
-  findMembershipVersion(accountId: string, tenantId: string): Promise<number | null>;
+  findMembershipVersion(accountId: string, tenantId: TenantId): Promise<number | null>;
 
   /** ACTIVE memberships joined with tenant name/slug/plan, for /api/me. */
   listMembershipsWithTenant(accountId: string): Promise<readonly MembershipWithTenant[]>;

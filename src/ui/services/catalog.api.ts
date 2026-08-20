@@ -33,35 +33,21 @@ import { apiRequest } from "./http-client";
  */
 const SYNC_RUN_TIMEOUT_MS = 120_000;
 
+/**
+ * `tenantKey` is the CACHE PARTITION, not a request parameter: the server reads
+ * the company from the session, but two companies must never share a cache
+ * entry. It comes from `useActiveTenant()`, never from a component literal.
+ */
 export const catalogKeys = {
-  syncStatus: (tenantId: string) => ["catalog", tenantId, "sync-status"] as const,
-  source: (tenantId: string) => ["catalog", tenantId, "source"] as const,
+  syncStatus: (tenantKey: string) => ["catalog", tenantKey, "sync-status"] as const,
+  source: (tenantKey: string) => ["catalog", tenantKey, "source"] as const,
   /** Derived from the SAME filter object the URL produced — no second source. */
-  products: (tenantId: string, filter: ProductFilter) =>
-    ["catalog", tenantId, "products", filter.status ?? "all", filter.q ?? ""] as const,
+  products: (tenantKey: string, filter: ProductFilter) =>
+    ["catalog", tenantKey, "products", filter.status ?? "all", filter.q ?? ""] as const,
 };
 
-function requireTenantId(tenantId: string): string {
-  const trimmed = typeof tenantId === "string" ? tenantId.trim() : "";
-  // Guard: never spend a round-trip on a request we already know is invalid.
-  if (trimmed.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "tenantId is required",
-      userMessage: "Chưa có mã đơn vị (tenant) để đồng bộ.",
-    });
-  }
-  return trimmed;
-}
-
-export async function fetchSyncStatus(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<SyncStatusResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-
-  return apiRequest(`/api/catalog/sync-status?${query.toString()}`, {
+export async function fetchSyncStatus(signal?: AbortSignal): Promise<SyncStatusResponse> {
+  return apiRequest("/api/catalog/sync-status", {
     schema: SyncStatusResponseSchema,
     signal,
     malformedMessage:
@@ -69,13 +55,8 @@ export async function fetchSyncStatus(
   });
 }
 
-export async function fetchCatalogSource(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<CatalogSourceResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-
-  return apiRequest(`/api/catalog/source?${query.toString()}`, {
+export async function fetchCatalogSource(signal?: AbortSignal): Promise<CatalogSourceResponse> {
+  return apiRequest("/api/catalog/source", {
     schema: CatalogSourceResponseSchema,
     signal,
     malformedMessage:
@@ -84,7 +65,6 @@ export async function fetchCatalogSource(
 }
 
 export interface UpdateCatalogSourceParams {
-  tenantId: string;
   /** A pasted browser link or a bare id — the server parses both. */
   driveFolder: string;
   spreadsheet: string;
@@ -115,7 +95,7 @@ export async function updateCatalogSource(
 
   return apiRequest("/api/catalog/source", {
     method: "PUT",
-    body: { tenantId: requireTenantId(params.tenantId), driveFolder, spreadsheet, sheetName },
+    body: { driveFolder, spreadsheet, sheetName },
     schema: CatalogSourceResponseSchema,
     signal,
     malformedMessage:
@@ -124,7 +104,6 @@ export async function updateCatalogSource(
 }
 
 export interface ListCatalogProductsParams {
-  tenantId: string;
   filter: ProductFilter;
   cursor?: string | null;
   limit?: number;
@@ -134,7 +113,7 @@ export async function listCatalogProducts(
   params: ListCatalogProductsParams,
   signal?: AbortSignal,
 ): Promise<CatalogProductsResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(params.tenantId) });
+  const query = new URLSearchParams();
   if (params.filter.status) query.set("status", params.filter.status);
   if (params.filter.q) query.set("q", params.filter.q);
   if (params.cursor) query.set("cursor", params.cursor);
@@ -148,13 +127,12 @@ export async function listCatalogProducts(
   });
 }
 
-export async function runCatalogSync(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<RunSyncResponse> {
+export async function runCatalogSync(signal?: AbortSignal): Promise<RunSyncResponse> {
   return apiRequest("/api/catalog/sync", {
     method: "POST",
-    body: { tenantId: requireTenantId(tenantId) },
+    // No body: the company comes from the session, and there is nothing else
+    // to say. The route still accepts (and ignores) a legacy body.
+    body: {},
     schema: RunSyncResponseSchema,
     signal,
     timeoutMs: SYNC_RUN_TIMEOUT_MS,

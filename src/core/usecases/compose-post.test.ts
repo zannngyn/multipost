@@ -8,8 +8,9 @@ import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { MediaRepo, ProductRepo } from "@/core/ports/product-repo";
 
 import { makeComposePost, VIDEO_NOT_CHECKED_WARNING } from "./compose-post";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
-const TENANT = "00000000-0000-0000-0000-000000000001";
+const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 const CHANNEL = "fb-page-1";
 
 /** E9 additions to MediaRepo; composing never calls them. */
@@ -100,7 +101,7 @@ const numbered = (numbers: number[], color = "KEM") =>
 
 describe("composePost — edge cases first", () => {
   it.each([
-    ["bad tenant", { tenantId: "nope", productCode: "MGKVX6310", channel: CHANNEL }],
+    ["bad tenant", { tenantId: testTenantId("nope"), productCode: "MGKVX6310", channel: CHANNEL }],
     ["empty code", { tenantId: TENANT, productCode: "  ", channel: CHANNEL }],
     ["empty channel", { tenantId: TENANT, productCode: "MGKVX6310", channel: "" }],
   ])("throws INVALID_INPUT on %s", async (_label, input) => {

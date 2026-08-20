@@ -1,9 +1,6 @@
-import { z } from "zod";
-
-import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
 import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
-import { readJsonBody } from "@/app/api/_lib/read-json-body";
+import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
 
 /**
@@ -13,16 +10,12 @@ import { getContainer } from "@/composition/container";
  * telling the operator to paste a token first.
  *
  * POST, not GET: it writes.
+ *
+ * M1.3b — admin / tier S (doc 10 §4.2). The body is now empty: it only ever
+ * carried `tenantId`, and the tenant comes from the membership.
  */
 
 const ROUTE = "POST /api/channels/refresh";
-
-const RefreshSchema = z.object({
-  tenantId: z
-    .string({ error: "Thiếu mã đơn vị (tenant)." })
-    .trim()
-    .min(1, "Thiếu mã đơn vị (tenant)."),
-});
 
 export const dynamic = "force-dynamic";
 
@@ -33,16 +26,22 @@ export async function POST(request: Request): Promise<Response> {
     const container = getContainer();
     logger = container.logger;
 
-    const body = await readJsonBody(request, RefreshSchema, { route: ROUTE });
-    const session = await getOperatorSession(`api:${ROUTE}`);
-
-    const result = await container.usecases.connectChannels.refreshChannels({
-      tenantId: body.tenantId,
-      actorEmail: session?.email ?? null,
+    // --- Refusals first: admin / tier S (doc 10 §4.2). This spends a STORED
+    // credential without a second paste, so it is a credential op ------------
+    const { ctx, session } = await requireTenantContext(request, {
+      surface: `api:${ROUTE}`,
+      tier: "S",
+      minRole: "admin",
     });
 
+    const result = await container.usecases.connectChannels.refreshChannels({
+      tenantId: ctx.tenantId,
+      actorEmail: session.email,
+    });
+
+    // Response shape unchanged (docs/11 §2): the UI still reads `tenantId`.
     return Response.json({
-      tenantId: result.tenantId,
+      tenantId: ctx.tenantId,
       imported: result.imported,
       updated: result.updated,
       skipped: result.skipped,

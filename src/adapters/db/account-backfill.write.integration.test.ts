@@ -17,6 +17,8 @@ import {
   users,
 } from "./schema";
 import { makeGlobalIdentityTestLock } from "./__fixtures__/global-identity-lock";
+import type { TenantId } from "@/core/domain/tenant-context";
+import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
  * The M1.1 backfill (drizzle/0013) — the migration that decides who can still
@@ -107,8 +109,8 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
    * splitting them into separate fixtures would test a world that cannot happen.
    */
   interface Fixture {
-    readonly tenantA: string;
-    readonly tenantB: string;
+    readonly tenantA: TenantId;
+    readonly tenantB: TenantId;
     readonly approvedEmail: string;
     readonly blockedEmail: string;
     readonly pendingEmail: string;
@@ -121,8 +123,8 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
 
   const insertFixture = async (tx: DbExecutor): Promise<Fixture> => {
     const p = randomUUID().slice(0, 8);
-    const tenantA = randomUUID();
-    const tenantB = randomUUID();
+    const tenantA = testTenantId(randomUUID());
+    const tenantB = testTenantId(randomUUID());
 
     await tx.insert(tenants).values([
       { id: tenantA, name: `M1.1 backfill A ${p}`, status: "active" },
@@ -436,7 +438,7 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
 
   it("gives an app_user with no registry row an account, an identity and a membership", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
-      const tenantId = randomUUID();
+      const tenantId = testTenantId(randomUUID());
       const p = randomUUID().slice(0, 8);
       const email = `${p}-orphan@example.com`;
       await tx.insert(tenants).values({ id: tenantId, name: `M1.1 orphan ${p}` });
@@ -459,8 +461,8 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
   it("matches a mixed-case app_user address to the identity that already exists", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
       const p = randomUUID().slice(0, 8);
-      const tenantA = randomUUID();
-      const tenantB = randomUUID();
+      const tenantA = testTenantId(randomUUID());
+      const tenantB = testTenantId(randomUUID());
       const lower = `${p}-alice@example.com`;
       const mixed = `${p}-Alice@Example.com`;
       await tx.insert(tenants).values([
@@ -512,8 +514,8 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
   it("gives no membership and no new app_user to someone blocked in another tenant", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
       const p = randomUUID().slice(0, 8);
-      const tenantA = randomUUID();
-      const tenantB = randomUUID();
+      const tenantA = testTenantId(randomUUID());
+      const tenantB = testTenantId(randomUUID());
       const email = `${p}-two-faced@example.com`;
       await tx.insert(tenants).values([
         { id: tenantA, name: `M1.1 ban A ${p}` },
@@ -561,7 +563,7 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
 
   it("does NOT re-admit an app_user whose identity was blocked", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
-      const tenantId = randomUUID();
+      const tenantId = testTenantId(randomUUID());
       const p = randomUUID().slice(0, 8);
       const email = `${p}-banned@example.com`;
       await tx.insert(tenants).values({ id: tenantId, name: `M1.1 banned ${p}` });
@@ -624,7 +626,7 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
 
   it("labels only the audit rows whose actor the data proves", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
-      const tenantId = randomUUID();
+      const tenantId = testTenantId(randomUUID());
       const p = randomUUID().slice(0, 8);
       await tx.insert(tenants).values({ id: tenantId, name: `M1.1 audit ${p}` });
       const inserted = await tx
@@ -655,7 +657,7 @@ describe.skipIf(!url)("M1.1 backfill — access_request/app_user -> account/iden
       const rows = await tx
         .select({ plan: tenants.plan, slug: tenants.slug })
         .from(tenants)
-        .where(eq(tenants.id, "00000000-0000-0000-0000-000000000001"));
+        .where(eq(tenants.id, testTenantId("00000000-0000-0000-0000-000000000001")));
       // Seeded databases only; an empty dev DB has no demo tenant to move.
       if (rows.length > 0) {
         expect(rows[0]?.plan).toBe("internal");
@@ -729,7 +731,7 @@ describe.skipIf(!url)("M1.1 schema — the constraints the design leans on", () 
   it("refuses two memberships for one (tenant, account)", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
       const p = randomUUID().slice(0, 8);
-      const tenantId = randomUUID();
+      const tenantId = testTenantId(randomUUID());
       await tx.insert(tenants).values({ id: tenantId, name: `M1.1 uq ${p}` });
       const [account] = await tx.insert(accounts).values({}).returning({ id: accounts.id });
       await tx.insert(memberships).values({ tenantId, accountId: account!.id, role: "editor" });
@@ -748,7 +750,7 @@ describe.skipIf(!url)("M1.1 schema — the constraints the design leans on", () 
   it("refuses two app_user rows for one (tenant, account) but tolerates many unlinked ones", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
       const p = randomUUID().slice(0, 8);
-      const tenantId = randomUUID();
+      const tenantId = testTenantId(randomUUID());
       await tx.insert(tenants).values({ id: tenantId, name: `M1.1 actor ${p}` });
       const [account] = await tx.insert(accounts).values({}).returning({ id: accounts.id });
       await tx.insert(users).values({
@@ -789,7 +791,7 @@ describe.skipIf(!url)("M1.1 schema — the constraints the design leans on", () 
   it("cascades a deleted account to identity and membership, but spares app_user", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
       const p = randomUUID().slice(0, 8);
-      const tenantId = randomUUID();
+      const tenantId = testTenantId(randomUUID());
       await tx.insert(tenants).values({ id: tenantId, name: `M1.1 cascade ${p}` });
       const [account] = await tx.insert(accounts).values({}).returning({ id: accounts.id });
       await tx.insert(identities).values({
@@ -825,7 +827,7 @@ describe.skipIf(!url)("M1.1 schema — the constraints the design leans on", () 
   it("cascades a deleted tenant to its memberships and invites", async () => {
     await inRolledBackTx(handle.db, async (tx) => {
       const p = randomUUID().slice(0, 8);
-      const tenantId = randomUUID();
+      const tenantId = testTenantId(randomUUID());
       await tx.insert(tenants).values({ id: tenantId, name: `M1.1 tenant cascade ${p}` });
       const [account] = await tx.insert(accounts).values({}).returning({ id: accounts.id });
       await tx.insert(memberships).values({ tenantId, accountId: account!.id, role: "editor" });

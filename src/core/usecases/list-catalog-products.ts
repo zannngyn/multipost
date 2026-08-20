@@ -11,6 +11,7 @@ import type {
   CatalogReadRepo,
   CatalogSignalGroup,
 } from "@/core/ports/product-repo";
+import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
  * E2/E3 — the "sản phẩm hợp lệ / không hợp lệ" screen: every synced product
@@ -61,7 +62,7 @@ export interface ListCatalogProductsFilter {
 }
 
 export interface ListCatalogProductsInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly filter?: ListCatalogProductsFilter;
 }
 
@@ -118,14 +119,15 @@ export function makeListCatalogProducts(deps: ListCatalogProductsDeps) {
     input: ListCatalogProductsInput,
   ): Promise<ListCatalogProductsResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const tenantId = str(input?.tenantId);
-    if (!isTenantId(tenantId)) {
+    const rawTenantId = str(input?.tenantId);
+    if (!isTenantId(rawTenantId)) {
       throw new AppError("INVALID_INPUT", {
         message: "listCatalogProducts requires a tenant UUID",
         userMessage: "Mã đơn vị (tenant) không hợp lệ.",
-        context: { tenant_id: tenantId || null },
+        context: { tenant_id: rawTenantId || null },
       });
     }
+    const tenantId = normalizeTenantId(input.tenantId);
 
     const filter = input?.filter ?? {};
     const limit = normaliseLimit(filter.limit, tenantId);
@@ -308,7 +310,7 @@ function foldTotals(groups: readonly CatalogSignalGroup[]): CatalogTotals {
 
 // --- input normalisation ----------------------------------------------------
 
-function normaliseLimit(raw: unknown, tenantId: string): number {
+function normaliseLimit(raw: unknown, tenantId: TenantId): number {
   if (raw === undefined || raw === null) return DEFAULT_CATALOG_PAGE_SIZE;
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0) {
     throw new AppError("INVALID_INPUT", {
@@ -324,7 +326,7 @@ function normaliseLimit(raw: unknown, tenantId: string): number {
  * An unknown status must not quietly mean "no filter": the operator would read
  * a full list as a filtered one and conclude nothing is blocked.
  */
-function normaliseStatus(raw: unknown, tenantId: string): CatalogStatusFilter | null {
+function normaliseStatus(raw: unknown, tenantId: TenantId): CatalogStatusFilter | null {
   const value = str(raw);
   if (value.length === 0) return null;
   if ((CATALOG_STATUS_FILTERS as readonly string[]).includes(value)) {
@@ -344,7 +346,7 @@ function normaliseStatus(raw: unknown, tenantId: string): CatalogStatusFilter | 
  */
 export function decodeCatalogCursor(
   raw: string | null | undefined,
-  tenantId?: string,
+  tenantId?: TenantId,
 ): string | null {
   const value = str(raw);
   if (value.length === 0) return null;

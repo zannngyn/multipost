@@ -1,3 +1,5 @@
+import type { TenantId } from "@/core/domain/tenant-context";
+
 /**
  * Fixture identifiers for the development seed. Side-effect free ON PURPOSE:
  * `seed.ts` runs a database script, so importing a constant from it used to
@@ -5,8 +7,12 @@
  * wanted the id. Import ids from here; import `seed()` from `./seed`.
  */
 
-/** Fixed id so fixtures, tests and manual API calls can hard-code one tenant. */
-export const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001";
+/**
+ * Fixed id so fixtures, tests and manual API calls can hard-code one tenant.
+ * Branded as a `TenantId`: this literal is one we own (not client input), and
+ * the seed/dev tooling scopes queries by it — a blessed cast site (docs/11 §3).
+ */
+export const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001" as TenantId;
 export const DEMO_TENANT_NAME = "Demo Tenant";
 /** URL handle (docs/09 §3.7). Unique across tenants — the seed skips it if taken. */
 export const DEMO_TENANT_SLUG = "demo";

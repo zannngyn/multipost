@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { tenantIdField } from "./tenant-health.schema";
 
 /**
  * Contracts of the "Mẫu prompt" screen (E10.7).
@@ -125,7 +124,8 @@ const MAX_NAME_LENGTH = 120;
 const MAX_CHANGELOG_LENGTH = 2000;
 
 export const PromptVersionFormSchema = z.object({
-  tenantId: tenantIdField(),
+  // No `tenantId` (M1.4): a prompt version belongs to the company in the
+  // session, so there is nothing here for the operator to type.
   name: z
     .string()
     .trim()

@@ -1,6 +1,6 @@
 "use client";
 
-import { Link } from "@astryxdesign/core";
+import { Banner, Link } from "@astryxdesign/core";
 
 import { ErrorState } from "@/ui/components/feedback/ErrorState";
 import {
@@ -37,6 +37,22 @@ export function ApiErrorNotice({
 }) {
   const apiError = toApiError(error);
   const view = presentApiError(apiError, operation ? { operation } : undefined);
+
+  // 409 TENANT_NOT_SELECTED is a fork in the road, not a failure: the company
+  // picker is already on screen (see TenantBoundary), so this only has to say
+  // what to do next — in an informational tone, never red (doc 10 §3).
+  if (view.kind === "select-tenant") {
+    return (
+      <Banner
+        className={className}
+        role="status"
+        status="info"
+        title={view.title}
+        description={view.hint ? `${view.description} ${view.hint}` : view.description}
+        endContent={extraAction}
+      />
+    );
+  }
 
   return (
     <ErrorState

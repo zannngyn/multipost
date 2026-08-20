@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import { and, eq } from "drizzle-orm";
 
+import type { TenantId } from "@/core/domain/tenant-context";
+
 import { makeFixtureDriveSource } from "@/adapters/google/fixture-catalog-source";
 import { mediaAssets, tenantIntegrations, tenants } from "@/adapters/db/schema";
 import { openConfigSecrets, sealConfigSecrets } from "@/adapters/db/secret-box";
@@ -29,8 +31,8 @@ import { AppError } from "@/core/domain/errors";
 
 const BASE_URL = "https://mysp.example.com";
 /** Same id as adapters/db/seed, inlined so importing it cannot re-run the seed. */
-const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001";
-const OTHER_TENANT_ID = "00000000-0000-0000-0000-0000000000ff";
+const DEMO_TENANT_ID = "00000000-0000-0000-0000-000000000001" as TenantId;
+const OTHER_TENANT_ID = "00000000-0000-0000-0000-0000000000ff" as TenantId;
 const FAKE_PAGE_TOKEN = "EAAG7ZBv1FAKEpageTokenForSmokeTest0000";
 const SMOKE_PROVIDER = "smoke-meta";
 
@@ -106,7 +108,7 @@ async function main(): Promise<void> {
 
   const url = new URL(signed.url);
   const request = {
-    tenantId: url.searchParams.get("tenant") ?? "",
+    tenantId: (url.searchParams.get("tenant") ?? "") as TenantId,
     mediaAssetId: decodeURIComponent(url.pathname.split("/").pop() ?? ""),
     expiresAt: url.searchParams.get("expires") ?? "",
     signature: url.searchParams.get("sig") ?? "",

@@ -12,25 +12,26 @@
  */
 
 import type { MediaAsset, Product } from "@/core/domain/product";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 export interface ProductRepo {
-  findByCode(tenantId: string, code: string): Promise<Product | null>;
+  findByCode(tenantId: TenantId, code: string): Promise<Product | null>;
   /** Insert or update by (tenant, code). Returns the number of rows written. */
-  upsertMany(tenantId: string, products: readonly Product[], syncRunId: string): Promise<number>;
+  upsertMany(tenantId: TenantId, products: readonly Product[], syncRunId: string): Promise<number>;
   /** Removes products not touched by `syncRunId`. Returns rows deleted. */
-  deleteStale(tenantId: string, syncRunId: string): Promise<number>;
+  deleteStale(tenantId: TenantId, syncRunId: string): Promise<number>;
   /**
    * How many products this tenant currently has. Read by the sync BEFORE
    * `deleteStale`: a sheet that suddenly parses to zero rows while the catalog
    * holds hundreds is a permission/tab problem, not an emptied shop, and the
    * difference is only visible by comparing the two numbers.
    */
-  countAll(tenantId: string): Promise<number>;
+  countAll(tenantId: TenantId): Promise<number>;
 }
 
 /** One row the E9.4 sweep may remove. Carries its tenant: the sweep has none. */
 export interface OrphanedUpload {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly assetId: string;
   readonly storageKey: string;
   readonly fileName: string;
@@ -38,14 +39,14 @@ export interface OrphanedUpload {
 }
 
 export interface MediaRepo {
-  listByProductCode(tenantId: string, code: string): Promise<readonly MediaAsset[]>;
+  listByProductCode(tenantId: TenantId, code: string): Promise<readonly MediaAsset[]>;
   /** Insert or update by (tenant, drive file id). Returns rows written. */
-  upsertMany(tenantId: string, assets: readonly MediaAsset[], syncRunId: string): Promise<number>;
+  upsertMany(tenantId: TenantId, assets: readonly MediaAsset[], syncRunId: string): Promise<number>;
   /**
    * Removes Drive rows the given sync did not see. MUST leave uploaded rows
    * alone — they belong to no sync run (E9).
    */
-  deleteStale(tenantId: string, syncRunId: string): Promise<number>;
+  deleteStale(tenantId: TenantId, syncRunId: string): Promise<number>;
   /**
    * How many Drive-origin assets this tenant currently has — the exact set
    * `deleteStale` may remove. Uploaded rows are excluded because no sync run
@@ -53,7 +54,7 @@ export interface MediaRepo {
    * `ProductRepo.countAll`: an empty Drive listing is what a lost permission
    * looks like (files.list answers HTTP 200 with `files: []`, not 403).
    */
-  countDriveAssets(tenantId: string): Promise<number>;
+  countDriveAssets(tenantId: TenantId): Promise<number>;
 
   // --- E9 (mode B) ---------------------------------------------------------
 
@@ -62,7 +63,7 @@ export interface MediaRepo {
    * that one is the sync writer and stamps a run id, which an upload must never
    * carry, or the next sync would sweep it away.
    */
-  registerUpload(tenantId: string, asset: MediaAsset): Promise<void>;
+  registerUpload(tenantId: TenantId, asset: MediaAsset): Promise<void>;
 
   /**
    * E9.4 — uploaded assets created before `olderThan` that no post job
@@ -88,12 +89,12 @@ export interface MediaRepo {
    * its rows to resolve a signed media URL.
    */
   listUnreferencedUploadsForCode(
-    tenantId: string,
+    tenantId: TenantId,
     productCode: string,
   ): Promise<readonly OrphanedUpload[]>;
 
   /** Removes uploaded rows by asset id. Returns how many were removed. */
-  deleteUploads(tenantId: string, assetIds: readonly string[]): Promise<number>;
+  deleteUploads(tenantId: TenantId, assetIds: readonly string[]): Promise<number>;
 }
 
 // --- Sync run ---------------------------------------------------------------
@@ -157,7 +158,7 @@ export interface SyncRunCounts {
 }
 
 export interface StartSyncRunInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly source: {
     readonly driveFolderId: string;
     readonly spreadsheetId: string;
@@ -167,7 +168,7 @@ export interface StartSyncRunInput {
 }
 
 export interface FinishSyncRunInput {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   readonly syncRunId: string;
   readonly status: SyncRunStatus;
   readonly finishedAt: Date;
@@ -223,12 +224,12 @@ export interface SyncRunRepo {
   start(input: StartSyncRunInput): Promise<{ id: string }>;
   finish(input: FinishSyncRunInput): Promise<void>;
   /** Newest run by `startedAt`, or null when the tenant never synced. */
-  findLatest(tenantId: string): Promise<SyncRunSummary | null>;
+  findLatest(tenantId: TenantId): Promise<SyncRunSummary | null>;
   /**
    * Newest `limit` runs by `startedAt` (descending), newest first. The caller
    * has already bounded `limit`; the adapter still refuses a non-positive one.
    */
-  listRecent(tenantId: string, limit: number): Promise<readonly SyncRunListItem[]>;
+  listRecent(tenantId: TenantId, limit: number): Promise<readonly SyncRunListItem[]>;
 }
 
 // --- Catalog read model (E2/E3 "nguồn dữ liệu + sản phẩm") -------------------
@@ -259,7 +260,7 @@ export interface CatalogProductRow {
 }
 
 export interface ListCatalogProductsQuery {
-  readonly tenantId: string;
+  readonly tenantId: TenantId;
   /**
    * Free text matched against code and name, case-insensitively. The ADAPTER
    * escapes LIKE wildcards: a user typing `%` searches for a percent sign.
@@ -296,7 +297,7 @@ export interface CatalogReadRepo {
   listCatalog(query: ListCatalogProductsQuery): Promise<CatalogProductPage>;
   /** Same filter as `listCatalog`, minus paging: one row per signal bucket. */
   aggregateCatalog(query: {
-    readonly tenantId: string;
+    readonly tenantId: TenantId;
     readonly search?: string;
   }): Promise<readonly CatalogSignalGroup[]>;
 }

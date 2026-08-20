@@ -29,6 +29,7 @@ import {
   type AccessRequestRow,
 } from "./schema";
 import { forTenant, type TenantScopedDb } from "./tenant-scope";
+import type { TenantId } from "@/core/domain/tenant-context";
 
 /**
  * `access_request` persistence (E1.4).
@@ -87,7 +88,7 @@ function isUniqueViolation(error: unknown): boolean {
   return findPgError(error)?.code === "23505";
 }
 
-function missingField(tenantId: string, operation: string, field: string): AppError {
+function missingField(tenantId: TenantId, operation: string, field: string): AppError {
   return new AppError("INVALID_INPUT", {
     message: `${operation} requires ${field}`,
     userMessage: "Thiếu thông tin định danh tài khoản.",
@@ -102,7 +103,7 @@ export class DrizzleAccessRequestRepo implements AccessRequestRepo {
   ) {}
 
   async findByProviderAccount(
-    tenantId: string,
+    tenantId: TenantId,
     provider: OperatorProvider,
     providerAccountId: string,
   ): Promise<AccessRequest | null> {
@@ -146,7 +147,7 @@ export class DrizzleAccessRequestRepo implements AccessRequestRepo {
     }
   }
 
-  async findBySessionEmail(tenantId: string, sessionEmail: string): Promise<AccessRequest | null> {
+  async findBySessionEmail(tenantId: TenantId, sessionEmail: string): Promise<AccessRequest | null> {
     const scope = forTenant(this.db, tenantId);
     const email = str(sessionEmail).toLowerCase();
     if (email.length === 0) {
@@ -176,7 +177,7 @@ export class DrizzleAccessRequestRepo implements AccessRequestRepo {
   }
 
   async createPending(input: CreatePendingAccessRequestInput): Promise<AccessRequest> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const identity = input?.identity;
     const accountId = str(identity?.providerAccountId);
     const sessionEmail = str(identity?.sessionEmail).toLowerCase();
@@ -256,7 +257,7 @@ export class DrizzleAccessRequestRepo implements AccessRequestRepo {
     }
   }
 
-  async list(tenantId: string, status: AccessStatus | "all"): Promise<readonly AccessRequest[]> {
+  async list(tenantId: TenantId, status: AccessStatus | "all"): Promise<readonly AccessRequest[]> {
     const scope = forTenant(this.db, tenantId);
     const filter = status === "all" || isAccessStatus(status) ? status : "pending";
 
@@ -283,7 +284,7 @@ export class DrizzleAccessRequestRepo implements AccessRequestRepo {
   }
 
   async decide(input: DecideAccessRequestRecord): Promise<AccessRequest | null> {
-    const scope = forTenant(this.db, input?.tenantId ?? "");
+    const scope = forTenant(this.db, input.tenantId);
     const id = str(input?.id);
     if (id.length === 0) throw missingField(scope.tenantId, "accessRequest.decide", "id");
     if (input?.status !== "approved" && input?.status !== "blocked") {

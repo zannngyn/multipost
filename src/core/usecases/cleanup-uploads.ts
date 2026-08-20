@@ -1,4 +1,5 @@
 import { AppError } from "@/core/domain/errors";
+import type { TenantId } from "@/core/domain/tenant-context";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaRepo, OrphanedUpload } from "@/core/ports/product-repo";
@@ -63,7 +64,7 @@ export function makeCleanupUploads(deps: CleanupUploadsDeps) {
     // --- Bytes first --------------------------------------------------------
     let blobsRemoved = 0;
     let failed = 0;
-    const deletable = new Map<string, string[]>();
+    const deletable = new Map<TenantId, string[]>();
 
     for (const orphan of orphans) {
       if (!orphan.storageKey) {
@@ -124,7 +125,7 @@ export type CleanupUploads = ReturnType<typeof makeCleanupUploads>;
 
 // --- helpers ----------------------------------------------------------------
 
-function addDeletable(map: Map<string, string[]>, orphan: OrphanedUpload): void {
+function addDeletable(map: Map<TenantId, string[]>, orphan: OrphanedUpload): void {
   const existing = map.get(orphan.tenantId);
   if (existing) existing.push(orphan.assetId);
   else map.set(orphan.tenantId, [orphan.assetId]);
