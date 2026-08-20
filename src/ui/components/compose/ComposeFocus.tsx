@@ -5,6 +5,7 @@ import { useWatch } from "react-hook-form";
 
 import { cn } from "@/shared/utils";
 import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
+import { activeCaptionChannel } from "@/ui/components/compose/caption-targets";
 import { ChannelChoice } from "@/ui/components/compose/ChannelChoice";
 import { ChannelPickerDialog } from "@/ui/components/compose/ChannelPickerDialog";
 import { publishableChannels } from "@/ui/components/compose/channel-picker";
@@ -151,8 +152,20 @@ export function ComposeFocus() {
    * The preview follows the caption tab: the text of the channel being edited,
    * under the name of that Page. Showing tab A's caption over page B's name is
    * exactly the confusion a per-channel editor has to avoid.
+   *
+   * It asks `activeCaptionChannel` — the SAME function the editor asks — rather
+   * than re-deriving "which tab is open" here. Two copies of that rule is how
+   * the editor and the payload came apart in the first place; a requested tab
+   * that has since been unticked must resolve identically in both.
    */
-  const previewChannelId = activeChannelId ?? publish.selectedIds[0] ?? null;
+  const previewChannelId =
+    activeCaptionChannel({
+      shareCaption: publish.shareCaption,
+      selectedIds: publish.selectedIds,
+      requested: activeChannelId,
+    }) ??
+    publish.selectedIds[0] ??
+    null;
   const previewCaption = previewChannelId
     ? publish.captionFor(previewChannelId)
     : (wizard.captionValues?.[PREVIEW_CHANNEL] ?? "");

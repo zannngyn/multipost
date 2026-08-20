@@ -32,6 +32,40 @@ export function sameTarget(a: CaptionTarget | undefined, b: CaptionTarget): bool
   return a.channelId === b.channelId;
 }
 
+/**
+ * WHICH channel the caption editor is editing, and the preview is previewing.
+ * `null` = the shared caption.
+ *
+ * THIS IS THE FIX FOR THE BUG THAT FAILED REVIEW (20/08/2026). The editor used
+ * to switch to per-channel only when MORE THAN ONE channel was ticked, while
+ * `usePublishForm` built the payload from `resolveCaption` with no such
+ * condition. Untick one of two channels after writing a per-channel caption and
+ * the box showed the shared text while the post carried the channel's own —
+ * the operator approving a string that is not the string being published, which
+ * is precisely the "người duyệt" step of business rule 1 broken.
+ *
+ * So there is no count in here. Per-channel mode is per-channel for one channel
+ * as much as for five, every path asks THIS function which channel it is on,
+ * and `resolveCaption` then answers for that channel. Hiding the tab strip when
+ * there is only one channel is a rendering decision and nothing more.
+ *
+ * A requested tab that is no longer ticked falls back to the first ticked
+ * channel rather than to the shared caption: the operator is still in
+ * per-channel mode, and silently showing them the shared text is how this bug
+ * happened in the first place.
+ */
+export function activeCaptionChannel(input: {
+  shareCaption: boolean;
+  selectedIds: readonly string[];
+  /** The tab the operator last opened, if any. */
+  requested: string | null;
+}): string | null {
+  if (input.shareCaption) return null;
+  if (input.selectedIds.length === 0) return null;
+  if (input.requested && input.selectedIds.includes(input.requested)) return input.requested;
+  return input.selectedIds[0];
+}
+
 export interface CaptionSources {
   readonly shareCaption: boolean;
   readonly base: string;

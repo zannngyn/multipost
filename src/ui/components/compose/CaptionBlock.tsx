@@ -12,6 +12,7 @@ import {
 } from "@/ui/components/compose/caption-text";
 import {
   SHARED_TARGET,
+  activeCaptionChannel,
   channelCaptionState,
   overridesThatDifferFromBase,
   resolveCaption,
@@ -87,13 +88,21 @@ export function CaptionBlock({
   if (!composed) return null;
 
   const { selectedIds, captionSources } = publish;
-  const perChannel = !publish.shareCaption && selectedIds.length > 1;
-  // A tab for a channel that has since been unticked must not stay open.
-  const activeId = perChannel && activeChannelId && selectedIds.includes(activeChannelId)
-    ? activeChannelId
-    : null;
-  const target: CaptionTarget =
-    perChannel && activeId ? { kind: "channel", channelId: activeId } : SHARED_TARGET;
+  /**
+   * NO channel count in this decision (see `activeCaptionChannel`): the editor
+   * is on whichever channel the payload will be built for, whether that is one
+   * channel or five. The tab STRIP is hidden for a single channel because one
+   * tab is noise — but the value below never depends on that.
+   */
+  const activeId = activeCaptionChannel({
+    shareCaption: publish.shareCaption,
+    selectedIds,
+    requested: activeChannelId,
+  });
+  const showTabs = activeId !== null && selectedIds.length > 1;
+  const target: CaptionTarget = activeId
+    ? { kind: "channel", channelId: activeId }
+    : SHARED_TARGET;
 
   const nameOf = (channelId: string): string => {
     const found = channels.data?.channels.find((item) => item.channelId === channelId);
@@ -112,12 +121,12 @@ export function CaptionBlock({
   const askedFor = captions.variables;
   const isThisTarget = sameTarget(askedFor, target);
 
-  const value = perChannel && activeId
-    ? resolveCaption(captionSources, activeId)
-    : captionSources.base;
+  // THE invariant: this is the same call `usePublishForm.captionFor` makes when
+  // it builds `captionByChannel`. The box shows the string that gets published.
+  const value = activeId ? resolveCaption(captionSources, activeId) : captionSources.base;
 
   function writeCaption(next: string) {
-    if (perChannel && activeId) {
+    if (activeId) {
       publish.setCaptionOverride(activeId, next);
       return;
     }
@@ -160,7 +169,7 @@ export function CaptionBlock({
         className="flex flex-col rounded-[var(--compose-radius-block)] bg-[var(--compose-well)] shadow-[inset_0_0_0_1px_var(--compose-hairline)]"
       >
         {/* --- Channel tabs: one caption per Page ------------------------- */}
-        {perChannel ? (
+        {showTabs ? (
           <div
             role="tablist"
             aria-label="Caption theo từng kênh"
@@ -204,7 +213,7 @@ export function CaptionBlock({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-3.5 pb-3">
           <h3 id={`${fieldId}-heading`} className="text-sm font-semibold">
             Caption
-            {perChannel && activeId ? (
+            {activeId ? (
               <span className="text-[var(--muted-foreground)]"> · {nameOf(activeId)}</span>
             ) : null}
           </h3>
@@ -269,13 +278,13 @@ export function CaptionBlock({
             className="mx-4 mb-3 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3.5 py-2.5 text-[13px] text-[var(--destructive)]"
           >
             AI chưa viết được caption cho{" "}
-            {perChannel && activeId ? nameOf(activeId) : "kênh này"}: {failed.reason}{" "}
+            {activeId ? nameOf(activeId) : "kênh này"}: {failed.reason}{" "}
             <span className="font-mono text-xs">({failed.code})</span> — bấm “Viết lại” hoặc tự
             nhập bên dưới.
           </p>
         ) : null}
 
-        {perChannel && activeId && channelCaptionState(captionSources, activeId) === "inherited" ? (
+        {activeId && channelCaptionState(captionSources, activeId) === "inherited" ? (
           <p className="mx-4 mb-3 rounded-xl bg-[var(--warning)]/15 px-3.5 py-2.5 text-xs leading-relaxed text-[var(--warning-foreground)]">
             Kênh này đang dùng chung caption với các kênh khác. Sửa hoặc bấm “Viết lại” để có bản
             riêng — nhiều Fanpage đăng y hệt nhau dễ bị coi là spam.
@@ -284,7 +293,7 @@ export function CaptionBlock({
 
         <CaptionFields
           idPrefix={`${fieldId}-${activeId ?? "shared"}`}
-          label={perChannel && activeId ? nameOf(activeId) : "Facebook"}
+          label={activeId ? nameOf(activeId) : "Facebook"}
           value={value}
           onChange={writeCaption}
           content={composed.content}

@@ -128,3 +128,48 @@ describe("support mode is wired into the compose screen", () => {
     expect(source).toMatch(/disabled=\{captions\.isPending \|\| Boolean\(readOnlyReason\)\}/);
   });
 });
+
+/**
+ * Structural guard for the bug that failed review: the caption box must take
+ * its value from the same pair of functions the payload does, and must never
+ * gate that on how many channels happen to be ticked.
+ *
+ * Behaviour is covered in `caption-targets.test.ts` (the reviewer's exact
+ * sequence). This only stops the CONDITION creeping back into the component,
+ * which no pure test can see.
+ */
+describe("the caption editor reads the published string", () => {
+  it("derives the active channel through the shared rule", () => {
+    const source = readCompose("./CaptionBlock.tsx");
+    expect(source).toContain("activeCaptionChannel({");
+    expect(source).toMatch(/const value = activeId \? resolveCaption\(captionSources, activeId\)/);
+  });
+
+  it("does not decide WHICH caption to show by counting channels", () => {
+    const source = readCompose("./CaptionBlock.tsx");
+
+    // The channel count may decide whether the tab strip is DRAWN…
+    expect(source).toMatch(/const showTabs = activeId !== null && selectedIds\.length > 1;/);
+
+    // …but nothing between choosing the channel and reading its caption may
+    // look at it. That was the bug: a count in this stretch of code made the
+    // editor show the shared caption while the payload used the channel's own.
+    const from = source.indexOf("const activeId = activeCaptionChannel({");
+    const to = source.indexOf("function writeCaption(");
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const derivation = source
+      .slice(from, to)
+      .replace(/const showTabs = .*/, "")
+      // Comments explain the rule; only the code has to obey it.
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*/g, "");
+    expect(derivation).not.toContain("selectedIds.length");
+  });
+
+  it("the preview asks the same rule instead of re-deriving it", () => {
+    const source = readCompose("./ComposeFocus.tsx");
+    expect(source).toContain("activeCaptionChannel({");
+    expect(source).toContain("publish.captionFor(previewChannelId)");
+  });
+});
