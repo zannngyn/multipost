@@ -57,11 +57,9 @@ const STEP_LABELS: { step: PickerStep; label: string }[] = [
 ];
 
 export function GoogleDrivePicker({
-  tenantId,
   onSaved,
   onCancel,
 }: {
-  tenantId: string;
   /** Called after the source was saved (the card closes the picker). */
   onSaved: () => void;
   onCancel: () => void;
@@ -83,25 +81,23 @@ export function GoogleDrivePicker({
   const sheetQuery = useDebouncedValue(sheetSearch.trim());
 
   const folders = useDriveFolders({
-    tenantId,
     parentId,
     q: folderQuery,
     enabled: step === "folder",
   });
   const spreadsheets = useDriveSpreadsheets({
-    tenantId,
     q: sheetQuery,
     enabled: step === "spreadsheet",
   });
-  const tabs = useSpreadsheetTabs(tenantId, pickedSheet?.id ?? null);
-  const update = useUpdateCatalogSource(tenantId);
+  const tabs = useSpreadsheetTabs(pickedSheet?.id ?? null);
+  const update = useUpdateCatalogSource();
 
   /**
    * The token died mid-session (revoked in Google's own settings, or never
    * stored). Re-reading the status is what makes the card above tell the truth;
    * without it the operator would keep clicking into a tree that cannot load.
    */
-  const refreshConnection = useRefreshGoogleConnection(tenantId);
+  const refreshConnection = useRefreshGoogleConnection();
   const lostConnection =
     isNotConnectedError(folders.error) ||
     isNotConnectedError(spreadsheets.error) ||

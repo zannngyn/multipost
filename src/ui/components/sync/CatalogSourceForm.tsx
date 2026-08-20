@@ -32,12 +32,10 @@ import { ApiError } from "@/ui/services/api-error";
  * input, so "link sai host" lands under the Drive field, not in a red box.
  */
 export function CatalogSourceForm({
-  tenantId,
   current,
   onSaved,
   onCancel,
 }: {
-  tenantId: string;
   /** Absent when the tenant has no source yet — the form starts empty. */
   current?: CatalogSource;
   /** Called after a successful save (the card closes the form and nudges sync). */
@@ -46,7 +44,7 @@ export function CatalogSourceForm({
   onCancel?: () => void;
 }) {
   const fieldId = useId();
-  const update = useUpdateCatalogSource(tenantId);
+  const update = useUpdateCatalogSource();
   const confirmRef = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState<CatalogSourceFormValues | null>(null);
 

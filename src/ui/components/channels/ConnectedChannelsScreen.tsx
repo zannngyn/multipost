@@ -34,7 +34,6 @@ import {
   type ChannelStatus,
   type ConnectOutcome,
 } from "@/ui/schemas/channel.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Kênh" (E5.1): the Fanpages this tenant may publish to — the screen that has
@@ -56,15 +55,13 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  * URL, so F5 does not replay a stale message (web-auth-methods §4).
  */
 export function ConnectedChannelsScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const channels = useChannels(tenantId);
-  const setStatus = useSetChannelStatus(tenantId);
-  const remove = useRemoveChannel(tenantId);
+  const channels = useChannels();
+  const setStatus = useSetChannelStatus();
+  const remove = useRemoveChannel();
 
   const tokenInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -166,7 +163,6 @@ export function ConnectedChannelsScreen() {
 
             <Stack direction="vertical" padding={4}>
               <ChannelConnectPanel
-                tenantId={tenantId}
                 tokenInputRef={tokenInputRef}
                 areWritesBlocked={areWritesBlocked}
               />

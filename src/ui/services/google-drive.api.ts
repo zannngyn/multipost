@@ -24,29 +24,16 @@ import { apiRequest } from "./http-client";
  */
 
 export const googleDriveKeys = {
-  all: (tenantId: string) => ["google-drive", tenantId] as const,
-  status: (tenantId: string) => ["google-drive", tenantId, "status"] as const,
-  folders: (tenantId: string, parentId: string, q: string) =>
-    ["google-drive", tenantId, "folders", parentId, q] as const,
-  spreadsheets: (tenantId: string, q: string) =>
-    ["google-drive", tenantId, "spreadsheets", q] as const,
-  tabs: (tenantId: string, spreadsheetId: string) =>
-    ["google-drive", tenantId, "tabs", spreadsheetId] as const,
+  all: (tenantKey: string) => ["google-drive", tenantKey] as const,
+  status: (tenantKey: string) => ["google-drive", tenantKey, "status"] as const,
+  folders: (tenantKey: string, parentId: string, q: string) =>
+    ["google-drive", tenantKey, "folders", parentId, q] as const,
+  spreadsheets: (tenantKey: string, q: string) =>
+    ["google-drive", tenantKey, "spreadsheets", q] as const,
+  tabs: (tenantKey: string, spreadsheetId: string) =>
+    ["google-drive", tenantKey, "tabs", spreadsheetId] as const,
 };
 
-function requireTenantId(tenantId: string): string {
-  const trimmed = typeof tenantId === "string" ? tenantId.trim() : "";
-  // Guard: never spend a round-trip on a request we already know is invalid.
-  if (trimmed.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "tenantId is required",
-      userMessage: "Chưa có mã đơn vị (tenant) để đọc Google Drive.",
-    });
-  }
-  return trimmed;
-}
 
 /**
  * Full-page navigation target for the OAuth round trip — NOT something to
@@ -54,18 +41,12 @@ function requireTenantId(tenantId: string): string {
  * that with `fetch` would either be blocked by CORS or land Google's consent
  * page in a JSON parser (web-auth-methods §1: redirect, not popup, not XHR).
  */
-export function googleConnectHref(tenantId: string): string {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-  return `/api/catalog/google/connect?${query.toString()}`;
+export function googleConnectHref(): string {
+  return "/api/catalog/google/connect";
 }
 
-export async function fetchGoogleConnection(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<GoogleConnection> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-
-  return apiRequest(`/api/catalog/google/status?${query.toString()}`, {
+export async function fetchGoogleConnection(signal?: AbortSignal): Promise<GoogleConnection> {
+  return apiRequest("/api/catalog/google/status", {
     schema: GoogleConnectionSchema,
     signal,
     malformedMessage:
@@ -74,7 +55,6 @@ export async function fetchGoogleConnection(
 }
 
 export interface ListDriveFoldersParams {
-  tenantId: string;
   /** `root` (the default) lists the top of My Drive. */
   parentId?: string;
   pageToken?: string | null;
@@ -86,7 +66,7 @@ export async function listDriveFolders(
   params: ListDriveFoldersParams,
   signal?: AbortSignal,
 ): Promise<DriveFolderPage> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(params.tenantId) });
+  const query = new URLSearchParams();
   query.set("parentId", params.parentId?.trim() || "root");
   if (params.pageToken) query.set("pageToken", params.pageToken);
   const q = params.q?.trim() ?? "";
@@ -101,7 +81,6 @@ export async function listDriveFolders(
 }
 
 export interface ListDriveSpreadsheetsParams {
-  tenantId: string;
   /** Omitted = search the whole Drive, most recently edited first. */
   parentId?: string | null;
   pageToken?: string | null;
@@ -112,7 +91,7 @@ export async function listDriveSpreadsheets(
   params: ListDriveSpreadsheetsParams,
   signal?: AbortSignal,
 ): Promise<DriveSpreadsheetPage> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(params.tenantId) });
+  const query = new URLSearchParams();
   const parentId = params.parentId?.trim() ?? "";
   if (parentId.length > 0) query.set("parentId", parentId);
   if (params.pageToken) query.set("pageToken", params.pageToken);
@@ -128,7 +107,7 @@ export async function listDriveSpreadsheets(
 }
 
 export async function fetchSpreadsheetTabs(
-  params: { tenantId: string; spreadsheetId: string },
+  params: { spreadsheetId: string },
   signal?: AbortSignal,
 ): Promise<SpreadsheetTabs> {
   const spreadsheetId = params.spreadsheetId?.trim() ?? "";
@@ -141,10 +120,7 @@ export async function fetchSpreadsheetTabs(
     });
   }
 
-  const query = new URLSearchParams({
-    tenantId: requireTenantId(params.tenantId),
-    spreadsheetId,
-  });
+  const query = new URLSearchParams({ spreadsheetId });
 
   return apiRequest(`/api/catalog/google/spreadsheets/tabs?${query.toString()}`, {
     schema: SpreadsheetTabsSchema,
@@ -158,13 +134,9 @@ export async function fetchSpreadsheetTabs(
  * Drops the stored Google token. Never retried automatically: a write that
  * half-applied must not be repeated behind the operator's back.
  */
-export async function disconnectGoogle(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<GoogleConnection> {
+export async function disconnectGoogle(signal?: AbortSignal): Promise<GoogleConnection> {
   return apiRequest("/api/catalog/google/connection", {
     method: "DELETE",
-    body: { tenantId: requireTenantId(tenantId) },
     schema: GoogleConnectionSchema,
     signal,
     malformedMessage:

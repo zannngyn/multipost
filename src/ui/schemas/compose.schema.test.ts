@@ -12,7 +12,6 @@ import {
   postFormatForVideo,
 } from "./compose.schema";
 import { SyncStatusResponseSchema } from "./sync.schema";
-import { DEMO_TENANT_ID } from "./tenant-health.schema";
 
 /**
  * These schemas are the UI's mirror of core types it may not import (docs/07
@@ -20,8 +19,11 @@ import { DEMO_TENANT_ID } from "./tenant-health.schema";
  * browser as an empty screen.
  */
 
+/** The server still echoes `tenantId` in its answer; the UI only reads it. */
+const RESPONSE_TENANT_ID = "00000000-0000-0000-0000-000000000001";
+
 const VALID_COMPOSE = {
-  tenantId: DEMO_TENANT_ID,
+  tenantId: RESPONSE_TENANT_ID,
   productCode: "MGKVX6310",
   channel: "facebook",
   content: {
@@ -67,7 +69,6 @@ const VALID_SPEC = {
 
 describe("ComposeWizardSchema", () => {
   const base = {
-    tenantId: DEMO_TENANT_ID,
     productCode: "MGKVX6310",
     mediaKind: "image",
     videoTarget: "facebook_video",
@@ -93,9 +94,12 @@ describe("ComposeWizardSchema", () => {
     expect(ComposeWizardSchema.safeParse({ ...base, videoTarget: "reels" }).success).toBe(false);
   });
 
-  it("rejects a tenant id that is not a UUID", () => {
+  it("ignores a tenant id an old draft may still carry (M1.4)", () => {
+    // The wizard has no company field any more: the session decides. A stored
+    // draft written before M1.4 must still load instead of failing the parse.
     const result = ComposeWizardSchema.safeParse({ ...base, tenantId: "demo" });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+    expect(result.success && "tenantId" in result.data).toBe(false);
   });
 
   it("rejects an empty product code", () => {
@@ -245,7 +249,7 @@ describe("SyncStatusResponseSchema", () => {
   it("treats 'never synced' as a valid answer, not an error", () => {
     const result = SyncStatusResponseSchema.safeParse({
       state: "never_synced",
-      tenantId: DEMO_TENANT_ID,
+      tenantId: RESPONSE_TENANT_ID,
     });
     expect(result.success).toBe(true);
   });
@@ -254,7 +258,7 @@ describe("SyncStatusResponseSchema", () => {
     const result = SyncStatusResponseSchema.safeParse({
       state: "has_run",
       run: {
-        tenantId: DEMO_TENANT_ID,
+        tenantId: RESPONSE_TENANT_ID,
         syncRunId: "run-1",
         status: "partial",
         startedAt: "2026-08-12T10:00:00.000Z",
@@ -328,7 +332,7 @@ describe("SyncStatusResponseSchema", () => {
     const result = SyncStatusResponseSchema.safeParse({
       state: "has_run",
       run: {
-        tenantId: DEMO_TENANT_ID,
+        tenantId: RESPONSE_TENANT_ID,
         syncRunId: "run-2",
         status: "running",
         startedAt: "2026-08-12T10:00:00.000Z",

@@ -17,6 +17,7 @@ import {
   type GoogleConnection,
   type SpreadsheetTabs,
 } from "@/ui/schemas/google-drive.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import {
   disconnectGoogle,
@@ -53,12 +54,14 @@ const retryDelay = (attempt: number) => Math.min(1_000 * 2 ** attempt, 5_000);
  */
 export type GoogleConnectionQuery = UseQueryResult<GoogleConnection, ApiError>;
 
-/** `tenantId === null` = no tenant picked yet (idle), so nothing is fetched. */
-export function useGoogleConnection(tenantId: string | null): GoogleConnectionQuery {
+/** Nothing is fetched until `/api/me` says which company we are in (M1.4). */
+export function useGoogleConnection(): GoogleConnectionQuery {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<GoogleConnection, ApiError>({
-    queryKey: googleDriveKeys.status(tenantId ?? "none"),
-    queryFn: ({ signal }) => fetchGoogleConnection(tenantId ?? "", signal),
-    enabled: tenantId !== null,
+    queryKey: googleDriveKeys.status(tenantKey),
+    queryFn: ({ signal }) => fetchGoogleConnection(signal),
+    enabled: isResolved,
     retry: retryPolicy,
     retryDelay,
     /**
@@ -70,7 +73,6 @@ export function useGoogleConnection(tenantId: string | null): GoogleConnectionQu
 }
 
 export interface DriveFoldersOptions {
-  tenantId: string;
   parentId: string;
   /** Already debounced by the caller — this hook does not time anything. */
   q: string;
@@ -82,13 +84,14 @@ export interface DriveFoldersOptions {
  * thêm" appends; there is deliberately no "nhảy tới trang 7" — a page token
  * cannot do it.
  */
-export function useDriveFolders({ tenantId, parentId, q, enabled }: DriveFoldersOptions) {
+export function useDriveFolders({ parentId, q, enabled }: DriveFoldersOptions) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useInfiniteQuery<DriveFolderPage, ApiError>({
-    queryKey: googleDriveKeys.folders(tenantId, parentId || GOOGLE_DRIVE_ROOT_ID, q),
+    queryKey: googleDriveKeys.folders(tenantKey, parentId || GOOGLE_DRIVE_ROOT_ID, q),
     queryFn: ({ pageParam, signal }) =>
       listDriveFolders(
         {
-          tenantId,
           parentId,
           pageToken: typeof pageParam === "string" ? pageParam : null,
           q,
@@ -97,7 +100,7 @@ export function useDriveFolders({ tenantId, parentId, q, enabled }: DriveFolders
       ),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextPageToken,
-    enabled: enabled && tenantId.length > 0,
+    enabled: enabled && isResolved,
     retry: retryPolicy,
     retryDelay,
     // Drive folders barely move during one picking session.
@@ -106,22 +109,23 @@ export function useDriveFolders({ tenantId, parentId, q, enabled }: DriveFolders
 }
 
 export interface DriveSpreadsheetsOptions {
-  tenantId: string;
   q: string;
   enabled: boolean;
 }
 
-export function useDriveSpreadsheets({ tenantId, q, enabled }: DriveSpreadsheetsOptions) {
+export function useDriveSpreadsheets({ q, enabled }: DriveSpreadsheetsOptions) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useInfiniteQuery<DriveSpreadsheetPage, ApiError>({
-    queryKey: googleDriveKeys.spreadsheets(tenantId, q),
+    queryKey: googleDriveKeys.spreadsheets(tenantKey, q),
     queryFn: ({ pageParam, signal }) =>
       listDriveSpreadsheets(
-        { tenantId, pageToken: typeof pageParam === "string" ? pageParam : null, q },
+        { pageToken: typeof pageParam === "string" ? pageParam : null, q },
         signal,
       ),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextPageToken,
-    enabled: enabled && tenantId.length > 0,
+    enabled: enabled && isResolved,
     retry: retryPolicy,
     retryDelay,
     staleTime: 60_000,
@@ -129,12 +133,13 @@ export function useDriveSpreadsheets({ tenantId, q, enabled }: DriveSpreadsheets
 }
 
 /** `spreadsheetId === null` = nothing picked yet, so nothing is fetched. */
-export function useSpreadsheetTabs(tenantId: string, spreadsheetId: string | null) {
+export function useSpreadsheetTabs(spreadsheetId: string | null) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useQuery<SpreadsheetTabs, ApiError>({
-    queryKey: googleDriveKeys.tabs(tenantId, spreadsheetId ?? "none"),
-    queryFn: ({ signal }) =>
-      fetchSpreadsheetTabs({ tenantId, spreadsheetId: spreadsheetId ?? "" }, signal),
-    enabled: spreadsheetId !== null && tenantId.length > 0,
+    queryKey: googleDriveKeys.tabs(tenantKey, spreadsheetId ?? "none"),
+    queryFn: ({ signal }) => fetchSpreadsheetTabs({ spreadsheetId: spreadsheetId ?? "" }, signal),
+    enabled: spreadsheetId !== null && isResolved,
     retry: retryPolicy,
     retryDelay,
     staleTime: 60_000,
@@ -146,18 +151,19 @@ export function useSpreadsheetTabs(tenantId: string, spreadsheetId: string | nul
  * page for this tenant is dropped: keeping them would let the picker show a
  * tree the server can no longer read.
  */
-export function useDisconnectGoogle(tenantId: string | null) {
+export function useDisconnectGoogle() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<GoogleConnection, ApiError, void>({
-    mutationFn: () => disconnectGoogle(tenantId ?? ""),
+    mutationFn: () => disconnectGoogle(),
     retry: false,
     onSuccess: (result) => {
-      queryClient.setQueryData(googleDriveKeys.status(tenantId ?? "none"), result);
+      queryClient.setQueryData(googleDriveKeys.status(tenantKey), result);
     },
     onSettled: () => {
       // Prefix key: status, every folder page, every spreadsheet page, tabs.
-      void queryClient.invalidateQueries({ queryKey: googleDriveKeys.all(tenantId ?? "none") });
+      void queryClient.invalidateQueries({ queryKey: googleDriveKeys.all(tenantKey) });
     },
   });
 }
@@ -166,14 +172,15 @@ export function useDisconnectGoogle(tenantId: string | null) {
  * Forces the connection status to be re-read — used when a browse call answers
  * 409 GOOGLE_NOT_CONNECTED, so the card stops claiming the tenant is connected.
  */
-export function useRefreshGoogleConnection(tenantId: string | null) {
+export function useRefreshGoogleConnection() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   // Stable identity: callers put it in an effect dependency list, and a new
   // function every render would turn that effect into a refetch loop.
   return useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: googleDriveKeys.status(tenantId ?? "none") });
-  }, [queryClient, tenantId]);
+    void queryClient.invalidateQueries({ queryKey: googleDriveKeys.status(tenantKey) });
+  }, [queryClient, tenantKey]);
 }
 
 /** True when an error means "the tenant has no usable Google token any more". */

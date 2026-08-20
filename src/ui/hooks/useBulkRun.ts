@@ -50,7 +50,6 @@ export interface BulkRunRow {
 }
 
 export interface BulkRunInput {
-  tenantId: string;
   codes: readonly string[];
   channelIds: readonly string[];
   captionMode: BulkCaptionMode;
@@ -210,7 +209,7 @@ export function useBulkRun() {
         const code = input.codes[index];
         try {
           patchRow(runId, index, { status: "composing", reason: null, errorCode: null });
-          const composed = await composePost({ tenantId: input.tenantId, productCode: code }, signal);
+          const composed = await composePost({ productCode: code }, signal);
 
           if (runId !== runIdRef.current) return;
           patchRow(runId, index, { status: "captioning", productName: composed.content.name });
@@ -224,7 +223,6 @@ export function useBulkRun() {
           } else {
             const captions = await generateCaptions(
               {
-                tenantId: composed.tenantId,
                 content: composed.content,
                 channels: [BASE_CHANNEL_ID],
               },
@@ -265,7 +263,6 @@ export function useBulkRun() {
 
           const batch = await createPostBatch(
             {
-              tenantId: input.tenantId,
               productCode: composed.content.code,
               channelIds: input.channelIds,
               captionByChannel,

@@ -8,6 +8,7 @@ import {
   type PostJobLogResponse,
   type RetryPostJobResponse,
 } from "@/ui/schemas/post-batch.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import { listPostJobs, postKeys, retryPostJob } from "@/ui/services/post.api";
 
@@ -20,13 +21,14 @@ import { listPostJobs, postKeys, retryPostJob } from "@/ui/services/post.api";
  * do it, and pretending otherwise breaks the moment someone tries.
  */
 
-export function usePostJobLog(tenantId: string, filter: JobLogFilter) {
+export function usePostJobLog(filter: JobLogFilter) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useInfiniteQuery<PostJobLogResponse, ApiError>({
-    queryKey: postKeys.jobs(tenantId, filter),
+    queryKey: postKeys.jobs(tenantKey, filter),
     queryFn: ({ pageParam, signal }) =>
       listPostJobs(
         {
-          tenantId,
           status: filter.status,
           batchId: filter.batchId,
           cursor: typeof pageParam === "string" ? pageParam : null,
@@ -36,7 +38,7 @@ export function usePostJobLog(tenantId: string, filter: JobLogFilter) {
       ),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    enabled: tenantId.length > 0,
+    enabled: isResolved,
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
     retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, 5_000),
@@ -50,19 +52,20 @@ export function usePostJobLog(tenantId: string, filter: JobLogFilter) {
  * Re-queues one job. Never retried automatically — a retry of a retry would
  * queue the same post twice; and a 409 (đã đăng rồi) must stay a 409.
  */
-export function useRetryPostJob(tenantId: string) {
+export function useRetryPostJob() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
 
   return useMutation<RetryPostJobResponse, ApiError, { postJobId: string }>({
-    mutationFn: ({ postJobId }) => retryPostJob({ tenantId, postJobId }),
+    mutationFn: ({ postJobId }) => retryPostJob({ postJobId }),
     retry: false,
     onSettled: (result) => {
       // Even a refusal must refresh the list: the row may have moved because
       // somebody else acted on it, which is exactly why the retry failed.
-      void queryClient.invalidateQueries({ queryKey: ["posts", tenantId, "jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["posts", tenantKey, "jobs"] });
       if (result) {
         void queryClient.invalidateQueries({
-          queryKey: postKeys.batch(tenantId, result.batchId),
+          queryKey: postKeys.batch(tenantKey, result.batchId),
         });
       }
     },

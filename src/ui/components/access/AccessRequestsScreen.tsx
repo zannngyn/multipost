@@ -36,7 +36,6 @@ import {
   type AccessRequest,
   type AccessRole,
 } from "@/ui/schemas/access-request.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Quyền truy cập" (E10): who may sign in to this tenant, and who is waiting.
@@ -64,8 +63,6 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  *   error   — 4xx (không thử lại được) vs 5xx (thử lại), via `presentApiError`
  */
 export function AccessRequestsScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -75,8 +72,8 @@ export function AccessRequestsScreen() {
     [searchParams],
   );
 
-  const requests = useAccessRequests(tenantId, status);
-  const decide = useDecideAccessRequest(tenantId);
+  const requests = useAccessRequests(status);
+  const decide = useDecideAccessRequest();
 
   /** What the last decision did — announced, and shown as a banner. */
   const [outcome, setOutcome] = useState<string | null>(null);

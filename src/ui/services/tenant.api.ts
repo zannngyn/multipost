@@ -1,6 +1,5 @@
 import { TenantHealthSchema, type TenantHealth } from "@/ui/schemas/tenant-health.schema";
 
-import { ApiError } from "./api-error";
 import { apiRequest } from "./http-client";
 
 /**
@@ -12,28 +11,13 @@ import { apiRequest } from "./http-client";
  * file only owns the endpoint, its contract and its guard clauses.
  */
 
-/** Query keys carry the tenant id so cached data can never leak across tenants. */
+/** Query keys carry the tenant key so cached data can never leak across tenants. */
 export const tenantKeys = {
-  health: (tenantId: string) => ["tenant", tenantId, "health"] as const,
+  health: (tenantKey: string) => ["tenant", tenantKey, "health"] as const,
 };
 
-export async function fetchTenantHealth(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<TenantHealth> {
-  // Guard: never send an empty query — that would be a 400 round-trip for free.
-  if (typeof tenantId !== "string" || tenantId.trim().length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "tenantId is required",
-      userMessage: "Chưa có mã đơn vị (tenant) để kiểm tra.",
-    });
-  }
-
-  const query = new URLSearchParams({ tenantId: tenantId.trim() });
-
-  return apiRequest(`/api/tenants/health?${query.toString()}`, {
+export async function fetchTenantHealth(signal?: AbortSignal): Promise<TenantHealth> {
+  return apiRequest("/api/tenants/health", {
     schema: TenantHealthSchema,
     signal,
     malformedMessage:

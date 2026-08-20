@@ -17,7 +17,6 @@ import {
 import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { formatDateTime } from "@/ui/schemas/post-batch.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 
 /**
  * "Nhóm kênh" (E7.6 / E10.3): component -> hook -> service -> internal API.
@@ -37,13 +36,11 @@ import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
  * and blocks the main thread.
  */
 export function ChannelGroupsScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
-  const groups = useChannelGroups(tenantId);
-  const create = useCreateChannelGroup(tenantId);
-  const update = useUpdateChannelGroup(tenantId);
-  const remove = useDeleteChannelGroup(tenantId);
-  const channels = useChannels(tenantId);
+  const groups = useChannelGroups();
+  const create = useCreateChannelGroup();
+  const update = useUpdateChannelGroup();
+  const remove = useDeleteChannelGroup();
+  const channels = useChannels();
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);

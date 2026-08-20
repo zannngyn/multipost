@@ -5,7 +5,6 @@ import {
   type ComposeDraftPayload,
 } from "@/ui/schemas/post-draft.schema";
 
-import { ApiError } from "./api-error";
 import { apiRequest, apiRequestNoContent } from "./http-client";
 
 /**
@@ -29,7 +28,7 @@ import { apiRequest, apiRequestNoContent } from "./http-client";
 const DRAFT_TIMEOUT_MS = 8_000;
 
 export const draftKeys = {
-  compose: (tenantId: string) => ["post-draft", tenantId, "compose"] as const,
+  compose: (tenantKey: string) => ["post-draft", tenantKey, "compose"] as const,
 };
 
 const DRAFT_ENDPOINT = "/api/posts/drafts";
@@ -61,25 +60,8 @@ export const SaveComposeDraftResponseSchema = z.object({
 });
 export type SaveComposeDraftResponse = z.infer<typeof SaveComposeDraftResponseSchema>;
 
-function requireTenantId(tenantId: string): string {
-  const trimmed = typeof tenantId === "string" ? tenantId.trim() : "";
-  if (trimmed.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "tenantId is required",
-      userMessage: "Chưa có mã đơn vị (tenant).",
-    });
-  }
-  return trimmed;
-}
-
-export async function fetchComposeDraft(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<ComposeDraftResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-  return apiRequest(`${DRAFT_ENDPOINT}?${query.toString()}`, {
+export async function fetchComposeDraft(signal?: AbortSignal): Promise<ComposeDraftResponse> {
+  return apiRequest(DRAFT_ENDPOINT, {
     schema: ComposeDraftResponseSchema,
     signal,
     timeoutMs: DRAFT_TIMEOUT_MS,
@@ -89,12 +71,12 @@ export async function fetchComposeDraft(
 }
 
 export async function saveComposeDraft(
-  params: { tenantId: string; payload: ComposeDraftPayload },
+  params: { payload: ComposeDraftPayload },
   signal?: AbortSignal,
 ): Promise<SaveComposeDraftResponse> {
   return apiRequest(DRAFT_ENDPOINT, {
     method: "PUT",
-    body: { tenantId: requireTenantId(params.tenantId), payload: params.payload },
+    body: { payload: params.payload },
     schema: SaveComposeDraftResponseSchema,
     signal,
     timeoutMs: DRAFT_TIMEOUT_MS,
@@ -102,12 +84,8 @@ export async function saveComposeDraft(
   });
 }
 
-export async function discardComposeDraft(
-  tenantId: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-  await apiRequestNoContent(`${DRAFT_ENDPOINT}?${query.toString()}`, {
+export async function discardComposeDraft(signal?: AbortSignal): Promise<void> {
+  await apiRequestNoContent(DRAFT_ENDPOINT, {
     method: "DELETE",
     signal,
     timeoutMs: DRAFT_TIMEOUT_MS,
@@ -127,14 +105,10 @@ export async function discardComposeDraft(
  * Returns whether a request was handed over. `false` means the buffer on this
  * machine is the only copy — the caller has already written it.
  */
-export function beaconComposeDraft(params: {
-  tenantId: string;
-  payload: ComposeDraftPayload;
-}): boolean {
-  const tenantId = typeof params.tenantId === "string" ? params.tenantId.trim() : "";
-  if (tenantId.length === 0 || typeof window === "undefined") return false;
+export function beaconComposeDraft(params: { payload: ComposeDraftPayload }): boolean {
+  if (typeof window === "undefined") return false;
 
-  const body = JSON.stringify({ tenantId, payload: params.payload });
+  const body = JSON.stringify({ payload: params.payload });
 
   try {
     // `text/plain` avoids a CORS preflight the unloading page would not survive;
@@ -157,7 +131,6 @@ export function beaconComposeDraft(params: {
       console.warn("[draft.api] keepalive draft flush failed", {
         scope: "ui/draft.api",
         action: "beacon",
-        tenantId,
         errorName: cause instanceof Error ? cause.name : undefined,
       });
     });
@@ -166,7 +139,6 @@ export function beaconComposeDraft(params: {
     console.warn("[draft.api] draft flush could not be handed to the browser", {
       scope: "ui/draft.api",
       action: "beacon",
-      tenantId,
       errorName: cause instanceof Error ? cause.name : undefined,
     });
     return false;

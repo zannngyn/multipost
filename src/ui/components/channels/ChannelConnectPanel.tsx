@@ -54,11 +54,9 @@ const NO_AUTOFILL = {
 const TOKEN_HINT = `Token phải có đủ quyền: ${REQUIRED_TOKEN_SCOPES.join(", ")}. Token chỉ được gửi thẳng tới máy chủ và không lưu lại trên trình duyệt.`;
 
 export function ChannelConnectPanel({
-  tenantId,
   tokenInputRef,
   areWritesBlocked,
 }: {
-  tenantId: string;
   /** Lets the empty state send the operator straight into the token field. */
   tokenInputRef: RefObject<HTMLInputElement | null>;
   /**
@@ -68,8 +66,8 @@ export function ChannelConnectPanel({
    */
   areWritesBlocked: boolean;
 }) {
-  const importChannels = useImportChannels(tenantId);
-  const refresh = useRefreshChannels(tenantId);
+  const importChannels = useImportChannels();
+  const refresh = useRefreshChannels();
 
   /**
    * The counts survive `importChannels.reset()` — that reset is what drops the
@@ -225,7 +223,7 @@ export function ChannelConnectPanel({
             Blocked too: the round trip ends in the same import, so letting it
             run would send the operator to Facebook and back for nothing. */}
         <Link
-          href={channelConnectHref(tenantId)}
+          href={channelConnectHref()}
           isStandalone
           isDisabled={areWritesBlocked}
           tooltip={blockedReason}

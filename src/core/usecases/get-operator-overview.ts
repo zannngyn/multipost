@@ -12,6 +12,13 @@ import type { OperatorRole } from "@/shared/operator-access";
  */
 
 export interface OperatorOverview {
+  /**
+   * Named in the env bootstrap lists (M1.4/N6). The UI needs it to tell two
+   * `{account: null, tenants: []}` answers apart: a bootstrap admin gets the
+   * app shell (their authority lives in env, not in a membership), a genuinely
+   * new person gets the "chưa thuộc công ty nào" screen.
+   */
+  readonly isBootstrapAdmin: boolean;
   /** Null for env-bootstrap / dev-bypass sessions that have no account row. */
   readonly account: {
     readonly id: string;
@@ -30,6 +37,8 @@ export interface OperatorOverview {
 
 export interface GetOperatorOverviewInput {
   readonly sessionEmail: string;
+  /** From the SESSION's env check — this usecase never re-derives it. */
+  readonly isBootstrapAdmin: boolean;
   /** Raw cookie value; validated against the membership list, never trusted. */
   readonly cookieTenantId?: string | null;
 }
@@ -46,14 +55,15 @@ export function makeGetOperatorOverview(deps: GetOperatorOverviewDeps): GetOpera
     // --- Edge cases first ---------------------------------------------------
     const sessionEmail =
       typeof input?.sessionEmail === "string" ? input.sessionEmail.trim().toLowerCase() : "";
+    const isBootstrapAdmin = input?.isBootstrapAdmin === true;
     if (sessionEmail.length === 0) {
       // The route only calls this with a session; an empty address is a bug
       // upstream, but the safe answer is still an empty overview, not a throw.
-      return { account: null, tenants: [], activeTenantId: null };
+      return { isBootstrapAdmin, account: null, tenants: [], activeTenantId: null };
     }
 
     const summary = await deps.accounts.findAccountBySessionEmail(sessionEmail);
-    if (!summary) return { account: null, tenants: [], activeTenantId: null };
+    if (!summary) return { isBootstrapAdmin, account: null, tenants: [], activeTenantId: null };
 
     const memberships = await deps.accounts.listMembershipsWithTenant(summary.accountId);
     // A suspended tenant is not offered as a workplace (docs/09 §3.7).
@@ -87,6 +97,7 @@ export function makeGetOperatorOverview(deps: GetOperatorOverviewDeps): GetOpera
     });
 
     return {
+      isBootstrapAdmin,
       account: {
         id: summary.accountId,
         displayName: summary.displayName,

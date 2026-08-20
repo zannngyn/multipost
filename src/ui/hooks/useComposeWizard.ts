@@ -23,7 +23,6 @@ import {
 } from "@/ui/components/compose/compose-draft";
 import type { QueuedFile } from "@/ui/components/compose/upload-queue";
 import type { ComposeDraftPayload } from "@/ui/schemas/post-draft.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 import { ApiError } from "@/ui/services/api-error";
 import { composePost, generateCaptions, uploadMedia } from "@/ui/services/post.api";
 
@@ -103,7 +102,6 @@ export function useComposeWizard() {
     resolver: zodResolver(ComposeWizardSchema),
     mode: "onSubmit",
     defaultValues: {
-      tenantId: DEMO_TENANT_ID,
       productCode: "",
       color: "",
       // Ảnh is the default: Phase 1 is an album tool, video is opt-in.
@@ -193,7 +191,6 @@ export function useComposeWizard() {
     mutationFn: () => {
       const values = form.getValues();
       return uploadMedia({
-        tenantId: values.tenantId,
         productCode: values.productCode,
         files: uploadQueue.map((item) => item.file),
         // The queue order IS the album order; index 0 is the cover.
@@ -215,7 +212,6 @@ export function useComposeWizard() {
     mutationFn: () => {
       const values = form.getValues();
       return composePost({
-        tenantId: values.tenantId,
         productCode: values.productCode,
         color: values.color,
         mediaKind: values.mediaKind,
@@ -268,7 +264,6 @@ export function useComposeWizard() {
         });
       }
       return generateCaptions({
-        tenantId: composed.tenantId,
         content: composed.content,
         channels: COMPOSE_CHANNELS.map((channel) => channel.id),
       });
@@ -423,9 +418,7 @@ export function useComposeWizard() {
    * (core-wizard: always offer "bỏ để làm lại"), so the wizard itself resets.
    */
   const resetWizard = useCallback(() => {
-    const { tenantId } = form.getValues();
     form.reset({
-      tenantId,
       productCode: "",
       color: "",
       mediaKind: "image",

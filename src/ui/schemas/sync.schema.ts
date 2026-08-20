@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import type { StatusTone } from "./post-batch.schema";
-import { tenantIdField } from "./tenant-health.schema";
 
 /**
  * Contracts of the "Đồng bộ dữ liệu" screen (E2 read model + trigger).
@@ -12,9 +11,6 @@ import { tenantIdField } from "./tenant-health.schema";
  * Any change there must be reflected here — the mirror is deliberate, and the
  * runtime parse in `http-client` is what makes a drift loud instead of silent.
  */
-
-export const SyncFormSchema = z.object({ tenantId: tenantIdField() });
-export type SyncFormValues = z.infer<typeof SyncFormSchema>;
 
 export const SYNC_RUN_STATUSES = ["running", "succeeded", "partial", "failed"] as const;
 export const SyncRunStatusSchema = z.enum(SYNC_RUN_STATUSES);

@@ -20,21 +20,8 @@ import { apiRequest } from "./http-client";
  */
 
 export const channelGroupKeys = {
-  list: (tenantId: string) => ["channel-groups", tenantId] as const,
+  list: (tenantKey: string) => ["channel-groups", tenantKey] as const,
 };
-
-function requireTenantId(tenantId: string): string {
-  const trimmed = typeof tenantId === "string" ? tenantId.trim() : "";
-  if (trimmed.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "tenantId is required",
-      userMessage: "Chưa có mã đơn vị (tenant).",
-    });
-  }
-  return trimmed;
-}
 
 function requireGroupId(groupId: string): string {
   const trimmed = typeof groupId === "string" ? groupId.trim() : "";
@@ -50,11 +37,9 @@ function requireGroupId(groupId: string): string {
 }
 
 export async function listChannelGroups(
-  tenantId: string,
   signal?: AbortSignal,
 ): Promise<ChannelGroupListResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(tenantId) });
-  return apiRequest(`/api/channel-groups?${query.toString()}`, {
+  return apiRequest("/api/channel-groups", {
     schema: ChannelGroupListResponseSchema,
     signal,
     malformedMessage:
@@ -63,7 +48,6 @@ export async function listChannelGroups(
 }
 
 export interface ChannelGroupPayload {
-  tenantId: string;
   name: string;
   channelIds: readonly string[];
 }
@@ -75,7 +59,6 @@ export async function createChannelGroup(
   return apiRequest("/api/channel-groups", {
     method: "POST",
     body: {
-      tenantId: requireTenantId(payload.tenantId),
       name: payload.name,
       channelIds: [...payload.channelIds],
     },
@@ -93,7 +76,6 @@ export async function updateChannelGroup(
   return apiRequest(`/api/channel-groups/${encodeURIComponent(requireGroupId(payload.groupId))}`, {
     method: "PUT",
     body: {
-      tenantId: requireTenantId(payload.tenantId),
       name: payload.name,
       channelIds: [...payload.channelIds],
     },
@@ -105,12 +87,11 @@ export async function updateChannelGroup(
 }
 
 export async function deleteChannelGroup(
-  params: { tenantId: string; groupId: string },
+  params: { groupId: string },
   signal?: AbortSignal,
 ): Promise<DeleteChannelGroupResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(params.tenantId) });
   return apiRequest(
-    `/api/channel-groups/${encodeURIComponent(requireGroupId(params.groupId))}?${query.toString()}`,
+    `/api/channel-groups/${encodeURIComponent(requireGroupId(params.groupId))}`,
     {
       method: "DELETE",
       schema: DeleteChannelGroupResponseSchema,

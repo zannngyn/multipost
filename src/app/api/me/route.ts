@@ -35,6 +35,10 @@ export async function GET(request: Request): Promise<Response> {
 
     const overview = await container.usecases.getOperatorOverview({
       sessionEmail: session.email,
+      // From the env check the session already carried out — the UI uses it to
+      // tell a bootstrap admin from a genuinely new person (both may have
+      // `account: null, tenants: []`).
+      isBootstrapAdmin: session.isBootstrapAdmin,
       cookieTenantId: readActiveTenantCookie(request),
     });
 

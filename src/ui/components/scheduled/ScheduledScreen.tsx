@@ -27,7 +27,6 @@ import {
   timeZoneLabel,
   type ScheduledFilter,
 } from "@/ui/schemas/scheduled.schema";
-import { DEMO_TENANT_ID } from "@/ui/schemas/tenant-health.schema";
 import {
   useCancelScheduledJob,
   useReschedulePostJob,
@@ -53,8 +52,6 @@ import {
  *   error   — 4xx (sửa bộ lọc) vs 5xx (thử lại), via `presentApiError`
  */
 export function ScheduledScreen() {
-  // Phase 1 is single-tenant in the UI; E10.4 will read it from the session.
-  const tenantId = DEMO_TENANT_ID;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -68,10 +65,10 @@ export function ScheduledScreen() {
     [searchParams],
   );
 
-  const list = useScheduledJobs(tenantId, filter);
-  const groups = useChannelGroups(tenantId);
-  const reschedule = useReschedulePostJob(tenantId);
-  const cancel = useCancelScheduledJob(tenantId);
+  const list = useScheduledJobs(filter);
+  const groups = useChannelGroups();
+  const reschedule = useReschedulePostJob();
+  const cancel = useCancelScheduledJob();
   const [notice, setNotice] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 

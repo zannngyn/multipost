@@ -25,30 +25,17 @@ import { apiRequest } from "./http-client";
 
 /** Query keys of the scheduled screen; one place, so invalidation cannot drift. */
 export const scheduledKeys = {
-  all: (tenantId: string) => ["posts", tenantId, "scheduled"] as const,
-  list: (tenantId: string, filter: ScheduledFilter) =>
+  all: (tenantKey: string) => ["posts", tenantKey, "scheduled"] as const,
+  list: (tenantKey: string, filter: ScheduledFilter) =>
     [
       "posts",
-      tenantId,
+      tenantKey,
       "scheduled",
       filter.channelId ?? "all",
       filter.from ?? "any",
       filter.to ?? "any",
     ] as const,
 };
-
-function requireTenantId(tenantId: string): string {
-  const trimmed = typeof tenantId === "string" ? tenantId.trim() : "";
-  if (trimmed.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "tenantId is required",
-      userMessage: "Chưa có mã đơn vị (tenant).",
-    });
-  }
-  return trimmed;
-}
 
 function requireJobId(postJobId: string, action: string): string {
   const trimmed = typeof postJobId === "string" ? postJobId.trim() : "";
@@ -64,7 +51,6 @@ function requireJobId(postJobId: string, action: string): string {
 }
 
 export interface ListScheduledJobsParams {
-  tenantId: string;
   filter: ScheduledFilter;
   cursor?: string | null;
   limit?: number;
@@ -74,7 +60,7 @@ export async function listScheduledJobs(
   params: ListScheduledJobsParams,
   signal?: AbortSignal,
 ): Promise<ScheduledJobsResponse> {
-  const query = new URLSearchParams({ tenantId: requireTenantId(params.tenantId) });
+  const query = new URLSearchParams();
 
   if (params.filter.channelId) query.set("channelId", params.filter.channelId);
   // A malformed day never becomes a request: the helpers return null and the
@@ -95,7 +81,6 @@ export async function listScheduledJobs(
 }
 
 export interface ReschedulePostJobParams {
-  tenantId: string;
   postJobId: string;
   /** An instant. The dialog converts the operator's wall clock before calling. */
   scheduledAt: string;
@@ -123,7 +108,7 @@ export async function reschedulePostJob(
 
   return apiRequest(`/api/posts/scheduled/${encodeURIComponent(postJobId)}/reschedule`, {
     method: "POST",
-    body: { tenantId: requireTenantId(params.tenantId), scheduledAt },
+    body: { scheduledAt },
     schema: RescheduleJobResponseSchema,
     signal,
     malformedMessage:
@@ -132,7 +117,6 @@ export async function reschedulePostJob(
 }
 
 export interface CancelScheduledJobParams {
-  tenantId: string;
   postJobId: string;
   note?: string;
 }
@@ -147,7 +131,6 @@ export async function cancelScheduledJob(
   return apiRequest(`/api/posts/scheduled/${encodeURIComponent(postJobId)}/cancel`, {
     method: "POST",
     body: {
-      tenantId: requireTenantId(params.tenantId),
       ...(note.length > 0 ? { note } : {}),
     },
     schema: CancelScheduledJobResponseSchema,

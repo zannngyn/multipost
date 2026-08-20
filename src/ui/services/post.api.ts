@@ -42,15 +42,14 @@ const CAPTION_TIMEOUT_MS = 90_000;
 
 /** Query keys of the publish screens; one place, so invalidation cannot drift. */
 export const postKeys = {
-  batch: (tenantId: string, batchId: string) => ["posts", tenantId, "batch", batchId] as const,
-  jobs: (tenantId: string, filter: { status?: string | null; batchId?: string | null }) =>
-    ["posts", tenantId, "jobs", filter.status ?? "all", filter.batchId ?? "all"] as const,
+  batch: (tenantKey: string, batchId: string) => ["posts", tenantKey, "batch", batchId] as const,
+  jobs: (tenantKey: string, filter: { status?: string | null; batchId?: string | null }) =>
+    ["posts", tenantKey, "jobs", filter.status ?? "all", filter.batchId ?? "all"] as const,
   /** Deliberately NOT under `jobs`: a job-list invalidation must not refetch it. */
-  workerHealth: (tenantId: string) => ["posts", tenantId, "worker-health"] as const,
+  workerHealth: (tenantKey: string) => ["posts", tenantKey, "worker-health"] as const,
 };
 
 export interface ComposeParams {
-  tenantId: string;
   productCode: string;
   /** Any spelling; empty means "every colour of this code". */
   color?: string;
@@ -66,26 +65,24 @@ export async function composePost(
   params: ComposeParams,
   signal?: AbortSignal,
 ): Promise<ComposeResponse> {
-  const tenantId = params.tenantId?.trim() ?? "";
   const productCode = params.productCode?.trim() ?? "";
   const color = params.color?.trim() ?? "";
   const mediaKind: MediaKind = params.mediaKind === "video" ? "video" : "image";
 
-  // Guards: both are required by the usecase, so a round-trip would only
-  // produce the same 400 we can raise here.
-  if (tenantId.length === 0 || productCode.length === 0) {
+  // Guard: the usecase requires it, so a round trip would only produce the same
+  // 400 we can raise here.
+  if (productCode.length === 0) {
     throw new ApiError({
       code: "INVALID_INPUT",
       status: 0,
-      message: "composePost requires tenantId and productCode",
-      userMessage: "Thiếu mã đơn vị hoặc mã sản phẩm.",
+      message: "composePost requires a productCode",
+      userMessage: "Thiếu mã sản phẩm.",
     });
   }
 
   return apiRequest("/api/posts/compose", {
     method: "POST",
     body: {
-      tenantId,
       productCode,
       ...(color ? { color } : {}),
       mediaKind,
@@ -102,7 +99,6 @@ export async function composePost(
 }
 
 export interface UploadMediaParams {
-  tenantId: string;
   productCode: string;
   files: readonly File[];
   /** Indexes into `files`; index 0 is the cover. */
@@ -123,15 +119,14 @@ export async function uploadMedia(
   params: UploadMediaParams,
   signal?: AbortSignal,
 ): Promise<UploadResponse> {
-  const tenantId = params.tenantId?.trim() ?? "";
   const productCode = params.productCode?.trim() ?? "";
   const files = params.files ?? [];
 
-  if (tenantId.length === 0 || productCode.length === 0) {
+  if (productCode.length === 0) {
     throw new ApiError({
       code: "INVALID_INPUT",
       status: 0,
-      message: "uploadMedia requires tenantId and productCode",
+      message: "uploadMedia requires a productCode",
       userMessage: "Nhập mã sản phẩm trước khi tải file lên.",
     });
   }
@@ -146,7 +141,6 @@ export async function uploadMedia(
   }
 
   const form = new FormData();
-  form.set("tenantId", tenantId);
   form.set("productCode", productCode);
   if (params.order) form.set("order", JSON.stringify([...params.order]));
   for (const file of files) form.append("files", file);
@@ -165,7 +159,6 @@ export async function uploadMedia(
 }
 
 export interface GenerateCaptionsParams {
-  tenantId: string;
   /**
    * Whitelisted product facts ONLY. `ProductContent` is the only type accepted
    * here, so a price or a stock number has no field to travel in — and the API
@@ -179,20 +172,18 @@ export async function generateCaptions(
   params: GenerateCaptionsParams,
   signal?: AbortSignal,
 ): Promise<CaptionsResponse> {
-  const tenantId = params.tenantId?.trim() ?? "";
-  if (tenantId.length === 0 || params.channels.length === 0) {
+  if (params.channels.length === 0) {
     throw new ApiError({
       code: "INVALID_INPUT",
       status: 0,
-      message: "generateCaptions requires a tenantId and at least one channel",
-      userMessage: "Thiếu mã đơn vị hoặc chưa chọn kênh nào để viết caption.",
+      message: "generateCaptions requires at least one channel",
+      userMessage: "Chưa chọn kênh nào để viết caption.",
     });
   }
 
   return apiRequest("/api/posts/captions", {
     method: "POST",
     body: {
-      tenantId,
       // Explicit field list: whatever else the compose response carried stays
       // on this side of the wire (business rule 2).
       product: {
@@ -214,7 +205,6 @@ export async function generateCaptions(
 // --- Publish (E7.2 / E7.5 / E11.1) ------------------------------------------
 
 export interface CreatePostBatchParams {
-  tenantId: string;
   productCode: string;
   color?: string;
   /** Absent = `image_post`. A video format takes exactly one video asset. */
@@ -240,17 +230,16 @@ export async function createPostBatch(
   params: CreatePostBatchParams,
   signal?: AbortSignal,
 ): Promise<CreateBatchResponse> {
-  const tenantId = params.tenantId?.trim() ?? "";
   const productCode = params.productCode?.trim() ?? "";
   const color = params.color?.trim() ?? "";
 
   // Guards: a round trip would only return the same 400 we can raise here.
-  if (tenantId.length === 0 || productCode.length === 0) {
+  if (productCode.length === 0) {
     throw new ApiError({
       code: "INVALID_INPUT",
       status: 0,
-      message: "createPostBatch requires tenantId and productCode",
-      userMessage: "Thiếu mã đơn vị hoặc mã sản phẩm.",
+      message: "createPostBatch requires a productCode",
+      userMessage: "Thiếu mã sản phẩm.",
     });
   }
   if (params.channelIds.length === 0) {
@@ -286,7 +275,6 @@ export async function createPostBatch(
   return apiRequest("/api/posts/batches", {
     method: "POST",
     body: {
-      tenantId,
       productCode,
       ...(color ? { color } : {}),
       ...(params.format ? { format: params.format } : {}),
@@ -308,7 +296,6 @@ export async function createPostBatch(
 }
 
 export async function fetchBatchStatus(
-  tenantId: string,
   batchId: string,
   signal?: AbortSignal,
 ): Promise<BatchStatusResponse> {
@@ -322,8 +309,7 @@ export async function fetchBatchStatus(
     });
   }
 
-  const query = new URLSearchParams({ tenantId: requirePostTenantId(tenantId) });
-  return apiRequest(`/api/posts/batches/${encodeURIComponent(id)}?${query.toString()}`, {
+  return apiRequest(`/api/posts/batches/${encodeURIComponent(id)}`, {
     schema: BatchStatusResponseSchema,
     signal,
     malformedMessage:
@@ -332,7 +318,6 @@ export async function fetchBatchStatus(
 }
 
 export interface ListPostJobsParams {
-  tenantId: string;
   status?: PostJobStatus | null;
   batchId?: string | null;
   cursor?: string | null;
@@ -343,7 +328,7 @@ export async function listPostJobs(
   params: ListPostJobsParams,
   signal?: AbortSignal,
 ): Promise<PostJobLogResponse> {
-  const query = new URLSearchParams({ tenantId: requirePostTenantId(params.tenantId) });
+  const query = new URLSearchParams();
   if (params.status) query.set("status", params.status);
   if (params.batchId) query.set("batchId", params.batchId);
   if (params.cursor) query.set("cursor", params.cursor);
@@ -365,13 +350,8 @@ export async function listPostJobs(
  * is part of the answer, not an error. A non-200 here therefore means the check
  * itself failed, which the screen shows as its quietest notice.
  */
-export async function fetchWorkerHealth(
-  params: { tenantId: string },
-  signal?: AbortSignal,
-): Promise<WorkerHealth> {
-  const query = new URLSearchParams({ tenantId: requirePostTenantId(params.tenantId) });
-
-  return apiRequest(`/api/posts/worker-health?${query.toString()}`, {
+export async function fetchWorkerHealth(signal?: AbortSignal): Promise<WorkerHealth> {
+  return apiRequest("/api/posts/worker-health", {
     schema: WorkerHealthSchema,
     signal,
     malformedMessage:
@@ -381,7 +361,7 @@ export async function fetchWorkerHealth(
 
 /** Re-queues ONE job. The stock gate still runs before the post goes out. */
 export async function retryPostJob(
-  params: { tenantId: string; postJobId: string },
+  params: { postJobId: string },
   signal?: AbortSignal,
 ): Promise<RetryPostJobResponse> {
   const postJobId = params.postJobId?.trim() ?? "";
@@ -396,23 +376,11 @@ export async function retryPostJob(
 
   return apiRequest(`/api/posts/jobs/${encodeURIComponent(postJobId)}/retry`, {
     method: "POST",
-    body: { tenantId: requirePostTenantId(params.tenantId) },
+    // The company comes from the session; the route ignores a legacy body.
+    body: {},
     schema: RetryPostJobResponseSchema,
     signal,
     malformedMessage:
       "Kết quả chạy lại không đúng định dạng. Hãy tải lại nhật ký để xem trạng thái thật của bài.",
   });
-}
-
-function requirePostTenantId(tenantId: string): string {
-  const trimmed = typeof tenantId === "string" ? tenantId.trim() : "";
-  if (trimmed.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "tenantId is required",
-      userMessage: "Chưa có mã đơn vị (tenant).",
-    });
-  }
-  return trimmed;
 }

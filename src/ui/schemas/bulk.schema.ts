@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { tenantIdField } from "./tenant-health.schema";
 
 /**
  * Contracts of the "Chạy hàng loạt" screen (E10.5).
@@ -166,7 +165,7 @@ export const BULK_CAPTION_MODE_LABELS: Record<BulkCaptionMode, string> = {
 
 export const BulkRunFormSchema = z
   .object({
-    tenantId: tenantIdField(),
+    // No `tenantId` (M1.4): the run belongs to the company in the session.
     codesText: z.string().min(1, "Nhập ít nhất một mã sản phẩm."),
     captionMode: z.enum(BULK_CAPTION_MODES),
     captionTemplate: z.string(),

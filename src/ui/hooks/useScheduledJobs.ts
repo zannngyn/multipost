@@ -9,6 +9,7 @@ import {
   type ScheduledFilter,
   type ScheduledJobsResponse,
 } from "@/ui/schemas/scheduled.schema";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
 import {
   cancelScheduledJob,
@@ -32,13 +33,14 @@ import {
  */
 const SCHEDULED_REFETCH_MS = 60_000;
 
-export function useScheduledJobs(tenantId: string, filter: ScheduledFilter) {
+export function useScheduledJobs(filter: ScheduledFilter) {
+  const { tenantKey, isResolved } = useActiveTenant();
+
   return useInfiniteQuery<ScheduledJobsResponse, ApiError>({
-    queryKey: scheduledKeys.list(tenantId, filter),
+    queryKey: scheduledKeys.list(tenantKey, filter),
     queryFn: ({ pageParam, signal }) =>
       listScheduledJobs(
         {
-          tenantId,
           filter,
           cursor: typeof pageParam === "string" ? pageParam : null,
           limit: SCHEDULED_DEFAULT_LIMIT,
@@ -47,7 +49,7 @@ export function useScheduledJobs(tenantId: string, filter: ScheduledFilter) {
       ),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
-    enabled: tenantId.length > 0,
+    enabled: isResolved,
     // A 4xx repeats the same bad filter — only transport/server errors retry.
     retry: (failureCount, error) =>
       ApiError.is(error) && error.isRetryable ? failureCount < 2 : false,
@@ -64,26 +66,27 @@ export function useScheduledJobs(tenantId: string, filter: ScheduledFilter) {
  * means the row moved (a worker claimed it, somebody else cancelled it), which
  * is exactly the state the operator now needs to see.
  */
-function useScheduledMutationInvalidation(tenantId: string) {
+function useScheduledMutationInvalidation() {
   const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
+
   return () => {
-    void queryClient.invalidateQueries({ queryKey: scheduledKeys.all(tenantId) });
+    void queryClient.invalidateQueries({ queryKey: scheduledKeys.all(tenantKey) });
     // The job log is the audit view of the same rows; a cancelled post has to
     // show up there as `blocked` immediately.
-    void queryClient.invalidateQueries({ queryKey: ["posts", tenantId, "jobs"] });
+    void queryClient.invalidateQueries({ queryKey: ["posts", tenantKey, "jobs"] });
   };
 }
 
-export function useReschedulePostJob(tenantId: string) {
-  const invalidate = useScheduledMutationInvalidation(tenantId);
+export function useReschedulePostJob() {
+  const invalidate = useScheduledMutationInvalidation();
 
   return useMutation<
     RescheduleJobResponse,
     ApiError,
     { postJobId: string; scheduledAt: string }
   >({
-    mutationFn: ({ postJobId, scheduledAt }) =>
-      reschedulePostJob({ tenantId, postJobId, scheduledAt }),
+    mutationFn: ({ postJobId, scheduledAt }) => reschedulePostJob({ postJobId, scheduledAt }),
     // Never automatic: QUEUE_ERROR means the row already changed, and a blind
     // retry would enqueue the same post a second time.
     retry: false,
@@ -91,11 +94,11 @@ export function useReschedulePostJob(tenantId: string) {
   });
 }
 
-export function useCancelScheduledJob(tenantId: string) {
-  const invalidate = useScheduledMutationInvalidation(tenantId);
+export function useCancelScheduledJob() {
+  const invalidate = useScheduledMutationInvalidation();
 
   return useMutation<CancelScheduledJobResponse, ApiError, { postJobId: string; note?: string }>({
-    mutationFn: ({ postJobId, note }) => cancelScheduledJob({ tenantId, postJobId, note }),
+    mutationFn: ({ postJobId, note }) => cancelScheduledJob({ postJobId, note }),
     retry: false,
     onSettled: invalidate,
   });
