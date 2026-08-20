@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { OperatorIdentity } from "@/core/domain/access-request";
@@ -8,7 +8,8 @@ import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
 
 import { DrizzleAccessRequestRepo } from "./access-request-repo.drizzle";
 import { makeDbHandle } from "./client";
-import { accessRequests, auditLogs, tenants, users } from "./schema";
+import { accessRequests, accounts, auditLogs, identities, tenants, users } from "./schema";
+import { makeGlobalIdentityTestLock } from "./__fixtures__/global-identity-lock";
 
 /**
  * The WRITE path of the access registry — the parts a stubbed query builder
@@ -42,10 +43,17 @@ function recordingLogger(lines: LogLine[]): Logger {
   return make();
 }
 
+/**
+ * Unique per run: since M1.2, `decide()` writes GLOBAL `account`/`identity`
+ * rows, and a fixed id here would collide with other test files (and with the
+ * real bootstrap admin id) on the shared database.
+ */
+const RUN_FB_ID = `9927${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
 const facebookIdentity: OperatorIdentity = {
   provider: "facebook",
-  providerAccountId: "992710700450296",
-  sessionEmail: "fb-992710700450296@facebook.local",
+  providerAccountId: RUN_FB_ID,
+  sessionEmail: `fb-${RUN_FB_ID}@facebook.local`,
   // Facebook may return none — the column must accept it.
   email: null,
   displayName: "Nguyen Van A",
@@ -57,13 +65,39 @@ describe.skipIf(!url)("DrizzleAccessRequestRepo — the write path", () => {
   const repo = new DrizzleAccessRequestRepo(handle.db, { logger: recordingLogger(lines) });
   const tenantId = randomUUID();
 
+  /** Every session address this file ever writes — the cleanup key. */
+  const RUN_EMAILS = [
+    facebookIdentity.sessionEmail,
+    "a@gmail.com",
+    "shared@example.org",
+    "later@gmail.com",
+  ];
+
   const clean = async () => {
     await handle.db.delete(auditLogs).where(eq(auditLogs.tenantId, tenantId));
     await handle.db.delete(accessRequests).where(eq(accessRequests.tenantId, tenantId));
     await handle.db.delete(users).where(eq(users.tenantId, tenantId));
+    // M1.2: decide() provisions GLOBAL account/identity rows — leaving them
+    // behind poisons the backfill test, which replays migration SQL against
+    // whatever this table holds. Deleting the accounts cascades to identities
+    // and memberships.
+    const minted = await handle.db
+      .select({ accountId: identities.accountId })
+      .from(identities)
+      .where(inArray(identities.sessionEmail, RUN_EMAILS));
+    if (minted.length > 0) {
+      await handle.db
+        .delete(accounts)
+        .where(inArray(accounts.id, [...new Set(minted.map((row) => row.accountId))]));
+    }
   };
 
+  // decide() writes GLOBAL identity rows since M1.2 — serialise against the
+  // backfill test, which replays migration SQL over the whole registry table.
+  const globalLock = makeGlobalIdentityTestLock(url ?? "postgres://unused");
+
   beforeAll(async () => {
+    await globalLock.acquire();
     await handle.db
       .insert(tenants)
       .values({ id: tenantId, name: `E1.4 access ${tenantId}`, status: "active" });
@@ -77,6 +111,7 @@ describe.skipIf(!url)("DrizzleAccessRequestRepo — the write path", () => {
   afterAll(async () => {
     await clean();
     await handle.db.delete(tenants).where(eq(tenants.id, tenantId));
+    await globalLock.release();
     await handle.close();
   });
 

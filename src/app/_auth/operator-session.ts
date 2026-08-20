@@ -1,4 +1,4 @@
-import type { OperatorRole } from "@/shared/operator-access";
+import type { OperatorRole, PlatformRole } from "@/shared/operator-access";
 
 /**
  * What the app layer needs to know about the signed-in operator.
@@ -23,6 +23,15 @@ export interface OperatorSession {
    * filter who can sign in but must never hand out unblockable admin rights.
    */
   isBootstrapAdmin: boolean;
+  /**
+   * M1.2 (additive — the 13 existing consumers keep compiling): the person
+   * behind this session. Null for the dev bypass and for env-bootstrap
+   * sessions that have no account row yet; everything tenant-scoped resolves
+   * through `requireTenant`, which refuses a null account.
+   */
+  accountId: string | null;
+  /** `account.platform_role` (docs/09 §3.5). Null = ordinary operator. */
+  platformRole: PlatformRole | null;
 }
 
 /** May this operator approve/block other people? */

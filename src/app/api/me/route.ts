@@ -1,0 +1,45 @@
+import { getOperatorSession } from "@/app/_auth/session";
+import { readActiveTenantCookie } from "@/app/_lib/active-tenant-cookie";
+import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
+import { mapAppErrorToHttp, type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { getContainer } from "@/composition/container";
+import { AppError } from "@/core/domain/errors";
+
+/**
+ * M1.2 — `GET /api/me`: account + companies + active tenant (doc 10 §4.4).
+ * Serves EVERY signed-in state, including NoMembership (`tenants: []`) and a
+ * bootstrap/dev session with no account row (`account: null`) — the UI decides
+ * between picker, create-or-join and the app shell from this one answer.
+ * Thin by contract (docs/07 §3.3).
+ */
+
+const ROUTE = "GET /api/me";
+
+export const dynamic = "force-dynamic";
+
+export async function GET(request: Request): Promise<Response> {
+  let logger: ErrorLogger = fallbackLogger;
+
+  try {
+    const container = getContainer();
+    logger = container.logger;
+
+    // --- Edge case first ----------------------------------------------------
+    const session = await getOperatorSession(`api:${ROUTE}`);
+    if (!session) {
+      throw new AppError("UNAUTHORIZED", {
+        message: "GET /api/me requires a signed-in operator",
+        context: { route: ROUTE },
+      });
+    }
+
+    const overview = await container.usecases.getOperatorOverview({
+      sessionEmail: session.email,
+      cookieTenantId: readActiveTenantCookie(request),
+    });
+
+    return Response.json(overview);
+  } catch (error) {
+    return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });
+  }
+}

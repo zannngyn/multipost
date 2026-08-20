@@ -109,7 +109,7 @@ POST /api/platform/tenant-sessions { tenantId, purpose }
 
 ### 3.7 Self-service — biên chống abuse
 
-`tenant.created_by_account_id` + rate limit: mỗi account tối đa **3 tenant**, tối đa 1 tenant/giờ (hằng cấu hình được). `tenant.status='suspended'` chặn toàn bộ thành viên (tầng S thấy ngay). Billing/quota ngoài phạm vi nhưng invariant đặt từ bây giờ.
+`tenant.created_by_account_id` + rate limit: mỗi account tối đa **3 tenant**, tối đa 1 tenant/giờ (hằng cấu hình được). `tenant.status='suspended'` chặn toàn bộ thành viên (tầng S thấy ngay). **`tenant.plan`** (`'internal'` | `'standard'`, mở rộng sau — quyết định PM 19/08, doc 10 §8.9): mọi giới hạn tiêu dùng (trần AI/ngày, quota) treo theo plan; tenant MYSP là `internal` không trần. Billing/thanh toán ngoài phạm vi nhưng invariant plan đặt từ M1.1.
 
 ### 3.8 State machine của actor
 
@@ -125,15 +125,16 @@ Mọi màn UI và mọi route phải xác định mình phục vụ state nào; 
 
 ## 4. Lộ trình — 3 phần *(estimate sửa sau review; M1.3 chốt lại sau M1.0)*
 
-Ước lượng theo ngày dev thuần (flow agent team + gate). **Tổng ~13–14,5 ngày ≈ 3 tuần lịch.**
+Ước lượng theo ngày dev thuần (flow agent team + gate). **Tổng ~15,5–16,5 ngày ≈ 3,5 tuần lịch** *(cập nhật sau M1.0 — phần test 87 file là cấu phần chi phối)*.
 
-### Phần 1 — Hợp đồng + nền móng + vá B-8 *(≈ 6–7,5 ngày)*
+### Phần 1 — Hợp đồng + nền móng + vá B-8 *(≈ 8,5–9,5 ngày — cập nhật sau M1.0)*
 
-- [ ] **M0** Threat model + hợp đồng phân quyền: ma trận actor × resource × action (viewer/editor/admin/owner × platform support/super_admin), danh sách tầng S/M/R cho toàn bộ 40 route, error semantics 401/404/403/409, state machine — đây là văn bản mà mọi milestone sau đối chiếu — *0,5–1 ngày* —
-- [ ] **M1.0** Inventory tenant propagation: với từng route lần theo route → usecase → repo → worker/cookie/signed-URL, lập bảng nguồn-đích của `tenantId`; **chốt lại estimate M1.3 bằng số liệu này** — *0,5 ngày* —
-- [ ] **M1.1** Schema `account` + `identity` + `membership`(+version) + `app_user.account_id` (UNIQUE tenant+account) + `invite` (tạo trước, chưa dùng) + `tenant.slug/created_by`; migration + backfill từ `access_request`/`app_user` (integration test trên dump dev); seed cập nhật — *1 ngày* —
-- [ ] **M1.2** Phiên + `requireTenant()` trả branded `TenantId`, cookie active-tenant, cache 3 tầng + `membership.version`, `GET /api/me`, `POST /api/me/active-tenant` — *1 ngày* —
-- [ ] **M1.3** Sửa **40 route** theo hợp đồng M0: bỏ `tenantId` từ client, đổi chữ ký port/usecase sang `TenantId`, bỏ `tenantId` khỏi 2 cookie OAuth state; route media HMAC giữ cơ chế riêng — *1–2,5 ngày (chốt sau M1.0)* —
+- [x] **M0** Threat model + hợp đồng phân quyền → **`docs/10-hop-dong-phan-quyen.md`** — gate reviewer-qa PASS, PM duyệt 19/08/2026 (12 quyết định mục 8, điều chỉnh 8.9: trần theo gói, MYSP không trần) — *commit 2a06319* ✅
+- [x] **M1.0** Inventory tenant propagation → **`docs/11-kiem-ke-tenant-propagation.md`** — 96 chữ ký port, 78 call site `forTenant`, 38 schema route, **87 file test/1.378 test case**; chốt M1.3 = 4 ngày tách đôi a/b — *19/08/2026* ✅
+- [x] **M1.1** Schema `account`/`identity`/`membership`/`invite` + sửa 4 bảng cũ; backfill trong migration `0013` (case-fold đủ 9 chỗ, blocked thắng xuyên tenant); seed `dev@localhost`. Gate PASS lần 2 — *commit 981cd91, 19/08* ✅. **Trước khi deploy prod chạy 3 câu SQL kiểm** (docs/11 §2 bổ sung): identity không lower · membership dưới account suspended · `app_user` trùng `(tenant, lower(email))` — câu thứ 3 vỡ là migration rollback nguyên tử, dọn rồi deploy lại. **Nghĩa vụ M1.2:** tra `session_email` TRƯỚC rồi vá placeholder `legacy-app-user:*`, không upsert theo `(provider, sub)` —
+- [x] **M1.2** Phiên mang tenant (identity→account→membership), `requireTenant()` branded `TenantId` + cache 3 tầng, cookie active-tenant, `/api/me` + `/api/me/active-tenant`, decide nối account, **chống chiếm quyền qua sub tái cấp (2 tầng, 1 luật chung)**. Gate PASS lần 2 — *commit 4c9adfc, 19/08* ✅. Vé mang sang: N4 (đường không-cookie bỏ cache — đo trước M1.3b), N5 (2 nhánh test tenant-suspended), N6 (`/api/me` thêm cờ `isBootstrapAdmin` cho M1.4), dọn identity cũ ở /access —
+- [ ] **M1.3a** Brand `TenantId` xuống lõi, KHÔNG đổi hành vi: `tenant-scope.ts` → 51 DTO port → 43 input usecase → 78 call site; unbrand có tên ở 3 biên chuỗi thô (Redis key, FS path, HMAC); `systemTenantId()` + ESLint cấm `as TenantId`; **helper `testTenantId()` + codemod 87 file test ở commit đầu**; route tạm cast qua MỘT hàm `legacyTenantIdFromRequest()` — *1,75 ngày* (chi tiết docs/11 §3) —
+- [ ] **M1.3b** Cắt dây từ client, đổi hành vi: gỡ 38 schema, `requireTenant()` vào 46 edge, xoá `legacyTenantIdFromRequest()`, OAuth state server-side + `proxy.ts` 302, bug B2–B6 doc 10, suspended-guard worker, ~10 route test nhóm rủi ro cao. **Quá độ: server bỏ qua `tenantId` client gửi (không lỗi) cho tới M1.4** — *2,25 ngày* —
 - [ ] **M1.4** UI: gỡ `DEMO_TENANT_ID` khỏi 13 file, xoá 3 ô nhập UUID, services bỏ tham số tenantId (query key lấy từ `useActiveTenant()`), top bar tên công ty thật, màn NoMembership tạm — *1 ngày* —
 - [ ] **M1.5** Gate + **negative test matrix** (mục 5) chạy thật trên dev với ≥2 account, ≥2 tenant, có account thuộc CẢ HAI tenant — *1 ngày* —
 
@@ -188,7 +189,7 @@ Grep "tenantId từ request" = 0          → chỉ là điều kiện phụ, kh
 
 | Phần | Milestone | Ước lượng | Trạng thái |
 |---|---|---|---|
-| 1 — Hợp đồng + nền móng | M0 → M1.5 | 6–7,5 ngày | ⬜ chưa bắt đầu |
+| 1 — Hợp đồng + nền móng | M0 → M1.5 | 8,5–9,5 ngày | 🟨 M0 ✅ · M1.0 ✅ (19/08) · kế tiếp M1.1 |
 | 2 — Onboarding | M2.1 → M2.4 | 3,5 ngày | ⬜ chưa bắt đầu |
 | 3 — Quản trị MYSP | M3.1 → M3.3 | 3,5 ngày | ⬜ chưa bắt đầu |
 

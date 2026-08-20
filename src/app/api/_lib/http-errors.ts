@@ -20,6 +20,11 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   // session is fine, so the screen must not bounce the operator to /signin.
   ACCESS_FORBIDDEN: 403,
   ACCESS_REQUEST_NOT_FOUND: 404,
+  // Multi-tenant session (M1.2, doc 10 §3): 409 = "pick a tenant" (UI shows the
+  // picker); 403 = member but role too low. "No membership" is never 403 — it is
+  // TENANT_NOT_FOUND 404, so outsiders cannot probe which tenants exist.
+  TENANT_NOT_SELECTED: 409,
+  FORBIDDEN: 403,
   TENANT_NOT_FOUND: 404,
   INTERNAL: 500,
   DB_ERROR: 503,

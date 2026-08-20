@@ -1,6 +1,11 @@
 /** Drizzle schema barrel — the single entry point for drizzle-kit and the client. */
+export * from "./_actor-kind";
+export * from "./account";
 export * from "./tenant";
 export * from "./tenant-integration";
+export * from "./identity";
+export * from "./membership";
+export * from "./invite";
 export * from "./user";
 export * from "./audit-log";
 export * from "./access-request";

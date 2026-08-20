@@ -125,6 +125,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => {
         return decideSignIn(
           {
             tenantId: ACCESS_REGISTRY_TENANT_ID,
+            signInAccount: (input) => container.usecases.operatorAccounts.signIn(input),
             register: (input) => container.usecases.operatorAccess.register(input),
             logger: container.logger,
           },

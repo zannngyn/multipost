@@ -26,14 +26,26 @@ interface LogLine {
   context?: Record<string, unknown>;
 }
 
-function harness(status = "pending", options: { failing?: boolean } = {}) {
+type AccountKind = "unknown" | "suspended" | "no_membership" | "member";
+
+function harness(
+  status = "pending",
+  options: { failing?: boolean; account?: AccountKind } = {},
+) {
   const lines: LogLine[] = [];
   const register = vi.fn(async () => {
     if (options.failing) throw new Error("connection refused");
     return { status };
   });
+  // M1.2: the account tables answer first; `unknown` falls through to the
+  // legacy registry flow, which is what the pre-M1.2 tests exercised.
+  const signInAccount = vi.fn(async (): Promise<{ kind: AccountKind }> => {
+    if (options.failing) throw new Error("connection refused");
+    return { kind: options.account ?? "unknown" };
+  });
   const deps = {
     tenantId: TENANT,
+    signInAccount,
     register,
     logger: {
       warn: (message: string, context?: Record<string, unknown>) =>
@@ -42,7 +54,7 @@ function harness(status = "pending", options: { failing?: boolean } = {}) {
         lines.push({ level: "error", message, context }),
     },
   };
-  return { deps, register, lines };
+  return { deps, register, signInAccount, lines };
 }
 
 const googleUser = {
@@ -87,10 +99,30 @@ describe("AUTH_ALLOWED_DOMAINS is a filter, not a grant", () => {
     });
   });
 
-  it("lets a domain match in once the registry approves it", async () => {
-    const { deps } = harness("approved");
+  it("lets a domain match in once they hold an active membership", async () => {
+    // Post-M1.2 an approval WRITES a membership (decide wiring), so "approved"
+    // manifests as the account tables answering `member`.
+    const { deps, register } = harness("approved", { account: "member" });
     const decideSignIn = await loadGate();
     await expect(decideSignIn(deps, googleUser)).resolves.toBe(true);
+    // The membership decided — the legacy registry was not even consulted.
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it("holds at the door when the registry says approved but no membership exists (drift)", async () => {
+    // Pre-M1.2 approval the backfill missed / a failed provision: letting them
+    // in would mint a session getOperatorSession refuses — a redirect loop.
+    const { deps, lines } = harness("approved", { account: "unknown" });
+    const decideSignIn = await loadGate();
+    await expect(decideSignIn(deps, googleUser)).resolves.toBe("/signin?error=pending_approval");
+    expect(lines.some((line) => line.level === "error")).toBe(true);
+  });
+
+  it("refuses a suspended account outright — the registry cannot rescue it", async () => {
+    const { deps, register } = harness("approved", { account: "suspended" });
+    const decideSignIn = await loadGate();
+    await expect(decideSignIn(deps, googleUser)).resolves.toBe(false);
+    expect(register).not.toHaveBeenCalled();
   });
 
   it("refuses a domain match the registry has blocked", async () => {
@@ -111,9 +143,9 @@ describe("AUTH_ALLOWED_DOMAINS is a filter, not a grant", () => {
     expect(register).not.toHaveBeenCalled();
   });
 
-  it("applies NO domain filter when the list is blank — the registry decides", async () => {
+  it("applies NO domain filter when the list is blank — the membership decides", async () => {
     vi.stubEnv("AUTH_ALLOWED_DOMAINS", "");
-    const { deps } = harness("approved");
+    const { deps } = harness("approved", { account: "member" });
     const decideSignIn = await loadGate();
 
     await expect(

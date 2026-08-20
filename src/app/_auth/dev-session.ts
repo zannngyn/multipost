@@ -54,11 +54,16 @@ export function getDevFakeSession(surface: string): OperatorSession | null {
   // `isBootstrapAdmin` so the bypass can reach the access-approval screen too:
   // a dev session that cannot test the admin flow is a dev session that hides
   // bugs in it. Both guards above still confine this to local development.
+  // accountId stays null ON PURPOSE: the bypass must work with no database at
+  // all. /api/me resolves the seeded dev@localhost account by ADDRESS, so the
+  // multi-tenant flow is still testable offline-first.
   return {
     email: DEV_FAKE_SESSION_EMAIL,
     name: DEV_FAKE_SESSION_NAME,
     isDevFake: true,
     role: null,
     isBootstrapAdmin: true,
+    accountId: null,
+    platformRole: null,
   };
 }

@@ -26,6 +26,18 @@ export type OperatorRole = (typeof OPERATOR_ROLES)[number];
 export const ACCESS_ADMIN_ROLES: readonly OperatorRole[] = ["owner", "admin"];
 
 /**
+ * MYSP-staff privileges, held by the PERSON (docs/09 §3.5). Lives here (not in
+ * core/domain/account) because the SESSION carries it, and the app layer that
+ * builds sessions may only import `shared` and `core/domain/errors`.
+ */
+export const PLATFORM_ROLES = ["support", "super_admin"] as const;
+export type PlatformRole = (typeof PLATFORM_ROLES)[number];
+
+export function isPlatformRole(value: unknown): value is PlatformRole {
+  return typeof value === "string" && (PLATFORM_ROLES as readonly string[]).includes(value);
+}
+
+/**
  * Domain of the synthetic address a Facebook session carries.
  *
  * WHY IT EXISTS: Auth.js drops `session.user` entirely when the token has no
@@ -76,6 +88,25 @@ export function normaliseEmail(value: unknown): string | null {
   const email = value.trim().toLowerCase();
   if (email.length === 0 || email.length > 320) return null;
   return EMAIL_PATTERN.test(email) ? email : null;
+}
+
+/**
+ * Provider-account-id PLACEHOLDERS — rows whose real sub was unknown when they
+ * were written: `legacy-app-user:<email>` (M1.1 backfill) and `seed:<name>`
+ * (dev seed). They are the ONLY values a sign-in may overwrite: a real sub is
+ * the stable identity (docs/09 §3.1), and replacing one because the e-mail
+ * matched is exactly the account-takeover the identity model exists to prevent
+ * (an address can be recycled to a different person; a sub cannot).
+ *
+ * One rule, three enforcement points (sign-in usecase, identity repo UPDATE,
+ * admin approve) — they must never drift apart, hence a shared function
+ * instead of three regexes.
+ */
+export const PLACEHOLDER_PROVIDER_ACCOUNT_ID_PREFIXES = ["legacy-app-user:", "seed:"] as const;
+
+export function isPlaceholderProviderAccountId(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return PLACEHOLDER_PROVIDER_ACCOUNT_ID_PREFIXES.some((prefix) => value.startsWith(prefix));
 }
 
 /** Trimmed provider account id, or null when it is missing/unsafe. */

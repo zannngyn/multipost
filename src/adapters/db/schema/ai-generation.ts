@@ -11,7 +11,9 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import { actorKindEnum } from "./_actor-kind";
 import { tenantIdColumn } from "./_tenant-column";
+import { users } from "./user";
 
 /**
  * ONE ROW PER ATTEMPT — including every failed one (docs/ai/prompt-versioning.md
@@ -77,6 +79,24 @@ export const aiGenerations = pgTable(
     >(),
     /** GeneratedContent kept for eval/debug; a retention job trims it later. */
     output: jsonb("output"),
+    /**
+     * WHO spent this money (doc 10 §8.9). Spend is charged to the tenant's plan,
+     * so the tenant column already answers billing; this pair answers the two
+     * questions billing cannot: "which operator burned the daily allowance" and
+     * "was this a person at all, or a background job".
+     *
+     * Two columns rather than one because `created_by_user_id IS NULL` is
+     * ambiguous on its own — worker, or an operator we failed to resolve. Both
+     * are nullable and `actor_kind` has no default: rows written before M1.1
+     * genuinely do not know, and a default would state otherwise. A real FK (not
+     * the loose text ids this table uses for post/batch/channel) because
+     * `app_user` is a small table in the same database and the join is the whole
+     * point of the column; `set null` keeps the cost row after the operator goes.
+     */
+    actorKind: actorKindEnum("actor_kind"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     /** Business context — nullable: a caption is written BEFORE the job exists. */
     postJobId: text("post_job_id"),
     batchId: text("batch_id"),
