@@ -6,6 +6,7 @@ import { LogOut } from "lucide-react";
 import { useState, useTransition } from "react";
 
 import { AppSearch } from "@/ui/components/shell/AppSearch";
+import { TenantSwitcher } from "@/ui/components/shell/TenantSwitcher";
 
 /**
  * The app's identity bar: who the product is, which shop it is reading, and who
@@ -23,7 +24,11 @@ export function AppTopBar({
   onSignOut,
 }: {
   operatorLabel: string;
-  /** null when the tenant could not be read — the bar renders without it. */
+  /**
+   * What the SERVER resolved for this request — the first paint, before
+   * `/api/me` answers on the client. Null when no company is established yet;
+   * the switcher then says so itself.
+   */
   tenantName: string | null;
   /** Absent for the dev bypass session, which has nothing to sign out of. */
   onSignOut?: () => Promise<void>;
@@ -92,7 +97,10 @@ export function AppTopBar({
   return (
     <TopNav
       label="Thanh trên cùng"
-      heading={<TopNavHeading heading="MYSP" headingHref="/" subheading={tenantName ?? undefined} />}
+      heading={<TopNavHeading heading="MYSP" headingHref="/" />}
+      // The company is no longer a label but a control (M2.3): it says where
+      // you are AND is the way out of it, plus the only door to "tạo công ty".
+      startContent={<TenantSwitcher fallbackLabel={tenantName} />}
       endContent={
         <>
           <AppSearch />

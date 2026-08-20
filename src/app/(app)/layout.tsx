@@ -38,13 +38,17 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // The company of THIS session, not a hardcoded one (M1.4). Read here so the
   // top bar is correct in the first paint; the client learns the same fact from
   // `/api/me` for everything that has to react to a switch.
+  //
+  // The NAME only: since M2.1 the plan and the role live inside the switcher
+  // menu, and a first paint that says more than the hydrated control would make
+  // the label visibly change under the operator.
   const cookieHeader = (await headers()).get("cookie");
   const tenant = await readActiveTenantLabel(session, cookieHeader);
 
   return (
     <AppFrame
       operatorLabel={session.name ?? session.email}
-      tenantName={tenantLabel(tenant.name, tenant.plan)}
+      tenantName={tenant.name}
       signOutAction={session.isDevFake ? undefined : signOutOperator}
     >
       {/* Blocks the screens below until a company is established — the picker
@@ -52,12 +56,4 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       <TenantBoundary>{children}</TenantBoundary>
     </AppFrame>
   );
-}
-
-/** "Nhà Xe An Anh · Pro" — nothing when the company is not established yet. */
-function tenantLabel(name: string | null, plan: string | null): string | null {
-  if (!name) return null;
-  const trimmedPlan = plan?.trim() ?? "";
-  if (trimmedPlan.length === 0) return name;
-  return `${name} · ${trimmedPlan.charAt(0).toUpperCase()}${trimmedPlan.slice(1)}`;
 }

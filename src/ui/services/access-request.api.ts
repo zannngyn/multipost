@@ -1,15 +1,9 @@
 import {
-  AccessDecisionResponseSchema,
   AccessRequestListResponseSchema,
-  DEFAULT_ACCESS_ROLE,
-  type AccessDecision,
-  type AccessDecisionResponse,
   type AccessFilterStatus,
   type AccessRequestListResponse,
-  type AccessRole,
 } from "@/ui/schemas/access-request.schema";
 
-import { ApiError } from "./api-error";
 import { apiRequest } from "./http-client";
 
 /**
@@ -31,18 +25,6 @@ export const accessRequestKeys = {
 };
 
 
-function requireRequestId(id: string): string {
-  const trimmed = typeof id === "string" ? id.trim() : "";
-  if (trimmed.length === 0) {
-    throw new ApiError({
-      code: "INVALID_INPUT",
-      status: 0,
-      message: "access request id is required",
-      userMessage: "Thiếu mã yêu cầu truy cập.",
-    });
-  }
-  return trimmed;
-}
 
 export async function listAccessRequests(
   status: AccessFilterStatus,
@@ -57,30 +39,5 @@ export async function listAccessRequests(
     signal,
     malformedMessage:
       "Danh sách yêu cầu truy cập không đúng định dạng. Hãy báo quản trị viên kiểm tra máy chủ.",
-  });
-}
-
-/**
- * A role only travels with an approval — sending one alongside "block" would
- * describe a permission nobody is being granted.
- */
-export async function decideAccessRequest(
-  params: { id: string; decision: AccessDecision; role?: AccessRole },
-  signal?: AbortSignal,
-): Promise<AccessDecisionResponse> {
-  const id = requireRequestId(params.id);
-
-  const body =
-    params.decision === "approve"
-      ? { id, decision: "approve" as const, role: params.role ?? DEFAULT_ACCESS_ROLE }
-      : { id, decision: "block" as const };
-
-  return apiRequest("/api/access-requests/decide", {
-    method: "POST",
-    body,
-    schema: AccessDecisionResponseSchema,
-    signal,
-    malformedMessage:
-      "Kết quả duyệt/chặn không đúng định dạng. Hãy tải lại danh sách để xem trạng thái thật.",
   });
 }

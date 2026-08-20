@@ -57,12 +57,15 @@ describe("forSignIn — refusals", () => {
 
   it("refuses to ADOPT an identity stored under another provider", async () => {
     // A facebook payload whose synthetic address somehow matches a google row —
-    // adopting it would be the account-linking hijack; the answer is `unknown`.
+    // adopting it would be the account-linking hijack. CHANGED AT M2.4: the
+    // answer is `rejected`, not `unknown` — `unknown` now triggers
+    // PROVISIONING, and provisioning over an existing address would collide
+    // with identity_session_email_uq (or worse, adopt the wrong person).
     const { usecase, accounts } = harness([
       accountRecord({ sessionEmail: "fb-111@facebook.local", providerAccountId: "gsub" }),
     ]);
     const verdict = await usecase.forSignIn({ provider: "facebook", providerAccountId: "111" });
-    expect(verdict.kind).toBe("unknown");
+    expect(verdict.kind).toBe("rejected");
     expect(accounts.patches).toHaveLength(0);
   });
 });
@@ -84,7 +87,9 @@ describe("forSignIn — placeholder patch", () => {
       email: "worker@gmail.com",
     });
 
-    expect(verdict).toEqual({ kind: "unknown" }); // no session, no adoption
+    // CHANGED AT M2.4: `rejected` (was `unknown`) — the gate must neither
+    // grant a session NOR provision a second account over this address.
+    expect(verdict).toEqual({ kind: "rejected" });
     expect(accounts.patches).toHaveLength(0); // and NOTHING was overwritten
   });
 
@@ -95,7 +100,9 @@ describe("forSignIn — placeholder patch", () => {
 
     const verdict = await usecase.forSignIn(GOOGLE_SIGNIN);
 
-    expect(verdict).toEqual({ kind: "unknown" });
+    // CHANGED AT M2.4: `rejected` (was `unknown`) — an unclaimable row must
+    // not be provisioned over, same reasoning as the recycled-address case.
+    expect(verdict).toEqual({ kind: "rejected" });
   });
 
   it("patches a seed:* placeholder too — same rule as legacy-app-user:*", async () => {

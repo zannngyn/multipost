@@ -1,21 +1,14 @@
 "use client";
 
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import type {
-  AccessDecision,
-  AccessDecisionResponse,
   AccessFilterStatus,
   AccessRequestListResponse,
-  AccessRole,
 } from "@/ui/schemas/access-request.schema";
 import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
-import {
-  accessRequestKeys,
-  decideAccessRequest,
-  listAccessRequests,
-} from "@/ui/services/access-request.api";
+import { accessRequestKeys, listAccessRequests } from "@/ui/services/access-request.api";
 
 /**
  * Logic layer of the "Quyền truy cập" screen (E10), docs/07 §4.1.
@@ -25,8 +18,10 @@ import {
  * the new answer arrives, instead of flashing back to a skeleton
  * (core-data-list-query §Hiệu năng).
  *
- * The decision is NEVER auto-retried: re-sending "chặn" after a timeout would
- * act twice on a request the server may already have accepted.
+ * READ-ONLY since M2.4: the approval queue is retired (people join with an
+ * invite link), and this list is kept as history. The decide mutation went with
+ * the flow it belonged to — leaving it here would be a loaded gun for the next
+ * screen that imports it.
  */
 
 export function useAccessRequests(status: AccessFilterStatus) {
@@ -43,31 +38,5 @@ export function useAccessRequests(status: AccessFilterStatus) {
     // Short: someone else may be approving from another browser, and an admin
     // acting on a stale row is exactly what this screen exists to prevent.
     staleTime: 15_000,
-  });
-}
-
-export interface AccessDecisionInput {
-  id: string;
-  decision: AccessDecision;
-  /** Only meaningful for "approve"; ignored by the service otherwise. */
-  role?: AccessRole;
-}
-
-export function useDecideAccessRequest() {
-  const queryClient = useQueryClient();
-  const { tenantKey } = useActiveTenant();
-
-  return useMutation<AccessDecisionResponse, ApiError, AccessDecisionInput>({
-    mutationFn: (input) => decideAccessRequest(input),
-    retry: false,
-    onSettled: () => {
-      // Every filter, not just the one on screen: an approval moves a row from
-      // "Chờ duyệt" to "Đã duyệt", so both lists are now wrong.
-      //
-      // Also on failure: another admin may have decided the same request a
-      // second earlier, and the screen must show what the server has rather
-      // than what this tab hoped for.
-      void queryClient.invalidateQueries({ queryKey: accessRequestKeys.all(tenantKey) });
-    },
   });
 }

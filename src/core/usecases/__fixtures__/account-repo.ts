@@ -82,6 +82,26 @@ export function makeFakeAccountRepo(seed: FakeAccountRecord[] = []): FakeAccount
       return records.get(sessionEmail.trim().toLowerCase())?.summary ?? null;
     },
 
+    // Mirrors the adapter's race rule: an existing row is ADOPTED, not an error.
+    async provisionAccount(input) {
+      const key = input.sessionEmail.trim().toLowerCase();
+      const existing = records.get(key);
+      if (existing) return existing.summary;
+      const record = accountRecord({
+        accountId: `acc-${records.size + 1}`,
+        sessionEmail: key,
+        providerAccountId: input.providerAccountId,
+        memberships: [],
+      });
+      record.summary = {
+        ...record.summary,
+        displayName: input.displayName,
+        identity: { ...record.summary.identity, provider: input.provider, email: input.email },
+      };
+      records.set(key, record);
+      return record.summary;
+    },
+
     async attachProviderAccountId(input) {
       patches.push(input);
       const record = records.get(input.sessionEmail.trim().toLowerCase());

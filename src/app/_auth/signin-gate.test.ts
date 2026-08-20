@@ -1,16 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 /**
- * Who gets in, and on whose authority (E1.4).
+ * Who gets in, and on whose authority — M2.4 edition.
  *
- * The rule this file exists to keep: AUTH_ALLOWED_DOMAINS is a FILTER, not a
- * grant. A domain covers an open-ended set of people, so matching it must leave
- * the operator in the approval queue — anything else makes every colleague an
- * admin nobody can block. Only the exact-address / exact-id lists grant.
+ * DELIBERATE BEHAVIOUR CHANGES vs the M1 suite (docs/09 M2.4 — the approval
+ * queue is retired; each old test's fate is recorded here):
+ *   - "holds a domain match for approval / files it as pending"  → REPLACED:
+ *     a stranger now gets an ACCOUNT provisioned and is let in (NoMembership);
+ *   - "registry approved → in" / "registry blocked → out"        → REMOVED:
+ *     the registry is no longer consulted at sign-in at all; membership and
+ *     `account.status` decide;
+ *   - "approved-but-no-membership drift → held at the door"      → REMOVED:
+ *     no_membership is a VALID signed-in state now;
+ *   - "?error=pending_approval redirect"                          → REMOVED:
+ *     nothing is pending anymore.
+ * UNCHANGED: env reject (domain filter, unverified e-mail, unknown provider),
+ * bootstrap escape hatch, suspended ban, the PROVIDER_SUB_MISMATCH guard
+ * (`rejected`), fail-closed on DB errors.
  */
-
-const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
 
 const ENV = {
   GOOGLE_CLIENT_ID: "client-id",
@@ -27,35 +34,31 @@ interface LogLine {
   context?: Record<string, unknown>;
 }
 
-type AccountKind = "unknown" | "suspended" | "no_membership" | "member";
+type AccountKind = "unknown" | "rejected" | "suspended" | "no_membership" | "member";
 
-function harness(
-  status = "pending",
-  options: { failing?: boolean; account?: AccountKind } = {},
-) {
+function harness(options: { account?: AccountKind; failing?: boolean } = {}) {
   const lines: LogLine[] = [];
-  const register = vi.fn(async () => {
-    if (options.failing) throw new Error("connection refused");
-    return { status };
-  });
-  // M1.2: the account tables answer first; `unknown` falls through to the
-  // legacy registry flow, which is what the pre-M1.2 tests exercised.
   const signInAccount = vi.fn(async (): Promise<{ kind: AccountKind }> => {
     if (options.failing) throw new Error("connection refused");
     return { kind: options.account ?? "unknown" };
   });
+  const provisionAccount = vi.fn(async () => {
+    if (options.failing) throw new Error("connection refused");
+    return { accountId: "acc-new" };
+  });
   const deps = {
-    tenantId: TENANT,
     signInAccount,
-    register,
+    provisionAccount,
     logger: {
       warn: (message: string, context?: Record<string, unknown>) =>
         lines.push({ level: "warn", message, context }),
       error: (message: string, context?: Record<string, unknown>) =>
         lines.push({ level: "error", message, context }),
+      info: (message: string, context?: Record<string, unknown>) =>
+        lines.push({ level: "info", message, context }),
     },
   };
-  return { deps, register, signInAccount, lines };
+  return { deps, signInAccount, provisionAccount, lines };
 }
 
 const googleUser = {
@@ -81,18 +84,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-// --- The domain list grants nothing -----------------------------------------
+// --- The M2.4 core: strangers are provisioned, not queued ----------------------
 
-describe("AUTH_ALLOWED_DOMAINS is a filter, not a grant", () => {
-  it("holds a domain match that is not in the registry, and FILES it for approval", async () => {
-    const { deps, register } = harness("pending");
+describe("first sign-in — provisioning replaces the approval queue", () => {
+  it("PROVISIONS a brand-new identity and lets them in (NoMembership state)", async () => {
+    const { deps, provisionAccount } = harness({ account: "unknown" });
     const decideSignIn = await loadGate();
 
-    // The redirect code the sign-in screen reads (src/app/signin/page.tsx).
-    await expect(decideSignIn(deps, googleUser)).resolves.toBe("/signin?error=pending_approval");
-    // Filed, so the admin has a row to act on instead of hunting a log line.
-    expect(register).toHaveBeenCalledWith({
-      tenantId: TENANT,
+    await expect(decideSignIn(deps, googleUser)).resolves.toBe(true);
+    expect(provisionAccount).toHaveBeenCalledWith({
       provider: "google",
       providerAccountId: "sub-1",
       email: "worker@mysp.vn",
@@ -100,100 +100,111 @@ describe("AUTH_ALLOWED_DOMAINS is a filter, not a grant", () => {
     });
   });
 
-  it("lets a domain match in once they hold an active membership", async () => {
-    // Post-M1.2 an approval WRITES a membership (decide wiring), so "approved"
-    // manifests as the account tables answering `member`.
-    const { deps, register } = harness("approved", { account: "member" });
+  it("lets an account with NO membership in — the lobby is a valid state now", async () => {
+    const { deps, provisionAccount } = harness({ account: "no_membership" });
+    const decideSignIn = await loadGate();
+
+    await expect(decideSignIn(deps, googleUser)).resolves.toBe(true);
+    expect(provisionAccount).not.toHaveBeenCalled(); // already exists
+  });
+
+  it("lets a member in without provisioning", async () => {
+    const { deps, provisionAccount } = harness({ account: "member" });
     const decideSignIn = await loadGate();
     await expect(decideSignIn(deps, googleUser)).resolves.toBe(true);
-    // The membership decided — the legacy registry was not even consulted.
-    expect(register).not.toHaveBeenCalled();
+    expect(provisionAccount).not.toHaveBeenCalled();
   });
 
-  it("holds at the door when the registry says approved but no membership exists (drift)", async () => {
-    // Pre-M1.2 approval the backfill missed / a failed provision: letting them
-    // in would mint a session getOperatorSession refuses — a redirect loop.
-    const { deps, lines } = harness("approved", { account: "unknown" });
+  it("applies NO domain filter when the list is blank — anyone verified may enter the lobby", async () => {
+    vi.stubEnv("AUTH_ALLOWED_DOMAINS", "");
+    const { deps } = harness({ account: "unknown" });
     const decideSignIn = await loadGate();
-    await expect(decideSignIn(deps, googleUser)).resolves.toBe("/signin?error=pending_approval");
-    expect(lines.some((line) => line.level === "error")).toBe(true);
+    await expect(
+      decideSignIn(deps, { ...googleUser, email: "outsider@gmail.com" }),
+    ).resolves.toBe(true);
   });
+});
 
-  it("refuses a suspended account outright — the registry cannot rescue it", async () => {
-    const { deps, register } = harness("approved", { account: "suspended" });
-    const decideSignIn = await loadGate();
-    await expect(decideSignIn(deps, googleUser)).resolves.toBe(false);
-    expect(register).not.toHaveBeenCalled();
-  });
+// --- Refusals that SURVIVE the retirement --------------------------------------
 
-  it("refuses a domain match the registry has blocked", async () => {
-    const { deps, lines } = harness("blocked");
+describe("sign-in refusals — unchanged by M2.4", () => {
+  it("refuses a SUSPENDED account — the only ban left until M3.1's platform switch", async () => {
+    const { deps, provisionAccount } = harness({ account: "suspended" });
     const decideSignIn = await loadGate();
 
     await expect(decideSignIn(deps, googleUser)).resolves.toBe(false);
-    expect(lines.some((line) => line.context?.access_status === "blocked")).toBe(true);
+    expect(provisionAccount).not.toHaveBeenCalled();
   });
 
-  it("refuses an address outside the domain filter — before any registry call", async () => {
-    const { deps, register } = harness("approved");
+  it("refuses a REJECTED identity (recycled address, PROVIDER_SUB_MISMATCH) — and never provisions over it", async () => {
+    // Provisioning here would collide with identity_session_email_uq — and
+    // hand the newcomer the old owner's address row.
+    const { deps, provisionAccount } = harness({ account: "rejected" });
+    const decideSignIn = await loadGate();
+
+    await expect(decideSignIn(deps, googleUser)).resolves.toBe(false);
+    expect(provisionAccount).not.toHaveBeenCalled();
+  });
+
+  it("refuses an address outside the domain filter — before any DB call", async () => {
+    const { deps, signInAccount } = harness();
     const decideSignIn = await loadGate();
 
     await expect(
       decideSignIn(deps, { ...googleUser, email: "stranger@elsewhere.com" }),
     ).resolves.toBe(false);
-    expect(register).not.toHaveBeenCalled();
+    expect(signInAccount).not.toHaveBeenCalled();
   });
 
-  it("applies NO domain filter when the list is blank — the membership decides", async () => {
-    vi.stubEnv("AUTH_ALLOWED_DOMAINS", "");
-    const { deps } = harness("approved", { account: "member" });
+  it("refuses an unverified Google e-mail even inside the domain", async () => {
+    const { deps } = harness();
     const decideSignIn = await loadGate();
-
-    await expect(
-      decideSignIn(deps, { ...googleUser, email: "outsider@gmail.com" }),
-    ).resolves.toBe(true);
+    await expect(decideSignIn(deps, { ...googleUser, emailVerified: false })).resolves.toBe(false);
   });
 
-  it("still holds an unknown identity when there is no domain filter", async () => {
-    vi.stubEnv("AUTH_ALLOWED_DOMAINS", "");
-    const { deps } = harness("pending");
+  it("refuses an unsupported provider", async () => {
+    const { deps } = harness();
+    const decideSignIn = await loadGate();
+    await expect(decideSignIn(deps, { ...googleUser, provider: "github" })).resolves.toBe(false);
+  });
+
+  it("refuses a payload with no provider account id — nothing can be filed", async () => {
+    const { deps, signInAccount } = harness();
+    const decideSignIn = await loadGate();
+    await expect(decideSignIn(deps, { ...googleUser, providerAccountId: "" })).resolves.toBe(false);
+    expect(signInAccount).not.toHaveBeenCalled();
+  });
+
+  it("FAILS CLOSED when the database cannot be reached", async () => {
+    const { deps, lines } = harness({ failing: true });
     const decideSignIn = await loadGate();
 
-    await expect(
-      decideSignIn(deps, { ...googleUser, email: "outsider@gmail.com" }),
-    ).resolves.toBe("/signin?error=pending_approval");
+    await expect(decideSignIn(deps, googleUser)).resolves.toBe(false);
+    expect(lines.some((line) => line.level === "error")).toBe(true);
   });
 });
 
-// --- The escape hatch --------------------------------------------------------
+// --- The escape hatch ----------------------------------------------------------
 
-describe("AUTH_BOOTSTRAP_ADMINS is the escape hatch", () => {
-  it("lets an exact address in with an EMPTY registry", async () => {
-    const { deps } = harness("pending");
+describe("AUTH_BOOTSTRAP_ADMINS is still the escape hatch", () => {
+  it("lets an exact address in and FILES them in the account tables", async () => {
+    const { deps, provisionAccount } = harness({ account: "unknown" });
     const decideSignIn = await loadGate();
 
     await expect(decideSignIn(deps, { ...googleUser, email: "boss@mysp.vn" })).resolves.toBe(true);
+    expect(provisionAccount).toHaveBeenCalledTimes(1);
   });
 
-  it("files the bootstrap admin too, so the approval screen lists everyone", async () => {
-    const { deps, register } = harness("pending");
-    const decideSignIn = await loadGate();
-
-    await decideSignIn(deps, { ...googleUser, email: "Boss@MYSP.vn" });
-    expect(register).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets the bootstrap admin in even when the registry cannot be reached", async () => {
-    const { deps, lines } = harness("pending", { failing: true });
+  it("lets the bootstrap admin in even when the database is down — loudly", async () => {
+    const { deps, lines } = harness({ failing: true });
     const decideSignIn = await loadGate();
 
     await expect(decideSignIn(deps, { ...googleUser, email: "boss@mysp.vn" })).resolves.toBe(true);
-    // Loud, never silent: the row could not be written.
     expect(lines.some((line) => line.level === "error")).toBe(true);
   });
 
-  it("lets an allow-listed Facebook id in without a registry row", async () => {
-    const { deps } = harness("pending");
+  it("lets an allow-listed Facebook id in through the env, no DB required", async () => {
+    const { deps } = harness({ failing: true });
     const decideSignIn = await loadGate();
 
     await expect(
@@ -207,8 +218,8 @@ describe("AUTH_BOOTSTRAP_ADMINS is the escape hatch", () => {
     ).resolves.toBe(true);
   });
 
-  it("holds another Facebook account for approval", async () => {
-    const { deps } = harness("pending");
+  it("an unlisted Facebook id goes through the normal account path", async () => {
+    const { deps, provisionAccount } = harness({ account: "unknown" });
     const decideSignIn = await loadGate();
 
     await expect(
@@ -219,41 +230,7 @@ describe("AUTH_BOOTSTRAP_ADMINS is the escape hatch", () => {
         emailVerified: undefined,
         displayName: "",
       }),
-    ).resolves.toBe("/signin?error=pending_approval");
-  });
-});
-
-// --- Refusals ----------------------------------------------------------------
-
-describe("sign-in refusals", () => {
-  it("refuses an unverified Google e-mail even inside the domain", async () => {
-    const { deps, register } = harness("approved");
-    const decideSignIn = await loadGate();
-
-    await expect(decideSignIn(deps, { ...googleUser, emailVerified: false })).resolves.toBe(false);
-    expect(register).not.toHaveBeenCalled();
-  });
-
-  it("refuses an unsupported provider", async () => {
-    const { deps } = harness("approved");
-    const decideSignIn = await loadGate();
-
-    await expect(decideSignIn(deps, { ...googleUser, provider: "github" })).resolves.toBe(false);
-  });
-
-  it("refuses a payload with no provider account id — nothing can be filed", async () => {
-    const { deps, register } = harness("approved");
-    const decideSignIn = await loadGate();
-
-    await expect(decideSignIn(deps, { ...googleUser, providerAccountId: "" })).resolves.toBe(false);
-    expect(register).not.toHaveBeenCalled();
-  });
-
-  it("FAILS CLOSED when the registry cannot be read for a non-bootstrap operator", async () => {
-    const { deps, lines } = harness("approved", { failing: true });
-    const decideSignIn = await loadGate();
-
-    await expect(decideSignIn(deps, googleUser)).resolves.toBe(false);
-    expect(lines.some((line) => line.level === "error")).toBe(true);
+    ).resolves.toBe(true); // provisioned into the lobby, like everyone else
+    expect(provisionAccount).toHaveBeenCalled();
   });
 });

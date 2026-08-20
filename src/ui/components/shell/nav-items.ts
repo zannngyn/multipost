@@ -48,7 +48,10 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { href: "/channels", label: "Kênh", isExact: true },
       { href: "/channels/groups", label: "Nhóm kênh" },
       { href: "/prompts", label: "Mẫu prompt" },
-      { href: "/access", label: "Quyền truy cập" },
+      { href: "/members", label: "Thành viên" },
+      // Read-only history since M2.4 — the label says so, so nobody opens it
+      // expecting to add someone.
+      { href: "/access", label: "Lịch sử duyệt" },
     ],
   },
 ] as const;

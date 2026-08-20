@@ -25,6 +25,17 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   // TENANT_NOT_FOUND 404, so outsiders cannot probe which tenants exist.
   TENANT_NOT_SELECTED: 409,
   FORBIDDEN: 403,
+  // Onboarding (M2.1/M2.2). INVITE_INVALID is 404 for every refusal reason on
+  // purpose: an invite endpoint that answers differently for "revoked" vs
+  // "never existed" is a probing oracle.
+  TENANT_LIMIT_REACHED: 409,
+  SLUG_TAKEN: 409,
+  INVITE_INVALID: 404,
+  INVITE_ROLE_FORBIDDEN: 403,
+  // Members (M2.3) + retirement (M2.4)
+  LAST_OWNER: 409,
+  MEMBER_NOT_FOUND: 404,
+  RETIRED: 410,
   TENANT_NOT_FOUND: 404,
   INTERNAL: 500,
   DB_ERROR: 503,

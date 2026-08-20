@@ -408,6 +408,24 @@ function parseEnv<T extends z.ZodType>(schema: T, env: EnvRecord, scope: string)
   });
 }
 
+/**
+ * Self-service tenant creation limits (docs/09 §3.7). Env-tunable so an abuse
+ * wave can be throttled without a deploy; defaults are the contract's numbers.
+ * Read on demand by the create-tenant wiring, never at boot.
+ */
+export const OnboardingConfigSchema = z.object({
+  /** Lifetime cap of tenants one account may CREATE (memberships don't count). */
+  TENANT_CREATE_MAX_PER_ACCOUNT: z.coerce.number().int().positive().max(1000).default(3),
+  /** Cap within any rolling hour. */
+  TENANT_CREATE_MAX_PER_HOUR: z.coerce.number().int().positive().max(1000).default(1),
+});
+
+export type OnboardingConfig = z.infer<typeof OnboardingConfigSchema>;
+
+export function loadOnboardingConfig(env: EnvRecord = process.env): OnboardingConfig {
+  return parseEnv(OnboardingConfigSchema, env, "onboarding");
+}
+
 export function loadConfig(env: EnvRecord = process.env): Config {
   return parseEnv(ConfigSchema, env, "core");
 }

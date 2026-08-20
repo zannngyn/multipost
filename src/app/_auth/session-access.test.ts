@@ -103,16 +103,28 @@ describe("getOperatorSession — the account tables decide", () => {
     expect(resolveMock).toHaveBeenCalledWith("worker@gmail.com");
   });
 
-  it("treats an unknown address and a membership-less account as no session", async () => {
+  it("treats an unknown address as no session", async () => {
     authMock.mockResolvedValue({ user: { email: "worker@gmail.com", name: null } });
     const getOperatorSession = await loadSession();
 
     resolveMock.mockResolvedValue(null);
     await expect(getOperatorSession("test")).resolves.toBeNull();
+  });
 
-    // PENDING(M2-nomembership): becomes a real signed-in state at M2.
+  /**
+   * CHANGED AT M2.4 (was: null). A membership-less account is the NoMembership
+   * state — a real signed-in person in the lobby (docs/09 §3.8). The session is
+   * valid with role null; requireTenant answers 409 for anything tenant-scoped.
+   */
+  it("gives a membership-less account a VALID lobby session (M2.4)", async () => {
+    authMock.mockResolvedValue({ user: { email: "worker@gmail.com", name: "Worker" } });
     resolveMock.mockResolvedValue(member({ activeMemberships: [] }));
-    await expect(getOperatorSession("test")).resolves.toBeNull();
+
+    const getOperatorSession = await loadSession();
+    const session = await getOperatorSession("test");
+
+    expect(session).toMatchObject({ accountId: "acc-1", role: null, isBootstrapAdmin: false });
+    expect(canManageAccess(session)).toBe(false);
   });
 
   it("lets a member in, carrying the demo-tenant role and the account id", async () => {
@@ -204,12 +216,21 @@ describe("getOperatorSession — env bootstrap admins", () => {
  * admin and unblockable.
  */
 describe("getOperatorSession — a domain match is not a grant", () => {
-  it("refuses a domain match with no membership", async () => {
+  /**
+   * CHANGED AT M2.4 (was: null session). A domain match without a membership
+   * now holds a LOBBY session — but still zero authority: no role, no admin
+   * rights, and requireTenant refuses every tenant-scoped call. The B1 claim
+   * ("a domain grants nothing") holds in its post-M2.4 form.
+   */
+  it("gives a domain match with no membership a lobby session with NO authority", async () => {
     authMock.mockResolvedValue({ user: { email: "colleague@mysp.vn", name: "Colleague" } });
     resolveMock.mockResolvedValue(member({ activeMemberships: [] }));
 
     const getOperatorSession = await loadSession();
-    await expect(getOperatorSession("test")).resolves.toBeNull();
+    const session = await getOperatorSession("test");
+
+    expect(session).toMatchObject({ role: null, isBootstrapAdmin: false });
+    expect(canManageAccess(session)).toBe(false);
   });
 
   it("gives an approved domain match the membership role — and no admin rights", async () => {

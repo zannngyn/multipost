@@ -44,11 +44,12 @@ describe("warnWhenNoBootstrapAdmin — warns", () => {
     expect(lines).toHaveLength(1);
     const entry = JSON.parse(lines[0]) as Record<string, unknown>;
     expect(entry.reason).toBe("NO_BOOTSTRAP_ADMIN");
-    // The consequence, not just "variable unset": someone reading the log at
-    // 2am must learn that nobody can approve anyone.
-    expect(entry.message).toContain("NOBODY can approve an access request");
+    // CHANGED AT M2.4: self-service sign-up means nobody is stuck pending —
+    // the consequence now is a missing EMERGENCY DOOR, and the message must
+    // say that truthfully instead of the retired approval-queue story.
+    expect(entry.message).toContain("NO emergency door");
     expect(entry.message).toContain("AUTH_BOOTSTRAP_ADMINS");
-    expect(entry.user_message).toContain("không ai duyệt được yêu cầu truy cập");
+    expect(entry.user_message).toContain("không có lối vào dự phòng");
   });
 
   it("still warns when only a domain filter is configured — a domain grants nothing", () => {

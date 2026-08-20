@@ -51,6 +51,7 @@ describe("NAV_SECTIONS", () => {
       "/channels",
       "/channels/groups",
       "/prompts",
+      "/members",
       "/access",
     ]);
     expect(new Set(hrefs).size).toBe(hrefs.length);

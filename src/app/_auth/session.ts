@@ -18,16 +18,16 @@ import type { OperatorSession } from "./operator-session";
  * through it.
  *
  * SOURCE OF TRUTH (M1.2, docs/09 §3.1/3.3): identity → account → membership.
- * A suspended account, or one with no active membership anywhere, reads as NO
- * SESSION — the layout turns that into a redirect to /signin. Suspension is
- * felt within ACCOUNT_CACHE_TTL_MS (≤60s), immediately in the process that
- * wrote the decision.
+ * A suspended account reads as NO SESSION — felt within ACCOUNT_CACHE_TTL_MS
+ * (≤60s), immediately in the process that wrote the decision.
  *
- * PENDING(M2-nomembership): "active account, zero memberships" will become a
- * REAL signed-in state (NoMembership → the create-or-join screen) when
- * self-service lands. Until then it must stay null: today the only people in
- * that state are un-approved registrants, and pre-M1.2 behaviour for them is
- * "đang chờ duyệt", not an empty app shell.
+ * M2.4 (reverses an M1.2 decision, deliberately): an active account with ZERO
+ * memberships is a VALID session — the NoMembership state of docs/09 §3.8.
+ * Sign-in provisions strangers instead of queueing them, so this state is now
+ * "person in the lobby", not "un-approved registrant". Screens keep working
+ * because nothing tenant-scoped renders from the session alone: every page and
+ * route goes through requireTenant, which answers 409 TENANT_NOT_SELECTED for
+ * a lobby session, and the UI shows the create-or-join screen.
  *
  * ORDER OF PRECEDENCE (same as the sign-in gate, see auth.config.ts):
  *   1. DEV_FAKE_SESSION — local dev only;
@@ -95,10 +95,9 @@ export async function getOperatorSession(surface: string): Promise<OperatorSessi
 
   const account = await getContainer().usecases.operatorAccounts.resolve(email);
 
-  // --- Edge cases first: no account, banned, or no membership anywhere ------
+  // --- Edge cases first: unknown identity, or a platform ban -----------------
   if (!account) return null;
   if (account.status !== "active") return null;
-  if (account.activeMemberships.length === 0) return null; // PENDING(M2-nomembership)
 
   /**
    * `role` keeps its pre-M1.2 meaning for the 13 existing consumers: the

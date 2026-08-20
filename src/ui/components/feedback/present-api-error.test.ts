@@ -283,4 +283,68 @@ describe("presentApiError — video posts (E10.1 Phase 2)", () => {
     expect(view.canRetry).toBe(false);
     expect(view.title).toContain("không có quyền");
   });
+
+  /**
+   * M2.1/M2.2 — the three refusals on the way INTO a company. None of them may
+   * offer a retry (the same request fails the same way), and only one of them
+   * is about something the operator typed.
+   */
+  it("does not speculate about which create limit was hit", () => {
+    const view = presentApiError(
+      makeError({
+        code: "TENANT_LIMIT_REACHED",
+        status: 409,
+        userMessage: "Bạn đã tạo 3 công ty — không tạo thêm được.",
+      }),
+    );
+    expect(view.canRetry).toBe(false);
+    // The count/window belongs to the server's sentence, not to a guess here.
+    expect(view.description).toBe("Bạn đã tạo 3 công ty — không tạo thêm được.");
+    expect(view.hint).toBeTruthy();
+  });
+
+  it("treats a taken slug as something to fix, not something to retry", () => {
+    const view = presentApiError(
+      makeError({
+        code: "SLUG_TAKEN",
+        status: 409,
+        userMessage: "Đường dẫn “nha-xe-an-anh” đã có người dùng.",
+      }),
+    );
+    expect(view.kind).toBe("input");
+    expect(view.canRetry).toBe(false);
+  });
+
+  it("keeps an invalid invite neutral and never guesses the reason", () => {
+    const view = presentApiError(
+      makeError({
+        code: "INVITE_INVALID",
+        status: 404,
+        userMessage: "Lời mời này không dùng được.",
+      }),
+    );
+    expect(view.canRetry).toBe(false);
+    expect(view.title).toContain("không còn hiệu lực");
+    // One code covers hết hạn / thu hồi / đã dùng — the copy says so instead of
+    // picking one and being wrong two times out of three.
+    expect(view.description).toContain("hết hạn");
+    expect(view.description).toContain("thu hồi");
+    expect(view.hint).toContain("link mời mới");
+  });
+
+  it("points a LAST_OWNER refusal at the fix, not at the operator's role", () => {
+    const view = presentApiError(
+      makeError({
+        code: "LAST_OWNER",
+        status: 409,
+        userMessage: "Công ty phải còn ít nhất một chủ sở hữu.",
+      }),
+    );
+    expect(view.canRetry).toBe(false);
+    // It is an invariant, not a permission — the next step is handing ownership
+    // over, and saying "bạn không có quyền" here would send someone to ask an
+    // admin for something no admin can grant.
+    expect(view.hint).toContain("Chủ sở hữu");
+    expect(view.title).toContain("ít nhất một chủ sở hữu");
+  });
 });

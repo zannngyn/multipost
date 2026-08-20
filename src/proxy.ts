@@ -8,6 +8,7 @@ import {
 
 import { buildBaseAuthConfig } from "@/app/_auth/auth.config";
 import { isDevFakeSessionEnabled, warnDevFakeSession } from "@/app/_auth/dev-session";
+import { redactSensitivePath } from "@/app/_lib/redact-path";
 import { safeReturnUrl } from "@/app/_auth/return-url";
 import { AppError } from "@/core/domain/errors";
 
@@ -65,7 +66,10 @@ function logDenied(request: NextRequest, kind: "json" | "redirect"): void {
       time: new Date().toISOString(),
       message: "Request blocked: no valid session",
       error_code: "UNAUTHORIZED",
-      path: request.nextUrl.pathname,
+      // Redacted: `/join/<token>` reaches this deny path for every signed-out
+      // invitee, and the token is a bearer (see _lib/redact-path). The
+      // browser's returnUrl below keeps the full path — only the log loses it.
+      path: redactSensitivePath(request.nextUrl.pathname),
       method: request.method,
       response: kind,
     }),
@@ -93,7 +97,8 @@ const CALLBACK_RETURN_SCREENS: Record<string, string> = {
 
 function deny(request: NextRequest): NextResponse {
   const error = new AppError("UNAUTHORIZED", {
-    context: { path: request.nextUrl.pathname },
+    // Same redaction as logDenied: AppError.context is log material.
+    context: { path: redactSensitivePath(request.nextUrl.pathname) },
   });
 
   const callbackScreen = CALLBACK_RETURN_SCREENS[request.nextUrl.pathname];
@@ -129,7 +134,9 @@ export default async function proxy(
   // Dev bypass: checked before Auth.js runs, so a developer can exercise the
   // protected routes without Google credentials (see _auth/dev-session.ts).
   if (isDevFakeSessionEnabled()) {
-    warnDevFakeSession({ surface: "middleware", path: pathname });
+    // Redacted for the same reason as logDenied: this line fires for every
+    // request under the bypass, /join/<token> included.
+    warnDevFakeSession({ surface: "middleware", path: redactSensitivePath(pathname) });
     return NextResponse.next();
   }
 

@@ -56,32 +56,28 @@ export function loadAuthEnv(): AuthConfig {
 }
 
 /**
- * The one configuration mistake that bricks a deployment.
+ * No bootstrap admin no longer BRICKS a deployment (M2.4: strangers provision
+ * their own account and found their own company), but it still deserves a
+ * warning: the env lists are the platform ESCAPE HATCH — the only door that
+ * opens when the database is broken, and (until M3.1's platform roles) the
+ * only identity guaranteed to reach /access history and repair screens.
  *
- * With no bootstrap admin, EVERY sign-in lands in `access_request` as `pending`
- * and nobody holds the power to approve it — the queue fills up and the only way
- * out is an UPDATE straight into the database. It became reachable the moment
- * AUTH_ALLOWED_DOMAINS stopped being mandatory (that was the schema's only
- * guard), and both deploy env examples ship all three lists blank: deploying the
- * sample file verbatim is exactly how someone gets here.
- *
- * A warning, not a throw: refusing to boot would take a running deployment down
- * over a variable that only bites at the next sign-in, and the app must stay up
- * for the operators whose sessions still work. `console` rather than pino —
- * this module is imported by the edge middleware (see the file header).
+ * A warning, not a throw: the app must stay up for operators whose sessions
+ * work. `console` rather than pino — this module is imported by the edge
+ * middleware (see the file header).
  */
 export function warnWhenNoBootstrapAdmin(env: AuthConfig): void {
   if (env.AUTH_BOOTSTRAP_ADMINS?.length) return;
   if (env.AUTH_FACEBOOK_ALLOWED_USER_IDS?.length) return;
 
   warnAuth(
-    "No bootstrap admin is configured: every new sign-in will wait as `pending` and NOBODY can approve an access request. Set AUTH_BOOTSTRAP_ADMINS (exact e-mail addresses) or AUTH_FACEBOOK_ALLOWED_USER_IDS (exact Facebook user ids).",
+    "No bootstrap admin is configured: there is NO emergency door if the database breaks (self-service sign-up still works). Set AUTH_BOOTSTRAP_ADMINS (exact e-mail addresses) or AUTH_FACEBOOK_ALLOWED_USER_IDS (exact Facebook user ids).",
     {
       error_code: "UNAUTHORIZED",
       reason: "NO_BOOTSTRAP_ADMIN",
       alert: "OPERATOR_ATTENTION",
       user_message:
-        "Chưa cấu hình quản trị viên khởi tạo — sẽ không ai duyệt được yêu cầu truy cập.",
+        "Chưa cấu hình quản trị viên khẩn cấp (bootstrap) — khi hệ thống lỗi sẽ không có lối vào dự phòng.",
     },
   );
 }

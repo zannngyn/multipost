@@ -25,6 +25,30 @@ export const ERROR_CODES = [
    * tenant picker (state NoMembership / chưa chọn, docs/09 §3.8).
    */
   "TENANT_NOT_SELECTED",
+  // Onboarding (M2.1/M2.2 — self-service tenants + invite links)
+  /** The account hit the self-service creation cap (lifetime or per-hour). */
+  "TENANT_LIMIT_REACHED",
+  /** The requested slug already names another tenant. */
+  "SLUG_TAKEN",
+  /**
+   * ONE code for every invite refusal — unknown, expired, revoked, used up,
+   * suspended tenant. Deliberately indistinguishable outside (anti-probing);
+   * the precise reason goes to the log.
+   */
+  "INVITE_INVALID",
+  /** The inviter's role may not grant the requested role (doc 10 §4.4 ladder). */
+  "INVITE_ROLE_FORBIDDEN",
+  // Members (M2.3) + retirement (M2.4)
+  /** The change would leave the company without a single active owner. */
+  "LAST_OWNER",
+  /** No membership with that id in this tenant — behaves as absent (doc 10 §3). */
+  "MEMBER_NOT_FOUND",
+  /**
+   * The endpoint was retired by a milestone and answers 410 Gone. Its own code
+   * (not INVALID_INPUT) so an old UI shows "tính năng đã thay đổi", not "dữ
+   * liệu không hợp lệ" — and so retired surfaces stay greppable as a family.
+   */
+  "RETIRED",
   /**
    * Has a membership in the tenant but lacks the required role. Deliberately
    * distinct from 404 (no membership = resource does not exist for you) and
@@ -110,6 +134,14 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   ACCESS_FORBIDDEN: "Tài khoản của bạn không có quyền thực hiện thao tác này.",
   ACCESS_REQUEST_NOT_FOUND: "Không tìm thấy yêu cầu truy cập tương ứng.",
   TENANT_NOT_SELECTED: "Bạn chưa chọn công ty làm việc. Hãy chọn một công ty để tiếp tục.",
+  TENANT_LIMIT_REACHED:
+    "Bạn đã chạm giới hạn tạo công ty (tối đa 3 công ty, và không quá 1 công ty mỗi giờ). Liên hệ quản trị viên nếu cần thêm.",
+  SLUG_TAKEN: "Định danh (slug) này đã có công ty khác dùng. Hãy chọn một định danh khác.",
+  INVITE_INVALID: "Link mời không hợp lệ hoặc đã hết hạn. Hãy xin link mời mới.",
+  INVITE_ROLE_FORBIDDEN: "Vai trò của bạn không được phép mời tới vai trò này.",
+  LAST_OWNER: "Công ty phải còn ít nhất một owner — chuyển quyền trước.",
+  MEMBER_NOT_FOUND: "Không tìm thấy thành viên tương ứng trong công ty.",
+  RETIRED: "Tính năng này đã thay đổi — thành viên mới vào công ty bằng link mời.",
   FORBIDDEN: "Vai trò của bạn trong công ty này không đủ quyền thực hiện thao tác.",
   JOB_PAYLOAD_INVALID: "Dữ liệu công việc nền không hợp lệ — công việc đã bị từ chối.",
   DRIVE_ERROR: "Không truy cập được Google Drive. Kiểm tra quyền Service Account hoặc thử lại sau.",
@@ -167,6 +199,13 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   ACCESS_FORBIDDEN: "Operator is not allowed to perform this administrative action",
   ACCESS_REQUEST_NOT_FOUND: "Access request not found in this tenant",
   TENANT_NOT_SELECTED: "Signed-in account has not selected an active tenant",
+  TENANT_LIMIT_REACHED: "Self-service tenant creation limit reached for this account",
+  SLUG_TAKEN: "Another tenant already uses this slug",
+  INVITE_INVALID: "Invite token is unknown, expired, revoked or used up",
+  INVITE_ROLE_FORBIDDEN: "Inviter's role may not grant the requested role",
+  LAST_OWNER: "Change would leave the tenant with zero active owners",
+  MEMBER_NOT_FOUND: "No membership with that id in this tenant",
+  RETIRED: "Endpoint retired — members join through invite links",
   FORBIDDEN: "Membership role is below the required role for this action",
   JOB_PAYLOAD_INVALID: "Job payload failed schema validation",
   DRIVE_ERROR: "Google Drive operation failed",

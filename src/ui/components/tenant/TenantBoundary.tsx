@@ -1,9 +1,10 @@
 "use client";
 
-import { Banner, EmptyState, Heading, Skeleton, Stack, Text } from "@astryxdesign/core";
+import { Heading, Skeleton, Stack, Text } from "@astryxdesign/core";
 import type { ReactNode } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+import { OnboardingPanel } from "@/ui/components/tenant/OnboardingPanel";
 import { TenantPicker } from "@/ui/components/tenant/TenantPicker";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useActiveTenant, useMe } from "@/ui/hooks/useMe";
@@ -55,8 +56,13 @@ export function TenantBoundary({ children }: { children: ReactNode }) {
   }
 
   // --- Empty: signed in, but a member of no company -------------------------
+  // Not a dead end any more (M2.1): create one, or use an invite.
   if (hasNoMembership) {
-    return <NoMembership />;
+    return (
+      <Stack direction="vertical" padding={4} maxWidth={720}>
+        <OnboardingPanel />
+      </Stack>
+    );
   }
 
   // --- Fork in the road: several companies, none chosen ---------------------
@@ -76,34 +82,4 @@ export function TenantBoundary({ children }: { children: ReactNode }) {
   }
 
   return <>{children}</>;
-}
-
-/**
- * NoMembership (docs/09 §3.8). Temporary by design: "Tạo công ty" is M2.1, so
- * offering a button that does nothing would be worse than saying plainly that
- * the way in today is an invitation.
- */
-function NoMembership() {
-  return (
-    <Stack direction="vertical" gap={4} padding={4}>
-      <Stack direction="vertical" gap={1}>
-        <Heading level={1}>Tài khoản chưa thuộc công ty nào</Heading>
-        <Text type="supporting">
-          Bạn đã đăng nhập thành công — đây không phải lỗi đăng nhập.
-        </Text>
-      </Stack>
-
-      <EmptyState
-        headingLevel={2}
-        title="Chờ được mời vào một công ty"
-        description="Dữ liệu trong MYSP luôn thuộc về một công ty cụ thể, nên chưa có gì để hiển thị cho tới khi bạn là thành viên của một công ty. Hãy nhờ quản trị viên của công ty mời tài khoản này vào."
-      />
-
-      <Banner
-        status="info"
-        title="Tự tạo công ty thì sao?"
-        description="Chức năng tự tạo công ty đang được làm và sẽ có ở bản kế tiếp. Hiện tại lối vào duy nhất là lời mời từ quản trị viên."
-      />
-    </Stack>
-  );
 }

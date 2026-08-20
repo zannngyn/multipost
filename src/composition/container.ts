@@ -1,11 +1,14 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
 import type { TenantId } from "@/core/domain/tenant-context";
 import { DrizzleAccessRequestRepo } from "@/adapters/db/access-request-repo.drizzle";
 import { DrizzleAccountRepo } from "@/adapters/db/account-repo.drizzle";
+import { DrizzleInviteRepo } from "@/adapters/db/invite-repo.drizzle";
+import { DrizzleMemberRepo } from "@/adapters/db/member-repo.drizzle";
 import { DrizzleOAuthStateStore } from "@/adapters/db/oauth-state-store.drizzle";
+import { DrizzleTenantOnboardingRepo } from "@/adapters/db/tenant-onboarding-repo.drizzle";
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
@@ -57,10 +60,17 @@ import {
   makeCheckOperatorAccess,
   type CheckOperatorAccess,
 } from "@/core/usecases/check-operator-access";
+import { makeCreateTenant, type CreateTenant } from "@/core/usecases/create-tenant";
 import {
   makeGetOperatorOverview,
   type GetOperatorOverview,
 } from "@/core/usecases/get-operator-overview";
+import {
+  makeJoinWithInvite,
+  type JoinWithInvite,
+} from "@/core/usecases/join-with-invite";
+import { makeManageInvites, type ManageInvites } from "@/core/usecases/manage-invites";
+import { makeManageMembers, type ManageMembers } from "@/core/usecases/manage-members";
 import {
   makeResolveOperatorAccount,
 } from "@/core/usecases/resolve-operator-account";
@@ -146,6 +156,7 @@ import {
   loadUploadConfig,
   loadMetaConfig,
   loadMetaOAuthConfig,
+  loadOnboardingConfig,
   loadSecretsConfig,
   loadVideoConfig,
   type Config,
@@ -231,6 +242,14 @@ export interface Usecases {
    * through `requireTenant` directly — same fresh check, one code path.)
    */
   oauthStates: OAuthStateService;
+  /** M2.1 — self-service company creation; the creator becomes owner. */
+  createTenant: CreateTenant;
+  /** M2.2 — invite links: list / create (role ladder) / revoke. */
+  invites: ManageInvites;
+  /** M2.2 — `POST /api/join`: token → membership (NoMembership state's door). */
+  joinWithInvite: JoinWithInvite;
+  /** M2.3 — members screen: list / change role (ladder) / remove. */
+  members: ManageMembers;
   /**
    * M1.2 — THE tenant authoriser (docs/09 §3.3). Routes adopt it in M1.3;
    * until then only /api/me* and tests touch it.
@@ -725,6 +744,38 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     clock: deps.clock,
     logger: deps.logger,
   });
+  // M2.1/M2.2 — onboarding. Token hashing mirrors the oauth-state service:
+  // core owns no crypto, the port only ever sees hashes.
+  const hashInviteToken = (token: string): string =>
+    createHash("sha256").update(token).digest("hex");
+  const onboardingLimits = () => {
+    const cfg = loadOnboardingConfig();
+    return {
+      maxCreatedTotal: cfg.TENANT_CREATE_MAX_PER_ACCOUNT,
+      maxCreatedPerHour: cfg.TENANT_CREATE_MAX_PER_HOUR,
+    };
+  };
+  const baseCreateTenant = makeCreateTenant({
+    onboarding: new DrizzleTenantOnboardingRepo(deps.db, { logger: deps.logger }),
+    clock: deps.clock,
+    logger: deps.logger,
+    // Read per call, not at boot: the web process must start without these vars.
+    get limits() {
+      return onboardingLimits();
+    },
+    randomSuffix: () => randomBytes(2).toString("hex"),
+  });
+  const inviteRepo = new DrizzleInviteRepo(deps.db, { logger: deps.logger });
+  const baseJoinWithInvite = makeJoinWithInvite({
+    invites: inviteRepo,
+    clock: deps.clock,
+    logger: deps.logger,
+    hashToken: hashInviteToken,
+  });
+  const baseMembers = makeManageMembers({
+    members: new DrizzleMemberRepo(deps.db, { logger: deps.logger }),
+    logger: deps.logger,
+  });
   /**
    * The cache is dropped the instant a decision is written — wired HERE rather
    * than inside the usecase so core stays free of caching, and so nobody can
@@ -878,6 +929,53 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       store: new DrizzleOAuthStateStore(deps.db, { logger: deps.logger }),
       clock: deps.clock,
     }),
+    /**
+     * Both onboarding writes mint a NEW membership — every cache over accounts
+     * and memberships is stale the same instant, so the caches drop HERE (the
+     * same discipline as decideAccessRequest above). Without this, /api/me and
+     * requireTenant would not see the new company for up to a TTL.
+     */
+    createTenant: async (input) => {
+      const result = await baseCreateTenant(input);
+      operatorAccounts.invalidateAll();
+      tenantGate.invalidateAll();
+      return result;
+    },
+    invites: makeManageInvites({
+      invites: inviteRepo,
+      clock: deps.clock,
+      logger: deps.logger,
+      newToken: () => randomBytes(32).toString("hex"),
+      hashToken: hashInviteToken,
+    }),
+    joinWithInvite: async (input) => {
+      const result = await baseJoinWithInvite(input);
+      if (!result.alreadyMember) {
+        operatorAccounts.invalidateAll();
+        tenantGate.invalidateAll();
+      }
+      return result;
+    },
+    /**
+     * M2.3 — writes change memberships: every cache over them dies with the
+     * decision (same discipline as decide/join above). The version bump covers
+     * OTHER processes; this covers this one, instantly.
+     */
+    members: {
+      listMembers: (input) => baseMembers.listMembers(input),
+      changeRole: async (input) => {
+        const result = await baseMembers.changeRole(input);
+        operatorAccounts.invalidateAll();
+        tenantGate.invalidateAll();
+        return result;
+      },
+      removeMember: async (input) => {
+        const result = await baseMembers.removeMember(input);
+        operatorAccounts.invalidateAll();
+        tenantGate.invalidateAll();
+        return result;
+      },
+    },
     requireTenant: tenantGate.requireTenant,
     listPostJobs: makeListPostJobs({ postJobs, logger: deps.logger }),
     retryPostJob: makeRetryPostJob({

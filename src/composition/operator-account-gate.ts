@@ -32,6 +32,8 @@ export interface OperatorAccountGate {
   resolve(sessionEmail: string): Promise<OperatorAccountState | null>;
   /** Sign-in path: fresh, throws on DB failure (the gate fails closed there). */
   signIn(input: SignInIdentityInput): Promise<SignInAccountVerdict>;
+  /** M2.4 — first sign-in creates the person. Fresh; clears the cache. */
+  provision(input: SignInIdentityInput & { displayName?: unknown }): Promise<OperatorAccountState>;
   /** Drops every cached account. Called the moment a decision is written. */
   invalidateAll(): void;
 }
@@ -82,6 +84,12 @@ export function makeOperatorAccountGate(deps: OperatorAccountGateDeps): Operator
       // address predates that fact. Sign-ins are rare; dropping all is fine.
       cache.clear();
       return verdict;
+    },
+
+    async provision(input) {
+      const state = await deps.resolveAccount.provisionForSignIn(input);
+      cache.clear();
+      return state;
     },
 
     invalidateAll() {

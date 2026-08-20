@@ -230,6 +230,76 @@ export function presentApiError(
         canRetry: false,
       };
 
+    /**
+     * 409 (M2.1): the account hit the create ceiling — three companies, or one
+     * in the last hour. The server's own sentence says WHICH, because only it
+     * knows; this side must not guess and must not offer a retry that would
+     * fail identically.
+     */
+    case "TENANT_LIMIT_REACHED":
+      return {
+        kind: "business",
+        title: "Chưa tạo thêm công ty được lúc này",
+        description: error.userMessage,
+        hint: "Nếu bạn cần thêm công ty, hãy liên hệ quản trị hệ thống. Bạn vẫn làm việc bình thường ở những công ty đang có.",
+        canRetry: false,
+      };
+
+    /**
+     * 409 (M2.1): the slug belongs to someone else. Field-level by nature — the
+     * form places it under the slug box (see `isCreateTenantField`), so the
+     * copy here only has to say what to change.
+     */
+    case "SLUG_TAKEN":
+      return {
+        kind: "input",
+        title: "Đường dẫn này đã có người dùng",
+        description: `${error.userMessage} Chọn một đường dẫn khác — ví dụ thêm tên chi nhánh hoặc năm.`,
+        canRetry: false,
+      };
+
+    /**
+     * 404 (M2.2): ONE code for every reason an invite fails — hết hạn, đã thu
+     * hồi, đã dùng, không tồn tại. Deliberately indistinguishable, so this copy
+     * must not speculate about which one it was.
+     */
+    case "INVITE_INVALID":
+      return {
+        kind: "business",
+        title: "Link mời không còn hiệu lực",
+        description: `${error.userMessage} Link mời có thể đã hết hạn, đã được dùng hoặc đã bị thu hồi.`,
+        hint: "Xin quản trị viên của công ty gửi lại một link mời mới.",
+        canRetry: false,
+      };
+
+    /**
+     * 404 (M2.3, verified against the running API): the membership is not in
+     * this company any more — almost always because somebody else removed it
+     * first. Retrying the same call cannot succeed; re-reading the list can.
+     */
+    case "MEMBER_NOT_FOUND":
+      return {
+        kind: "business",
+        title: "Không còn thành viên này trong công ty",
+        description: `${error.userMessage} Có thể người khác vừa gỡ họ trước bạn.`,
+        hint: "Tải lại danh sách thành viên để xem ai còn trong công ty.",
+        canRetry: false,
+      };
+
+    /**
+     * 409 (M2.3): the change would leave the company with no owner. Refused by
+     * the server as an invariant, not as a permission — so the wording points
+     * at the fix (hand ownership over first) instead of at the operator's role.
+     */
+    case "LAST_OWNER":
+      return {
+        kind: "business",
+        title: "Công ty phải còn ít nhất một chủ sở hữu",
+        description: error.userMessage,
+        hint: "Hãy cấp vai trò Chủ sở hữu cho một thành viên khác trước, rồi quay lại thao tác này.",
+        canRetry: false,
+      };
+
     /** 403: has a membership, lacks the role. Retrying changes nothing. */
     case "FORBIDDEN":
       return {

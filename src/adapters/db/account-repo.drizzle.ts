@@ -13,6 +13,7 @@ import type {
   AttachProviderAccountIdInput,
   MembershipWithTenant,
   OperatorAccountSummary,
+  ProvisionAccountRecord,
 } from "@/core/ports/account-repo";
 import type { Logger } from "@/core/ports/infra";
 import {
@@ -135,6 +136,62 @@ export class DrizzleAccountRepo implements AccountRepo {
         field: "sessionEmail",
       });
     }
+  }
+
+  /**
+   * M2.4 — a first sign-in creates the PERSON (no approval queue anymore):
+   * account + identity, zero memberships. Two identical first sign-ins race on
+   * `identity_session_email_uq`; the loser ADOPTS the winner's row — a failed
+   * sign-in over a unique key would punish the person for double-clicking.
+   */
+  async provisionAccount(input: ProvisionAccountRecord): Promise<OperatorAccountSummary> {
+    // --- Edge cases first ---------------------------------------------------
+    const sessionEmail = str(input?.sessionEmail).toLowerCase();
+    const providerAccountId = str(input?.providerAccountId);
+    if (!isOperatorProvider(input?.provider) || sessionEmail.length === 0 || providerAccountId.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "provisionAccount requires provider, providerAccountId and sessionEmail",
+        context: { provider: input?.provider ?? null, field: "sessionEmail" },
+      });
+    }
+
+    try {
+      await this.db.transaction(async (tx) => {
+        const accountRows = await tx
+          .insert(accounts)
+          .values({ displayName: str(input?.displayName) || null })
+          .returning({ id: accounts.id });
+        await tx.insert(identities).values({
+          accountId: accountRows[0].id,
+          provider: input.provider,
+          providerAccountId,
+          sessionEmail,
+          email: str(input?.email).toLowerCase() || null,
+        });
+      });
+    } catch (error) {
+      // The race: the other first sign-in won. Adopt their row below.
+      if (findPgError(error)?.code !== "23505") {
+        throw wrapDbError(error, {
+          operation: "account.provisionAccount",
+          provider: input.provider,
+          field: "sessionEmail",
+        });
+      }
+      this.deps.logger.info("Provision lost a first-sign-in race — adopting the existing row", {
+        provider: input.provider,
+      });
+    }
+
+    const summary = await this.findAccountBySessionEmail(sessionEmail);
+    if (!summary) {
+      // Insert failed AND nothing exists: real corruption, never silent.
+      throw new AppError("DB_ERROR", {
+        message: "Provisioned identity could not be read back",
+        context: { provider: input.provider },
+      });
+    }
+    return summary;
   }
 
   async attachProviderAccountId(input: AttachProviderAccountIdInput): Promise<boolean> {

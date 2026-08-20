@@ -3,11 +3,7 @@ import Facebook from "next-auth/providers/facebook";
 import Google from "next-auth/providers/google";
 
 import { loadMetaOAuthConfig } from "@/composition/config";
-import {
-  ACCESS_REGISTRY_TENANT_ID,
-  FACEBOOK_CONNECT_SCOPES,
-  getContainer,
-} from "@/composition/container";
+import { FACEBOOK_CONNECT_SCOPES, getContainer } from "@/composition/container";
 import { facebookSessionEmail } from "@/shared/operator-access";
 
 import { buildBaseAuthConfig, loadAuthEnv } from "./auth.config";
@@ -74,9 +70,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => {
         const container = getContainer();
         return decideSignIn(
           {
-            tenantId: ACCESS_REGISTRY_TENANT_ID,
             signInAccount: (input) => container.usecases.operatorAccounts.signIn(input),
-            register: (input) => container.usecases.operatorAccess.register(input),
+            // M2.4: a first sign-in provisions the person; the approval queue
+            // (`operatorAccess.register`) is retired and no longer written.
+            provisionAccount: (input) => container.usecases.operatorAccounts.provision(input),
             logger: container.logger,
           },
           {

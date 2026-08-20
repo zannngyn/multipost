@@ -140,10 +140,10 @@ Mọi màn UI và mọi route phải xác định mình phục vụ state nào; 
 
 ### Phần 2 — Onboarding tự phục vụ *(≈ 3,5 ngày)*
 
-- [ ] **M2.1** Tạo công ty (state NoMembership → owner) + biên abuse 3.7 — *0,5 ngày* —
-- [ ] **M2.2** Invite đủ invariant 3.6: sinh/thu hồi/hết hạn, trang `/join/<token>`, audit mỗi lần dùng — *1,5 ngày* —
-- [ ] **M2.3** Bộ chuyển công ty + màn "Thành viên" (đổi vai trò, gỡ — gỡ bump version nên tầng S mất quyền ngay) — *1 ngày* —
-- [ ] **M2.4** Nghỉ hưu luồng chờ-duyệt; `/access` thành read-only lịch sử; dọn ngữ nghĩa env — *0,5 ngày* —
+- [x] **M2.1** Tự tạo công ty: `POST /api/tenants` biên abuse 3+1/giờ trong advisory lock (test đua tất định), transaction đủ 4 bảng, cookie active sang công ty mới; UI `OnboardingPanel` + `TenantSwitcher` topbar — *commit d52bfa1, 20/08* ✅
+- [x] **M2.2** Invite: token 256-bit chỉ giữ hash, xuất hiện đúng 1 lần, thang mời 3 bậc từ `ctx.role`, claim nguyên tử 1-thắng, MỘT mã 404 chống dò, revive membership removed, **proxy redact `/join/<token>` khỏi log** (gate bắt được rò, đã vá + test pin payload); trang `/join/[token]` ngoài app shell — *commit d52bfa1, 20/08* ✅. Vé: **Caddy access log ở edge vẫn nuốt token ở prod** (filter log hoặc chuyển token khỏi path — xử ở M2.3) · sweep invite + oauth_state hết hạn · `hashtext` int4 va khoá (thông lượng)
+- [x] **M2.3** Màn "Thành viên" + quản lý link mời (switcher đã lên từ M2.1): thang từ role TƯƠI trong tx, **advisory lock per-tenant** (gate bắt được ca 2 owner hạ nhau → 0 owner, đã vá + 2 test tất định), `LAST_OWNER` 409, gỡ = removed + xoá draft + revive được — *commit 6a93ace, 20/08* ✅
+- [x] **M2.4** Nghỉ hưu luồng chờ-duyệt: người lạ provision account ngay → state NoMembership tự tạo/join; guard chống chiếm account M1.2 còn nguyên (verdict `rejected` tách khỏi `unknown`, audit đủ 17 ca test cũ); `decide` → 410 `RETIRED`; `/access` thành "Lịch sử duyệt" — *commit 6a93ace, 20/08* ✅. Khoảng trống ban kẻ xấu = suspend tay cho tới M3.1
 
 ### Phần 3 — Quản trị MYSP *(≈ 3,5 ngày)*
 
@@ -190,7 +190,7 @@ Grep "tenantId từ request" = 0          → chỉ là điều kiện phụ, kh
 | Phần | Milestone | Ước lượng | Trạng thái |
 |---|---|---|---|
 | 1 — Hợp đồng + nền móng | M0 → M1.5 | 8,5–9,5 ngày | ✅ **HOÀN TẤT 20/08/2026** — B-8 đóng, matrix 12/12 trên dev thật |
-| 2 — Onboarding | M2.1 → M2.4 | 3,5 ngày | ⬜ chưa bắt đầu |
+| 2 — Onboarding | M2.1 → M2.4 | 3,5 ngày | ✅ **HOÀN TẤT 20/08/2026** — hết whitelist env, mời bằng link, thành viên quản trong app |
 | 3 — Quản trị MYSP | M3.1 → M3.3 | 3,5 ngày | ⬜ chưa bắt đầu |
 
 ## 8. Lịch sử review

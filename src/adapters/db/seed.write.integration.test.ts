@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 
 import type { LogBindings, LogContext, Logger } from "@/core/ports/infra";
@@ -59,8 +59,25 @@ describe.skipIf(!url)("seed — M1.1 identity chain", () => {
       .from(users)
       .innerJoin(accounts, eq(accounts.id, users.accountId))
       .innerJoin(identities, eq(identities.accountId, accounts.id))
-      .innerJoin(memberships, eq(memberships.accountId, accounts.id))
-      .where(inArray(users.email, [DEMO_USER_EMAIL, DEV_BYPASS_EMAIL]))
+      .innerJoin(
+        memberships,
+        and(
+          eq(memberships.accountId, accounts.id),
+          // Scoped to the SEEDED tenant: on a live dev database the same
+          // accounts legitimately hold memberships in self-service companies
+          // (M2.1), and an unscoped join fans out. The invariant this test
+          // pins is "owner of the DEMO tenant", nothing broader.
+          eq(memberships.tenantId, DEMO_TENANT_ID),
+        ),
+      )
+      // Same scoping for app_user: self-service companies (M2.1) mint their
+      // own rows for these addresses on a live dev database.
+      .where(
+        and(
+          inArray(users.email, [DEMO_USER_EMAIL, DEV_BYPASS_EMAIL]),
+          eq(users.tenantId, DEMO_TENANT_ID),
+        ),
+      )
       .orderBy(users.email);
 
   it("wires both demo logins from identity to app_user and stays put on a second run", async () => {

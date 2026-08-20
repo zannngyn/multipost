@@ -63,9 +63,25 @@ export interface AttachProviderAccountIdInput {
   readonly providerAccountId: string;
 }
 
+export interface ProvisionAccountRecord {
+  readonly provider: OperatorProvider;
+  readonly providerAccountId: string;
+  readonly sessionEmail: string;
+  readonly email: string | null;
+  readonly displayName: string | null;
+}
+
 export interface AccountRepo {
   /** Null when no identity signs in under that address. */
   findAccountBySessionEmail(sessionEmail: string): Promise<OperatorAccountSummary | null>;
+
+  /**
+   * M2.4 — create account + identity for a first sign-in (no memberships).
+   * MUST survive the race of two identical first sign-ins: on a session-e-mail
+   * unique collision the implementer re-reads and returns the existing row
+   * instead of failing the sign-in.
+   */
+  provisionAccount(input: ProvisionAccountRecord): Promise<OperatorAccountSummary>;
 
   /**
    * Replace a placeholder/stale `provider_account_id` with the real one, keyed

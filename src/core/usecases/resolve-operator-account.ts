@@ -1,4 +1,5 @@
 import type { PlatformRole } from "@/core/domain/account";
+import { toOperatorIdentity } from "@/core/domain/access-request";
 import { AppError } from "@/core/domain/errors";
 import type { AccountRepo, OperatorAccountSummary } from "@/core/ports/account-repo";
 import type { Logger } from "@/core/ports/infra";
@@ -31,11 +32,19 @@ export interface OperatorAccountState {
 }
 
 export type SignInAccountVerdict =
-  /** No identity under this address — the legacy pending flow takes over. */
+  /** No identity under this address — M2.4: provision an account and let them in. */
   | { readonly kind: "unknown" }
-  /** Platform-level ban: refuse, regardless of what the registry says. */
+  /**
+   * The address exists but must NOT be adopted or provisioned: stored REAL sub
+   * differs (recycled address, docs/09 §3.1), patch could not claim the row,
+   * or the address belongs to another provider. Distinct from `unknown` since
+   * M2.4: provisioning on this branch would collide with
+   * `identity_session_email_uq` — and hand the account to the wrong person.
+   */
+  | { readonly kind: "rejected" }
+  /** Platform-level ban: refuse, always. */
   | { readonly kind: "suspended" }
-  /** Account exists but holds no active membership — pending flow decides. */
+  /** Valid person, no company yet — the NoMembership state (docs/09 §3.8). */
   | { readonly kind: "no_membership"; readonly account: OperatorAccountState }
   | { readonly kind: "member"; readonly account: OperatorAccountState };
 
@@ -54,7 +63,16 @@ export interface ResolveOperatorAccount {
   /** Null when nobody signs in under that address. Never throws on bad input. */
   forSession(sessionEmail: string): Promise<OperatorAccountState | null>;
   /** Sign-in path: identify, patch a placeholder sub, classify. Throws on DB failure. */
-  forSignIn(input: SignInIdentityInput): Promise<SignInAccountVerdict>;
+  forSignIn(input: SignInIdentityInput & { displayName?: unknown }): Promise<SignInAccountVerdict>;
+  /**
+   * M2.4 — a first sign-in CREATES the person (no approval queue anymore,
+   * docs/09 M2.4): account + identity, zero memberships. Idempotent under the
+   * race of two first sign-ins (unique on session_email; the loser adopts the
+   * winner's row). Only call after `forSignIn` answered `unknown`.
+   */
+  provisionForSignIn(
+    input: SignInIdentityInput & { displayName?: unknown },
+  ): Promise<OperatorAccountState>;
 }
 
 export function makeResolveOperatorAccount(deps: ResolveOperatorAccountDeps): ResolveOperatorAccount {
@@ -110,7 +128,7 @@ export function makeResolveOperatorAccount(deps: ResolveOperatorAccountDeps): Re
           stored_provider: summary.identity.provider,
           alert: "OPERATOR_ATTENTION",
         });
-        return { kind: "unknown" };
+        return { kind: "rejected" };
       }
 
       if (summary.identity.providerAccountId !== providerAccountId) {
@@ -132,7 +150,7 @@ export function makeResolveOperatorAccount(deps: ResolveOperatorAccountDeps): Re
               alert: "OPERATOR_ATTENTION",
             },
           );
-          return { kind: "unknown" };
+          return { kind: "rejected" };
         }
 
         /**
@@ -164,7 +182,7 @@ export function makeResolveOperatorAccount(deps: ResolveOperatorAccountDeps): Re
             account_id: summary.accountId,
             alert: "OPERATOR_ATTENTION",
           });
-          return { kind: "unknown" };
+          return { kind: "rejected" };
         }
       }
 
@@ -172,6 +190,27 @@ export function makeResolveOperatorAccount(deps: ResolveOperatorAccountDeps): Re
       const account = toState(summary);
       if (summary.activeMemberships.length === 0) return { kind: "no_membership", account };
       return { kind: "member", account };
+    },
+
+    async provisionForSignIn(input) {
+      const identity = toOperatorIdentity(input);
+      const summary = await deps.accounts.provisionAccount(identity);
+
+      // A suspended account can surface here through the two-first-sign-ins
+      // race (the loser adopts an existing row) — the ban must still hold.
+      if (summary.status !== "active") {
+        throw new AppError("UNAUTHORIZED", {
+          message: "Provisioned/adopted account is not active",
+          context: { provider: identity.provider, account_id: summary.accountId },
+        });
+      }
+
+      deps.logger.info("Account provisioned at first sign-in", {
+        provider: identity.provider,
+        account_id: summary.accountId,
+        session_email: identity.sessionEmail,
+      });
+      return toState(summary);
     },
   };
 }
