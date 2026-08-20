@@ -1,3 +1,4 @@
+import { DEFAULT_CAPTION_TONE, type CaptionTone } from "@/shared/caption-tone";
 import {
   CaptionsResponseSchema,
   ComposeResponseSchema,
@@ -166,12 +167,68 @@ export interface GenerateCaptionsParams {
    */
   content: ProductContent;
   channels: readonly string[];
+  /**
+   * Tông giọng chosen in the caption header. Absent or "mac-dinh" = the writer
+   * decides, and NOTHING extra is put on the wire.
+   */
+  tone?: CaptionTone;
+}
+
+/**
+ * The server's answer, plus ONE fact about the call itself.
+ *
+ * Deliberately an EXTENSION of `CaptionsResponse` rather than a wrapper around
+ * it: every existing caller (the bulk run) keeps reading `generated` / `failed`
+ * exactly as before, and only the compose screen looks at the extra field.
+ */
+export type GenerateCaptionsResult = CaptionsResponse & {
+  /**
+   * True when a tone was asked for, refused by the server, and the call was
+   * retried without it. The caller MUST say so — silently writing in the
+   * default tone while the dropdown claims otherwise is exactly the "im lặng
+   * bỏ qua" business rule 5 forbids.
+   */
+  readonly toneDropped: boolean;
+};
+
+function captionsBody(params: GenerateCaptionsParams, withTone: boolean): unknown {
+  const tone = params.tone;
+  return {
+    // Explicit field list: whatever else the compose response carried stays
+    // on this side of the wire (business rule 2).
+    product: {
+      name: params.content.name,
+      description: params.content.description ?? "",
+      category: params.content.category ?? "",
+      season: params.content.season ?? "",
+    },
+    channels: [...params.channels],
+    // The field only exists on the wire when the operator picked something
+    // other than the default — a server without the new contract must see the
+    // exact body it has always seen.
+    ...(withTone && tone && tone !== DEFAULT_CAPTION_TONE ? { tone } : {}),
+  };
+}
+
+/**
+ * True when this 400 is the server refusing the `tone` field itself, rather
+ * than refusing the request for a reason a retry cannot fix.
+ *
+ * Deliberately narrow: only a validation status, and only when the server named
+ * `tone` in its issues. Anything broader would retry real validation failures
+ * and hide them behind a friendlier message.
+ */
+function isToneRejection(error: unknown): boolean {
+  if (!ApiError.is(error)) return false;
+  if (error.status !== 400 && error.status !== 422) return false;
+  const issues = error.issues ?? [];
+  return issues.some((issue) => issue.path === "tone" || issue.path.startsWith("tone."));
 }
 
 export async function generateCaptions(
   params: GenerateCaptionsParams,
   signal?: AbortSignal,
-): Promise<CaptionsResponse> {
+): Promise<GenerateCaptionsResult> {
   if (params.channels.length === 0) {
     throw new ApiError({
       code: "INVALID_INPUT",
@@ -181,25 +238,32 @@ export async function generateCaptions(
     });
   }
 
-  return apiRequest("/api/posts/captions", {
-    method: "POST",
-    body: {
-      // Explicit field list: whatever else the compose response carried stays
-      // on this side of the wire (business rule 2).
-      product: {
-        name: params.content.name,
-        description: params.content.description ?? "",
-        category: params.content.category ?? "",
-        season: params.content.season ?? "",
-      },
-      channels: [...params.channels],
-    },
-    schema: CaptionsResponseSchema,
-    signal,
-    timeoutMs: CAPTION_TIMEOUT_MS,
-    malformedMessage:
-      "Kết quả caption không đúng định dạng. Hãy thử lại hoặc nhập caption tay.",
-  });
+  const wantsTone = Boolean(params.tone && params.tone !== DEFAULT_CAPTION_TONE);
+
+  const send = (withTone: boolean) =>
+    apiRequest("/api/posts/captions", {
+      method: "POST",
+      body: captionsBody(params, withTone),
+      schema: CaptionsResponseSchema,
+      signal,
+      timeoutMs: CAPTION_TIMEOUT_MS,
+      malformedMessage:
+        "Kết quả caption không đúng định dạng. Hãy thử lại hoặc nhập caption tay.",
+    });
+
+  if (!wantsTone) return { ...(await send(false)), toneDropped: false };
+
+  try {
+    return { ...(await send(true)), toneDropped: false };
+  } catch (error) {
+    // A deploy older than this build does not know `tone` and answers 400 with
+    // the field named. Retrying WITHOUT it means the operator still gets a
+    // caption instead of a dead end — and `toneDropped` is what makes the
+    // downgrade visible rather than silent. Anything else is rethrown untouched
+    // (CLAUDE.md rule 5: never swallow).
+    if (!isToneRejection(error)) throw error;
+    return { ...(await send(false)), toneDropped: true };
+  }
 }
 
 // --- Publish (E7.2 / E7.5 / E11.1) ------------------------------------------

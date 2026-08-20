@@ -15,6 +15,7 @@ import { Input } from "@/ui/components/ui/input";
 import { Select } from "@/ui/components/ui/select";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { useNowMs } from "@/ui/hooks/useNowMs";
 import {
   SCHEDULED_DIALOG_PARAMS,
@@ -69,6 +70,9 @@ export function ScheduledScreen() {
   const groups = useChannelGroups();
   const reschedule = useReschedulePostJob();
   const cancel = useCancelScheduledJob();
+  // Support mode is read-only (M3.3): a customer's schedule may be read, never
+  // moved or cancelled. The table folds this into its own per-row reason slot.
+  const readOnlyReason = useReadOnlyReason();
   const [notice, setNotice] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
@@ -339,6 +343,7 @@ export function ScheduledScreen() {
                           ? (cancel.variables?.postJobId ?? null)
                           : null
                     }
+                    readOnlyReason={readOnlyReason}
                   />
                 </section>
               );

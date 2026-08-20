@@ -18,6 +18,36 @@
 (mysp_app) {
 	encode zstd gzip
 
+	# Explicit access log (goes to journald via stderr) so what gets recorded
+	# is a decision, not a default. The format is `filter` around json because
+	# two URL shapes carry bearer credentials and must never land verbatim in
+	# any log this box keeps:
+	#   /join/<token>        single-use invite token (possession = membership)
+	#   ...?sig=<hmac>       signed media URL (possession = the file bytes)
+	# The app layer already redacts its own logs (src/app/_lib/redact-path.ts);
+	# this closes the remaining layer, the edge access log. One regexp handles
+	# both shapes; Referer gets the same treatment because a browser leaving
+	# the /join page repeats the full URL there.
+	#
+	# KNOWN GAP: per-request ERROR entries (http.log.error.*, e.g. "no
+	# upstreams available" while the app is down) travel through the box's
+	# `default` logger, which only global options can filter — and a conf.d
+	# snippet must not declare global options in a Caddyfile it does not own.
+	# Those entries embed the full URI, so during an app outage a /join or
+	# sig= hit can land verbatim in journald (root-readable only). Closing it
+	# means adding the same `log { format filter ... }` to the global options
+	# block of /etc/caddy/Caddyfile by hand. deploy/caddy/Caddyfile shows the
+	# exact block — it closes the same gap for the container stack.
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp "(/join/)[^/?]+|([?&](?:sig|token)=)[^&]*" "${1}${2}<redacted>"
+				request>headers>Referer regexp "(/join/)[^/?]+|([?&](?:sig|token)=)[^&]*" "${1}${2}<redacted>"
+			}
+		}
+	}
+
 	# Long enough for a Drive fetch plus a Graph upload to finish inside one
 	# request; short enough that a wedged upstream is not held open forever.
 	reverse_proxy {args[0]} {

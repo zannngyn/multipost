@@ -39,6 +39,7 @@ export function ScheduledJobTable({
   nowMs,
   hrefFor,
   busyJobId,
+  readOnlyReason = null,
 }: {
   items: readonly ScheduledJobEntry[];
   /** The day heading this table belongs to (`aria-labelledby`). */
@@ -48,6 +49,12 @@ export function ScheduledJobTable({
   hrefFor: (action: "reschedule" | "cancel", postJobId: string) => string;
   /** Job currently being changed — its actions are disabled while it runs. */
   busyJobId: string | null;
+  /**
+   * Set while the whole app is read-only (support mode, M3.3). It folds into
+   * the row's EXISTING "vì sao không đổi giờ được" slot rather than adding a
+   * second mechanism: one reason line per row, whatever produced it.
+   */
+  readOnlyReason?: string | null;
 }) {
   const zone = timeZoneLabel();
 
@@ -96,7 +103,11 @@ export function ScheduledJobTable({
             const deltaMs =
               nowMs > 0 ? new Date(job.scheduledAt).getTime() - nowMs : job.startsInMs;
             const isBusy = busyJobId === job.postJobId;
-            const blockedReason = rescheduleBlockedReason(job);
+            // Read-only wins over the per-row rule: when nothing may be
+            // written at all, "bài đã tới giờ" is not the answer to give.
+            const blockedReason = readOnlyReason ?? rescheduleBlockedReason(job);
+            const canReschedule = job.canReschedule && readOnlyReason === null;
+            const canCancel = job.canCancel && readOnlyReason === null;
             const reasonId = `reschedule-blocked-${job.postJobId}`;
 
             return (
@@ -146,10 +157,10 @@ export function ScheduledJobTable({
                   ) : null}
                 </td>
                 <td className="px-3 py-2">
-                  {job.canReschedule || job.canCancel ? (
+                  {canReschedule || canCancel ? (
                     <div className="space-y-1.5">
                       <div className="flex flex-wrap gap-2">
-                        {job.canReschedule ? (
+                        {canReschedule ? (
                           <Button asChild size="sm" variant="outline" disabled={isBusy}>
                             <Link href={hrefFor("reschedule", job.postJobId)} scroll={false}>
                               Đổi giờ
@@ -178,7 +189,7 @@ export function ScheduledJobTable({
                             </span>
                           </Button>
                         ) : null}
-                        {job.canCancel ? (
+                        {canCancel ? (
                           <Button asChild size="sm" variant="destructive" disabled={isBusy}>
                             <Link href={hrefFor("cancel", job.postJobId)} scroll={false}>
                               Huỷ

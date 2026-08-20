@@ -110,6 +110,37 @@ describe("generateCaptions — invalid input", () => {
       makeGenerateCaptions(deps)(makeInput({ product: { name: "Penny", category: "Đầm" } })),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
+
+  it("rejects a tone outside the closed list instead of writing in the default voice", async () => {
+    await expect(
+      makeGenerateCaptions(deps)(makeInput({ tone: "giọng nào cũng được" })),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tone
+// ---------------------------------------------------------------------------
+
+describe("generateCaptions — tone", () => {
+  it("passes the chosen tone to the engine for every channel", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+
+    await makeGenerateCaptions({ contentEngine: engine, logger: makeFakeLogger() })(
+      makeInput({ tone: "sale-manh" }),
+    );
+
+    expect(engine.requests).toHaveLength(2);
+    for (const request of engine.requests) expect(request.tone).toBe("sale-manh");
+  });
+
+  it("falls back to the default tone key when none is given", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+
+    await makeGenerateCaptions({ contentEngine: engine, logger: makeFakeLogger() })(makeInput());
+
+    expect(engine.requests[0]?.tone).toBe("mac-dinh");
+  });
 });
 
 // ---------------------------------------------------------------------------

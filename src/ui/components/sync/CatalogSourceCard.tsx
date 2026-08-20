@@ -5,6 +5,7 @@ import { useEffect, useId, useState } from "react";
 
 import { cn } from "@/shared/utils";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { CatalogSourceForm } from "@/ui/components/sync/CatalogSourceForm";
 import { GoogleConnectionPanel } from "@/ui/components/sync/GoogleConnectionPanel";
 import { GoogleDrivePicker } from "@/ui/components/sync/GoogleDrivePicker";
@@ -12,6 +13,8 @@ import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import { useCatalogSource } from "@/ui/hooks/useCatalogProducts";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
+import { writeGate } from "@/ui/hooks/read-only-gate";
+import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { useGoogleConnection } from "@/ui/hooks/useGoogleDrive";
 import { shortenId, type CatalogSource } from "@/ui/schemas/catalog.schema";
 import {
@@ -54,6 +57,14 @@ export function CatalogSourceCard({
 
   const source = useCatalogSource();
   const connection = useGoogleConnection();
+
+  /**
+   * Support mode is read-only (M3.3). Changing the source is the heaviest write
+   * on this screen — the next sync deletes every product that no longer belongs
+   * to the new folder — so the picker, the manual form and the button that
+   * opens them all go off together.
+   */
+  const gate = writeGate(useReadOnlyReason());
 
   const [isPicking, setIsPicking] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
@@ -149,7 +160,7 @@ export function CatalogSourceCard({
           {/* Only for the tenants the picker cannot serve, and only once the
               status is known — offering it while the answer is still loading
               would flash a button at everyone. */}
-          {configured !== null && needsManualEntry && !isPicking ? (
+          {configured !== null && needsManualEntry && !isPicking && !gate.isDisabled ? (
             <Button
               type="button"
               variant="outline"
@@ -192,22 +203,27 @@ export function CatalogSourceCard({
           onRetry={() => void source.refetch()}
           configured={configured}
           isConnectionPending={isConnectionFirstLoad}
-          canPick={isConnected}
+          canPick={isConnected && !gate.isDisabled}
           onPick={() => setIsPicking(true)}
+          readOnlyReason={gate.reason}
         />
       )}
 
-      <ManualSourceDisclosure
-        panelId={manualPanelId}
-        isOpen={isManualOpen}
-        onToggle={() => setIsManualOpen((open) => !open)}
-      >
-        <CatalogSourceForm
-          current={configured ?? undefined}
-          onSaved={finishSourceChange}
-          onCancel={() => setIsManualOpen(false)}
-        />
-      </ManualSourceDisclosure>
+      {/* The manual editor is not offered at all in read-only mode: a form
+          whose save can only 403 invites typing that gets thrown away. */}
+      {gate.isDisabled ? null : (
+        <ManualSourceDisclosure
+          panelId={manualPanelId}
+          isOpen={isManualOpen}
+          onToggle={() => setIsManualOpen((open) => !open)}
+        >
+          <CatalogSourceForm
+            current={configured ?? undefined}
+            onSaved={finishSourceChange}
+            onCancel={() => setIsManualOpen(false)}
+          />
+        </ManualSourceDisclosure>
+      )}
     </section>
   );
 }
@@ -223,6 +239,7 @@ function SourceRegion({
   isConnectionPending,
   canPick,
   onPick,
+  readOnlyReason = null,
 }: {
   isFirstLoad: boolean;
   showSkeleton: boolean;
@@ -235,6 +252,8 @@ function SourceRegion({
   /** Only a connected tenant can open the in-app picker. */
   canPick: boolean;
   onPick: () => void;
+  /** Set while the app is read-only (support mode, M3.3). */
+  readOnlyReason?: string | null;
 }) {
   if (isFirstLoad) {
     return showSkeleton ? <SourceFactsSkeleton /> : null;
@@ -262,10 +281,15 @@ function SourceRegion({
       <div className="border-border space-y-3 border-b p-4">
         <p className="text-muted-foreground max-w-prose text-sm">
           Chưa cấu hình nguồn Drive/Sheet cho đơn vị này, nên chưa chạy đồng bộ được.
-          {canPick
-            ? " Chọn thư mục ảnh và bảng sản phẩm ngay trong app."
-            : " Kết nối Google ở trên, hoặc nhập link/ID thủ công ở phần dưới."}
+          {readOnlyReason
+            ? ""
+            : canPick
+              ? " Chọn thư mục ảnh và bảng sản phẩm ngay trong app."
+              : " Kết nối Google ở trên, hoặc nhập link/ID thủ công ở phần dưới."}
         </p>
+        {/* In read-only mode the "làm gì tiếp theo" belongs to whoever owns the
+            company, not to the person reading over their shoulder. */}
+        <ReadOnlyNotice reason={readOnlyReason} />
         {canPick ? (
           <Button type="button" onClick={onPick}>
             Chọn thư mục và bảng
