@@ -136,7 +136,7 @@ Mọi màn UI và mọi route phải xác định mình phục vụ state nào; 
 - [x] **M1.3a** Brand `TenantId` xuống lõi — cột DB brand tại `$type`, 92 file test codemod không đổi assertion nào, ESLint 3 rule (probe 4 vi phạm đều bị bắt), HMAC media không đụng, **36 call site `legacyTenantIdFromRequest` = worklist M1.3b**. Test giữ nguyên 2687, `db:generate` không sinh gì. Gate PASS — *commit 9dd89ab, 20/08* ✅ —
 - [x] **M1.3b** B-8 ĐÓNG: 36 route lấy tenant từ phiên qua `requireTenantContext` (khớp ma trận doc 10 **ở mức route** — 4 luật field-level chuyển M1.4: `secretsConfigured`, google/status email+scopes, worker-health boolean, drafts owner qua account); OAuth state server-side 2 luồng (bảng `oauth_state`, đốt nonce nguyên tử trước gọi ngoài, migration 0014); proxy 302 cho callback; bug B2–B6 đóng; suspended-guard worker (dep bắt buộc, mutation-check); shim xoá, media dùng `signedMediaTenantId` tầng P. +114 test (2801). Gate PASS — *commit b3df9bd, 20/08* ✅. Vé: thống nhất quy ước minRole viewer/bỏ trống · job dọn `oauth_state` hết hạn · Q8.5 (xoá kênh không huỷ job queued) —
 - [x] **M1.4** UI hết biết tenant: `DEMO_TENANT_ID` = 0, 3 ô nhập UUID xoá, 43 hàm service bỏ tham số, query key theo `useActiveTenant()`, đổi công ty = set-cookie-trước-removeQueries-sau, `TenantBoundary` (picker 409 / NoMembership / bootstrap pass-through), `/api/me.isBootstrapAdmin`, vá lỗ auto-import Page vào tenant demo lúc đăng nhập FB. +28 test (2829). Gate PASS — *commit fa4ed41, 20/08* ✅. Vé: **4 luật field-level vẫn treo, TODO trong code phải đổi nhãn M2.x** (`secretsConfigured` · google/status email/scopes · worker-health boolean · drafts owner qua account) · cảnh báo khi `/api/me` thiếu field `isBootstrapAdmin` —
-- [ ] **M1.5** Gate + **negative test matrix** (mục 5) chạy thật trên dev với ≥2 account, ≥2 tenant, có account thuộc CẢ HAI tenant — *1 ngày* —
+- [x] **M1.5** Negative matrix chạy thật qua HTTP trên dev: **12/12 ĐẠT** (cách ly đọc khi đổi công ty, cookie/body giả bị bỏ qua, 403 theo vai trò, nâng/gỡ role thấy ngay ở tầng S, media URL giả tenant → 401, sig hợp lệ + asset tenant khác → 404, OAuth state bịa → STATE_MISMATCH; bootstrap admin không vượt được minRole). DB dev teardown về baseline. — *20/08* ✅. Không kiểm được trên môi trường này (dựa tầng test dưới): không-phiên→401, 2 account OAuth thật song song, đổi quyền giữa consent, worker suspended-guard e2e. Vé: `SYNC_FAILED` 500 cho "chưa cấu hình nguồn" phải thành 409/412 (tenant mới M2.1 gặp ngay ngày đầu) —
 
 ### Phần 2 — Onboarding tự phục vụ *(≈ 3,5 ngày)*
 
@@ -189,7 +189,7 @@ Grep "tenantId từ request" = 0          → chỉ là điều kiện phụ, kh
 
 | Phần | Milestone | Ước lượng | Trạng thái |
 |---|---|---|---|
-| 1 — Hợp đồng + nền móng | M0 → M1.5 | 8,5–9,5 ngày | 🟨 M0 ✅ · M1.0 ✅ (19/08) · kế tiếp M1.1 |
+| 1 — Hợp đồng + nền móng | M0 → M1.5 | 8,5–9,5 ngày | ✅ **HOÀN TẤT 20/08/2026** — B-8 đóng, matrix 12/12 trên dev thật |
 | 2 — Onboarding | M2.1 → M2.4 | 3,5 ngày | ⬜ chưa bắt đầu |
 | 3 — Quản trị MYSP | M3.1 → M3.3 | 3,5 ngày | ⬜ chưa bắt đầu |
 
