@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import { CAPTION_TONES, CAPTION_TONE_LABELS, type CaptionTone } from "@/shared/caption-tone";
 import { cn } from "@/shared/utils";
@@ -20,9 +20,15 @@ import {
   type CaptionTarget,
   type ChannelCaptionState,
 } from "@/ui/components/compose/caption-targets";
+import {
+  MAX_SHARED_WORD_RUN,
+  findDuplicateCaptions,
+} from "@/ui/components/compose/caption-duplicate";
+import { describeFanOut } from "@/ui/components/compose/caption-fanout";
 import { avatarToneVar, channelInitials } from "@/ui/components/compose/channel-picker";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { Select } from "@/ui/components/ui/select";
+import { useCaptionFanOut, type CaptionFanOutStatus } from "@/ui/hooks/useCaptionFanOut";
 import { useChannels } from "@/ui/hooks/useChannels";
 import type { ComposeWizard } from "@/ui/hooks/useComposeWizard";
 import type { PublishForm } from "@/ui/hooks/usePublishForm";
@@ -66,6 +72,7 @@ export function CaptionBlock({
   publish,
   activeChannelId,
   onActiveChannelChange,
+  onOpenPicker,
   readOnlyReason,
 }: {
   wizard: ComposeWizard;
@@ -73,6 +80,8 @@ export function CaptionBlock({
   /** Which channel tab is open; null = the shared caption. */
   activeChannelId: string | null;
   onActiveChannelChange: (channelId: string | null) => void;
+  /** Opens the channel modal — the empty state's own way out. */
+  onOpenPicker: () => void;
   /**
    * Support mode (M3.3): generating a caption spends money and writes an
    * `ai_generation` row, so it is a WRITE and the server answers 403. Editing
@@ -84,10 +93,46 @@ export function CaptionBlock({
   const channels = useChannels();
   const { captions, composed } = wizard;
   const [confirmShare, setConfirmShare] = useState<string[] | null>(null);
+  const { selectedIds, captionSources } = publish;
+
+  /**
+   * "Viết caption cho N trang" — one press, one call per Page, each landing on
+   * its own tab. Declared before the early return below, as every hook must be.
+   */
+  const fanOut = useCaptionFanOut({
+    content: composed?.content ?? null,
+    tone: wizard.tone,
+    onText: publish.setCaptionOverride,
+  });
+
+  /**
+   * D1, as an early warning: which tabs currently repeat another tab.
+   *
+   * Recomputed when the TEXTS change, not on every render — and deliberately
+   * not only after a fan-out: an operator who edits two captions into agreement
+   * by hand has the same problem, and a warning that only appears after the AI
+   * ran would be a lie by omission.
+   */
+  const duplicateKey = selectedIds
+    .map((channelId) => `${channelId}\u0000${resolveCaption(captionSources, channelId)}`)
+    .join("\u0001");
+  const duplicates = useMemo(
+    () =>
+      publish.shareCaption
+        ? {}
+        : findDuplicateCaptions(
+            selectedIds.map((channelId) => ({
+              channelId,
+              text: resolveCaption(captionSources, channelId),
+            })),
+          ),
+    // `duplicateKey` IS the dependency: it changes exactly when a caption does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [duplicateKey, publish.shareCaption],
+  );
 
   if (!composed) return null;
 
-  const { selectedIds, captionSources } = publish;
   /**
    * NO channel count in this decision (see `activeCaptionChannel`): the editor
    * is on whichever channel the payload will be built for, whether that is one
@@ -133,6 +178,19 @@ export function CaptionBlock({
     wizard.form.setValue(`captions.${COMPOSE_CHANNELS[0].id}`, next, { shouldDirty: true });
   }
 
+  /** Per-Page mode with something to write for: the one-press fan-out. */
+  const canFanOut = !publish.shareCaption && selectedIds.length > 0;
+  const failedCount = selectedIds.filter(
+    (channelId) => fanOut.statuses[channelId] === "error",
+  ).length;
+  const progress = describeFanOut({
+    isRunning: fanOut.isRunning,
+    done: fanOut.done,
+    total: fanOut.total,
+    failed: failedCount,
+  });
+  const busy = captions.isPending || fanOut.isRunning;
+
   function generate() {
     captions.mutate(target, {
       onSuccess: (result) => {
@@ -164,6 +222,66 @@ export function CaptionBlock({
         </p>
       ) : null}
 
+      {/* --- Dòng đầu: công tắc caption riêng (PM, 21/08/2026) ---------- */}
+      <PerChannelSwitch
+        id={`${fieldId}-per-channel`}
+        /** The model still stores "dùng chung"; the switch shows its opposite,
+            because "caption riêng từng kênh" is the thing an operator turns ON
+            (and the default, per brief §7.2 + validator D1). */
+        perChannel={!publish.shareCaption}
+        disabled={publish.isPending}
+        channelCount={selectedIds.length}
+        onChange={(nextPerChannel) => {
+          if (nextPerChannel) {
+            publish.setShareCaption(false, { seedFrom: selectedIds });
+            onActiveChannelChange(selectedIds[0] ?? null);
+            return;
+          }
+          const losing = overridesThatDifferFromBase(captionSources, selectedIds);
+          if (losing.length > 0) {
+            setConfirmShare(losing);
+            return;
+          }
+          publish.setShareCaption(true);
+          onActiveChannelChange(null);
+        }}
+      />
+
+      {confirmShare ? (
+        <div
+          role="alertdialog"
+          aria-label="Xác nhận dùng chung caption"
+          className="flex flex-wrap items-center gap-3 rounded-xl bg-[var(--warning)]/15 px-3.5 py-2.5 text-xs leading-relaxed text-[var(--warning-foreground)]"
+        >
+          <span>
+            {confirmShare.length} kênh đang có caption riêng ({confirmShare.map(nameOf).join(", ")}
+            ). Tắt “caption riêng” sẽ bỏ các bản riêng đó.
+          </span>
+          <span className="flex-1" />
+          <button
+            type="button"
+            onClick={() => setConfirmShare(null)}
+            className="focus-visible:ring-ring cursor-pointer rounded-md px-2 py-1 font-semibold outline-none focus-visible:ring-3"
+          >
+            Giữ bản riêng
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              publish.setShareCaption(true);
+              onActiveChannelChange(null);
+              setConfirmShare(null);
+            }}
+            className="focus-visible:ring-ring cursor-pointer rounded-md bg-[var(--compose-ink)] px-3 py-1 font-semibold text-[var(--card)] outline-none focus-visible:ring-3"
+          >
+            Bỏ và dùng chung
+          </button>
+        </div>
+      ) : null}
+
+      {selectedIds.length === 0 ? (
+        <NoChannelYet onOpenPicker={onOpenPicker} />
+      ) : (
       <section
         aria-labelledby={`${fieldId}-heading`}
         className="flex flex-col rounded-[var(--compose-radius-block)] bg-[var(--compose-well)] shadow-[inset_0_0_0_1px_var(--compose-hairline)]"
@@ -202,7 +320,11 @@ export function CaptionBlock({
                     {channelInitials(name)}
                   </span>
                   <span className="max-w-35 truncate">{name}</span>
-                  <TabState state={state} />
+                  <TabState
+                    state={state}
+                    running={fanOut.statuses[channelId]}
+                    duplicate={Boolean(duplicates[channelId])}
+                  />
                 </button>
               );
             })}
@@ -218,9 +340,17 @@ export function CaptionBlock({
             ) : null}
           </h3>
 
+          {/* The pill follows whichever mechanism last touched THIS tab: the
+              single "Viết lại" call, or this tab's slot in the fan-out. */}
           <AiStatePill
-            pending={captions.isPending && isThisTarget}
-            generated={Boolean(generated) && isThisTarget && captions.isSuccess}
+            pending={
+              (captions.isPending && isThisTarget) ||
+              (activeId ? fanOut.statuses[activeId] === "pending" : false)
+            }
+            generated={
+              (Boolean(generated) && isThisTarget && captions.isSuccess) ||
+              (activeId ? fanOut.statuses[activeId] === "done" : false)
+            }
             hasText={value.trim().length > 0}
           />
 
@@ -248,20 +378,82 @@ export function CaptionBlock({
             </optgroup>
           </Select>
 
+          {/* Per-Page mode: ONE press writes every ticked Page, each call
+              landing on its own tab. The single-tab "Viết lại" stays beside it
+              for fixing one Page without spending N calls. */}
+          {canFanOut && selectedIds.length > 1 ? (
+            <button
+              type="button"
+              onClick={() => fanOut.run(selectedIds)}
+              disabled={busy || Boolean(readOnlyReason)}
+              title={readOnlyReason ?? undefined}
+              className="focus-visible:ring-ring h-8.5 cursor-pointer rounded-[10px] bg-[var(--compose-ink)] px-3.5 text-[13px] font-semibold text-[var(--card)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {fanOut.isRunning
+                ? `Đang viết ${fanOut.done}/${fanOut.total}…`
+                : `Viết caption cho ${selectedIds.length} trang`}
+            </button>
+          ) : null}
+
           <button
             type="button"
             onClick={generate}
-            disabled={captions.isPending || Boolean(readOnlyReason)}
+            disabled={busy || Boolean(readOnlyReason)}
             title={readOnlyReason ?? undefined}
             className="focus-visible:ring-ring h-8.5 cursor-pointer rounded-md px-1.5 text-sm font-semibold text-[var(--primary)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {captions.isPending && isThisTarget
               ? "Đang viết…"
               : value.trim().length > 0
-                ? "Viết lại"
+                ? canFanOut && selectedIds.length > 1
+                  ? "Viết lại trang này"
+                  : "Viết lại"
                 : "Nhờ AI viết"}
           </button>
         </div>
+
+        {/* Progress of the fan-out, announced without stealing focus. */}
+        {progress ? (
+          <p
+            role="status"
+            aria-live="polite"
+            className="mx-4 mb-3 rounded-xl bg-[var(--compose-track)] px-3.5 py-2 text-xs leading-relaxed"
+          >
+            {progress}
+          </p>
+        ) : null}
+
+        {/* The failure of THIS tab's own fan-out call, with its own retry.
+            One channel failing never stops the others (business rule 6). */}
+        {activeId && fanOut.statuses[activeId] === "error" ? (
+          <p
+            role="alert"
+            className="mx-4 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3.5 py-2.5 text-[13px] text-[var(--destructive)]"
+          >
+            <span>
+              {nameOf(activeId)}: {fanOut.errors[activeId]}
+            </span>
+            <button
+              type="button"
+              onClick={generate}
+              disabled={busy}
+              className="focus-visible:ring-ring cursor-pointer rounded-md px-2 py-0.5 font-semibold underline underline-offset-2 outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Viết lại trang này
+            </button>
+          </p>
+        ) : null}
+
+        {/* D1, early: the server refuses two channels sharing more than eight
+            consecutive words. Saying it here means the fix is one press away
+            instead of arriving as a blocked post job. */}
+        {activeId && duplicates[activeId] ? (
+          <p className="mx-4 mb-3 rounded-xl bg-[var(--warning)]/15 px-3.5 py-2.5 text-xs leading-relaxed text-[var(--warning-foreground)]">
+            Caption này trùng {MAX_SHARED_WORD_RUN + 1} từ liên tiếp với{" "}
+            {nameOf(duplicates[activeId].otherChannelId)}: “{duplicates[activeId].run}”. Bấm “Viết
+            lại trang này” để có bản khác — máy chủ sẽ chặn bài trùng khi đăng.
+          </p>
+        ) : null}
 
         {/* Per-tab failure: the request that broke, or the channel the AI
             refused. Either way it belongs to THIS tab and nowhere else — one
@@ -302,86 +494,17 @@ export function CaptionBlock({
         />
       </section>
 
-      {/* --- "Dùng chung một caption" ----------------------------------- */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor={`${fieldId}-share`}
-          className="flex cursor-pointer items-center gap-2.5 text-sm"
-        >
-          <input
-            id={`${fieldId}-share`}
-            type="checkbox"
-            className="peer sr-only"
-            checked={publish.shareCaption}
-            disabled={publish.isPending}
-            onChange={(event) => {
-              if (!event.target.checked) {
-                // chung → riêng: every ticked channel starts from what is on
-                // screen instead of an empty box.
-                publish.setShareCaption(false, { seedFrom: selectedIds });
-                onActiveChannelChange(selectedIds[0] ?? null);
-                return;
-              }
-              // riêng → chung: ask first, but only when it would actually
-              // destroy something.
-              const losing = overridesThatDifferFromBase(captionSources, selectedIds);
-              if (losing.length > 0) {
-                setConfirmShare(losing);
-                return;
-              }
-              publish.setShareCaption(true);
-              onActiveChannelChange(null);
-            }}
-          />
-          <span
-            aria-hidden="true"
-            className="bg-input peer-checked:bg-primary peer-focus-visible:ring-ring/50 peer-checked:[&>span]:translate-x-4 flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors peer-focus-visible:ring-3"
-          >
-            <span className="bg-card size-4 rounded-full shadow-sm transition-transform" />
-          </span>
-          <span>Dùng chung một caption cho mọi kênh</span>
-        </label>
+      )}
 
-        {confirmShare ? (
-          <div
-            role="alertdialog"
-            aria-label="Xác nhận dùng chung caption"
-            className="flex flex-wrap items-center gap-3 rounded-xl bg-[var(--warning)]/15 px-3.5 py-2.5 text-xs leading-relaxed text-[var(--warning-foreground)]"
-          >
-            <span>
-              {confirmShare.length} kênh đang có caption riêng ({confirmShare.map(nameOf).join(", ")}
-              ). Dùng chung sẽ bỏ các bản riêng đó.
-            </span>
-            <span className="flex-1" />
-            <button
-              type="button"
-              onClick={() => setConfirmShare(null)}
-              className="focus-visible:ring-ring cursor-pointer rounded-md px-2 py-1 font-semibold outline-none focus-visible:ring-3"
-            >
-              Giữ bản riêng
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                publish.setShareCaption(true);
-                onActiveChannelChange(null);
-                setConfirmShare(null);
-              }}
-              className="focus-visible:ring-ring cursor-pointer rounded-md bg-[var(--compose-ink)] px-3 py-1 font-semibold text-[var(--card)] outline-none focus-visible:ring-3"
-            >
-              Bỏ và dùng chung
-            </button>
-          </div>
-        ) : null}
-
-        <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">
-          {publish.shareCaption
-            ? "Mọi kênh đã chọn sẽ nhận đúng caption này. Nên tắt khi đăng nhiều Fanpage — nội dung trùng hệt nhau dễ bị nền tảng coi là spam."
-            : selectedIds.length > 1
-              ? "Mỗi kênh một caption riêng. Bấm vào tab kênh ở trên để sửa từng bản."
-              : "Chọn thêm kênh để soạn caption riêng cho từng Fanpage."}
-        </p>
-      </div>
+      <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">
+        {publish.shareCaption
+          ? "Mọi kênh đã chọn sẽ nhận đúng caption này. Bật “caption riêng” khi đăng nhiều Fanpage — nội dung trùng hệt nhau dễ bị nền tảng coi là spam."
+          : selectedIds.length > 1
+            ? "Mỗi kênh một caption riêng. Bấm “Viết caption cho N trang” để AI viết cho tất cả, hoặc mở từng tab để sửa tay."
+            : selectedIds.length === 1
+              ? "Chọn thêm kênh để mỗi Fanpage có một caption riêng."
+              : ""}
+      </p>
     </div>
   );
 }
@@ -389,8 +512,132 @@ export function CaptionBlock({
 /** Soft limit — going over is allowed, it is only counted out loud. */
 const HASHTAG_BUDGET = 10;
 
-/** The dot on a channel tab. Text carries it too: colour is never alone. */
-function TabState({ state }: { state: ChannelCaptionState }) {
+/**
+ * "Caption riêng từng kênh" — the FIRST thing in the caption block (PM,
+ * 21/08/2026), because it decides what everything under it means.
+ *
+ * The switch is the inverse of the stored `shareCaption`: an operator turns ON
+ * "riêng", and the model records "not shared". Presenting it the other way
+ * round (a "dùng chung" switch that is off by default) made the default look
+ * like an omission instead of the deliberate choice it is — brief §7.2 and
+ * validator D1 both want captions to differ.
+ */
+function PerChannelSwitch({
+  id,
+  perChannel,
+  channelCount,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  perChannel: boolean;
+  channelCount: number;
+  disabled?: boolean;
+  onChange: (perChannel: boolean) => void;
+}) {
+  return (
+    <label
+      htmlFor={id}
+      className={cn(
+        "flex items-center gap-2.5 rounded-[var(--compose-radius-tile)] bg-[var(--card)] px-3.5 py-3 text-sm shadow-[inset_0_0_0_1px_var(--compose-hairline)]",
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+      )}
+    >
+      <input
+        id={id}
+        type="checkbox"
+        className="peer sr-only"
+        checked={perChannel}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span
+        aria-hidden="true"
+        className="bg-input peer-checked:bg-primary peer-focus-visible:ring-ring/50 peer-checked:[&>span]:translate-x-4 flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors peer-focus-visible:ring-3"
+      >
+        <span className="bg-card size-4 rounded-full shadow-sm transition-transform" />
+      </span>
+      <span className="font-medium">Caption riêng từng kênh</span>
+      <span className="flex-1" />
+      <span className="text-xs text-[var(--muted-foreground)]">
+        {perChannel
+          ? channelCount > 1
+            ? `${channelCount} trang, mỗi trang một bản`
+            : "mỗi trang một bản"
+          : "một caption cho mọi trang"}
+      </span>
+    </label>
+  );
+}
+
+/**
+ * Nothing to write for yet. NOT a disabled box: it says what to do next and
+ * carries the way to do it (core-feedback-states — empty states have a CTA).
+ */
+function NoChannelYet({ onOpenPicker }: { onOpenPicker: () => void }) {
+  return (
+    <div className="flex flex-col items-start gap-2 rounded-[var(--compose-radius-block)] bg-[var(--compose-well)] px-4 py-8 shadow-[inset_0_0_0_1px_var(--compose-hairline)]">
+      <p className="text-sm font-medium">Chọn kênh đăng trước để viết caption</p>
+      <p className="max-w-110 text-xs leading-relaxed text-[var(--muted-foreground)]">
+        Mỗi Fanpage cần một caption riêng, nên hệ thống hỏi bạn đăng lên đâu trước rồi mới viết.
+      </p>
+      <button
+        type="button"
+        onClick={onOpenPicker}
+        className="focus-visible:ring-ring mt-1 h-9.5 cursor-pointer rounded-[10px] bg-[var(--card)] px-4 text-[13px] font-semibold shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)] outline-none focus-visible:ring-3"
+      >
+        Chọn kênh đăng
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The dot on a channel tab. Text carries it too: colour is never alone
+ * (core-accessibility §5).
+ *
+ * Order is deliberate — what is happening RIGHT NOW outranks what the caption
+ * is: a tab being written must not read as "đã có caption riêng" for the two
+ * seconds before its text lands.
+ */
+function TabState({
+  state,
+  running,
+  duplicate,
+}: {
+  state: ChannelCaptionState;
+  /** This tab's fan-out call, when one is in flight or has just failed. */
+  running?: CaptionFanOutStatus;
+  /** True when this caption repeats another channel's (D1). */
+  duplicate?: boolean;
+}) {
+  if (running === "pending") {
+    return (
+      <>
+        <span
+          aria-hidden="true"
+          className="size-2 shrink-0 rounded-full bg-[var(--primary)] motion-safe:animate-pulse"
+        />
+        <span className="sr-only">— đang viết</span>
+      </>
+    );
+  }
+  if (running === "error") {
+    return (
+      <>
+        <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-[var(--destructive)]" />
+        <span className="sr-only">— viết lỗi, cần thử lại</span>
+      </>
+    );
+  }
+  if (duplicate) {
+    return (
+      <>
+        <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-[var(--warning)]" />
+        <span className="sr-only">— trùng caption với kênh khác</span>
+      </>
+    );
+  }
   if (state === "own") {
     return (
       <>

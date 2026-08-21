@@ -400,11 +400,26 @@ export function ComposeFocus() {
                   <VideoSpecCard video={composed.video} clip={composed.media[0]} />
                 ) : null}
 
+                <span aria-hidden="true" className={COMPOSE_RULE} />
+
+                {/* KÊNH ĐĂNG BEFORE CAPTION (PM, 21/08/2026): a caption is
+                    written per Fanpage, so "đăng lên đâu" has to be answered
+                    before there is anything to write. The caption block below
+                    says so in words when nothing is ticked yet. */}
+                <ChannelChoice
+                  publish={publish}
+                  onOpenPicker={() => setPickerOpen(true)}
+                  readOnlyReason={readOnlyReason}
+                />
+
+                <span aria-hidden="true" className={COMPOSE_RULE} />
+
                 <CaptionBlock
                   wizard={wizard}
                   publish={publish}
                   activeChannelId={activeChannelId}
                   onActiveChannelChange={setActiveChannelId}
+                  onOpenPicker={() => setPickerOpen(true)}
                   readOnlyReason={readOnlyReason}
                 />
               </>
@@ -413,12 +428,6 @@ export function ComposeFocus() {
             )}
 
             <span aria-hidden="true" className={COMPOSE_RULE} />
-
-            <ChannelChoice
-              publish={publish}
-              onOpenPicker={() => setPickerOpen(true)}
-              readOnlyReason={readOnlyReason}
-            />
 
             {publish.formError ? (
               <p role="alert" className="text-[13px] text-[var(--destructive)]">

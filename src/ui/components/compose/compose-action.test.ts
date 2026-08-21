@@ -173,3 +173,44 @@ describe("the caption editor reads the published string", () => {
     expect(source).toContain("publish.captionFor(previewChannelId)");
   });
 });
+
+/**
+ * The order of the left card (PM, 21/08/2026): a caption is written per
+ * Fanpage, so "đăng lên đâu" is asked BEFORE there is anything to write.
+ */
+describe("channels are chosen before the caption is written", () => {
+  it("puts the channel block above the caption block", () => {
+    const source = readCompose("./ComposeFocus.tsx");
+    const channels = source.indexOf("<ChannelChoice");
+    const caption = source.indexOf("<CaptionBlock");
+    expect(channels).toBeGreaterThan(-1);
+    expect(caption).toBeGreaterThan(-1);
+    expect(channels).toBeLessThan(caption);
+  });
+
+  it("gives the caption block a way to open the picker for its empty state", () => {
+    const source = readCompose("./ComposeFocus.tsx");
+    expect(source).toMatch(/<CaptionBlock[\s\S]*?onOpenPicker=\{/);
+  });
+
+  it("the caption block says what to do next instead of going quiet", () => {
+    const source = readCompose("./CaptionBlock.tsx");
+    // An empty state with a CTA, not a disabled box (core-feedback-states).
+    expect(source).toContain("selectedIds.length === 0 ? (");
+    expect(source).toContain("Chọn kênh đăng trước để viết caption");
+    expect(source).toMatch(/onClick=\{onOpenPicker\}/);
+  });
+
+  it("the switch reads as “caption riêng”, over the stored shareCaption", () => {
+    const source = readCompose("./CaptionBlock.tsx");
+    expect(source).toContain("Caption riêng từng kênh");
+    expect(source).toContain("perChannel={!publish.shareCaption}");
+  });
+
+  it("offers one press for every ticked Page, and keeps the per-tab rewrite", () => {
+    const source = readCompose("./CaptionBlock.tsx");
+    expect(source).toContain("Viết caption cho ${selectedIds.length} trang");
+    expect(source).toContain("Viết lại trang này");
+    expect(source).toContain("fanOut.run(selectedIds)");
+  });
+});
