@@ -16,6 +16,17 @@ export interface ErrorStateProps {
   retryLabel?: string;
   /** Extra action rendered next to retry (e.g. "Về trang chủ"). */
   secondaryAction?: React.ReactNode;
+  /**
+   * Whether to pull focus onto the message when it appears. Default `true`,
+   * which is what every caller relied on before this prop existed.
+   *
+   * Set `false` for a message that is NOT the whole screen's answer — a notice
+   * about one of several sources on a dashboard, for instance. Focus is a
+   * single resource: two boundaries mounting together would fight over it, and
+   * stealing it from someone mid-sentence is worse than staying put, since
+   * `role="alert"` announces the text either way.
+   */
+  shouldFocus?: boolean;
   className?: string;
 }
 
@@ -34,6 +45,7 @@ export function ErrorState({
   onRetry,
   retryLabel = "Thử lại",
   secondaryAction,
+  shouldFocus = true,
   className,
 }: ErrorStateProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -41,8 +53,9 @@ export function ErrorState({
 
   // Move focus to the alert so keyboard/screen-reader users land on the message.
   useEffect(() => {
+    if (!shouldFocus) return;
     containerRef.current?.focus();
-  }, []);
+  }, [shouldFocus]);
 
   return (
     <Banner

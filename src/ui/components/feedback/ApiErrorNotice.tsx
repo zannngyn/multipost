@@ -22,12 +22,19 @@ export function ApiErrorNotice({
   className,
   extraAction,
   operation,
+  shouldFocus,
 }: {
   error: unknown;
   /** Ignored for 4xx — a retry there would repeat the same bad request. */
   onRetry?: () => void;
   className?: string;
   extraAction?: React.ReactNode;
+  /**
+   * Passed straight to `ErrorState` (default: focus the message). Set `false`
+   * where this notice is one of several on a screen that still works — see the
+   * prop's own note there.
+   */
+  shouldFocus?: boolean;
   /**
    * The action that failed, when its wording differs from the default
    * publish/read one (see `ApiErrorOperation`). Only the title and the next
@@ -61,6 +68,7 @@ export function ApiErrorNotice({
       description={view.hint ? `${view.description} ${view.hint}` : view.description}
       details={view.details}
       referenceCode={apiError.code}
+      shouldFocus={shouldFocus}
       onRetry={view.canRetry && onRetry ? onRetry : undefined}
       secondaryAction={
         view.kind === "auth" ? (

@@ -11,9 +11,10 @@ import {
   ATTENTION_LIMIT,
   channelLabel,
   failureReason,
-  formatLoadedCount,
   pickAttentionItems,
+  statValue,
   type AttentionItem,
+  type StatValue,
 } from "@/ui/components/overview/overview-model";
 import { TenantHealthPanel } from "@/ui/components/tenant/TenantHealthPanel";
 import { Button } from "@/ui/components/ui/button";
@@ -52,7 +53,10 @@ import {
  * Motion contract (raise 2 + 3 — one event at a time, settled things stand
  * still): the only authored moments are a count that CHANGED settling into
  * place, and the compose card lifting out of its sleeve under the pointer.
- * Nothing loops, nothing idles, and both are `motion-safe:` only.
+ * Neither loops. The skeletons DO loop — `animate-pulse` is what says "still
+ * waiting" — but they are `aria-hidden`, they only exist while a query is in
+ * flight, and nothing that has settled keeps moving. Every animation on the
+ * screen, skeletons included, is `motion-safe:` only.
  *
  * The four states, per source, on purpose: the two lists are independent
  * queries and a failure of one must not blank the other (core-feedback-states).
@@ -74,7 +78,8 @@ const FAILED_JOBS: JobLogFilter = { status: "failed", batchId: null };
 
 const SCHEDULED_HREF = "/posts?tab=scheduled";
 const FAILED_HREF = "/posts?tab=log&status=failed";
-const LOG_HREF = "/posts?tab=log";
+/** `published` is a real `PostJobStatus`, so the log opens already filtered. */
+const PUBLISHED_HREF = "/posts?tab=log&status=published";
 /** `?status=blocked` is what `parseProductFilter` reads — see catalog.schema. */
 const BLOCKED_PRODUCTS_HREF = "/products?status=blocked";
 
@@ -133,11 +138,25 @@ export function OverviewScreen() {
   );
 
   const isRefreshing = scheduled.isFetching || failed.isFetching;
+  /**
+   * Only a refresh the OPERATOR asked for. The live region below is keyed on
+   * this, not on `isRefreshing`: both lists poll on their own, and announcing
+   * every poll made a screen reader say "Đang tải số liệu tổng quan" once a
+   * minute, forever, over whatever the person was actually reading
+   * (core-feedback-states: chỉ thông báo thứ người dùng vừa gây ra).
+   */
+  const [isUserRefreshing, setIsUserRefreshing] = useState(false);
+
   /** Both lists are stale at the same moment, so one button refreshes both. */
   function refreshAll() {
-    void scheduled.refetch();
-    void failed.refetch();
-    if (channels.isError) void channels.refetch();
+    setIsUserRefreshing(true);
+    // `allSettled`, so a failing source still clears the flag — and the
+    // failure itself is already on screen in that source's own notice.
+    void Promise.allSettled([
+      scheduled.refetch(),
+      failed.refetch(),
+      channels.isError ? channels.refetch() : Promise.resolve(),
+    ]).then(() => setIsUserRefreshing(false));
   }
 
   return (
@@ -163,28 +182,22 @@ export function OverviewScreen() {
         <LayoutContent padding={0} isScrollable>
           <div className="@container mx-auto w-full max-w-5xl space-y-10 px-6 py-8">
             <p className="sr-only" role="status" aria-live="polite">
-              {isRefreshing ? "Đang tải số liệu tổng quan" : ""}
+              {isUserRefreshing ? "Đang tải số liệu tổng quan" : ""}
             </p>
 
             <StatTape
-              scheduled={{
-                value: scheduled.data
-                  ? formatLoadedCount({
-                      loaded: scheduledItems.length,
-                      hasNextPage: scheduled.hasNextPage,
-                    })
-                  : null,
-                isLoading: scheduledWaiting,
-              }}
-              failed={{
-                value: failed.data
-                  ? formatLoadedCount({
-                      loaded: failedItems.length,
-                      hasNextPage: failed.hasNextPage,
-                    })
-                  : null,
-                isLoading: failedWaiting,
-              }}
+              scheduled={statValue({
+                hasData: scheduled.data !== undefined,
+                isError: scheduled.isError,
+                loaded: scheduledItems.length,
+                hasNextPage: scheduled.hasNextPage,
+              })}
+              failed={statValue({
+                hasData: failed.data !== undefined,
+                isError: failed.isError,
+                loaded: failedItems.length,
+                hasNextPage: failed.hasNextPage,
+              })}
               showSkeleton={showSkeleton}
             />
 
@@ -197,6 +210,11 @@ export function OverviewScreen() {
                   className="mx-0 max-w-none"
                   error={scheduled.error}
                   onRetry={() => void scheduled.refetch()}
+                  // One of two sources on a screen that still works: the tape
+                  // and the other list are on screen and readable. Both
+                  // notices grabbing focus would also mean the second one wins
+                  // and the first is never seen.
+                  shouldFocus={false}
                 />
               </div>
             ) : null}
@@ -208,6 +226,7 @@ export function OverviewScreen() {
                   className="mx-0 max-w-none"
                   error={failed.error}
                   onRetry={() => void failed.refetch()}
+                  shouldFocus={false}
                 />
               </div>
             ) : null}
@@ -235,12 +254,6 @@ export function OverviewScreen() {
   );
 }
 
-interface StatSource {
-  /** `null` = this source failed; the cell says so instead of showing a 0. */
-  value: string | null;
-  isLoading: boolean;
-}
-
 /**
  * The woven label strip: four destinations, hairline-stitched together.
  *
@@ -255,8 +268,8 @@ function StatTape({
   failed,
   showSkeleton,
 }: {
-  scheduled: StatSource;
-  failed: StatSource;
+  scheduled: StatValue;
+  failed: StatValue;
   showSkeleton: boolean;
 }) {
   return (
@@ -280,9 +293,13 @@ function StatTape({
           unit="bài lỗi"
           destination="Mở nhật ký lọc theo lỗi"
         />
+        {/* "Bài đã đăng", not "Bài lên hôm nay": nothing on this screen counts
+            a day, and the log behind it is the whole history. A label that
+            promised "hôm nay" and opened an unfiltered list was the tape's one
+            dishonest cell. */}
         <StatCell
-          label="Bài lên hôm nay"
-          href={LOG_HREF}
+          label="Bài đã đăng"
+          href={PUBLISHED_HREF}
           action="Mở nhật ký"
           hint="Chưa có số liệu đếm sẵn"
         />
@@ -314,7 +331,8 @@ function StatCell({
 }: {
   label: string;
   href: string;
-  source?: StatSource;
+  /** Absent = this cell is a doorway, not a count (see `action`). */
+  source?: StatValue;
   showSkeleton?: boolean;
   unit?: string;
   destination?: string;
@@ -331,14 +349,14 @@ function StatCell({
 
         {source ? (
           <span className="flex min-h-9 items-baseline gap-2">
-            {source.isLoading ? (
+            {source.kind === "loading" ? (
               showSkeleton ? (
                 <span
                   aria-hidden="true"
                   className="bg-muted h-8 w-16 self-center rounded motion-safe:animate-pulse"
                 />
               ) : null
-            ) : source.value === null ? (
+            ) : source.kind === "unavailable" ? (
               <span className="text-muted-foreground text-base">Không tải được</span>
             ) : (
               <>
@@ -352,10 +370,10 @@ function StatCell({
                     already-visible default), so a dropped frame or a throttled
                     tab can never leave a washed-out number on screen. */}
                 <span
-                  key={source.value}
+                  key={source.text}
                   className="font-mono text-4xl leading-none font-semibold tabular-nums motion-safe:animate-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-500 motion-safe:ease-out"
                 >
-                  {source.value}
+                  {source.text}
                 </span>
                 <span className="text-muted-foreground text-sm">{unit}</span>
               </>

@@ -112,6 +112,44 @@ export function formatLoadedCount(input: { loaded: number; hasNextPage: boolean 
   return input.hasNextPage ? `${exact}+` : exact;
 }
 
+/**
+ * What one cell of the stat tape is allowed to say, given the state of the
+ * query behind it.
+ *
+ * THE REGRESSION THIS EXISTS FOR — "số 0 giả": every count on this screen is
+ * `items.length` over the pages a cursor query has loaded, and an empty array is
+ * what that expression returns while the query is still in flight AND after it
+ * has failed. Read straight, the first screen of the day opens on a confident
+ * "0 bài lỗi" for a list nobody managed to read. The cell may only print a
+ * number when a page actually arrived, and this function is the only place that
+ * decides so.
+ *
+ * A query that has data AND an error is a REFRESH that failed: the number
+ * stands (it is the last one we really read) and the error notice next to the
+ * tape says the rest.
+ */
+export type StatValue =
+  | { readonly kind: "loading" }
+  /** No page has ever arrived and the query is not going to give one. */
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "count"; readonly text: string };
+
+export function statValue(input: {
+  /** At least one page of the cursor query has arrived. */
+  hasData: boolean;
+  isError: boolean;
+  loaded: number;
+  hasNextPage: boolean;
+}): StatValue {
+  if (input?.hasData !== true) {
+    return input?.isError === true ? { kind: "unavailable" } : { kind: "loading" };
+  }
+  return {
+    kind: "count",
+    text: formatLoadedCount({ loaded: input.loaded, hasNextPage: input.hasNextPage === true }),
+  };
+}
+
 /** Why a job failed, in one line, without ever printing an empty cell. */
 export function failureReason(job: {
   userMessage: string | null;

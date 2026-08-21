@@ -6,6 +6,7 @@ import {
   failureReason,
   formatLoadedCount,
   pickAttentionItems,
+  statValue,
   type FailedJobInput,
   type UpcomingJobInput,
 } from "@/ui/components/overview/overview-model";
@@ -185,5 +186,52 @@ describe("channelLabel", () => {
     expect(channelLabel(" fbpage-a ", channels)).toBe("Shop Hoa");
     // A Page can genuinely carry a blank name — the id stays readable then.
     expect(channelLabel("fbpage-b", channels)).toBe("fbpage-b");
+  });
+});
+
+/**
+ * The "0 giả" guard. Every branch here was a real reading of the same screen:
+ * an operator opening the app before the queries land, and an operator whose
+ * queries failed — both used to be told the number was zero.
+ */
+describe("statValue", () => {
+  it("prints the count once a page has actually arrived", () => {
+    expect(statValue({ hasData: true, isError: false, loaded: 3, hasNextPage: false })).toEqual({
+      kind: "count",
+      text: "3",
+    });
+    // Zero is only ever printed when a page really came back empty.
+    expect(statValue({ hasData: true, isError: false, loaded: 0, hasNextPage: false })).toEqual({
+      kind: "count",
+      text: "0",
+    });
+  });
+
+  it("says 'at least this many' while a cursor page is still outstanding", () => {
+    expect(statValue({ hasData: true, isError: false, loaded: 25, hasNextPage: true })).toEqual({
+      kind: "count",
+      text: "25+",
+    });
+  });
+
+  it("is loading — NOT zero — before the first page arrives", () => {
+    expect(statValue({ hasData: false, isError: false, loaded: 0, hasNextPage: false })).toEqual({
+      kind: "loading",
+    });
+  });
+
+  it("is unavailable — NOT zero — when the query failed with no page", () => {
+    expect(statValue({ hasData: false, isError: true, loaded: 0, hasNextPage: false })).toEqual({
+      kind: "unavailable",
+    });
+  });
+
+  it("keeps the last real number when a REFRESH fails", () => {
+    // Data on screen + an error is a failed refresh, not an unknown count: the
+    // notice beside the tape carries the failure, the cell keeps the truth.
+    expect(statValue({ hasData: true, isError: true, loaded: 7, hasNextPage: false })).toEqual({
+      kind: "count",
+      text: "7",
+    });
   });
 });
