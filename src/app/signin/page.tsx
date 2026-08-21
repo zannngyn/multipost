@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 
 import { signIn } from "@/app/_auth/auth";
 import { DEFAULT_RETURN_URL, safeReturnUrl } from "@/app/_auth/return-url";
-import { Button } from "@/ui/components/ui/button";
+import { SignInScreen } from "@/ui/components/auth/SignInScreen";
 
 /**
- * Sign-in page — a Server Component with a real `<form action>`, so it submits
- * even before the client bundle loads (web-auth-flows rule 5). It sits OUTSIDE
- * the middleware guard; putting it inside would redirect to itself forever.
+ * Sign-in page — a thin Server Component: read the query string, turn it into
+ * Vietnamese, hand two Server Actions to the screen.
+ *
+ * It sits OUTSIDE the middleware guard; putting it inside would redirect to
+ * itself forever.
  */
 
 export const metadata: Metadata = {
@@ -57,6 +59,26 @@ function firstParam(value: string | string[] | undefined): string | null {
   return null;
 }
 
+/**
+ * `signIn()` throws NEXT_REDIRECT — it must never sit inside try/catch, or the
+ * redirect signal gets swallowed (web-data-fetching rule 4).
+ *
+ * `returnUrl` arrives from a hidden field the browser can edit, so it is
+ * sanitised again here rather than trusted: this is the open-redirect gate
+ * (web-frontend-security §6), and the client-side value is only a convenience.
+ */
+async function signInWithGoogle(formData: FormData) {
+  "use server";
+  const target = safeReturnUrl(formData.get("returnUrl"));
+  await signIn("google", { redirectTo: target });
+}
+
+async function signInWithFacebook(formData: FormData) {
+  "use server";
+  const target = safeReturnUrl(formData.get("returnUrl"));
+  await signIn("facebook", { redirectTo: target });
+}
+
 export default async function SignInPage(props: PageProps<"/signin">) {
   const searchParams = await props.searchParams;
   const returnUrl = safeReturnUrl(firstParam(searchParams.returnUrl));
@@ -64,84 +86,22 @@ export default async function SignInPage(props: PageProps<"/signin">) {
   const isPendingApproval = errorCode === PENDING_APPROVAL_ERROR;
   const errorMessage =
     errorCode && !isPendingApproval ? (ERROR_MESSAGES[errorCode] ?? GENERIC_ERROR_MESSAGE) : null;
+  // Only a code we could NOT translate is worth showing: printing "AccessDenied"
+  // under a sentence that already explains it is noise.
+  const unknownErrorCode =
+    errorMessage && errorCode && !ERROR_MESSAGES[errorCode] ? errorCode : null;
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-8 px-6 py-16">
-      <header className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">MYSP — Đăng bài tự động</h1>
-        <p className="text-muted-foreground text-sm">
-          Công cụ nội bộ. Đăng nhập bằng tài khoản Google thuộc tên miền đã được cấp quyền.
-        </p>
-      </header>
-
-      {isPendingApproval ? (
-        // `role="status"`, not `alert`: nothing went wrong and nothing has to
-        // be fixed by this person. Neutral surface tokens, no destructive red.
-        <div role="status" className="border-border bg-muted/40 space-y-1 rounded-xl border p-4">
-          <p className="text-sm font-medium">Tài khoản đang chờ quản trị viên duyệt</p>
-          <p className="text-muted-foreground text-sm">
-            Yêu cầu truy cập của bạn đã được ghi nhận — đây không phải là bị từ chối. Khi quản trị
-            viên duyệt xong, bạn chỉ cần đăng nhập lại là vào được. Cần gấp thì báo trực tiếp cho
-            quản trị viên để duyệt sớm.
-          </p>
-        </div>
-      ) : null}
-
-      {errorMessage ? (
-        <div
-          role="alert"
-          className="border-destructive/30 bg-destructive/5 space-y-1 rounded-xl border p-4"
-        >
-          <p className="text-sm font-medium">Không đăng nhập được</p>
-          <p className="text-muted-foreground text-sm">{errorMessage}</p>
-          {errorCode && !ERROR_MESSAGES[errorCode] ? (
-            <p className="text-muted-foreground/80 font-mono text-xs">Mã lỗi: {errorCode}</p>
-          ) : null}
-        </div>
-      ) : null}
-
-      <form
-        action={async (formData: FormData) => {
-          "use server";
-          // signIn() throws NEXT_REDIRECT — it must never sit inside try/catch,
-          // or the redirect signal gets swallowed (web-data-fetching rule 4).
-          const target = safeReturnUrl(formData.get("returnUrl"));
-          await signIn("google", { redirectTo: target });
-        }}
-        className="space-y-3"
-      >
-        <input type="hidden" name="returnUrl" value={returnUrl} />
-        <Button type="submit" size="lg" className="w-full">
-          Đăng nhập bằng Google
-        </Button>
-        {returnUrl !== DEFAULT_RETURN_URL ? (
-          <p className="text-muted-foreground text-xs">
-            Sau khi đăng nhập, bạn sẽ quay lại: <span className="font-mono">{returnUrl}</span>
-          </p>
-        ) : null}
-      </form>
-
-      {/* E5.2 — the same round trip signs the operator in AND brings back the
-          Page tokens, so a successful Facebook sign-in leaves the channels
-          already connected. Full-page redirect, never a popup: popups are
-          blocked often enough that they need a fallback anyway
-          (web-auth-methods rule 1). */}
-      <form
-        action={async (formData: FormData) => {
-          "use server";
-          const target = safeReturnUrl(formData.get("returnUrl"));
-          await signIn("facebook", { redirectTo: target });
-        }}
-        className="space-y-3"
-      >
-        <input type="hidden" name="returnUrl" value={returnUrl} />
-        <Button type="submit" size="lg" variant="outline" className="w-full">
-          Đăng nhập bằng Facebook
-        </Button>
-        <p className="text-muted-foreground text-xs">
-          Dành cho tài khoản đã được cấp quyền. Đăng nhập xong, danh sách Fanpage được lấy về luôn.
-        </p>
-      </form>
+    <main className="flex w-full flex-1">
+      <SignInScreen
+        returnUrl={returnUrl}
+        isDefaultReturnUrl={returnUrl === DEFAULT_RETURN_URL}
+        errorMessage={errorMessage}
+        unknownErrorCode={unknownErrorCode}
+        isPendingApproval={isPendingApproval}
+        signInWithGoogle={signInWithGoogle}
+        signInWithFacebook={signInWithFacebook}
+      />
     </main>
   );
 }
