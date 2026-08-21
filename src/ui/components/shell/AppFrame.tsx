@@ -31,11 +31,18 @@ export function AppFrame({
   operatorLabel,
   tenantName,
   signOutAction,
+  navDefaultCollapsed,
 }: {
   children: ReactNode;
   operatorLabel: string;
   tenantName: string | null;
   signOutAction?: () => Promise<void>;
+  /**
+   * The collapsed state the server read from the nav cookie. Passed down rather
+   * than read here so the first paint already matches what the operator left
+   * behind — a client-side read would render the wide nav first.
+   */
+  navDefaultCollapsed: boolean;
 }) {
   return (
     <LinkProvider component={NextLink}>
@@ -45,7 +52,13 @@ export function AppFrame({
           topNav={<AppTopBar tenantName={tenantName} />}
           // The account block lives at the foot of the nav, so the session props
           // travel down this side of the shell.
-          sideNav={<AppSideNav operatorLabel={operatorLabel} onSignOut={signOutAction} />}
+          sideNav={
+            <AppSideNav
+              operatorLabel={operatorLabel}
+              onSignOut={signOutAction}
+              defaultCollapsed={navDefaultCollapsed}
+            />
+          }
         >
           {/* Above every screen, on purpose (M3.3): while MYSP staff are inside
               a customer's company, no screen may look like their own. It pushes

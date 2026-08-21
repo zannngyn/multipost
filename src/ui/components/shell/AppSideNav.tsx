@@ -30,8 +30,12 @@ import {
 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import type { ComponentType, SVGProps } from "react";
-import { useState, useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 
+import {
+  buildNavCollapsedCookie,
+  dropStaleCollapsedWidth,
+} from "@/ui/components/shell/nav-collapse";
 import { isNavItemActive, visibleNavSections } from "@/ui/components/shell/nav-items";
 import { useMe } from "@/ui/hooks/useMe";
 
@@ -63,8 +67,15 @@ const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
 export function AppSideNav({
   operatorLabel,
   onSignOut,
+  defaultCollapsed,
 }: {
   operatorLabel: string;
+  /**
+   * The state the server read from the nav cookie. It seeds the state once; from
+   * then on React owns it for the rest of the session, and every change is
+   * written back to the cookie for the next request.
+   */
+  defaultCollapsed: boolean;
   /**
    * A Server Action handed down from the layout. This component sits in
    * `src/ui`, which may not import `src/app` (docs/07) — receiving the action as
@@ -76,6 +87,36 @@ export function AppSideNav({
 }) {
   const pathname = usePathname();
   const me = useMe();
+
+  /**
+   * CONTROLLED collapse, seeded from the cookie the server read.
+   *
+   * Uncontrolled would lose the state on every reload: Astryx's SideNav only
+   * ever initialises from `defaultIsCollapsed` and never reads storage
+   * (@astryxdesign/core@0.4.0 `dist/SideNav/SideNav.js:125-136`), while the
+   * resize hook underneath it restores its own, separate collapsed flag from
+   * localStorage — the two disagree and the nav springs back open.
+   *
+   * The initialiser also clears the width that older build left behind; it has
+   * to happen before SideNav renders its resize hook, and the parent renders
+   * first. Idempotent, so a StrictMode double render is harmless.
+   */
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    clearStaleNavWidth(defaultCollapsed);
+    return defaultCollapsed;
+  });
+
+  /**
+   * Called by SideNav for every collapse change, wherever it came from: the row
+   * below, a drag past the collapse threshold, Astryx's own button
+   * (`dist/SideNav/SideNav.js:143-148`). React state stays the truth within the
+   * session — rapid toggles simply end on the last value, which is also what the
+   * cookie ends up holding.
+   */
+  const handleCollapsedChange = useCallback((next: boolean) => {
+    setIsCollapsed(next);
+    persistNavCollapsed(next);
+  }, []);
 
   /**
    * While `/api/me` is still loading this is false, so a privileged section is
@@ -94,7 +135,7 @@ export function AppSideNav({
       // Astryx's own toggle sits in the bottom icon bar, where Next's dev
       // overlay badge covers it. The nav owns a toggle of its own at the top
       // instead (see NavCollapseToggle).
-      collapsible={{ hasButton: false }}
+      collapsible={{ hasButton: false, isCollapsed, onCollapsedChange: handleCollapsedChange }}
       resizable={{ defaultWidth: 256, minWidth: 240, maxWidth: 280, autoSaveId: "mysp-nav" }}
       // AppShell renders the top bar as a second navigation landmark, and a
       // screen reader lists both by name — "Side navigation" next to a
@@ -124,6 +165,55 @@ export function AppSideNav({
       ))}
     </SideNav>
   );
+}
+
+/**
+ * Writes the state the server will read on the next request.
+ *
+ * Client-side write on purpose: nothing on the server needs to know before the
+ * next navigation, and a round trip for a menu width would be absurd.
+ */
+function persistNavCollapsed(isCollapsed: boolean): void {
+  if (typeof document === "undefined") return;
+
+  try {
+    document.cookie = buildNavCollapsedCookie(isCollapsed, {
+      secure: window.location.protocol === "https:",
+    });
+  } catch (error) {
+    // Cookies blocked (sandboxed iframe, hardened browser). Logged, not
+    // rethrown: this runs inside a click handler, where a throw reaches no error
+    // boundary and would only break a working toggle. The nav still collapses —
+    // the preference just will not survive the reload.
+    console.warn("[shell] could not persist side nav collapse", {
+      error_code: "NAV_COLLAPSE_PERSIST_FAILED",
+      is_collapsed: isCollapsed,
+      err: error,
+    });
+  }
+}
+
+/**
+ * Removes the width that the pre-cookie build persisted while collapsed — see
+ * `dropStaleCollapsedWidth` for what Astryx does with it and why it has to go.
+ */
+function clearStaleNavWidth(isCollapsed: boolean): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    dropStaleCollapsedWidth(window.localStorage, isCollapsed);
+  } catch (error) {
+    // Storage access denied (Safari private mode, third-party context). Astryx
+    // reads the same storage through the same failing call, so it will fall back
+    // to the default width and the two stay in agreement. Reported anyway: a
+    // browser that cannot read storage also cannot keep the dragged width, and
+    // that is worth seeing in the console rather than guessing at.
+    console.warn("[shell] could not read side nav width storage", {
+      error_code: "NAV_WIDTH_STORAGE_UNAVAILABLE",
+      is_collapsed: isCollapsed,
+      err: error,
+    });
+  }
 }
 
 /**
