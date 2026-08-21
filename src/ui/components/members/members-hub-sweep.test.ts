@@ -27,27 +27,27 @@ function readSource(relative: string): string {
 }
 
 /**
- * Comments are stripped before the negative assertion: the file EXPLAINS the
- * trap in prose, and a test that cannot tell prose from code would either fail
- * on the explanation or force the explanation to be deleted.
+ * Comments are stripped before EVERY assertion, positive ones included: the
+ * file explains this trap in prose, so a comment naming `useActiveTenant()`
+ * would satisfy the positive checks on a file that no longer calls it — the
+ * test would go green on the exact regression it exists to catch.
  */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
 describe("support mode: the members hub reads the role that support mode downgrades", () => {
-  const source = readSource("./MembersHub.tsx");
+  const code = stripComments(readSource("./MembersHub.tsx"));
 
   it("takes the role from useActiveTenant()", () => {
-    expect(source).toContain("useActiveTenant");
+    expect(code).toContain("useActiveTenant");
     // …and actually calls it, rather than importing it and forgetting.
-    expect(source).toMatch(/useActiveTenant\(\)/);
+    expect(code).toMatch(/useActiveTenant\(\)/);
     // The downgraded field, destructured under whatever local name.
-    expect(stripComments(source)).toMatch(/\brole\s*:/);
+    expect(code).toMatch(/\brole\s*:/);
   });
 
   it("never reaches around it for the raw membership role", () => {
-    const code = stripComments(source);
     expect(code).not.toMatch(/tenant\??\.role/);
     expect(code).not.toMatch(/tenants\s*\[/);
   });

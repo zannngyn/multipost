@@ -36,3 +36,27 @@ export function isPlatformContext(pathname: string | null | undefined): boolean 
   if (typeof pathname !== "string" || pathname === "") return false;
   return isNavItemActive(pathname, PLATFORM_ROOT);
 }
+
+/**
+ * The whole condition for showing the badge, in one testable place.
+ *
+ * BOTH HALVES ARE LOAD-BEARING, and each fails differently:
+ *   wrong route  — a badge saying "ngoài công ty" on a screen that IS about the
+ *                  company is a lie the operator will act on;
+ *   no platform  — an account without a platform role gets `PlatformForbidden`
+ *      role       at this URL, so telling them they are inside MYSP's admin
+ *                 screens describes a screen they cannot see. It is also false
+ *                 while `/api/me` is still loading, which is what stops the
+ *                 badge being painted and then taken away.
+ *
+ * Pure, so both halves can be checked without rendering — a component test
+ * would need a router and a query client to assert one boolean.
+ */
+export function shouldShowOutOfTenantBadge(input: {
+  pathname: string | null | undefined;
+  /** `account.platformRole` from /api/me — `null` until it is known. */
+  platformRole: string | null | undefined;
+}): boolean {
+  if (!isPlatformContext(input?.pathname)) return false;
+  return typeof input.platformRole === "string" && input.platformRole.length > 0;
+}

@@ -58,9 +58,12 @@ describe("resolveActiveChannelsTab", () => {
  * success shape carries FIVE params, not one, and a wipe that only knew about
  * `connected` left `?new=1&skipped=3` stuck in the address bar for good.
  *
- * Change the route and this list is what has to change with it: every test
- * below reads from here, so an added param fails them instead of quietly
- * surviving the wipe.
+ * HOW STRONG THIS PIN ACTUALLY IS: it is a hand-copied convention, not a link.
+ * Nothing here reads the route, so adding a fifth param to the callback does
+ * NOT turn this file red — it stays green while the new param survives the wipe
+ * and sticks in the address bar, exactly as `new` and `skipped` once did. What
+ * the list does buy is that every test below reads from ONE place, so keeping
+ * it in step with the route is a single edit for whoever remembers to make it.
  */
 const CALLBACK_QUERIES = [
   "connected=2&new=1&skipped=3",

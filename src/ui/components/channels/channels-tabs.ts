@@ -1,4 +1,4 @@
-import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
+import { TAB_PARAM, withTabParam } from "@/ui/components/navigation/tab-param";
 
 /**
  * The three views of the "Kênh" hub. Pure and node-testable: the Server
@@ -24,12 +24,12 @@ export const CHANNELS_TAB_LABELS: Record<ChannelsTab, string> = {
 };
 
 /**
- * The name of the param, in one place. It is the SAME `tab` the "Bài đăng" hub
- * uses — one spelling for the whole app, so `withTabParam` below works for both
- * (and so a future move of these two helpers to a neutral module is one import
- * to change, not a search for the string "tab").
+ * The name of the param, in one place. It is the SAME `tab` every hub uses, and
+ * it now comes from the neutral `components/navigation/tab-param` module rather
+ * than from the posts hub — this file no longer has to import a sibling feature
+ * to learn the spelling of a shared parameter.
  */
-export const CHANNELS_TAB_PARAM = POSTS_TAB_PARAM;
+export const CHANNELS_TAB_PARAM = TAB_PARAM;
 
 /**
  * Anything that is not one of the three tabs — missing, misspelt, an array from

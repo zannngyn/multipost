@@ -5,6 +5,7 @@ import {
   OUT_OF_TENANT_LABEL,
   PLATFORM_ROOT,
   isPlatformContext,
+  shouldShowOutOfTenantBadge,
 } from "@/ui/components/shell/platform-context";
 
 describe("isPlatformContext", () => {
@@ -42,5 +43,52 @@ describe("isPlatformContext", () => {
 
   it("keeps the operator-facing wording in one place", () => {
     expect(OUT_OF_TENANT_LABEL).toBe("Ngoài công ty — màn quản trị MYSP");
+  });
+});
+
+/**
+ * The badge's whole condition. It used to be two `if`s inside the component,
+ * where the only way to check them was to render a client component with a
+ * router and a query client — so nobody did.
+ */
+describe("shouldShowOutOfTenantBadge", () => {
+  it("stays quiet on every screen that IS about the current company", () => {
+    expect(shouldShowOutOfTenantBadge({ pathname: "/", platformRole: "super_admin" })).toBe(false);
+    expect(shouldShowOutOfTenantBadge({ pathname: "/members", platformRole: "support" })).toBe(
+      false,
+    );
+    // Not a platform route, however much it looks like one.
+    expect(shouldShowOutOfTenantBadge({ pathname: "/platformer", platformRole: "support" })).toBe(
+      false,
+    );
+  });
+
+  it("stays quiet for an account that cannot open the platform screens", () => {
+    // They would get PlatformForbidden at this URL: the badge would describe a
+    // screen they cannot see.
+    expect(shouldShowOutOfTenantBadge({ pathname: "/platform", platformRole: null })).toBe(false);
+    expect(shouldShowOutOfTenantBadge({ pathname: "/platform", platformRole: "" })).toBe(false);
+  });
+
+  it("stays quiet while /api/me is still loading", () => {
+    // `undefined` is "not known yet". Painting the badge now and removing it a
+    // moment later is the flicker the nav rule avoids too.
+    expect(shouldShowOutOfTenantBadge({ pathname: "/platform", platformRole: undefined })).toBe(
+      false,
+    );
+  });
+
+  it("survives a route change with no pathname yet", () => {
+    expect(shouldShowOutOfTenantBadge({ pathname: null, platformRole: "super_admin" })).toBe(false);
+    expect(shouldShowOutOfTenantBadge({ pathname: undefined, platformRole: "support" })).toBe(false);
+  });
+
+  it("shows on the platform screens for an account that holds a role", () => {
+    expect(shouldShowOutOfTenantBadge({ pathname: "/platform", platformRole: "super_admin" })).toBe(
+      true,
+    );
+    expect(
+      shouldShowOutOfTenantBadge({ pathname: "/platform/tenants/abc", platformRole: "support" }),
+    ).toBe(true);
   });
 });

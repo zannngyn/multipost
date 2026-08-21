@@ -1,4 +1,4 @@
-import { POSTS_TAB_PARAM } from "@/ui/components/posts/posts-tabs";
+import { TAB_PARAM } from "@/ui/components/navigation/tab-param";
 
 /**
  * The three views of the "Thành viên" hub. Pure and node-testable: the Server
@@ -26,10 +26,10 @@ export const MEMBERS_TAB_LABELS: Record<MembersTab, string> = {
 
 /**
  * The name of the param, in one place. It is the SAME `tab` the "Bài đăng" and
- * "Kênh" hubs use — one spelling for the whole app, so `withTabParam` works for
- * all three.
+ * "Kênh" hubs use — one spelling for the whole app, kept in the neutral
+ * `components/navigation/tab-param` module so no hub owns another hub's URL.
  */
-export const MEMBERS_TAB_PARAM = POSTS_TAB_PARAM;
+export const MEMBERS_TAB_PARAM = TAB_PARAM;
 
 /**
  * Anything that is not one of the three tabs — missing, misspelt, an array from

@@ -1,3 +1,5 @@
+import { TAB_PARAM, withTabParam } from "@/ui/components/navigation/tab-param";
+
 /**
  * The two views of the "Bài đăng" hub. Pure and node-testable: the Server
  * Component parses `?tab=` with it before rendering, and the client hub parses
@@ -25,8 +27,14 @@ export function parsePostsTab(value: unknown): PostsTab {
   return (POSTS_TABS as readonly string[]).includes(value) ? (value as PostsTab) : DEFAULT_POSTS_TAB;
 }
 
-/** The name of the param, in one place — nothing else may spell it by hand. */
-export const POSTS_TAB_PARAM = "tab";
+/**
+ * The `?tab=` name and the carry rule now live in
+ * `components/navigation/tab-param.ts` — they belong to every hub, not to this
+ * one. Re-exported under the old names so the screens inside "Bài đăng" keep
+ * their import.
+ */
+export const POSTS_TAB_PARAM = TAB_PARAM;
+export { withTabParam };
 
 /**
  * Which tab is on screen. The URL wins the moment the browser has one of its
@@ -40,33 +48,4 @@ export const POSTS_TAB_PARAM = "tab";
 export function resolveActiveTab(urlTab: string | null, serverTab: PostsTab): PostsTab {
   if (urlTab === null) return serverTab;
   return parsePostsTab(urlTab);
-}
-
-/**
- * Carries `?tab=` through a query string that a CHILD screen rebuilt.
- *
- * Both screens own their filter in the URL and rewrite the whole query when it
- * changes — which used to drop the hub's `?tab=` and bounce the operator back
- * to the scheduled tab mid-filter. They rebuild the query with their own schema
- * helper (untouched), then hand the result here.
- *
- * `tab` goes FIRST so a shared link reads the way the redirect writes it
- * (`/posts?tab=log&status=failed`). The raw value is carried, not normalised:
- * an unknown `?tab=x` already renders the default tab, and rewriting it under
- * the operator would move the address bar for no visible reason.
- *
- * Returns a query string with no leading "?" — empty means "no query at all".
- */
-export function withTabParam(search: string, tab: string | null | undefined): string {
-  const rest = search.replace(/^\?/, "");
-  const value = typeof tab === "string" ? tab.trim() : "";
-  if (!value) return rest;
-
-  const params = new URLSearchParams(rest);
-  // A tab already inside `search` would be the child's own stale copy: the one
-  // passed in is what the URL says now.
-  params.delete(POSTS_TAB_PARAM);
-  const query = params.toString();
-  const carried = `${POSTS_TAB_PARAM}=${encodeURIComponent(value)}`;
-  return query ? `${carried}&${query}` : carried;
 }
