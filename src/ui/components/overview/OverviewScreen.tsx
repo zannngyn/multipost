@@ -62,8 +62,8 @@ import {
  * flight, and nothing that has settled keeps moving. Every animation on the
  * screen, skeletons included, is `motion-safe:` only.
  *
- * The four states, per source, on purpose: the two lists are independent
- * queries and a failure of one must not blank the other (core-feedback-states).
+ * The four states, per source, on purpose: the lists are independent queries
+ * and a failure of one must not blank the others (core-feedback-states).
  *   loading — skeleton in the value slot / the row list, delayed 300ms
  *   data    — the tape, the attention list
  *   empty   — "Không có gì cần chú ý"
@@ -79,6 +79,21 @@ import {
  */
 const ALL_SCHEDULED: ScheduledFilter = { channelId: null, from: null, to: null };
 const FAILED_JOBS: JobLogFilter = { status: "failed", batchId: null };
+/**
+ * The unfiltered log, first page only — the source of "Lô đang chạy".
+ *
+ * A SECOND job-log query beside `FAILED_JOBS`, not a replacement: the tape's
+ * "Lỗi cần xử lý" cell counts the failed page and must keep counting it. They
+ * cannot tread on each other — `postKeys.jobs` puts the status into the key, so
+ * these are `[…,"jobs","failed","all"]` and `[…,"jobs","all","all"]`, two cache
+ * entries with two independent poll timers.
+ *
+ * It is also the only query on this screen that SHOULD poll fast: the hook
+ * polls while a loaded page still holds a `queued`/`publishing` row and stops
+ * the moment none is left, so the section moves exactly while something is
+ * moving and costs nothing on a quiet morning.
+ */
+const ALL_JOBS: JobLogFilter = { status: null, batchId: null };
 
 const SCHEDULED_HREF = "/posts?tab=scheduled";
 const FAILED_HREF = "/posts?tab=log&status=failed";
@@ -95,6 +110,7 @@ export function OverviewScreen() {
 
   const scheduled = useScheduledJobs(ALL_SCHEDULED);
   const failed = usePostJobLog(FAILED_JOBS);
+  const running = usePostJobLog(ALL_JOBS);
   // Names only: a row that cannot be named falls back to the raw channel id
   // rather than waiting for this query (see `channelLabel`).
   const channels = useChannels();
@@ -143,40 +159,40 @@ export function OverviewScreen() {
   );
 
   /**
-   * The lots with work in flight, DERIVED from the job pages this screen has
-   * already loaded — no query of its own (docs/07 §4.1: the overview reads,
-   * never fetches for a second reason).
+   * The lots with work in flight, from the FIRST page of the unfiltered log.
    *
-   * KNOWN LIMIT, stated here because the section looks broken otherwise: the
-   * only job-log query on this screen is filtered to `status=failed`, so a
-   * running job cannot appear in it today and the section stays hidden. The day
-   * this screen loads an unfiltered page — or the log filter grows a
-   * "đang chạy" value — the cards light up with no further change here.
+   * The whole rule lives in `pickRunningBatches` (tested without rendering):
+   * only `queued`/`publishing`, and a `queued` row that is parked until its
+   * hour is NOT running — the tape already counts that one under "Đang chờ
+   * giờ". Whatever the page happens to contain, this screen only ever claims
+   * what it actually read.
    */
   const runningBatches = useMemo(
     () =>
       pickRunningBatches(
-        failedItems.map((job) => ({
-          batchId: job.batchId,
-          status: job.status,
-          code: job.productCode,
-          scheduledAt: job.scheduledAt,
-        })),
+        (running.data?.pages ?? []).flatMap((page) =>
+          page.items.map((job) => ({
+            batchId: job.batchId,
+            status: job.status,
+            code: job.productCode,
+            scheduledAt: job.scheduledAt,
+          })),
+        ),
       ),
-    [failedItems],
+    [running.data],
   );
 
-  const isRefreshing = scheduled.isFetching || failed.isFetching;
+  const isRefreshing = scheduled.isFetching || failed.isFetching || running.isFetching;
   /**
    * Only a refresh the OPERATOR asked for. The live region below is keyed on
-   * this, not on `isRefreshing`: both lists poll on their own, and announcing
+   * this, not on `isRefreshing`: the lists poll on their own, and announcing
    * every poll made a screen reader say "Đang tải số liệu tổng quan" once a
    * minute, forever, over whatever the person was actually reading
    * (core-feedback-states: chỉ thông báo thứ người dùng vừa gây ra).
    */
   const [isUserRefreshing, setIsUserRefreshing] = useState(false);
 
-  /** Both lists are stale at the same moment, so one button refreshes both. */
+  /** Every list is stale at the same moment, so one button refreshes them all. */
   function refreshAll() {
     setIsUserRefreshing(true);
     // `allSettled`, so a failing source still clears the flag — and the
@@ -184,6 +200,7 @@ export function OverviewScreen() {
     void Promise.allSettled([
       scheduled.refetch(),
       failed.refetch(),
+      running.refetch(),
       channels.isError ? channels.refetch() : Promise.resolve(),
     ]).then(() => setIsUserRefreshing(false));
   }
@@ -271,7 +288,15 @@ export function OverviewScreen() {
                   lots={runningBatches}
                   // A cursor page still outstanding means there may be more
                   // lots than we can see: "3+ lô", never a flat "3".
-                  hasMore={failed.hasNextPage === true}
+                  hasMore={running.hasNextPage === true}
+                  // Local, both of them: this section may be absent without
+                  // costing the operator anything, so it never takes over the
+                  // screen — no skeleton before the first page, and a failure
+                  // is one line inside the section, not a third banner at the
+                  // top (core-feedback-states: lỗi cục bộ ở đúng chỗ hỏng).
+                  isWaiting={running.data === undefined && !running.isError}
+                  hasFailed={running.isError}
+                  onRetry={() => void running.refetch()}
                 />
               </div>
 
@@ -623,20 +648,49 @@ function ComposeCard({ headingId }: { headingId: string }) {
  * another card from the same fan without competing with the one primary action
  * sitting above it.
  *
- * NO empty state on purpose: "không có lô nào đang chạy" is the normal state of
- * a quiet morning, and a placeholder saying so every day would be a permanent
- * empty box next to the action. Nothing running, nothing drawn.
+ * NO empty state and NO skeleton on purpose: "không có lô nào đang chạy" is the
+ * normal state of a quiet morning, and a placeholder saying so every day would
+ * be a permanent empty box next to the action. Nothing running, nothing drawn.
+ *
+ * A FAILURE is drawn, though — one line, inside the section. This is the only
+ * source on the screen whose absence looks exactly like its empty state, so
+ * staying silent would tell the operator "không có lô nào đang chạy" when the
+ * truth is "không biết" (business rule 5: nothing is silently skipped).
  */
 function RunningBatches({
   headingId,
   lots,
   hasMore,
+  isWaiting,
+  hasFailed,
+  onRetry,
 }: {
   headingId: string;
   lots: readonly RunningBatch[];
   /** A cursor page is still outstanding, so this list may be partial. */
   hasMore: boolean;
+  /** No page has arrived yet — draw nothing rather than a box that pops in. */
+  isWaiting: boolean;
+  hasFailed: boolean;
+  onRetry: () => void;
 }) {
+  if (isWaiting) return null;
+  if (hasFailed) {
+    return (
+      <section aria-labelledby={headingId} className="space-y-2">
+        <h2 id={headingId} className="text-xl font-semibold tracking-tight">
+          Lô đang chạy
+        </h2>
+        <p className="text-muted-foreground text-sm">
+          Không đọc được danh sách lô đang chạy, nên phần này đang trống vì thiếu dữ liệu — không
+          phải vì không có lô nào.
+        </p>
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          Thử lại
+        </Button>
+      </section>
+    );
+  }
   if (lots.length === 0) return null;
 
   const shown = lots.slice(0, RUNNING_BATCH_LIMIT);
