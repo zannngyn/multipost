@@ -4,7 +4,6 @@ import { Suspense } from "react";
 
 import { getOperatorSession } from "@/app/_auth/session";
 import { ComposeFocus } from "@/ui/components/compose/ComposeFocus";
-import { COMPOSE_PALETTE } from "@/ui/components/compose/compose-theme";
 
 /**
  * "Soạn bài" (E3 + E4) — ONE screen, per the approved ComposeFocus design.
@@ -45,16 +44,12 @@ export default async function ComposePage() {
 /** The same two columns at the same sizes as the screen, so nothing jumps. */
 function ComposeFallback() {
   return (
-    <div
-      aria-hidden="true"
-      style={COMPOSE_PALETTE}
-      className="h-full min-h-0 bg-[var(--background)] motion-safe:animate-pulse"
-    >
+    <div aria-hidden="true" className="bg-background h-full min-h-0 motion-safe:animate-pulse">
       <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4 p-5">
-        <div className="h-7 w-40 rounded bg-[var(--compose-track)]" />
+        <div className="bg-muted h-7 w-40 rounded" />
         <div className="flex flex-col items-start gap-6 xl:flex-row">
-          <div className="h-160 w-full rounded-[var(--compose-radius-card)] bg-[var(--card)] xl:w-190 xl:shrink-0" />
-          <div className="h-140 w-full rounded-[var(--compose-radius-block)] bg-[var(--card)] xl:min-w-0 xl:flex-1" />
+          <div className="border-border bg-card h-160 w-full rounded-xl border xl:w-190 xl:shrink-0" />
+          <div className="border-border bg-card h-140 w-full rounded-lg border xl:min-w-0 xl:flex-1" />
         </div>
       </div>
     </div>

@@ -68,7 +68,7 @@ export function FacebookPreview({
         <div
           role="group"
           aria-label="Khổ màn hình xem trước"
-          className="flex gap-[3px] rounded-[10px] bg-[var(--compose-track)] p-[3px]"
+          className="flex gap-[3px] rounded-lg bg-[var(--muted)] p-[3px]"
         >
           {(["desktop", "mobile"] as const).map((option) => (
             <button
@@ -77,9 +77,9 @@ export function FacebookPreview({
               aria-pressed={device === option}
               onClick={() => setDevice(option)}
               className={cn(
-                "focus-visible:ring-ring h-7 cursor-pointer rounded-lg px-3 text-xs font-medium text-[var(--compose-text-2)] transition-colors outline-none focus-visible:ring-3",
+                "focus-visible:ring-ring h-7 cursor-pointer rounded-lg px-3 text-xs font-medium text-[var(--muted-foreground)] transition-colors outline-none focus-visible:ring-3",
                 device === option &&
-                  "bg-[var(--compose-raised)] font-semibold text-[var(--primary)] shadow-[0_1px_3px_rgba(34,31,28,0.14)]",
+                  "bg-[var(--card)] font-semibold text-[var(--primary)] shadow-sm",
               )}
             >
               {option === "desktop" ? "Desktop" : "Mobile"}
@@ -90,11 +90,8 @@ export function FacebookPreview({
 
       <div
         className={cn(
-          "flex flex-col overflow-hidden bg-[var(--card)] transition-[max-width]",
-          "shadow-[inset_0_0_0_1px_var(--compose-hairline)]",
-          isMobile
-            ? "max-w-90 self-center rounded-[22px] shadow-[inset_0_0_0_1px_var(--compose-hairline),0_12px_30px_rgba(34,31,28,0.12)]"
-            : "w-full rounded-[var(--compose-radius-block)]",
+          "border-border flex flex-col overflow-hidden border bg-[var(--card)] transition-[max-width]",
+          isMobile ? "max-w-90 self-center rounded-2xl shadow-md" : "w-full rounded-lg",
         )}
       >
         <div className="flex items-center gap-3 px-4 py-3.5">
@@ -132,16 +129,16 @@ export function FacebookPreview({
         </div>
 
         {tags.length > 0 ? (
-          <div className="px-4 pb-3 text-sm break-words text-[var(--compose-link)]">{tags}</div>
+          <div className="px-4 pb-3 text-sm break-words text-[var(--primary)]">{tags}</div>
         ) : null}
 
         <PreviewCollage media={media} isVideo={isVideo} compact={isMobile} />
 
-        <div className="flex h-12 items-center shadow-[inset_0_1px_0_var(--compose-hairline)]">
+        <div className="flex h-12 items-center shadow-[inset_0_1px_0_var(--border)]">
           {["Thích", "Bình luận", "Chia sẻ"].map((action) => (
             <span
               key={action}
-              className="flex-1 text-center text-[13px] text-[var(--compose-text-2)]"
+              className="flex-1 text-center text-[13px] text-[var(--muted-foreground)]"
             >
               {action}
             </span>
@@ -224,7 +221,7 @@ function PreviewCollage({
                 {overflow > 0 && index === right.length - 1 ? (
                   <span
                     aria-hidden="true"
-                    className="absolute inset-0 z-1 flex items-center justify-center bg-[var(--compose-veil)] text-[22px] font-semibold text-white"
+                    className="absolute inset-0 z-1 flex items-center justify-center bg-foreground/50 text-[22px] font-semibold text-white"
                   >
                     +{overflow}
                   </span>

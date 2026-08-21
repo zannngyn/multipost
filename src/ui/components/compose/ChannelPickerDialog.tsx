@@ -1,11 +1,13 @@
 "use client";
 
+import { Check } from "lucide-react";
 import Link from "next/link";
 import { useId, useState } from "react";
 
 import { cn } from "@/shared/utils";
 import {
-  avatarToneVar,
+  applyChannelGroup,
+  avatarToneStyle,
   channelBlockReason,
   channelInitials,
   draftOnOpenChange,
@@ -14,11 +16,9 @@ import {
   matchingGroupId,
   publishableChannels,
   selectAllVisible,
-  selectionForGroup,
   toggleChannelId,
   visibleRows,
 } from "@/ui/components/compose/channel-picker";
-import { COMPOSE_PALETTE } from "@/ui/components/compose/compose-theme";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import {
   Dialog,
@@ -28,6 +28,7 @@ import {
 } from "@/ui/components/ui/dialog";
 import { useChannelGroups, useCreateChannelGroup } from "@/ui/hooks/useChannelGroups";
 import { useChannels } from "@/ui/hooks/useChannels";
+import type { ChannelGroup } from "@/ui/schemas/channel-group.schema";
 
 /**
  * "Chọn kênh đăng" — the modal of the ComposeFocus design (template 161–191).
@@ -48,8 +49,10 @@ import { useChannels } from "@/ui/hooks/useChannels";
  * on open, focus back to the trigger on close, `Esc`, `aria-modal`, and the
  * page behind made inert (core-accessibility).
  *
- * The palette is applied HERE as well as on the screen: the dialog renders in a
- * portal on `document.body`, outside the wrapper that defines `--compose-*`.
+ * Pressing a group chip ADDS the group to what is ticked (`applyChannelGroup`)
+ * instead of replacing it, so two groups can be pressed in a row and a Page
+ * ticked by hand survives. A group that cannot be loaded at all does not block
+ * the dialog: the row says so and the list underneath still works.
  *
  * What the mock shows and this cannot: follower counts ("128K theo dõi", 184).
  * Nothing in this system stores them — see the handover note; the column shows
@@ -106,6 +109,30 @@ export function ChannelPickerDialog({
   const { rows, hidden } = visibleRows(filtered, expanded);
   const groupItems = groups.data?.groups ?? [];
   const activeGroupId = matchingGroupId(groupItems, draft);
+  /**
+   * The Pages a group press may actually tick. A disabled Page is listed (so it
+   * can explain itself) but cannot be published to, so `applyChannelGroup` is
+   * given the publishable ids only and the row below counts what it left out.
+   */
+  const activeIds = all
+    .filter((channel) => channelBlockReason(channel) === null)
+    .map((channel) => channel.channelId);
+
+  /** One group press: union into the draft, then say what could not come. */
+  function pressGroup(group: ChannelGroup) {
+    const next = applyChannelGroup([...draft], group.channelIds, activeIds);
+    // Everything the press could have kept and did not — from the group AND
+    // from what was already ticked, because a Page switched off since it was
+    // chosen leaves the same way and must not leave silently.
+    const asked = new Set([...draft, ...group.channelIds]);
+    const lost = [...asked].filter((id) => !next.includes(id));
+    setDraft(new Set(next));
+    setNotice(
+      lost.length > 0
+        ? `${lost.length} kênh của nhóm “${group.name}” không đăng được (đã gỡ khỏi danh sách hoặc đang tắt) nên không được tick.`
+        : null,
+    );
+  }
 
   function saveGroup() {
     // The server's own rules, checked locally with the SAME sentences so the
@@ -128,10 +155,9 @@ export function ChannelPickerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-labelledby={titleId}
-        style={COMPOSE_PALETTE}
-        className="max-w-160 gap-0 overflow-hidden rounded-[var(--compose-radius-modal)] border-0 bg-[var(--card)] p-0 text-[var(--foreground)]"
+        className="bg-card text-foreground max-w-160 gap-0 overflow-hidden rounded-xl border-0 p-0"
       >
-        <div className="px-6 py-5 shadow-[inset_0_-1px_0_var(--compose-hairline)]">
+        <div className="px-6 py-5 shadow-[inset_0_-1px_0_var(--border)]">
           <DialogTitle id={titleId} className="text-[19px] font-semibold">
             Chọn kênh đăng
           </DialogTitle>
@@ -153,7 +179,7 @@ export function ChannelPickerDialog({
               setExpanded(false);
             }}
             placeholder="Tìm page"
-            className="focus-visible:ring-ring h-11.5 rounded-[var(--compose-radius-tile)] border-0 bg-[var(--card)] px-4 text-sm shadow-[inset_0_0_0_1.5px_var(--input)] outline-none focus-visible:ring-3"
+            className="focus-visible:ring-ring h-11.5 rounded-md border-0 bg-[var(--card)] px-4 text-sm shadow-[inset_0_0_0_1.5px_var(--input)] outline-none focus-visible:ring-3"
           />
 
           {/* --- Nhóm có sẵn (166–172) --------------------------------------- */}
@@ -174,24 +200,16 @@ export function ChannelPickerDialog({
                     key={group.id}
                     type="button"
                     aria-pressed={group.id === activeGroupId}
-                    onClick={() => {
-                      const { selected, dropped } = selectionForGroup(group, all);
-                      setDraft(new Set(selected));
-                      setNotice(
-                        dropped.length > 0
-                          ? `Nhóm “${group.name}” có ${dropped.length} kênh không còn trong danh sách nên đã bỏ qua.`
-                          : null,
-                      );
-                    }}
+                    onClick={() => pressGroup(group)}
                     className={cn(
-                      "focus-visible:ring-ring h-10 cursor-pointer rounded-[11px] px-4.5 text-sm font-medium transition-colors outline-none focus-visible:ring-3",
+                      "focus-visible:ring-ring h-10 cursor-pointer rounded-lg px-4.5 text-sm font-medium transition-colors outline-none focus-visible:ring-3",
                       group.id === activeGroupId
-                        ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                        : "bg-[var(--card)] shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)]",
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-card shadow-[inset_0_0_0_1px_var(--input)]",
                     )}
                   >
                     {group.name}
-                    <span className="sr-only"> — {group.channelCount} kênh</span>
+                    <span className="sr-only"> — thêm {group.channelCount} kênh vào lựa chọn</span>
                   </button>
                 ))}
 
@@ -208,7 +226,7 @@ export function ChannelPickerDialog({
                     setGroupError(null);
                   }}
                   aria-expanded={groupName !== null}
-                  className="focus-visible:ring-ring h-10 cursor-pointer rounded-[11px] border-0 px-4.5 text-sm text-[var(--muted-foreground)] shadow-[inset_0_0_0_1.5px_var(--compose-hairline-strong)] outline-none focus-visible:ring-3"
+                  className="focus-visible:ring-ring h-10 cursor-pointer rounded-lg border-0 px-4.5 text-sm text-[var(--muted-foreground)] shadow-[inset_0_0_0_1.5px_var(--input)] outline-none focus-visible:ring-3"
                 >
                   + Tạo nhóm
                 </button>
@@ -227,14 +245,14 @@ export function ChannelPickerDialog({
                     onChange={(event) => setGroupName(event.target.value)}
                     placeholder="Tên nhóm, ví dụ: Bộ 5 page chính"
                     aria-invalid={Boolean(groupError)}
-                    className="focus-visible:ring-ring h-10 min-w-60 flex-1 rounded-[11px] border-0 bg-[var(--card)] px-3.5 text-sm shadow-[inset_0_0_0_1.5px_var(--input)] outline-none focus-visible:ring-3"
+                    className="focus-visible:ring-ring h-10 min-w-60 flex-1 rounded-lg border-0 bg-[var(--card)] px-3.5 text-sm shadow-[inset_0_0_0_1.5px_var(--input)] outline-none focus-visible:ring-3"
                   />
                   <button
                     type="button"
                     onClick={saveGroup}
                     disabled={createGroup.isPending || Boolean(readOnlyReason)}
                     title={readOnlyReason ?? undefined}
-                    className="focus-visible:ring-ring h-10 cursor-pointer rounded-[11px] bg-[var(--card)] px-4 text-sm font-semibold text-[var(--primary)] shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="focus-visible:ring-ring h-10 cursor-pointer rounded-lg bg-[var(--card)] px-4 text-sm font-semibold text-[var(--primary)] shadow-[inset_0_0_0_1px_var(--input)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {createGroup.isPending ? "Đang lưu…" : "Lưu nhóm"}
                   </button>
@@ -277,9 +295,9 @@ export function ChannelPickerDialog({
               <ul aria-hidden="true" className="flex flex-col motion-safe:animate-pulse">
                 {[0, 1, 2].map((row) => (
                   <li key={row} className="flex h-15 items-center gap-3.5">
-                    <span className="size-5.5 rounded-[7px] bg-[var(--compose-track)]" />
-                    <span className="size-8.5 rounded-full bg-[var(--compose-track)]" />
-                    <span className="h-3.5 w-40 rounded bg-[var(--compose-track)]" />
+                    <span className="size-5.5 rounded-sm bg-[var(--muted)]" />
+                    <span className="size-8.5 rounded-full bg-[var(--muted)]" />
+                    <span className="h-3.5 w-40 rounded bg-[var(--muted)]" />
                   </li>
                 ))}
               </ul>
@@ -312,7 +330,7 @@ export function ChannelPickerDialog({
                     <li key={channel.channelId}>
                       <label
                         className={cn(
-                          "flex h-15 items-center gap-3.5 shadow-[inset_0_-1px_0_var(--compose-hairline)]",
+                          "flex h-15 items-center gap-3.5 shadow-[inset_0_-1px_0_var(--border)]",
                           blocked ? "cursor-not-allowed opacity-55" : "cursor-pointer",
                         )}
                       >
@@ -331,15 +349,15 @@ export function ChannelPickerDialog({
                             the native control keeps the role and the keyboard. */}
                         <span
                           aria-hidden="true"
-                          className="peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-ring/50 peer-checked:[&>span]:inline flex size-5.5 shrink-0 items-center justify-center rounded-[7px] bg-[var(--card)] text-xs shadow-[inset_0_0_0_1.5px_var(--input)] peer-checked:shadow-[inset_0_0_0_1.5px_var(--primary)] peer-focus-visible:ring-3"
+                          className="peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-ring/50 bg-card peer-checked:[&>svg]:block flex size-5.5 shrink-0 items-center justify-center rounded-sm shadow-[inset_0_0_0_1.5px_var(--input)] peer-checked:shadow-[inset_0_0_0_1.5px_var(--primary)] peer-focus-visible:ring-3"
                         >
-                          <span className="hidden">✓</span>
+                          <Check aria-hidden="true" className="hidden size-3.5" strokeWidth={3} />
                         </span>
 
                         <span
                           aria-hidden="true"
-                          style={{ background: avatarToneVar(channel.name) }}
-                          className="flex size-8.5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white"
+                          style={avatarToneStyle(channel.name)}
+                          className="flex size-8.5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold"
                         >
                           {channelInitials(channel.name)}
                         </span>
@@ -390,8 +408,8 @@ export function ChannelPickerDialog({
         </div>
 
         {/* --- Footer (187–191) --------------------------------------------- */}
-        <div className="flex flex-wrap items-center gap-3.5 bg-[var(--compose-well)] px-6 py-4.5 shadow-[inset_0_1px_0_var(--compose-hairline)]">
-          <p className="text-[13px] text-[var(--compose-text-2)]">
+        <div className="flex flex-wrap items-center gap-3.5 bg-[var(--muted)] px-6 py-4.5 shadow-[inset_0_1px_0_var(--border)]">
+          <p className="text-[13px] text-[var(--muted-foreground)]">
             Đã chọn {draft.size} page
           </p>
           <span className="flex-1" />
@@ -404,7 +422,7 @@ export function ChannelPickerDialog({
             }}
             disabled={draft.size === 0 || Boolean(readOnlyReason)}
             title={readOnlyReason ?? undefined}
-            className="focus-visible:ring-ring h-12 cursor-pointer rounded-[13px] bg-[var(--card)] px-6 text-sm font-semibold shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
+            className="focus-visible:ring-ring h-12 cursor-pointer rounded-xl bg-[var(--card)] px-6 text-sm font-semibold shadow-[inset_0_0_0_1px_var(--input)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Lưu thành nhóm
           </button>
@@ -415,7 +433,7 @@ export function ChannelPickerDialog({
               onApply([...draft]);
               onOpenChange(false);
             }}
-            className="focus-visible:ring-ring h-12 cursor-pointer rounded-[13px] bg-[var(--compose-ink)] px-8 text-sm font-semibold text-[var(--card)] outline-none focus-visible:ring-3"
+            className="focus-visible:ring-ring h-12 cursor-pointer rounded-xl bg-primary text-primary-foreground px-8 text-sm font-semibold outline-none focus-visible:ring-3"
           >
             Xong
           </button>

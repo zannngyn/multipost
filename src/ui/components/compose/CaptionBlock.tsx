@@ -25,7 +25,7 @@ import {
   findDuplicateCaptions,
 } from "@/ui/components/compose/caption-duplicate";
 import { describeFanOut } from "@/ui/components/compose/caption-fanout";
-import { avatarToneVar, channelInitials } from "@/ui/components/compose/channel-picker";
+import { avatarToneStyle, channelInitials } from "@/ui/components/compose/channel-picker";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { Select } from "@/ui/components/ui/select";
 import { useCaptionFanOut, type CaptionFanOutStatus } from "@/ui/hooks/useCaptionFanOut";
@@ -208,7 +208,7 @@ export function CaptionBlock({
   return (
     <div className="flex flex-col gap-3">
       {readOnlyReason ? (
-        <p className="rounded-xl bg-[var(--compose-track)] px-3.5 py-2.5 text-xs leading-relaxed">
+        <p className="rounded-xl bg-[var(--muted)] px-3.5 py-2.5 text-xs leading-relaxed">
           {readOnlyReason}
         </p>
       ) : null}
@@ -216,7 +216,7 @@ export function CaptionBlock({
       {wizard.toneDropped ? (
         <p
           role="status"
-          className="rounded-xl bg-[var(--compose-track)] px-3.5 py-2.5 text-xs leading-relaxed"
+          className="rounded-xl bg-[var(--muted)] px-3.5 py-2.5 text-xs leading-relaxed"
         >
           Tông giọng chưa sẵn sàng trên máy chủ — caption vừa rồi được viết theo tông mặc định.
         </p>
@@ -272,7 +272,7 @@ export function CaptionBlock({
               onActiveChannelChange(null);
               setConfirmShare(null);
             }}
-            className="focus-visible:ring-ring cursor-pointer rounded-md bg-[var(--compose-ink)] px-3 py-1 font-semibold text-[var(--card)] outline-none focus-visible:ring-3"
+            className="focus-visible:ring-ring cursor-pointer rounded-md bg-primary text-primary-foreground px-3 py-1 font-semibold outline-none focus-visible:ring-3"
           >
             Bỏ và dùng chung
           </button>
@@ -284,7 +284,7 @@ export function CaptionBlock({
       ) : (
       <section
         aria-labelledby={`${fieldId}-heading`}
-        className="flex flex-col rounded-[var(--compose-radius-block)] bg-[var(--compose-well)] shadow-[inset_0_0_0_1px_var(--compose-hairline)]"
+        className="flex flex-col rounded-lg bg-[var(--muted)] shadow-[inset_0_0_0_1px_var(--border)]"
       >
         {/* --- Channel tabs: one caption per Page ------------------------- */}
         {showTabs ? (
@@ -308,14 +308,14 @@ export function CaptionBlock({
                   className={cn(
                     "focus-visible:ring-ring flex h-9 cursor-pointer items-center gap-2 rounded-full py-0 pr-3 pl-1 text-[13px] transition-colors outline-none focus-visible:ring-3",
                     isActive
-                      ? "bg-[var(--compose-chip-on)] font-semibold shadow-[inset_0_0_0_1.5px_var(--compose-chip-ring)]"
-                      : "bg-[var(--card)] shadow-[inset_0_0_0_1px_var(--compose-hairline)]",
+                      ? "bg-[var(--accent)] font-semibold shadow-[inset_0_0_0_1.5px_var(--primary)]"
+                      : "bg-[var(--card)] shadow-[inset_0_0_0_1px_var(--border)]",
                   )}
                 >
                   <span
                     aria-hidden="true"
-                    style={{ background: avatarToneVar(name) }}
-                    className="flex size-7 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+                    style={avatarToneStyle(name)}
+                    className="flex size-7 items-center justify-center rounded-full text-[10px] font-semibold"
                   >
                     {channelInitials(name)}
                   </span>
@@ -367,7 +367,7 @@ export function CaptionBlock({
             value={wizard.tone}
             disabled={captions.isPending || Boolean(readOnlyReason)}
             onChange={(event) => wizard.setTone(event.target.value as CaptionTone)}
-            className="h-8.5 w-auto rounded-[10px] border-0 bg-[var(--card)] px-3 text-[13px] shadow-[inset_0_0_0_1px_var(--border)]"
+            className="h-8.5 w-auto rounded-lg border-0 bg-[var(--card)] px-3 text-[13px] shadow-[inset_0_0_0_1px_var(--border)]"
           >
             <optgroup label="Mẫu prompt">
               {CAPTION_TONES.map((tone) => (
@@ -387,7 +387,7 @@ export function CaptionBlock({
               onClick={() => fanOut.run(selectedIds)}
               disabled={busy || Boolean(readOnlyReason)}
               title={readOnlyReason ?? undefined}
-              className="focus-visible:ring-ring h-8.5 cursor-pointer rounded-[10px] bg-[var(--compose-ink)] px-3.5 text-[13px] font-semibold text-[var(--card)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
+              className="focus-visible:ring-ring h-8.5 cursor-pointer rounded-lg bg-primary text-primary-foreground px-3.5 text-[13px] font-semibold outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {fanOut.isRunning
                 ? `Đang viết ${fanOut.done}/${fanOut.total}…`
@@ -417,7 +417,7 @@ export function CaptionBlock({
           <p
             role="status"
             aria-live="polite"
-            className="mx-4 mb-3 rounded-xl bg-[var(--compose-track)] px-3.5 py-2 text-xs leading-relaxed"
+            className="mx-4 mb-3 rounded-xl bg-[var(--muted)] px-3.5 py-2 text-xs leading-relaxed"
           >
             {progress}
           </p>
@@ -539,7 +539,7 @@ function PerChannelSwitch({
     <label
       htmlFor={id}
       className={cn(
-        "flex items-center gap-2.5 rounded-[var(--compose-radius-tile)] bg-[var(--card)] px-3.5 py-3 text-sm shadow-[inset_0_0_0_1px_var(--compose-hairline)]",
+        "flex items-center gap-2.5 rounded-md bg-[var(--card)] px-3.5 py-3 text-sm shadow-[inset_0_0_0_1px_var(--border)]",
         disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
       )}
     >
@@ -576,7 +576,7 @@ function PerChannelSwitch({
  */
 function NoChannelYet({ onOpenPicker }: { onOpenPicker: () => void }) {
   return (
-    <div className="flex flex-col items-start gap-2 rounded-[var(--compose-radius-block)] bg-[var(--compose-well)] px-4 py-8 shadow-[inset_0_0_0_1px_var(--compose-hairline)]">
+    <div className="flex flex-col items-start gap-2 rounded-lg bg-[var(--muted)] px-4 py-8 shadow-[inset_0_0_0_1px_var(--border)]">
       <p className="text-sm font-medium">Chọn kênh đăng trước để viết caption</p>
       <p className="max-w-110 text-xs leading-relaxed text-[var(--muted-foreground)]">
         Mỗi Fanpage cần một caption riêng, nên hệ thống hỏi bạn đăng lên đâu trước rồi mới viết.
@@ -584,7 +584,7 @@ function NoChannelYet({ onOpenPicker }: { onOpenPicker: () => void }) {
       <button
         type="button"
         onClick={onOpenPicker}
-        className="focus-visible:ring-ring mt-1 h-9.5 cursor-pointer rounded-[10px] bg-[var(--card)] px-4 text-[13px] font-semibold shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)] outline-none focus-visible:ring-3"
+        className="focus-visible:ring-ring mt-1 h-9.5 cursor-pointer rounded-lg bg-[var(--card)] px-4 text-[13px] font-semibold shadow-[inset_0_0_0_1px_var(--input)] outline-none focus-visible:ring-3"
       >
         Chọn kênh đăng
       </button>
@@ -723,7 +723,7 @@ function CaptionFields({
     <>
       {/* --- Tier 2: the post itself (template 96–99) ------------------- */}
       <div className="px-4 pb-3.5">
-        <div className="flex flex-col gap-2.5 rounded-[var(--compose-radius-tile)] bg-[var(--compose-raised)] p-4 shadow-[inset_0_0_0_1px_var(--compose-hairline)]">
+        <div className="flex flex-col gap-2.5 rounded-md bg-[var(--card)] p-4 shadow-[inset_0_0_0_1px_var(--border)]">
           <label htmlFor={idPrefix} className="sr-only">
             Nội dung caption cho {label}
           </label>
@@ -746,7 +746,7 @@ function CaptionFields({
             onChange={(event) => write(body, event.target.value)}
             placeholder="#hashtag của bài"
             spellCheck={false}
-            className="focus-visible:ring-ring border-0 bg-transparent text-sm leading-6 text-[var(--compose-link)] outline-none placeholder:text-[var(--muted-foreground)] focus-visible:ring-3 focus-visible:ring-offset-2"
+            className="focus-visible:ring-ring border-0 bg-transparent text-sm leading-6 text-[var(--primary)] outline-none placeholder:text-[var(--muted-foreground)] focus-visible:ring-3 focus-visible:ring-offset-2"
           />
         </div>
       </div>
@@ -754,7 +754,7 @@ function CaptionFields({
       {/* --- Tier 3: tag suggestions (template 100–109) ----------------- */}
       <div
         id={`${idPrefix}-meta`}
-        className="flex flex-col gap-2.5 px-4 pt-3 pb-4 shadow-[inset_0_1px_0_var(--compose-hairline)]"
+        className="flex flex-col gap-2.5 px-4 pt-3 pb-4 shadow-[inset_0_1px_0_var(--border)]"
       >
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <span className="font-mono text-[10px] tracking-[0.1em] text-[var(--foreground-subtle)] uppercase">
@@ -777,8 +777,8 @@ function CaptionFields({
                 type="button"
                 onClick={() => write(body, addHashtag(tags, tag))}
                 className={cn(
-                  "focus-visible:ring-ring h-8 cursor-pointer rounded-[9px] px-3 text-[13px] text-[var(--compose-text-2)] outline-none focus-visible:ring-3",
-                  "shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)] hover:bg-[var(--card)]",
+                  "focus-visible:ring-ring h-8 cursor-pointer rounded-md px-3 text-[13px] text-[var(--muted-foreground)] outline-none focus-visible:ring-3",
+                  "shadow-[inset_0_0_0_1px_var(--input)] hover:bg-[var(--card)]",
                 )}
               >
                 + {tag}
@@ -826,8 +826,8 @@ function AiStatePill({
       className={cn(
         "rounded-full px-2.5 py-1 text-xs",
         tone === "ok"
-          ? "bg-[var(--compose-ok-bg)] text-[var(--compose-ok-fg)]"
-          : "bg-[var(--compose-track)] text-[var(--muted-foreground)]",
+          ? "bg-success/20 text-success-foreground"
+          : "bg-[var(--muted)] text-[var(--muted-foreground)]",
       )}
     >
       {text}

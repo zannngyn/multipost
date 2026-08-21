@@ -13,7 +13,7 @@ import type { Channel } from "@/ui/schemas/channel.schema";
 /** How many rows the modal shows before "Xem thêm N page" (template 178, 186). */
 export const CHANNEL_ROWS_BEFORE_EXPAND = 5;
 
-/** Number of avatar washes in `compose-theme.ts` (`--compose-avatar-0..4`). */
+/** Number of dye tones a Page avatar can wear (`--chart-1..5`). */
 const AVATAR_TONES = 5;
 
 /** Casefold + strip Vietnamese marks, so "Lady" finds "Lady Fashion" and "lady". */
@@ -56,9 +56,31 @@ export function avatarToneIndex(name: string): number {
   return hash % AVATAR_TONES;
 }
 
-/** `var(--compose-avatar-N)` for a Page — the only place the index is spent. */
+/**
+ * The dye tone of a Page, as a token reference — the only place the index is
+ * spent.
+ *
+ * It names one of the five chart hues, which are the app's only ramp of five
+ * distinguishable colours that is already re-valued for the dark scheme. The
+ * avatar wears it as a TINT with the ink on top (see the callers), never as a
+ * solid with white text: three of the five are far too light for that, and the
+ * circle is `aria-hidden` decoration beside the name it stands for.
+ */
 export function avatarToneVar(name: string): string {
-  return `var(--compose-avatar-${avatarToneIndex(name)})`;
+  return `var(--chart-${avatarToneIndex(name) + 1})`;
+}
+
+/**
+ * The avatar circle itself: the Page's dye at swatch strength, with the page's
+ * own ink on top. Written once so the three places that draw an avatar cannot
+ * drift into three different strengths.
+ *
+ * `transparent` rather than a named surface: the same chip sits on the card in
+ * the modal and on the sunken well in the summary row, and mixing to alpha lets
+ * whatever is behind it show through instead of stamping a wrong surface colour.
+ */
+export function avatarToneStyle(name: string): { backgroundColor: string } {
+  return { backgroundColor: `color-mix(in oklch, ${avatarToneVar(name)} 28%, transparent)` };
 }
 
 /**
@@ -112,27 +134,37 @@ export function matchingGroupId(
 }
 
 /**
- * Picking a preset group REPLACES the selection with that group.
+ * Pressing a preset group ADDS it to what is already ticked.
  *
- * The mock's pills are one-of ("Bộ 5 page chính" / "Nhóm sĩ" / "Miền Bắc"), and
- * the footer counts one number. Adding to whatever was ticked before would make
- * the lit pill a lie the moment a sixth Page is left over from the last pick.
+ * A chip is a shortcut for "và cả nhóm này nữa", so two groups can be pressed
+ * in a row and a Page ticked by hand survives the press. It is not a radio:
+ * `matchingGroupId` above only lights a chip when the selection IS the group
+ * exactly, so a union that goes past the group lights nothing and claims
+ * nothing.
  *
- * Channels the tenant no longer owns are dropped: a group can outlive a Page,
- * and sending an id that is not in the list would only produce a blocked job.
+ * The result is filtered to `activeChannelIds` — the Pages that can actually be
+ * published to right now. A group outlives the Page it named and a Page can be
+ * switched off after it was ticked; either way the id would only produce a
+ * blocked job, so it is dropped here and the caller says how many went.
+ *
+ * Order is the reading order of the list: what was ticked first stays first.
+ * Pure and input-safe: neither array it is given is mutated.
  */
-export function selectionForGroup(
-  group: ChannelGroup,
-  available: readonly Channel[],
-): { selected: string[]; dropped: string[] } {
-  const owned = new Set(available.map((channel) => channel.channelId));
-  const selected: string[] = [];
-  const dropped: string[] = [];
-  for (const id of group.channelIds) {
-    if (owned.has(id)) selected.push(id);
-    else dropped.push(id);
+export function applyChannelGroup(
+  current: readonly string[],
+  groupChannelIds: readonly string[],
+  activeChannelIds: readonly string[],
+): string[] {
+  const active = new Set(activeChannelIds);
+  const next: string[] = [];
+  const seen = new Set<string>();
+
+  for (const id of [...current, ...groupChannelIds]) {
+    if (seen.has(id) || !active.has(id)) continue;
+    seen.add(id);
+    next.push(id);
   }
-  return { selected, dropped };
+  return next;
 }
 
 /** Adds or removes one id, returning a NEW set (never mutating the applied one). */

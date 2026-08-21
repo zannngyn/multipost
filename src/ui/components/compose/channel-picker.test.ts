@@ -5,6 +5,8 @@ import type { Channel } from "@/ui/schemas/channel.schema";
 
 import {
   CHANNEL_ROWS_BEFORE_EXPAND,
+  applyChannelGroup,
+  avatarToneStyle,
   avatarToneVar,
   channelBlockReason,
   channelInitials,
@@ -14,7 +16,6 @@ import {
   matchingGroupId,
   publishableChannels,
   selectAllVisible,
-  selectionForGroup,
   toggleChannelId,
   visibleRows,
 } from "./channel-picker";
@@ -117,10 +118,16 @@ describe("avatarToneVar", () => {
     expect(avatarToneVar("Lady Fashion")).toBe(avatarToneVar("Lady Fashion"));
   });
 
-  it("always names a variable that exists in compose-theme", () => {
+  it("always names a token the stylesheet actually defines", () => {
     for (const name of ["Lady Fashion", "Mys.P", "", "Devis", "Charmia"]) {
-      expect(avatarToneVar(name)).toMatch(/^var\(--compose-avatar-[0-4]\)$/);
+      expect(avatarToneVar(name)).toMatch(/^var\(--chart-[1-5]\)$/);
     }
+  });
+
+  it("wears the dye as a tint, never as a solid — the ink has to stay readable", () => {
+    expect(avatarToneStyle("Lady Fashion").backgroundColor).toBe(
+      `color-mix(in oklch, ${avatarToneVar("Lady Fashion")} 28%, transparent)`,
+    );
   });
 });
 
@@ -144,27 +151,37 @@ describe("matchingGroupId", () => {
   });
 });
 
-describe("selectionForGroup", () => {
-  const available = [channel({ channelId: "ch-lady" }), channel({ channelId: "ch-mysp" })];
-
-  it("ticks exactly the group's channels", () => {
-    expect(selectionForGroup(group(), available)).toEqual({
-      selected: ["ch-lady", "ch-mysp"],
-      dropped: [],
-    });
+describe("applyChannelGroup", () => {
+  it("unions the group into the selection, keeping only active channels", () => {
+    expect(applyChannelGroup(["a"], ["b", "dead"], ["a", "b", "c"])).toEqual(["a", "b"]);
   });
 
-  it("REPLACES rather than adds — the lit pill must not lie", () => {
-    const one = selectionForGroup(group({ channelIds: ["ch-mysp"] }), available);
-    expect(one.selected).toEqual(["ch-mysp"]);
+  it("is idempotent", () => {
+    expect(applyChannelGroup(["a", "b"], ["b"], ["a", "b"])).toEqual(["a", "b"]);
   });
 
-  it("drops a channel the tenant no longer owns, and says which", () => {
-    const stale = group({ channelIds: ["ch-lady", "ch-gone"] });
-    expect(selectionForGroup(stale, available)).toEqual({
-      selected: ["ch-lady"],
-      dropped: ["ch-gone"],
-    });
+  it("keeps the order: what was ticked first stays first", () => {
+    expect(applyChannelGroup(["c", "a"], ["b", "a"], ["a", "b", "c"])).toEqual(["c", "a", "b"]);
+  });
+
+  it("drops an already-ticked channel that can no longer be published to", () => {
+    // A Page ticked before it was switched off must not travel back into the
+    // selection on a group press: the post to it could only be blocked.
+    expect(applyChannelGroup(["off", "a"], ["b"], ["a", "b"])).toEqual(["a", "b"]);
+  });
+
+  it("adds nothing when the group is empty, and never mutates its input", () => {
+    const current = ["a"];
+    expect(applyChannelGroup(current, [], ["a"])).toEqual(["a"]);
+    expect(current).toEqual(["a"]);
+  });
+
+  it("answers an empty selection when nothing is publishable", () => {
+    expect(applyChannelGroup(["a"], ["b"], [])).toEqual([]);
+  });
+
+  it("de-duplicates a group that repeats an id", () => {
+    expect(applyChannelGroup([], ["a", "a"], ["a"])).toEqual(["a"]);
   });
 });
 

@@ -2,9 +2,9 @@
  * The 20px dot on a colour chip (ComposeFocus template line 70).
  *
  * These hex values are NOT palette: they are what the WORD means. "HỒNG" has to
- * look pink or the chip is decoration. They stay out of `compose-theme.ts` for
- * exactly that reason — re-theming the screen must not repaint the colours of
- * the clothes.
+ * look pink or the chip is decoration. They are therefore the one place in
+ * `compose/**` a literal colour is allowed, and they are deliberately not
+ * tokens — re-theming the screen must not repaint the colours of the clothes.
  *
  * Matching rules, in order:
  *  1. the exact canonical name (`core/domain/media-file-name` CANONICAL_COLORS,

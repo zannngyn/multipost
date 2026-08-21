@@ -3,9 +3,15 @@
 import { cn } from "@/shared/utils";
 
 /**
- * The bar at the foot of the left card — template lines 126–132:
+ * The action row of the compose screen:
  *
  *   [Chọn kênh]  |  [Đăng luôn]  [Hẹn lịch]              N kênh · 1 bài
+ *
+ * It renders inside the sticky tray at the foot of the left column, so the one
+ * action and the sentence explaining it are on screen at every scroll position
+ * of a card that is several viewports tall. The tray — its background, its
+ * hairline, and the schedule fields that open above this row — belongs to
+ * `ComposeFocus`; this component is the row and nothing else.
  *
  * One black action, because there is one thing this screen does. The wizard's
  * "Tiếp / Quay lại" pair is gone with the wizard: nothing on this screen is a
@@ -46,11 +52,14 @@ export function ComposeActionBar({
 }) {
   const blocked = Boolean(readOnlyReason);
   return (
-    <div className="flex flex-wrap items-center gap-3.5 pt-4 shadow-[inset_0_1px_0_var(--compose-hairline)]">
+    // No frame of its own any more: the bar is the last row of the sticky tray
+    // its caller owns, and a second hairline inside that tray only drew a line
+    // across it. Spacing and background belong to the tray, this is the row.
+    <div className="flex flex-wrap items-center gap-3.5">
       <button
         type="button"
         onClick={onPickChannels}
-        className="focus-visible:ring-ring h-13 cursor-pointer rounded-[var(--compose-radius-control)] bg-[var(--card)] px-6 text-[15px] font-medium shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)] outline-none focus-visible:ring-3"
+        className="focus-visible:ring-ring bg-card h-13 cursor-pointer rounded-lg px-6 text-[15px] font-medium shadow-[inset_0_0_0_1px_var(--input)] outline-none focus-visible:ring-3"
       >
         Chọn kênh
       </button>
@@ -64,7 +73,7 @@ export function ComposeActionBar({
         aria-busy={busy}
         title={readOnlyReason ?? undefined}
         className={cn(
-          "focus-visible:ring-ring h-13 cursor-pointer rounded-[var(--compose-radius-control)] bg-[var(--compose-ink)] px-8 text-[15px] font-semibold text-[var(--card)] outline-none focus-visible:ring-3",
+          "focus-visible:ring-ring h-13 cursor-pointer rounded-lg bg-primary text-primary-foreground px-8 text-[15px] font-semibold outline-none focus-visible:ring-3",
           "disabled:cursor-not-allowed disabled:opacity-50",
         )}
       >
@@ -78,10 +87,10 @@ export function ComposeActionBar({
         disabled={blocked}
         title={readOnlyReason ?? undefined}
         className={cn(
-          "focus-visible:ring-ring h-13 cursor-pointer rounded-[var(--compose-radius-control)] px-6 text-[15px] font-medium outline-none focus-visible:ring-3",
+          "focus-visible:ring-ring h-13 cursor-pointer rounded-lg px-6 text-[15px] font-medium outline-none focus-visible:ring-3",
           scheduling
-            ? "bg-[var(--compose-chip-on)] shadow-[inset_0_0_0_1.5px_var(--compose-chip-ring)]"
-            : "bg-[var(--card)] shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)]",
+            ? "bg-accent text-accent-foreground shadow-[inset_0_0_0_1.5px_var(--primary)]"
+            : "bg-card shadow-[inset_0_0_0_1px_var(--input)]",
           "disabled:cursor-not-allowed disabled:opacity-50",
         )}
       >
@@ -90,7 +99,7 @@ export function ComposeActionBar({
 
       <span className="flex-1" />
 
-      <p className="text-[13px] text-[var(--muted-foreground)]">{note}</p>
+      <p className="text-muted-foreground max-w-90 text-[13px] leading-relaxed">{note}</p>
     </div>
   );
 }
