@@ -6,9 +6,6 @@ import {
   EmptyState,
   HStack,
   Heading,
-  Layout,
-  LayoutContent,
-  LayoutHeader,
   SegmentedControl,
   SegmentedControlItem,
   Stack,
@@ -22,6 +19,7 @@ import { AccessRequestTable } from "@/ui/components/access/AccessRequestTable";
 import { AccessRequestTableSkeleton } from "@/ui/components/access/AccessRequestTableSkeleton";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { presentApiError, toApiError } from "@/ui/components/feedback/present-api-error";
+import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
 import { useAccessRequests } from "@/ui/hooks/useAccessRequests";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import {
@@ -43,13 +41,18 @@ import {
  * stay because they are the AUDIT TRAIL of every account ever let in or
  * refused — retiring a flow is not a reason to delete its history.
  *
- * Frame (`astryx docs layout`, tracker archetype): header carries the title and
- * the filter, the content region carries the rows edge-to-edge.
+ * Since the wave-1 IA this is a PANEL of the "Thành viên" hub
+ * (`/members?tab=history`), not a page of its own: the hub owns the frame, the
+ * page's h1 and the tab strip, so this panel starts at h2, its list section at
+ * h3 and its empty boxes at h4 (core-accessibility §1 — one h1 per page, no
+ * level skipped). `/access` redirects here, query and all.
  *
- * The filter lives in the URL (core-data-list-query rule 1): `/access?status=
- * blocked` is shareable, survives F5 and makes Back behave. One builder writes
- * it, one parser reads it, and the query key is derived from the same value.
- * The default ("chờ duyệt") is NOT written to the URL.
+ * The filter lives in the URL (core-data-list-query rule 1): `/members?tab=
+ * history&status=blocked` is shareable, survives F5 and makes Back behave. One
+ * builder writes it, one parser reads it, and the query key is derived from the
+ * same value. The default ("chờ duyệt") is NOT written to the URL — but the
+ * hub's `?tab=` IS carried through every rewrite, or changing the filter would
+ * throw the operator back to the member list.
  *
  * The four mandatory states live in `AccessRequestsBody`:
  *   loading — skeleton with the real columns, delayed 300ms
@@ -60,7 +63,15 @@ import {
  *             make an admin think the list was lost
  *   error   — 4xx (không thử lại được) vs 5xx (thử lại), via `presentApiError`
  */
-export function AccessRequestsScreen() {
+export function AccessRequestsScreen({
+  /**
+   * Takes the operator to the tab that can actually add someone. A tab switch,
+   * not a navigation: the invite block lives on the same address now.
+   */
+  onGoToMembers,
+}: {
+  onGoToMembers: () => void;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -79,105 +90,100 @@ export function AccessRequestsScreen() {
   const selectStatus = useCallback(
     (value: string) => {
       const next = value as AccessFilterStatus;
-      const query = accessSearchParams(next).toString();
+      // This panel rebuilds the WHOLE query from its own builder, so the hub's
+      // `?tab=` has to be carried back in by hand — without it the next render
+      // reads no tab, falls back to "members" and the history disappears
+      // mid-filter. The raw value is carried, not re-normalised: an unknown tab
+      // already renders the default panel.
+      const query = withTabParam(
+        accessSearchParams(next).toString(),
+        searchParams.get(POSTS_TAB_PARAM),
+      );
       // `replace`: switching a filter is not a navigation step to walk back to.
       router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     },
-    [pathname, router],
+    [pathname, router, searchParams],
   );
 
 
 
   return (
-    <Layout
-      height="fill"
-      header={
-        <LayoutHeader hasDivider>
-          <Stack direction="vertical" gap={3} padding={4}>
-            <Stack direction="vertical" gap={1}>
-              <Heading level={1}>Lịch sử duyệt</Heading>
-              <Text type="supporting">
-                Lưu lại những tài khoản từng xin vào hệ thống theo luồng chờ duyệt cũ, ai quyết
-                định và lúc nào. Màn này chỉ để tra cứu — không thao tác được nữa.
-              </Text>
-            </Stack>
+    <Stack direction="vertical" height="100%">
+      <Stack direction="vertical" gap={3} paddingInline={4} paddingBlock={3}>
+        <Stack direction="vertical" gap={1}>
+          {/* h2: the hub above owns the page's h1 (core-accessibility §1). */}
+          <Heading level={2}>Lịch sử duyệt</Heading>
+          <Text type="supporting">
+            Lưu lại những tài khoản từng xin vào hệ thống theo luồng chờ duyệt cũ, ai quyết định và
+            lúc nào. Tab này chỉ để tra cứu — không thao tác được nữa.
+          </Text>
+        </Stack>
 
-            <HStack gap={3} align="center" wrap="wrap">
-              <SegmentedControl
-                label="Lọc theo trạng thái yêu cầu"
-                value={status}
-                onChange={selectStatus}
-                size="sm"
-              >
-                {ACCESS_FILTER_STATUSES.map((value) => (
-                  <SegmentedControlItem
-                    key={value}
-                    value={value}
-                    label={ACCESS_FILTER_LABELS[value]}
-                  />
-                ))}
-              </SegmentedControl>
+        <HStack gap={3} align="center" wrap="wrap">
+          <SegmentedControl
+            label="Lọc theo trạng thái yêu cầu"
+            value={status}
+            onChange={selectStatus}
+            size="sm"
+          >
+            {ACCESS_FILTER_STATUSES.map((value) => (
+              <SegmentedControlItem key={value} value={value} label={ACCESS_FILTER_LABELS[value]} />
+            ))}
+          </SegmentedControl>
 
-              <Button
-                variant="secondary"
-                size="sm"
-                label={requests.isFetching ? "Đang tải…" : "Tải lại"}
-                isDisabled={requests.isFetching}
-                onClick={() => void requests.refetch()}
-              />
-            </HStack>
-          </Stack>
-        </LayoutHeader>
-      }
-      content={
-        <LayoutContent padding={0} isScrollable>
-          <Stack direction="vertical" height="100%">
-            {/* Said once, at the top, instead of a row of disabled buttons:
-                the operator needs to know WHERE the flow moved, not that this
-                screen is dead. `info`, not `warning` — nothing is broken. */}
-            <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
-              <Banner
-                status="info"
-                title="Luồng duyệt đã nghỉ hưu"
-                description="Giờ thêm người bằng link mời ở màn Thành viên: bạn chọn sẵn vai trò, gửi link, người nhận đăng nhập là vào thẳng công ty. Bảng dưới đây được giữ lại để tra cứu lịch sử."
-                endContent={
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    label="Mở màn Thành viên"
-                    onClick={() => router.push("/members")}
-                  />
-                }
-              />
-            </Stack>
+          <Button
+            variant="secondary"
+            size="sm"
+            label={requests.isFetching ? "Đang tải…" : "Tải lại"}
+            isDisabled={requests.isFetching}
+            onClick={() => void requests.refetch()}
+          />
+        </HStack>
+      </Stack>
 
-            <HStack gap={3} paddingInline={4} paddingBlock={3} align="center" wrap="wrap">
-              <Heading level={2}>Lịch sử yêu cầu</Heading>
-              {/* Only once the list is real: "0 yêu cầu" while loading reads as
-                  an answer, and an admin would act on it. */}
-              {requests.data ? (
-                <Text type="supporting" role="status" aria-live="polite">
-                  {items.length} yêu cầu · {ACCESS_FILTER_LABELS[status].toLowerCase()}
-                </Text>
-              ) : null}
-            </HStack>
+      {/* Said once, at the top, instead of a row of disabled buttons: the
+          operator needs to know WHERE the flow moved, not that this panel is
+          dead. `info`, not `warning` — nothing is broken. */}
+      <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+        <Banner
+          status="info"
+          title="Luồng duyệt đã nghỉ hưu"
+          description="Giờ thêm người bằng link mời ở tab “Link mời”: bạn chọn sẵn vai trò, gửi link, người nhận đăng nhập là vào thẳng công ty. Bảng dưới đây được giữ lại để tra cứu lịch sử."
+          endContent={
+            <Button
+              variant="secondary"
+              size="sm"
+              label="Mở tab Thành viên"
+              onClick={onGoToMembers}
+            />
+          }
+        />
+      </Stack>
 
-            <StackItem size="fill">
-              <AccessRequestsBody
-                status={status}
-                isFirstLoad={isFirstLoad}
-                showSkeleton={showSkeleton}
-                isError={requests.isError}
-                error={requests.error}
-                onRetry={() => void requests.refetch()}
-                onShowAll={() => selectStatus("all")}
-                items={items}
-              />
-            </StackItem>
-          </Stack>
-        </LayoutContent>
-      }
-    />
+      <HStack gap={3} paddingInline={4} paddingBlock={3} align="center" wrap="wrap">
+        <Heading level={3}>Lịch sử yêu cầu</Heading>
+        {/* Only once the list is real: "0 yêu cầu" while loading reads as an
+            answer, and an admin would act on it. */}
+        {requests.data ? (
+          <Text type="supporting" role="status" aria-live="polite">
+            {items.length} yêu cầu · {ACCESS_FILTER_LABELS[status].toLowerCase()}
+          </Text>
+        ) : null}
+      </HStack>
+
+      <StackItem size="fill">
+        <AccessRequestsBody
+          status={status}
+          isFirstLoad={isFirstLoad}
+          showSkeleton={showSkeleton}
+          isError={requests.isError}
+          error={requests.error}
+          onRetry={() => void requests.refetch()}
+          onShowAll={() => selectStatus("all")}
+          items={items}
+        />
+      </StackItem>
+    </Stack>
   );
 }
 
@@ -221,9 +227,9 @@ function AccessRequestsBody({
       return (
         <Stack direction="vertical" padding={4}>
           <EmptyState
-            headingLevel={3}
+            headingLevel={4}
             title="Không còn ai chờ duyệt"
-            description="Luồng chờ duyệt đã nghỉ hưu nên sẽ không có yêu cầu mới nào xuất hiện ở đây. Muốn thêm người, hãy tạo link mời ở màn Thành viên."
+            description="Luồng chờ duyệt đã nghỉ hưu nên sẽ không có yêu cầu mới nào xuất hiện ở đây. Muốn thêm người, hãy tạo link mời ở tab “Link mời”."
             actions={
               <Button variant="secondary" label="Xem tất cả lịch sử" onClick={onShowAll} />
             }
@@ -236,9 +242,9 @@ function AccessRequestsBody({
       return (
         <Stack direction="vertical" padding={4}>
           <EmptyState
-            headingLevel={3}
+            headingLevel={4}
             title="Chưa có yêu cầu nào trong lịch sử"
-            description="Không tài khoản nào từng đi qua luồng chờ duyệt của đơn vị này. Thành viên hiện tại được thêm bằng link mời — xem ở màn Thành viên."
+            description="Không tài khoản nào từng đi qua luồng chờ duyệt của đơn vị này. Thành viên hiện tại được thêm bằng link mời — xem ở tab “Link mời”."
           />
         </Stack>
       );
@@ -248,7 +254,7 @@ function AccessRequestsBody({
     return (
       <Stack direction="vertical" padding={4}>
         <EmptyState
-          headingLevel={3}
+          headingLevel={4}
           title={`Không có yêu cầu nào ở trạng thái “${ACCESS_FILTER_LABELS[status]}”`}
           description="Dữ liệu vẫn còn nguyên — chỉ là không có ai ở trạng thái đang lọc. Xem tất cả để đối chiếu."
           actions={<Button variant="secondary" label="Xem tất cả lịch sử" onClick={onShowAll} />}
