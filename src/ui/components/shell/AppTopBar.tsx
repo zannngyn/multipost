@@ -3,6 +3,7 @@
 import { TopNav, TopNavHeading } from "@astryxdesign/core";
 
 import { AppSearch } from "@/ui/components/shell/AppSearch";
+import { OutOfTenantBadge } from "@/ui/components/shell/OutOfTenantBadge";
 import { TenantSwitcher } from "@/ui/components/shell/TenantSwitcher";
 
 /**
@@ -30,7 +31,16 @@ export function AppTopBar({
       heading={<TopNavHeading heading="MYSP" headingHref="/" />}
       // The company is no longer a label but a control (M2.3): it says where
       // you are AND is the way out of it, plus the only door to "tạo công ty".
-      startContent={<TenantSwitcher fallbackLabel={tenantName} />}
+      //
+      // The badge next to it only appears on MYSP's own admin screens, where
+      // that company name is not what the screen is about. The slot is already
+      // a spaced row, so the two travel as a fragment — no wrapper of our own.
+      startContent={
+        <>
+          <TenantSwitcher fallbackLabel={tenantName} />
+          <OutOfTenantBadge />
+        </>
+      }
       endContent={<AppSearch />}
     />
   );
