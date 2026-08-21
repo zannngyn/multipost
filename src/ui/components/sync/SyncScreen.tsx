@@ -15,8 +15,14 @@ import { SyncRailSkeleton, SyncStatusSkeleton } from "@/ui/components/sync/SyncS
 import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useActiveTenant } from "@/ui/hooks/useMe";
+import { useNowMs } from "@/ui/hooks/useNowMs";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
-import { useRunCatalogSync, useSyncStatus } from "@/ui/hooks/useCatalogSync";
+import {
+  isSyncRunLive,
+  isSyncStillRunningError,
+  useRunCatalogSync,
+  useSyncStatus,
+} from "@/ui/hooks/useCatalogSync";
 import type { BadgeTone } from "@/ui/components/ui/badge";
 import {
   SYNC_STATUS_LABELS,
@@ -78,6 +84,30 @@ export function SyncScreen() {
   const isFirstLoad = status.isPending && status.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
   const latestRun = status.data?.state === "has_run" ? status.data.run : null;
+  /**
+   * The server's own answer to "is a sync happening right now". Everything the
+   * screen says about a run in flight hangs off THIS, never off the mutation:
+   * the request that started the run gives up at 120s while the handler keeps
+   * writing rows. `isSyncRunLive` also refuses to believe a `running` row that
+   * is older than any real sync could be, so a crashed run cannot lock this
+   * screen up for good.
+   *
+   * The clock comes from `useNowMs` rather than a bare `Date.now()`: reading
+   * the clock during render is impure (react-hooks/purity), and the age verdict
+   * has to be able to CHANGE without a refetch — that is what re-enables the
+   * button after a run died. A minute of granularity is plenty against the
+   * thirty-minute hard-max age. `useNowMs` answers 0 before its first tick,
+   * which reads as "still live" — the safe side: it keeps the button shut.
+   */
+  const nowMs = useNowMs(60_000);
+  const isRunningOnServer = isSyncRunLive(latestRun, nowMs);
+  /**
+   * A timeout only means "still running" while the server says so. Once the run
+   * settles, the poller brings the new status and this notice disappears on its
+   * own. A timeout next to a run that is NOT running is a claim the client
+   * cannot back up — the normal error notice is the honest answer there.
+   */
+  const isSyncStillRunning = run.isError && isSyncStillRunningError(run.error) && isRunningOnServer;
 
   return (
     <div className="@container bg-background h-full min-h-0">
@@ -106,8 +136,17 @@ export function SyncScreen() {
                   run.mutate();
                 }}
                 isRunning={run.isPending}
-                disabled={!isResolved || readOnlyReason !== null}
-                disabledReason={readOnlyReason ?? undefined}
+                // A second run on top of a run that is still writing is the one
+                // thing this button must not allow — and after a client timeout
+                // the mutation is no longer pending, so `run.isPending` alone
+                // would let it through.
+                disabled={!isResolved || readOnlyReason !== null || isRunningOnServer}
+                disabledReason={
+                  readOnlyReason ??
+                  (isRunningOnServer
+                    ? "Một lần đồng bộ đang chạy trên máy chủ — chờ chạy xong rồi mới chạy lại được."
+                    : undefined)
+                }
               />
             </div>
           </header>
@@ -126,7 +165,31 @@ export function SyncScreen() {
           <div className="flex min-w-0 flex-col gap-5 px-6 py-5">
             {run.isPending ? <SyncRunningCard /> : null}
 
-            {run.isError ? (
+            {/* A client timeout is NOT a failed sync: the request gave up at
+                120s while the handler keeps walking Drive. Showing it in red
+                with a "Thử lại" button would both lie and offer to start a
+                second run over the first — the rail below already follows the
+                real `sync_run` status, and it polls until that run settles.
+                Gated on that status, so this sentence is only ever said while
+                the server is still saying it. */}
+            {isSyncStillRunning ? (
+              <div
+                role="status"
+                className={cn(
+                  "flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-sm",
+                  NOTICE_TONE.info,
+                )}
+              >
+                <p className="min-w-0">
+                  Lần đồng bộ này chạy lâu hơn thời gian chờ của trình duyệt —{" "}
+                  <span className="font-medium">đồng bộ vẫn đang chạy trên máy chủ</span>. Trang tự
+                  cập nhật khi có kết quả, đừng bấm chạy lại.
+                </p>
+                <Button type="button" variant="outline" onClick={() => void status.refetch()}>
+                  Tải lại trạng thái
+                </Button>
+              </div>
+            ) : run.isError ? (
               <ApiErrorNotice
                 error={run.error}
                 onRetry={() => run.mutate()}

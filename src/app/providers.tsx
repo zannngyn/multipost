@@ -18,7 +18,11 @@ export function Providers({ children }: { children: ReactNode }) {
           queries: {
             // Per-query retry policies decide; the default must not retry a 4xx.
             retry: false,
-            refetchOnWindowFocus: false,
+            // The operator leaves the tab, the worker keeps writing, and coming
+            // back to yesterday's numbers is the complaint this default fixes.
+            // `staleTime` still gates it, so tabbing back and forth does not
+            // turn into a refetch per focus event.
+            refetchOnWindowFocus: true,
             staleTime: 15_000,
           },
         },
