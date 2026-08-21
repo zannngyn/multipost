@@ -6,9 +6,11 @@ import type { Channel } from "@/ui/schemas/channel.schema";
 import {
   CHANNEL_ROWS_BEFORE_EXPAND,
   applyChannelGroup,
+  applyChannelGroupSafe,
   avatarToneStyle,
   avatarToneVar,
   channelBlockReason,
+  channelDropSentences,
   channelInitials,
   draftOnOpenChange,
   filterChannels,
@@ -182,6 +184,126 @@ describe("applyChannelGroup", () => {
 
   it("de-duplicates a group that repeats an id", () => {
     expect(applyChannelGroup([], ["a", "a"], ["a"])).toEqual(["a"]);
+  });
+});
+
+/**
+ * The guard that used to be an early `return` in the click handler — which made
+ * the chip do nothing AND say nothing, the one outcome a shortcut must never
+ * have.
+ */
+describe("applyChannelGroupSafe", () => {
+  it("refuses the press when the modal is listing no Pages at all", () => {
+    // Query still in flight, query failed, or a tenant with no Fanpage: all
+    // three arrive here as an empty list, and all three would wipe the draft.
+    expect(
+      applyChannelGroupSafe({
+        current: ["a"],
+        groupChannelIds: ["a", "b"],
+        activeChannelIds: [],
+        listedChannelCount: 0,
+      }),
+    ).toEqual({ ok: false, reason: "no-listed-channels" });
+  });
+
+  it("refuses a count that is not a count", () => {
+    const nonsense = { listedChannelCount: Number.NaN } as { listedChannelCount: number };
+    expect(
+      applyChannelGroupSafe({
+        current: ["a"],
+        groupChannelIds: ["b"],
+        activeChannelIds: ["a", "b"],
+        ...nonsense,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("keeps the draft intact when it refuses — the caller has something to show", () => {
+    const current = ["a"];
+    const press = applyChannelGroupSafe({
+      current,
+      groupChannelIds: ["b"],
+      activeChannelIds: [],
+      listedChannelCount: 0,
+    });
+    expect(press.ok).toBe(false);
+    expect(current).toEqual(["a"]);
+  });
+
+  it("applies the group once there is a list to resolve it against", () => {
+    expect(
+      applyChannelGroupSafe({
+        current: ["a"],
+        groupChannelIds: ["b", "dead"],
+        activeChannelIds: ["a", "b"],
+        listedChannelCount: 3,
+      }),
+    ).toEqual({ ok: true, next: ["a", "b"] });
+  });
+});
+
+describe("channelDropSentences", () => {
+  const named = (id: string) => (id === "ch-lady" ? "Lady Fashion" : id === "ch-mysp" ? "MYSP Shop" : null);
+
+  it("says nothing when the press lost nothing", () => {
+    expect(
+      channelDropSentences({ groupName: "Bộ 5", fromGroup: [], alreadyTicked: [], nameOf: named }),
+    ).toBeNull();
+  });
+
+  it("never prints a raw id — an id with no Page behind it is COUNTED", () => {
+    const text = channelDropSentences({
+      groupName: "Bộ 5",
+      fromGroup: ["fbpage-7c1d", "fbpage-9a22"],
+      alreadyTicked: [],
+      nameOf: named,
+    });
+    expect(text).toBe("Nhóm “Bộ 5” có 2 kênh không còn trong danh sách nên không được tick.");
+    expect(text).not.toContain("fbpage-");
+  });
+
+  it("names what it can and counts the rest", () => {
+    const text = channelDropSentences({
+      groupName: "Bộ 5",
+      fromGroup: ["ch-lady", "fbpage-7c1d"],
+      alreadyTicked: [],
+      nameOf: named,
+    });
+    expect(text).toContain("Lady Fashion và 1 kênh không còn trong danh sách");
+    expect(text).not.toContain("fbpage-");
+  });
+
+  it("keeps the two facts apart: the group's Pages and the operator's own ticks", () => {
+    const text = channelDropSentences({
+      groupName: "Bộ 5",
+      fromGroup: ["ch-lady"],
+      alreadyTicked: ["ch-mysp"],
+      nameOf: named,
+    });
+    expect(text).toContain("Nhóm “Bộ 5” có Lady Fashion");
+    expect(text).toContain("MYSP Shop bạn đã tick trước đó");
+  });
+
+  it("counts the operator's own lost ticks too when they cannot be named", () => {
+    expect(
+      channelDropSentences({
+        groupName: "Bộ 5",
+        fromGroup: [],
+        alreadyTicked: ["fbpage-7c1d"],
+        nameOf: named,
+      }),
+    ).toBe("1 kênh bạn đã tick trước đó không còn trong danh sách nên đã bị gỡ khỏi lựa chọn.");
+  });
+
+  it("names at most three, then counts the remaining named ones", () => {
+    const manyNames = (id: string) => `Page ${id}`;
+    const text = channelDropSentences({
+      groupName: "Bộ 5",
+      fromGroup: ["a", "b", "c", "d", "e"],
+      alreadyTicked: [],
+      nameOf: manyNames,
+    });
+    expect(text).toContain("Page a, Page b, Page c và 2 kênh nữa");
   });
 });
 

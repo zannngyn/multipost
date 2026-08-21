@@ -167,6 +167,42 @@ export function applyChannelGroup(
   return next;
 }
 
+export type ChannelGroupPress =
+  | { readonly ok: true; readonly next: string[] }
+  /** There is no usable Page list, so a press could only ever take rows away. */
+  | { readonly ok: false; readonly reason: "no-listed-channels" };
+
+/**
+ * `applyChannelGroup` with the precondition it cannot check for itself.
+ *
+ * THE TRAP: the function above keeps only the ids that are in
+ * `activeChannelIds`. When the modal has no Page list — the query failed, or
+ * this tenant genuinely has none — that array is empty, so a press reads EVERY
+ * id as "gone" and returns `[]`. A chip that promises "và cả nhóm này nữa"
+ * would silently empty the selection, and the post would go nowhere.
+ *
+ * So the guard lives here, next to the rule it protects, instead of as an early
+ * `return` in a click handler where the next person to touch the modal cannot
+ * see why it is there. The caller gets a reason it can put on screen — a press
+ * that does nothing and says nothing is the bug this replaced.
+ */
+export function applyChannelGroupSafe(input: {
+  current: readonly string[];
+  groupChannelIds: readonly string[];
+  activeChannelIds: readonly string[];
+  /** How many Pages the modal is listing at all, disabled ones included. */
+  listedChannelCount: number;
+}): ChannelGroupPress {
+  const listed = input?.listedChannelCount;
+  if (typeof listed !== "number" || !Number.isFinite(listed) || listed <= 0) {
+    return { ok: false, reason: "no-listed-channels" };
+  }
+  return {
+    ok: true,
+    next: applyChannelGroup(input.current, input.groupChannelIds, input.activeChannelIds),
+  };
+}
+
 /** Adds or removes one id, returning a NEW set (never mutating the applied one). */
 export function toggleChannelId(
   selected: ReadonlySet<string>,
@@ -242,6 +278,84 @@ export function groupPayloadFrom(
     };
   }
   return { ok: true, value: parsed.data };
+}
+
+/** At most this many Pages are named before the rest are counted. */
+const NAMES_IN_A_SENTENCE = 3;
+
+/**
+ * What a group press could not tick, said in words.
+ *
+ * TWO FACTS, TWO SENTENCES, because they need two different actions: a Page
+ * missing from the GROUP is somebody else's edit to fix in "Nhóm kênh", while a
+ * Page the operator ticked a moment ago and lost was switched off under them
+ * and belongs on the "Kênh" screen.
+ *
+ * NAMES, NEVER IDS. `nameOf` returns `null` for an id that is not in the
+ * channel list any more, and those are COUNTED ("2 kênh không còn trong danh
+ * sách") rather than printed — a raw `fbpage-7c1d…` in a sentence is something
+ * an operator cannot look up, cannot search for, and cannot act on.
+ *
+ * Pure, and here rather than in the component, because the wording is the whole
+ * behaviour: this is the only place that tells somebody their post is not going
+ * where they just asked it to go.
+ */
+export function channelDropSentences(input: {
+  groupName: string;
+  /** Ids the group carries that the press could not tick. */
+  fromGroup: readonly string[];
+  /** Ids the operator had ticked by hand and lost. */
+  alreadyTicked: readonly string[];
+  nameOf: (channelId: string) => string | null;
+}): string | null {
+  const lines: string[] = [];
+
+  const group = splitByName(input.fromGroup, input.nameOf);
+  if (group.named.length > 0) {
+    lines.push(
+      `Nhóm “${input.groupName}” có ${listPhrase(group)} không đăng được (đang tắt hoặc đã bị gỡ) nên không được tick.`,
+    );
+  } else if (group.unnamed > 0) {
+    lines.push(
+      `Nhóm “${input.groupName}” có ${group.unnamed} kênh không còn trong danh sách nên không được tick.`,
+    );
+  }
+
+  const ticked = splitByName(input.alreadyTicked, input.nameOf);
+  if (ticked.named.length > 0) {
+    lines.push(
+      `${listPhrase(ticked)} bạn đã tick trước đó cũng bị gỡ khỏi lựa chọn vì kênh đang tắt hoặc không còn trong danh sách.`,
+    );
+  } else if (ticked.unnamed > 0) {
+    lines.push(
+      `${ticked.unnamed} kênh bạn đã tick trước đó không còn trong danh sách nên đã bị gỡ khỏi lựa chọn.`,
+    );
+  }
+
+  return lines.length > 0 ? lines.join(" ") : null;
+}
+
+/** Ids that still have a name, and how many no longer do. */
+function splitByName(
+  ids: readonly string[],
+  nameOf: (channelId: string) => string | null,
+): { named: string[]; unnamed: number } {
+  const named: string[] = [];
+  let unnamed = 0;
+  for (const id of ids) {
+    const name = nameOf(id);
+    if (typeof name === "string" && name.trim().length > 0) named.push(name.trim());
+    else unnamed += 1;
+  }
+  return { named, unnamed };
+}
+
+/** "Shop A, Shop B và 2 kênh nữa", plus the unnamed tail when there is one. */
+function listPhrase(split: { named: string[]; unnamed: number }): string {
+  const head = split.named.slice(0, NAMES_IN_A_SENTENCE).join(", ");
+  const rest = split.named.length - NAMES_IN_A_SENTENCE;
+  const names = rest > 0 ? `${head} và ${rest} kênh nữa` : head;
+  return split.unnamed > 0 ? `${names} và ${split.unnamed} kênh không còn trong danh sách` : names;
 }
 
 /** Rows to draw right now, and how many are folded away behind "Xem thêm". */

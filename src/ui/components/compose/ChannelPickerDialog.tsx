@@ -6,9 +6,10 @@ import { useId, useState } from "react";
 
 import { cn } from "@/shared/utils";
 import {
-  applyChannelGroup,
+  applyChannelGroupSafe,
   avatarToneStyle,
   channelBlockReason,
+  channelDropSentences,
   channelInitials,
   draftOnOpenChange,
   filterChannels,
@@ -123,22 +124,51 @@ export function ChannelPickerDialog({
     .filter((channel) => channelBlockReason(channel) === null)
     .map((channel) => channel.channelId);
 
-  /** A Page's name for a sentence — the bare id when the Page is gone. */
-  const channelName = (channelId: string): string => {
+  /**
+   * Why the group chips are dead, as a SENTENCE ON SCREEN.
+   *
+   * It used to be a `title` on a disabled button: a disabled button takes no
+   * pointer events in most browsers, so the tooltip never appeared, and it is
+   * not focusable, so a keyboard or screen-reader user could not reach the
+   * explanation at all. Three grey chips with no reason is a dead end
+   * (core-accessibility: ẩn vs vô hiệu hoá — vô hiệu hoá thì phải kèm lý do
+   * đọc được).
+   */
+  const groupsDisabledReason = channels.isPending
+    ? "Đang đọc danh sách Page — chờ một chút rồi bấm nhóm."
+    : channels.isError
+      ? "Chưa đọc được danh sách Page, nên chưa biết nhóm này gồm những Page nào."
+      : null;
+
+  /**
+   * A Page's name for a sentence, or `null` when there is no Page behind the id
+   * any more. `null` is the point: the sentence COUNTS those instead of
+   * printing an id nobody can look up.
+   */
+  const channelName = (channelId: string): string | null => {
     const found = all.find((channel) => channel.channelId === channelId);
     const name = found?.name?.trim();
-    return name && name.length > 0 ? name : channelId;
+    return name && name.length > 0 ? name : null;
   };
 
   /** One group press: union into the draft, then say what could not come. */
   function pressGroup(group: ChannelGroup) {
-    // The list has not arrived (or failed): EVERY id would read as "no longer
-    // publishable" and the press would empty the draft instead of adding to it.
-    // The chips are disabled in that state; this is the second lock, because a
-    // wiped selection is a post going to the wrong Pages.
-    if (all.length === 0) return;
+    const press = applyChannelGroupSafe({
+      current: [...draft],
+      groupChannelIds: group.channelIds,
+      activeChannelIds: activeIds,
+      listedChannelCount: all.length,
+    });
+    if (!press.ok) {
+      // A press with no Page list would read every id as "gone" and wipe the
+      // draft. The chips are disabled while the list is LOADING or FAILED, but
+      // a tenant with zero Pages leaves them live — and a chip that does
+      // nothing and says nothing is what this sentence replaces.
+      setNotice("Chưa có Page nào để áp nhóm — kết nối Facebook ở màn Kênh trước.");
+      return;
+    }
 
-    const next = applyChannelGroup([...draft], group.channelIds, activeIds);
+    const next = press.next;
     // What the press could not keep, split by WHOSE it was. One count over both
     // would tell an operator their own tick was "một kênh của nhóm", which is
     // the wrong thing to go looking for.
@@ -148,7 +178,14 @@ export function ChannelPickerDialog({
     );
 
     setDraft(new Set(next));
-    setNotice(sentencesFor(group.name, fromGroup, alreadyTicked, channelName));
+    setNotice(
+      channelDropSentences({
+        groupName: group.name,
+        fromGroup,
+        alreadyTicked,
+        nameOf: channelName,
+      }),
+    );
   }
 
   function saveGroup() {
@@ -222,12 +259,7 @@ export function ChannelPickerDialog({
                   <button
                     key={group.id}
                     type="button"
-                    disabled={channels.isPending || channels.isError}
-                    title={
-                      channels.isPending || channels.isError
-                        ? "Chưa đọc được danh sách Page, nên chưa biết nhóm này gồm những Page nào."
-                        : undefined
-                    }
+                    disabled={groupsDisabledReason !== null}
                     onClick={() => pressGroup(group)}
                     className={cn(
                       "focus-visible:ring-ring h-10 cursor-pointer rounded-lg px-4.5 text-sm font-medium transition-colors outline-none focus-visible:ring-3",
@@ -265,6 +297,12 @@ export function ChannelPickerDialog({
                 </button>
               </div>
             )}
+
+            {/* The reason the chips above are dead, where it can be read and
+                heard — not in a `title` no disabled button ever shows. */}
+            {groupsDisabledReason !== null && groupItems.length > 0 ? (
+              <p className="text-[13px] text-[var(--muted-foreground)]">{groupsDisabledReason}</p>
+            ) : null}
 
             {groupName !== null ? (
               <div className="flex flex-col gap-1.5">
@@ -476,38 +514,3 @@ export function ChannelPickerDialog({
   );
 }
 
-/** At most this many Pages are named before the rest are counted. */
-const NAMES_IN_A_SENTENCE = 3;
-
-/**
- * What a group press could not tick, NAMED and split by whose it was.
- *
- * Two facts, two sentences, because they need two different actions: a Page
- * missing from the group is somebody else's edit to fix in "Nhóm kênh", while a
- * Page the operator ticked a moment ago and lost was switched off under them and
- * belongs on the "Kênh" screen. Naming rather than counting is the same rule
- * `describeAction` follows — "Camilla đã tắt" is something you can go and fix,
- * "1 kênh" sends you hunting.
- */
-function sentencesFor(
-  groupName: string,
-  fromGroup: readonly string[],
-  alreadyTicked: readonly string[],
-  nameOf: (channelId: string) => string,
-): string | null {
-  const lines: string[] = [];
-  if (fromGroup.length > 0) {
-    lines.push(`Nhóm “${groupName}” có ${nameList(fromGroup, nameOf)} không đăng được (đã gỡ khỏi danh sách hoặc đang tắt) nên không được tick.`);
-  }
-  if (alreadyTicked.length > 0) {
-    lines.push(`${nameList(alreadyTicked, nameOf)} bạn đã tick trước đó cũng bị gỡ khỏi lựa chọn vì kênh đang tắt hoặc không còn trong danh sách.`);
-  }
-  return lines.length > 0 ? lines.join(" ") : null;
-}
-
-/** "Shop A, Shop B và 2 kênh nữa" — never a bare count when a name exists. */
-function nameList(ids: readonly string[], nameOf: (channelId: string) => string): string {
-  const named = ids.slice(0, NAMES_IN_A_SENTENCE).map(nameOf).join(", ");
-  const rest = ids.length - NAMES_IN_A_SENTENCE;
-  return rest > 0 ? `${named} và ${rest} kênh nữa` : named;
-}
