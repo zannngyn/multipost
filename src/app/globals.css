@@ -11,7 +11,13 @@
 
 @import "@astryxdesign/core/reset.css";
 @import "@astryxdesign/core/astryx.css";
-@import "@astryxdesign/theme-neutral/theme.css";
+/* The neutral theme, re-inked (src/ui/theme/mysp-theme.ts). NOT
+   @astryxdesign/theme-neutral/theme.css any more: that file is scoped to
+   `[data-astryx-theme="neutral"]`, and <Theme> writes the name of whatever
+   theme it was given — so the moment AppFrame stopped passing `neutralTheme`,
+   the neutral stylesheet stopped matching anything. Regenerate with
+   `pnpm exec astryx theme build src/ui/theme/mysp-theme.ts`. */
+@import "../ui/theme/mysp.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -91,7 +97,11 @@
 
   --background: oklch(0.955 0.013 84); /* vải mộc — unbleached muslin */
   --foreground: oklch(0.28 0.018 55); /* mực nâu đen ấm — warm brown-black ink */
-  --foreground-subtle: oklch(0.62 0.02 60);
+  /* 4.65:1 on the cloth ground and 5.07:1 on a card — this tone labels the
+     stat tape and every mono eyebrow at 12px, so it has to clear 4.5:1 as
+     SMALL text, not as large (core-accessibility §5). The old 0.62 read 3.21:1
+     and every screen that cared was quietly overriding it. */
+  --foreground-subtle: oklch(0.53 0.02 60);
   --card: oklch(0.984 0.007 84); /* swatch card, a shade above the cloth */
   --card-foreground: oklch(0.28 0.018 55);
   --popover: oklch(0.984 0.007 84);
@@ -140,19 +150,29 @@
    changes the semantic layer, never the meaning). Same formula throughout: keep
    the hue, invert the lightness. The ground is dyed-dark cloth — a warm very
    dark brown, not pure black — and the indigo is lightened, because the
-   light-mode primary has nowhere near enough contrast on a dark surface. The
-   status hues stay far enough apart to read as a 10% tint on that ground. */
+   light-mode primary has nowhere near enough contrast on a dark surface.
+
+   `--info` is NOT the same hue-shift of the light value as the rest: lightening
+   both roles pulled indigo and info to 7° apart (0.084 sRGB distance, ~0.007
+   between their 10% tints — two pills a metre from the screen looked like one
+   colour). Dark info is therefore pushed to a colder 235° and a clearly higher
+   lightness; the other status hues keep their light-mode hue. */
 .dark {
   color-scheme: dark;
 
-  --background: oklch(0.24 0.012 60); /* vải nhuộm sẫm */
+  --background: oklch(0.24 0.012 60); /* vải nhuộm sẫm — dark-dyed cloth */
   --foreground: oklch(0.94 0.01 84); /* muslin ink on dark cloth */
-  --foreground-subtle: oklch(0.62 0.018 60);
+  /* 5.28:1 on the ground and 4.68:1 on a card. The old 0.62 cleared the ground
+     by 0.01 (4.51:1) and FAILED on every card at 4.00:1 — in the dark scheme a
+     card is lighter than the page, so the ground is the easy surface, not the
+     hard one. Held 0.06 below `--muted-foreground`, the same step the light
+     scheme uses, so the three text tones stay three. */
+  --foreground-subtle: oklch(0.66 0.018 60);
   --card: oklch(0.28 0.014 60);
   --card-foreground: oklch(0.94 0.01 84);
   --popover: oklch(0.28 0.014 60);
   --popover-foreground: oklch(0.94 0.01 84);
-  --primary: oklch(0.68 0.09 262); /* chàm sáng */
+  --primary: oklch(0.68 0.09 262); /* chàm sáng — lightened indigo dye */
   --primary-foreground: oklch(0.22 0.03 262);
   --secondary: oklch(0.32 0.014 60); /* raised surface */
   --secondary-foreground: oklch(0.94 0.01 84);
@@ -165,8 +185,10 @@
   --warning-foreground: oklch(0.87 0.09 72);
   --success: oklch(0.74 0.10 160);
   --success-foreground: oklch(0.84 0.08 162);
-  --info: oklch(0.72 0.095 255);
-  --info-foreground: oklch(0.85 0.075 256);
+  /* Colder and lighter than the dark indigo above, on purpose — see the block
+     comment: 0.137 sRGB distance from `--primary`, up from 0.084. */
+  --info: oklch(0.75 0.09 235);
+  --info-foreground: oklch(0.85 0.075 235);
   --media-empty: oklch(0.33 0.018 60);
   --media-empty-cover: oklch(0.36 0.022 75);
   /* Shadows are near-invisible on a dark ground — elevation comes from a
@@ -175,7 +197,7 @@
   --input: oklch(1 0 0 / 16%);
   --ring: oklch(0.68 0.09 262 / 50%);
   --chart-1: oklch(0.68 0.09 262);
-  --chart-2: oklch(0.72 0.095 255);
+  --chart-2: oklch(0.75 0.09 235); /* stays the twin of --info, as in light */
   --chart-3: oklch(0.74 0.10 160);
   --chart-4: oklch(0.80 0.11 75);
   --chart-5: oklch(0.68 0.145 30);
@@ -196,8 +218,19 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Craft floor: the browser's default selection is a system blue that belongs
+     to no theme, and the caret is a hairline of the OS accent. Both are places
+     the operator's own hand touches the page, so both wear the dye.
+     `--accent` is the "đang chọn" surface everywhere else in this world, and it
+     keeps `--foreground` legible on top (light 10.5:1, dark 9.2:1) — which is
+     why the pair is set explicitly rather than left to the browser to guess. */
+  ::selection {
+    background-color: var(--accent);
+    color: var(--foreground);
+  }
   html {
     @apply font-sans;
+    caret-color: var(--primary);
     /* A short page and a long page must not sit at different x offsets
        (web-layout-shell §scrollbar gutter). */
     scrollbar-gutter: stable;

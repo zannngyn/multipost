@@ -192,7 +192,7 @@ export function OverviewScreen() {
                 showing the count the OTHER query returned. */}
             {scheduled.isError ? (
               <div className="space-y-2">
-                <Eyebrow className="text-muted-foreground">Nguồn: bài đã hẹn</Eyebrow>
+                <Eyebrow>Nguồn: bài đã hẹn</Eyebrow>
                 <ApiErrorNotice
                   className="mx-0 max-w-none"
                   error={scheduled.error}
@@ -203,7 +203,7 @@ export function OverviewScreen() {
 
             {failed.isError ? (
               <div className="space-y-2">
-                <Eyebrow className="text-muted-foreground">Nguồn: nhật ký bài lỗi</Eyebrow>
+                <Eyebrow>Nguồn: nhật ký bài lỗi</Eyebrow>
                 <ApiErrorNotice
                   className="mx-0 max-w-none"
                   error={failed.error}
@@ -327,10 +327,7 @@ function StatCell({
         href={href}
         className="hover:bg-accent/40 focus-visible:ring-ring/50 flex h-full flex-col gap-3 px-5 py-4 transition-colors outline-none focus-visible:ring-3 focus-visible:ring-inset"
       >
-        {/* Overridden off `--foreground-subtle`: at 12px that tone lands near
-            3.5:1 on the card, and these labels are what the tape is FOR
-            (core-accessibility: 4.5:1 for small text). */}
-        <Eyebrow className="text-muted-foreground">{label}</Eyebrow>
+        <Eyebrow>{label}</Eyebrow>
 
         {source ? (
           <span className="flex min-h-9 items-baseline gap-2">

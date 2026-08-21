@@ -1,13 +1,16 @@
 "use client";
 
 import { AppShell, LinkProvider, Theme } from "@astryxdesign/core";
-import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import NextLink from "next/link";
 import type { ReactNode } from "react";
 
 import { AppSideNav } from "@/ui/components/shell/AppSideNav";
 import { AppTopBar } from "@/ui/components/shell/AppTopBar";
 import { SupportModeBanner } from "@/ui/components/shell/SupportModeBanner";
+// The BUILT theme (`astryx theme build` output), not the source module: a
+// runtime theme injects its tokens after hydration, so the first paint would
+// show the neutral ink and swap. Its CSS is imported once, in globals.css.
+import { myspTheme } from "@/ui/theme/mysp";
 
 /**
  * The app's single client boundary for the shell (web-layout-shell). Pages stay
@@ -46,7 +49,7 @@ export function AppFrame({
 }) {
   return (
     <LinkProvider component={NextLink}>
-      <Theme theme={neutralTheme}>
+      <Theme theme={myspTheme}>
         <AppShell
           contentPadding={0}
           topNav={<AppTopBar tenantName={tenantName} />}
