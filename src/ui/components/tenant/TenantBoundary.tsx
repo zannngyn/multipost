@@ -48,12 +48,17 @@ export function TenantBoundary({ children }: { children: ReactNode }) {
   if (isTenantIndependentPath(pathname)) return <>{children}</>;
 
   // --- Loading --------------------------------------------------------------
+  // Shaped like the screens below it — page title, one supporting line, then a
+  // block — so nothing jumps when the real content lands (web-feedback-states
+  // rule 1: CLS = 0).
   if (isFirstLoad) {
     return showSkeleton ? (
-      <Stack direction="vertical" gap={3} padding={4} aria-hidden="true">
-        <Skeleton width={240} height={28} />
-        <Skeleton width="100%" height={16} />
-        <Skeleton width="100%" height={200} />
+      <Stack direction="vertical" gap={6} padding={6} maxWidth={1120} aria-hidden="true">
+        <Stack direction="vertical" gap={2}>
+          <Skeleton width={240} height={28} />
+          <Skeleton width={420} height={16} index={1} />
+        </Stack>
+        <Skeleton width="100%" height={220} index={2} />
       </Stack>
     ) : null;
   }
@@ -63,7 +68,7 @@ export function TenantBoundary({ children }: { children: ReactNode }) {
   // for data on behalf of a company nobody has established.
   if (me.isError && !me.data) {
     return (
-      <Stack direction="vertical" gap={3} padding={4}>
+      <Stack direction="vertical" gap={4} padding={6} maxWidth={1120}>
         <Heading level={1}>Chưa mở được phiên làm việc</Heading>
         <ApiErrorNotice error={me.error} onRetry={() => void me.refetch()} />
       </Stack>
@@ -74,7 +79,7 @@ export function TenantBoundary({ children }: { children: ReactNode }) {
   // Not a dead end any more (M2.1): create one, or use an invite.
   if (hasNoMembership) {
     return (
-      <Stack direction="vertical" padding={4} maxWidth={720}>
+      <Stack direction="vertical" padding={6} maxWidth={720}>
         <OnboardingPanel />
       </Stack>
     );
@@ -83,12 +88,12 @@ export function TenantBoundary({ children }: { children: ReactNode }) {
   // --- Fork in the road: several companies, none chosen ---------------------
   if (mustPickTenant) {
     return (
-      <Stack direction="vertical" gap={4} padding={4}>
-        <Stack direction="vertical" gap={1}>
+      <Stack direction="vertical" gap={5} padding={6} maxWidth={840}>
+        <Stack direction="vertical" gap={1} maxWidth="70ch">
           <Heading level={1}>Chọn công ty để làm việc</Heading>
           <Text type="supporting">
             Tài khoản của bạn thuộc {tenants.length} công ty. Mỗi công ty có sản phẩm, kênh và nhật
-            ký riêng — chọn một công ty để bắt đầu; bạn đổi lại lúc nào cũng được.
+            ký riêng. Chọn một công ty để bắt đầu; bạn đổi lại lúc nào cũng được.
           </Text>
         </Stack>
         <TenantPicker />

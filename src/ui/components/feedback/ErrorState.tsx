@@ -58,9 +58,15 @@ export function ErrorState({
       defaultIsExpanded={hasBody}
       endContent={
         onRetry || secondaryAction ? (
-          <Stack direction="horizontal" gap={2}>
+          <Stack direction="horizontal" gap={2} align="center" wrap="wrap">
             {onRetry ? (
-              <Button type="button" variant="primary" size="sm" label={retryLabel} onClick={onRetry} />
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                label={retryLabel}
+                onClick={onRetry}
+              />
             ) : null}
             {secondaryAction}
           </Stack>
@@ -68,12 +74,18 @@ export function ErrorState({
       }
     >
       {hasBody ? (
-        <Stack direction="vertical" gap={1}>
-          {details?.map((line) => (
-            <Text key={line} type="supporting" display="block">
-              {line}
-            </Text>
-          ))}
+        // Reasons first, reference code last and quieter: the operator reads
+        // the reasons, support reads the code.
+        <Stack direction="vertical" gap={2}>
+          {details && details.length > 0 ? (
+            <Stack direction="vertical" gap={1}>
+              {details.map((line) => (
+                <Text key={line} type="supporting" color="primary" display="block">
+                  {line}
+                </Text>
+              ))}
+            </Stack>
+          ) : null}
           {referenceCode ? (
             <Text type="code" color="secondary" display="block">
               Mã tham chiếu: {referenceCode}

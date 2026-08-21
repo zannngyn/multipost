@@ -12,7 +12,6 @@ import {
   StatusDot,
   Text,
 } from "@astryxdesign/core";
-import { useRouter } from "next/navigation";
 
 import { productStatus } from "@/ui/components/products/ProductTable";
 import {
@@ -38,8 +37,6 @@ function blockedBannerText(product: CatalogProduct): string {
 }
 
 export function ProductInspector({ product }: { product: CatalogProduct | null }) {
-  const router = useRouter();
-
   if (!product) {
     return (
       <EmptyState
@@ -111,9 +108,11 @@ export function ProductInspector({ product }: { product: CatalogProduct | null }
         <Button
           variant="primary"
           label="Soạn bài"
-          // The code travels in the URL; the wizard looks it up again and re-runs
-          // the stock gate — this is a shortcut, not a bypass.
-          onClick={() => router.push(`/compose?code=${encodeURIComponent(product.code)}`)}
+          // A real link, not a click handler: this is navigation, so Ctrl+click,
+          // middle-click and "mở tab mới" all have to work. The code travels in
+          // the URL; the wizard looks it up again and re-runs the stock gate —
+          // a shortcut, not a bypass.
+          href={`/compose?code=${encodeURIComponent(product.code)}`}
         />
       ) : (
         <Banner status="error" title={status.label} description={blockedBannerText(product)} />

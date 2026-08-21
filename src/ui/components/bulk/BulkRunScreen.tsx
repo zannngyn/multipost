@@ -1,25 +1,45 @@
 "use client";
 
+import {
+  Banner,
+  Button,
+  CodeBlock,
+  Divider,
+  EmptyState,
+  Field,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Link,
+  RadioList,
+  RadioListItem,
+  Stack,
+  StackItem,
+  Text,
+} from "@astryxdesign/core";
 import { zodResolver } from "@hookform/resolvers/zod";
-import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { useForm, useWatch } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { BulkCodesField } from "@/ui/components/bulk/BulkCodesField";
 import { BulkProgressTable } from "@/ui/components/bulk/BulkProgressTable";
 import { ChannelGroupPicker } from "@/ui/components/compose/ChannelGroupPicker";
-import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { SchedulePicker } from "@/ui/components/scheduled/SchedulePicker";
-import { Button } from "@/ui/components/ui/button";
 import { Textarea } from "@/ui/components/ui/textarea";
-import { useBulkRun } from "@/ui/hooks/useBulkRun";
+import {
+  useBulkRun,
+  type BulkRunPhase,
+  type BulkRunRow,
+  type BulkRunSummary,
+} from "@/ui/hooks/useBulkRun";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useScheduleChoice } from "@/ui/hooks/useScheduleChoice";
 import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import {
-  BULK_CAPTION_MODES,
   BULK_CAPTION_MODE_LABELS,
   BulkRunFormSchema,
   CAPTION_TEMPLATE_VARIABLES,
@@ -31,6 +51,11 @@ import {
 
 /**
  * "Chạy hàng loạt" (E10.5): component -> hook -> service -> internal API.
+ *
+ * Frame (`astryx docs layout`, tracker archetype): the header names the screen
+ * and its one warning; the content region carries the form, then the per-code
+ * result rows edge-to-edge. The rows are the reason this screen exists, so they
+ * get the full width rather than a centred reading column.
  *
  * The order of the screen is the order of the business rules (rule 1): the
  * codes, then the channels, then the caption, then "Chạy". Each code goes
@@ -50,12 +75,12 @@ import {
 export function BulkRunScreen() {
   const codesId = useId();
   const templateId = useId();
-  const captionModeId = useId();
+  const captionHintId = `${templateId}-mode-hint`;
 
   const groups = useChannelGroups();
   const run = useBulkRun();
   const schedule = useScheduleChoice();
-  const summaryRef = useRef<HTMLDivElement>(null);
+  const summaryRef = useRef<HTMLElement>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [channelError, setChannelError] = useState<string | null>(null);
   /** Whether the run in the table was scheduled — decides where its link points. */
@@ -140,224 +165,355 @@ export function BulkRunScreen() {
     });
   }
 
+  const runLabel = isRunning
+    ? "Đang chạy…"
+    : schedule.mode === "scheduled"
+      ? `Hẹn giờ ${parsed.codes.length} mã`
+      : `Chạy ${parsed.codes.length} mã`;
+
   return (
-    <section className="space-y-6" aria-labelledby="bulk-heading">
-      <header className="space-y-1">
-        <h1 id="bulk-heading" className="text-2xl font-semibold tracking-tight">
-          Chạy hàng loạt
-        </h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Dán danh sách mã, chọn kênh, rồi chạy tuần tự từng mã. Mã hết hàng hoặc thiếu ảnh bị bỏ
-          qua kèm lý do — cả lô vẫn chạy tiếp. Trang này chạy trong trình duyệt: đừng đóng tab giữa
-          chừng, các lô đã tạo thì vẫn chạy tiếp trên máy chủ.
-        </p>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Màn này chỉ chạy <strong className="text-foreground font-medium">bài ảnh</strong>. Bài
-          video cần chọn đích đăng và kiểm thông số từng clip, nên làm ở màn{" "}
-          <Link href="/compose" className="underline underline-offset-4">
-            Soạn bài
-          </Link>
-          .
-        </p>
-      </header>
-
-      <form noValidate className="space-y-6" onSubmit={form.handleSubmit(handleSubmit)}>
-        <BulkCodesField
-          id={codesId}
-          registration={form.register("codesText")}
-          parsed={parsed}
-          error={form.formState.errors.codesText?.message}
-          disabled={isRunning}
-        />
-
-        <div className="space-y-2">
-          <h2 className="text-sm font-medium">Chọn kênh (áp dụng cho mọi mã)</h2>
-          <ChannelGroupPicker
-            groups={groupItems}
-            selected={selected}
-            onToggleChannel={toggleChannel}
-            onToggleGroup={toggleGroup}
-            loading={groups.isPending && groups.fetchStatus === "fetching"}
-            error={groups.isError ? groups.error : undefined}
-            onRetry={() => void groups.refetch()}
-            disabled={isRunning}
-          />
-          {groupItems.length > 0 ? (
-            <p className="text-muted-foreground text-xs">
-              Đã chọn {selectedIds.length} kênh · mỗi mã sẽ tạo {selectedIds.length} bài.{" "}
-              <Link href="/channels/groups" className="underline underline-offset-4">
-                Quản lý nhóm kênh
-              </Link>
-            </p>
-          ) : null}
-          {channelError ? (
-            <p role="alert" className="text-destructive text-sm">
-              {channelError}
-            </p>
-          ) : null}
-        </div>
-
-        <fieldset className="space-y-3" aria-describedby={`${captionModeId}-hint`}>
-          <legend className="text-sm font-medium">Caption</legend>
-          <p id={`${captionModeId}-hint`} className="text-muted-foreground text-xs">
-            Caption chỉ dùng tên, mô tả, chủng loại, mùa vụ của sản phẩm. Không có biến giá hay tồn
-            kho — thông tin đó không bao giờ đi vào bài đăng.
-          </p>
-
-          {BULK_CAPTION_MODES.map((mode) => (
-            <label key={mode} className="flex items-start gap-2 text-sm">
-              <input
-                type="radio"
-                value={mode}
-                className="accent-primary mt-0.5 size-4"
-                disabled={isRunning}
-                {...form.register("captionMode")}
+    <Layout
+      height="fill"
+      header={
+        <LayoutHeader hasDivider>
+          <Stack direction="vertical" gap={1} padding={4}>
+            <Heading level={1}>Chạy hàng loạt</Heading>
+            <Text type="supporting">
+              Dán danh sách mã, chọn kênh, rồi chạy tuần tự từng mã. Mã hết hàng hoặc thiếu ảnh bị
+              bỏ qua kèm lý do — cả lô vẫn chạy tiếp. Vòng lặp chạy trong trình duyệt: đừng đóng tab
+              giữa chừng, các lô đã tạo thì vẫn chạy tiếp trên máy chủ.
+            </Text>
+          </Stack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={0} isScrollable>
+          <Stack direction="vertical" gap={0}>
+            {/* Said once, at the top, before any field is filled in: finding out
+                after typing forty codes that this screen cannot post video is
+                the expensive version of this sentence. */}
+            <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+              <Banner
+                status="info"
+                title="Màn này chỉ chạy bài ảnh"
+                description="Bài video cần chọn đích đăng và kiểm thông số từng clip."
+                endContent={
+                  <Button variant="secondary" size="sm" label="Mở màn Soạn bài" href="/compose" />
+                }
               />
-              <span>
-                {BULK_CAPTION_MODE_LABELS[mode]}
-                <span className="text-muted-foreground block text-xs">
-                  {mode === "ai"
-                    ? "Gọi AI một lần cho mỗi mã. Chậm hơn và cần cấu hình khoá AI; mã nào AI viết hỏng thì báo lỗi ở dòng đó."
-                    : "Một mẫu chung, thay {code} và {name} theo từng mã. Không cần AI."}
-                </span>
-              </span>
-            </label>
-          ))}
+            </Stack>
 
-          {captionMode === "template" ? (
-            <div className="space-y-1.5">
-              <label htmlFor={templateId} className="text-sm font-medium">
-                Mẫu caption dùng chung
-              </label>
-              <Textarea
-                id={templateId}
-                {...form.register("captionTemplate")}
-                rows={5}
-                disabled={isRunning}
-                aria-invalid={form.formState.errors.captionTemplate ? true : undefined}
-                aria-describedby={`${templateId}-hint`}
-                placeholder={"{name} — mã {code}\nInbox để được tư vấn size."}
-              />
-              <p id={`${templateId}-hint`} className="text-muted-foreground text-xs">
-                Biến dùng được: {CAPTION_TEMPLATE_VARIABLES.map((name) => `{${name}}`).join(", ")}.
-                Các biến khác giữ nguyên chữ, không được thay.
-              </p>
-              {form.formState.errors.captionTemplate ? (
-                <p role="alert" className="text-destructive text-sm">
-                  {form.formState.errors.captionTemplate.message}
-                </p>
-              ) : null}
-              {unknownVariables.length > 0 ? (
-                <p role="alert" className="text-warning-foreground text-xs">
-                  Không nhận ra biến {unknownVariables.map((name) => `{${name}}`).join(", ")} — sẽ
-                  giữ nguyên chữ trong caption. Chỉ có {CAPTION_TEMPLATE_VARIABLES.map((n) => `{${n}}`).join(", ")}{" "}
-                  được thay.
-                </p>
-              ) : null}
-              {captionTemplate.trim().length > 0 && parsed.codes.length > 0 ? (
-                <div className="space-y-1">
-                  <p className="text-muted-foreground text-xs">
-                    Xem thử với mã {parsed.codes[0].code} (tên sản phẩm lấy từ dữ liệu khi chạy):
-                  </p>
-                  <pre className="bg-muted/40 max-h-48 overflow-auto rounded-lg border p-3 text-sm break-words whitespace-pre-wrap">
-                    {renderCaptionTemplate(captionTemplate, {
-                      code: parsed.codes[0].code,
-                      name: "(tên sản phẩm)",
-                    })}
-                  </pre>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </fieldset>
+            {/* A real <form>: `noValidate` + submit belong to the element, not
+                to a layout component. Everything inside it is Astryx. */}
+            <form noValidate onSubmit={form.handleSubmit(handleSubmit)}>
+              <Stack
+                direction="vertical"
+                gap={5}
+                paddingInline={4}
+                paddingBlock={3}
+                maxWidth={880}
+              >
+                <BulkCodesField
+                  id={codesId}
+                  registration={form.register("codesText")}
+                  parsed={parsed}
+                  error={form.formState.errors.codesText?.message}
+                  disabled={isRunning}
+                />
 
-        <SchedulePicker
-          choice={schedule}
-          disabled={isRunning}
-          disabledReason="Lô đang chạy — chờ chạy xong rồi mới đổi được giờ đăng."
-          scopeNote="Áp dụng cho mọi mã và mọi kênh trong lượt chạy này. Các bài vẫn được đăng giãn cách theo cấu hình kênh, không lên cùng lúc."
-        />
+                <Stack direction="vertical" gap={2}>
+                  <Heading level={2}>
+                    Chọn kênh
+                  </Heading>
+                  <Text type="supporting">Áp dụng cho mọi mã trong lượt chạy này.</Text>
 
-        <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-          {/* A bulk run creates real posts on the customer's Pages; support
-              mode may not (M3.3). The rest of the form stays readable so staff
-              can still see what a customer had set up. */}
-          <Button type="submit" disabled={isRunning || gate.isDisabled}>
-            {isRunning
-              ? "Đang chạy…"
-              : schedule.mode === "scheduled"
-                ? `Hẹn giờ ${parsed.codes.length} mã`
-                : `Chạy ${parsed.codes.length} mã`}
-          </Button>
-          {isRunning ? (
-            <Button type="button" variant="destructive" onClick={run.stop} disabled={phase === "stopping"}>
-              {phase === "stopping" ? "Đang dừng…" : "Dừng"}
-            </Button>
-          ) : null}
-          {phase === "finished" ? (
-            <Button type="button" variant="ghost" onClick={run.reset}>
-              Xoá kết quả để chạy lượt mới
-            </Button>
-          ) : null}
-          <ReadOnlyNotice reason={gate.reason} className="basis-full" />
-        </div>
-      </form>
+                  <ChannelGroupPicker
+                    groups={groupItems}
+                    selected={selected}
+                    onToggleChannel={toggleChannel}
+                    onToggleGroup={toggleGroup}
+                    loading={groups.isPending && groups.fetchStatus === "fetching"}
+                    error={groups.isError ? groups.error : undefined}
+                    onRetry={() => void groups.refetch()}
+                    disabled={isRunning}
+                  />
 
-      <section aria-labelledby="bulk-progress-heading" className="space-y-3">
-        <h2 id="bulk-progress-heading" className="text-lg font-semibold">
+                  {groupItems.length > 0 ? (
+                    <Text type="supporting">
+                      Đã chọn {selectedIds.length} kênh · mỗi mã sẽ tạo {selectedIds.length} bài.{" "}
+                      <Link href="/channels/groups">Quản lý nhóm kênh</Link>
+                    </Text>
+                  ) : null}
+
+                  {/* Not part of the zod schema, so it has no field to sit under:
+                      it belongs to the picker above it and is announced. */}
+                  {channelError ? (
+                    <Banner role="alert" status="error" title={channelError} />
+                  ) : null}
+                </Stack>
+
+                <Stack direction="vertical" gap={3}>
+                  <Stack direction="vertical" gap={1}>
+                    <Heading level={2}>
+                      Caption
+                    </Heading>
+                    <Text id={captionHintId} type="supporting">
+                      Caption chỉ dùng tên, mô tả, chủng loại, mùa vụ của sản phẩm. Không có biến giá
+                      hay tồn kho — thông tin đó không bao giờ đi vào bài đăng.
+                    </Text>
+                  </Stack>
+
+                  {/* Astryx RadioList takes `value`/`onChange` rather than a
+                      ref, which is the one case core-form-architecture allows a
+                      controlled field — so it goes through `Controller`, like
+                      every other Astryx input in this codebase. The form keeps
+                      the value AND the validation schedule: `mode: "onSubmit"`
+                      plus `reValidateMode: "onChange"` still decide when the
+                      resolver runs. */}
+                  <Controller
+                    control={form.control}
+                    name="captionMode"
+                    render={({ field, fieldState }) => (
+                      <RadioList
+                        label="Cách viết caption"
+                        isLabelHidden
+                        aria-describedby={captionHintId}
+                        htmlName={field.name}
+                        value={field.value}
+                        onChange={field.onChange}
+                        onBlur={field.onBlur}
+                        isDisabled={isRunning}
+                        status={
+                          fieldState.error
+                            ? { type: "error", message: fieldState.error.message }
+                            : undefined
+                        }
+                      >
+                        <RadioListItem
+                          value="ai"
+                          label={BULK_CAPTION_MODE_LABELS.ai}
+                          description="Gọi AI một lần cho mỗi mã. Chậm hơn và cần cấu hình khoá AI; mã nào AI viết hỏng thì báo lỗi ở dòng đó."
+                        />
+                        <RadioListItem
+                          value="template"
+                          label={BULK_CAPTION_MODE_LABELS.template}
+                          description="Một mẫu chung, thay {code} và {name} theo từng mã. Không cần AI."
+                        />
+                      </RadioList>
+                    )}
+                  />
+
+                  {captionMode === "template" ? (
+                    <Stack direction="vertical" gap={2}>
+                      <Field
+                        label="Mẫu caption dùng chung"
+                        inputID={templateId}
+                        descriptionID={`${templateId}-hint`}
+                        description={`Biến dùng được: ${CAPTION_TEMPLATE_VARIABLES.map((name) => `{${name}}`).join(", ")}. Các biến khác giữ nguyên chữ, không được thay.`}
+                        isDisabled={isRunning}
+                        statusVariant="detached"
+                        status={
+                          form.formState.errors.captionTemplate
+                            ? {
+                                type: "error",
+                                message: form.formState.errors.captionTemplate.message,
+                                messageID: `${templateId}-error`,
+                              }
+                            : undefined
+                        }
+                      >
+                        {/* Repo textarea: bound with react-hook-form `register()`,
+                            which the controlled Astryx TextArea cannot take. */}
+                        <Textarea
+                          id={templateId}
+                          {...form.register("captionTemplate")}
+                          rows={5}
+                          disabled={isRunning}
+                          aria-invalid={form.formState.errors.captionTemplate ? true : undefined}
+                          aria-describedby={`${templateId}-hint`}
+                          placeholder={"{name} — mã {code}\nInbox để được tư vấn size."}
+                        />
+                      </Field>
+
+                      {unknownVariables.length > 0 ? (
+                        <Banner
+                          role="alert"
+                          status="warning"
+                          title={`Không nhận ra biến ${unknownVariables.map((name) => `{${name}}`).join(", ")}`}
+                          description={`Những biến này sẽ giữ nguyên chữ trong caption. Chỉ ${CAPTION_TEMPLATE_VARIABLES.map((n) => `{${n}}`).join(", ")} được thay.`}
+                        />
+                      ) : null}
+
+                      {captionTemplate.trim().length > 0 && parsed.codes.length > 0 ? (
+                        <Stack direction="vertical" gap={1}>
+                          <Text type="supporting">
+                            Xem thử với mã {parsed.codes[0].code} (tên sản phẩm lấy từ dữ liệu khi
+                            chạy):
+                          </Text>
+                          <CodeBlock
+                            language="text"
+                            isWrapped
+                            hasCopyButton={false}
+                            maxHeight={192}
+                            code={renderCaptionTemplate(captionTemplate, {
+                              code: parsed.codes[0].code,
+                              name: "(tên sản phẩm)",
+                            })}
+                          />
+                        </Stack>
+                      ) : null}
+                    </Stack>
+                  ) : null}
+                </Stack>
+
+                <SchedulePicker
+                  choice={schedule}
+                  disabled={isRunning}
+                  disabledReason="Lô đang chạy — chờ chạy xong rồi mới đổi được giờ đăng."
+                  scopeNote="Áp dụng cho mọi mã và mọi kênh trong lượt chạy này. Các bài vẫn được đăng giãn cách theo cấu hình kênh, không lên cùng lúc."
+                />
+
+                <Divider />
+
+                <Stack direction="vertical" gap={2}>
+                  <HStack gap={2} align="center" wrap="wrap">
+                    {/* A bulk run creates real posts on the customer's Pages;
+                        support mode may not (M3.3). The rest of the form stays
+                        readable so staff can still see what a customer set up. */}
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      label={runLabel}
+                      isDisabled={isRunning || gate.isDisabled}
+                    />
+                    {isRunning ? (
+                      <Button
+                        variant="destructive"
+                        label={phase === "stopping" ? "Đang dừng…" : "Dừng"}
+                        isDisabled={phase === "stopping"}
+                        onClick={run.stop}
+                      />
+                    ) : null}
+                    {phase === "finished" ? (
+                      <Button
+                        variant="ghost"
+                        label="Xoá kết quả để chạy lượt mới"
+                        onClick={run.reset}
+                      />
+                    ) : null}
+                  </HStack>
+                  <ReadOnlyNotice reason={gate.reason} />
+                </Stack>
+              </Stack>
+            </form>
+
+            <Divider />
+
+            <BulkProgressSection
+              phase={phase}
+              summary={summary}
+              rows={rows}
+              isRunning={isRunning}
+              ranScheduled={ranScheduled}
+              summaryRef={summaryRef}
+            />
+          </Stack>
+        </LayoutContent>
+      }
+    />
+  );
+}
+
+/** Idle / running / finished view of the per-code results. */
+function BulkProgressSection({
+  phase,
+  summary,
+  rows,
+  isRunning,
+  ranScheduled,
+  summaryRef,
+}: {
+  phase: BulkRunPhase;
+  summary: BulkRunSummary;
+  rows: readonly BulkRunRow[];
+  isRunning: boolean;
+  ranScheduled: boolean;
+  summaryRef: React.RefObject<HTMLElement | null>;
+}) {
+  const isFinished = phase === "finished";
+
+  return (
+    <Stack direction="vertical" gap={3} paddingBlock={3}>
+      <HStack gap={3} paddingInline={4} align="center" wrap="wrap">
+        <Heading level={2}>
           Tiến độ
-        </h2>
+        </Heading>
+        {rows.length > 0 ? (
+          <Text type="supporting" role="status" aria-live="polite">
+            Đã xử lý {summary.processed}/{summary.total} mã
+            {isRunning ? " — đang chạy, đừng đóng tab." : "."}
+          </Text>
+        ) : null}
+      </HStack>
 
-        {rows.length === 0 ? (
+      {rows.length === 0 ? (
+        <Stack direction="vertical" paddingInline={4}>
           <EmptyState
-            kind="idle"
+            headingLevel={3}
             title="Chưa chạy lượt nào"
             description="Nhập mã, chọn kênh rồi bấm “Chạy”. Bảng này sẽ hiện trạng thái của từng mã ngay khi bắt đầu."
           />
-        ) : (
-          <>
-            <p role="status" aria-live="polite" className="text-muted-foreground text-sm">
-              Đã xử lý {summary.processed}/{summary.total} mã
-              {isRunning ? " — đang chạy, đừng đóng tab." : "."}
-            </p>
-
-            <div
-              ref={summaryRef}
-              tabIndex={-1}
-              role={phase === "finished" ? "alert" : undefined}
-              className="bg-muted/30 rounded-xl border p-4 text-sm outline-none"
-            >
-              <p className="font-medium">
-                {phase === "finished"
+        </Stack>
+      ) : (
+        <>
+          {/* Focus target when the run ends: the outcome, not a dead button. */}
+          <Stack
+            direction="vertical"
+            ref={summaryRef}
+            tabIndex={-1}
+            role={isFinished ? "alert" : undefined}
+            paddingInline={4}
+          >
+            <Banner
+              status={
+                isFinished
+                  ? summary.failed > 0
+                    ? "warning"
+                    : "success"
+                  : "info"
+              }
+              title={
+                isFinished
                   ? `Xong: ${summary.done} thành công · ${summary.skipped} bỏ qua · ${summary.failed} lỗi${
                       summary.cancelled > 0 ? ` · ${summary.cancelled} đã dừng` : ""
                     }.`
-                  : `Đang chạy: ${summary.done} thành công · ${summary.skipped} bỏ qua · ${summary.failed} lỗi.`}
-              </p>
-              <p className="text-muted-foreground mt-1">
-                {summary.cancelled > 0
+                  : `Đang chạy: ${summary.done} thành công · ${summary.skipped} bỏ qua · ${summary.failed} lỗi.`
+              }
+              description={`${
+                summary.cancelled > 0
                   ? `${summary.cancelled} mã chưa chạy nên không bị ảnh hưởng gì. `
-                  : ""}
-                {ranScheduled
-                  ? "Các lô đã tạo đang chờ tới giờ hẹn — đổi giờ hoặc huỷ ở "
-                  : "Các lô đã tạo chạy tiếp trên máy chủ kể cả khi bạn rời trang — xem ở "}
-                {ranScheduled ? (
-                  <Link href="/scheduled" className="underline underline-offset-4">
-                    Bài đã hẹn
-                  </Link>
-                ) : (
-                  <Link href="/jobs" className="underline underline-offset-4">
-                    Nhật ký đăng bài
-                  </Link>
-                )}
-                .
-              </p>
-            </div>
+                  : ""
+              }${
+                ranScheduled
+                  ? "Các lô đã tạo đang chờ tới giờ hẹn."
+                  : "Các lô đã tạo chạy tiếp trên máy chủ kể cả khi bạn rời trang."
+              }`}
+              endContent={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  label={ranScheduled ? "Bài đã hẹn" : "Nhật ký đăng bài"}
+                  href={ranScheduled ? "/scheduled" : "/jobs"}
+                />
+              }
+            />
+          </Stack>
 
+          <StackItem size="fill">
             <BulkProgressTable rows={rows} />
-          </>
-        )}
-      </section>
-    </section>
+          </StackItem>
+        </>
+      )}
+    </Stack>
   );
 }

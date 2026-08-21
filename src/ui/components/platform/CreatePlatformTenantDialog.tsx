@@ -5,6 +5,7 @@ import {
   Button,
   Dialog,
   DialogHeader,
+  FormLayout,
   HStack,
   Selector,
   Stack,
@@ -145,79 +146,84 @@ function CreateForm({
     // for one error is how a field says two different things.
     <form noValidate onSubmit={form.handleSubmit((values) => onSubmit(values))}>
       <Stack direction="vertical" gap={3}>
-        <Controller
-          control={form.control}
-          name="name"
-          render={({ field, fieldState }) => (
-            <TextInput
-              label="Tên công ty"
-              description="Tên khách nhìn thấy trên thanh trên cùng."
-              placeholder="Nhà Xe An Anh"
-              isRequired
-              hasAutoFocus
-              isDisabled={isPending}
-              value={field.value}
-              onChange={field.onChange}
-              status={
-                fieldState.error ? { type: "error", message: fieldState.error.message } : undefined
-              }
-              statusVariant="detached"
-            />
-          )}
-        />
+        {/* FormLayout, not a bare Stack: the fields get the design system's
+            own field rhythm, so this dialog spaces its inputs exactly like
+            the prompt form does. */}
+        <FormLayout>
+          <Controller
+            control={form.control}
+            name="name"
+            render={({ field, fieldState }) => (
+              <TextInput
+                label="Tên công ty"
+                description="Tên khách nhìn thấy trên thanh trên cùng."
+                placeholder="Nhà Xe An Anh"
+                isRequired
+                hasAutoFocus
+                isDisabled={isPending}
+                value={field.value}
+                onChange={field.onChange}
+                status={
+                  fieldState.error ? { type: "error", message: fieldState.error.message } : undefined
+                }
+                statusVariant="detached"
+              />
+            )}
+          />
 
-        <Controller
-          control={form.control}
-          name="slug"
-          render={({ field, fieldState }) => (
-            <TextInput
-              label="Đường dẫn"
-              description="Bỏ trống để máy chủ tự sinh từ tên công ty."
-              placeholder="nha-xe-an-anh"
-              isOptional
-              isDisabled={isPending}
-              value={field.value}
-              onChange={field.onChange}
-              status={
-                fieldState.error ? { type: "error", message: fieldState.error.message } : undefined
-              }
-              statusVariant="detached"
-            />
-          )}
-        />
+          <Controller
+            control={form.control}
+            name="slug"
+            render={({ field, fieldState }) => (
+              <TextInput
+                label="Đường dẫn"
+                description="Bỏ trống để máy chủ tự sinh từ tên công ty."
+                placeholder="nha-xe-an-anh"
+                isOptional
+                isDisabled={isPending}
+                value={field.value}
+                onChange={field.onChange}
+                status={
+                  fieldState.error ? { type: "error", message: fieldState.error.message } : undefined
+                }
+                statusVariant="detached"
+              />
+            )}
+          />
 
-        <Controller
-          control={form.control}
-          name="plan"
-          render={({ field, fieldState }) => (
-            // A picker, not a text box: the server takes exactly two codes
-            // (`PlatformCreateTenantRecord.plan`), so a typed one could only
-            // ever come back as a 400.
-            <Selector
-              label="Gói"
-              description="Bỏ trống để dùng gói mặc định của hệ thống."
-              placeholder="Gói mặc định"
-              isOptional
-              hasClear
-              isDisabled={isPending}
-              options={PLATFORM_PLANS.map((plan) => ({
-                value: plan,
-                label: PLATFORM_PLAN_LABELS[plan],
-              }))}
-              // `null`, not `undefined`: this Selector is controlled, and null is
-              // how it says "chưa chọn" (an undefined value would make it
-              // uncontrolled and drop the operator's clear action).
-              value={field.value.length > 0 ? field.value : null}
-              // `hasClear` hands back null at runtime while the prop type says
-              // string — `?? ""` covers the gap without widening the signature.
-              onChange={(value: string | null) => field.onChange(value ?? "")}
-              status={
-                fieldState.error ? { type: "error", message: fieldState.error.message } : undefined
-              }
-              statusVariant="detached"
-            />
-          )}
-        />
+          <Controller
+            control={form.control}
+            name="plan"
+            render={({ field, fieldState }) => (
+              // A picker, not a text box: the server takes exactly two codes
+              // (`PlatformCreateTenantRecord.plan`), so a typed one could only
+              // ever come back as a 400.
+              <Selector
+                label="Gói"
+                description="Bỏ trống để dùng gói mặc định của hệ thống."
+                placeholder="Gói mặc định"
+                isOptional
+                hasClear
+                isDisabled={isPending}
+                options={PLATFORM_PLANS.map((plan) => ({
+                  value: plan,
+                  label: PLATFORM_PLAN_LABELS[plan],
+                }))}
+                // `null`, not `undefined`: this Selector is controlled, and null
+                // is how it says "chưa chọn" (an undefined value would make it
+                // uncontrolled and drop the operator's clear action).
+                value={field.value.length > 0 ? field.value : null}
+                // `hasClear` hands back null at runtime while the prop type says
+                // string — `?? ""` covers the gap without widening the signature.
+                onChange={(value: string | null) => field.onChange(value ?? "")}
+                status={
+                  fieldState.error ? { type: "error", message: fieldState.error.message } : undefined
+                }
+                statusVariant="detached"
+              />
+            )}
+          />
+        </FormLayout>
 
         {error && !isFieldOnlyError ? <ApiErrorNotice error={error} operation="platform" /> : null}
 

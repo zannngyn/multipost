@@ -337,8 +337,12 @@ function NavAccountBlock({
       ) : (
         // No control, because there is nothing to sign out of — a disabled
         // button here would only invite clicks that can never work.
-        <Text type="supporting" color="disabled">
-          Phiên phát triển — không có đăng xuất
+        //
+        // `secondary`, not `disabled`: the disabled tone is a ~2.3:1 grey meant
+        // for dead controls, and this is a sentence somebody has to read
+        // (core-accessibility §6, AA needs 4.5:1).
+        <Text type="supporting" color="secondary">
+          Phiên phát triển: không có đăng xuất
         </Text>
       )}
     </>

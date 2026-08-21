@@ -4,6 +4,7 @@ import {
   Badge,
   Banner,
   Button,
+  Card,
   Divider,
   Grid,
   Heading,
@@ -42,6 +43,17 @@ import { useFormStatus } from "react-dom";
  *     inside a `<form>`: a real login form here would make password managers
  *     offer to fill a box that can never be submitted, and would let Enter
  *     "submit" nothing.
+ *
+ * The four states, and where each one lives:
+ *   loading  `app/signin/loading.tsx` — the split frame in Skeleton form while
+ *            the dynamic page renders; plus per-button `isLoading` during the
+ *            OAuth hop, which is the only wait this component itself owns.
+ *   data     the screen below, on a clean visit.
+ *   empty    a clean visit IS the empty state here: there is no list to be
+ *            empty of, so the CTA pair is the "what to do next".
+ *   error    the `status="error"` Banner from `?error=`, with the untranslated
+ *            code underneath for support. `isPendingApproval` is deliberately
+ *            NOT one of these — see the comment on that Banner.
  */
 
 /** The two preview tabs. The value lives in state, not the URL: nothing here
@@ -97,11 +109,15 @@ export function SignInScreen({
     >
       <BrandColumn />
 
-      <Section variant="transparent" padding={8}>
+      {/* padding={6}, one step under the brand half: this column carries five
+          times the content, and on a phone the extra inline room goes to the
+          fields rather than to the margin. The 420px cap keeps both halves
+          optically centred anyway. */}
+      <Section variant="transparent" padding={6}>
         <Stack direction="vertical" vAlign="center" height="100%">
           <Stack
             direction="vertical"
-            gap={4}
+            gap={5}
             width="100%"
             maxWidth={420}
             className="mx-auto"
@@ -149,6 +165,10 @@ export function SignInScreen({
               value={tab}
               onChange={(value) => setTab(value as AuthTab)}
               hasDivider
+              // Two tabs in a 420px column: `fill` splits the strip evenly so
+              // the switcher reads as one control instead of two words adrift
+              // at the start edge.
+              layout="fill"
               aria-label="Tự động hóa với MysP ngay"
             >
               <Tab value="signin" label="Đăng nhập" />
@@ -194,18 +214,28 @@ export function SignInScreen({
               </Text>
             </Stack>
 
-            {isDefaultReturnUrl ? null : (
-              <Text type="supporting">
-                Sau khi đăng nhập, bạn sẽ quay lại: <Text type="code">{returnUrl}</Text>
-              </Text>
-            )}
+            {/* The fine print is one block, not three loose lines: at gap={5}
+                the destination note, the terms line and the copyright read as
+                three separate claims of equal weight. Tightened to gap={1},
+                they read as what they are — a footnote under the buttons. */}
+            <Stack direction="vertical" gap={1}>
+              {isDefaultReturnUrl ? null : (
+                <Text type="supporting">
+                  Sau khi đăng nhập, bạn sẽ quay lại: <Text type="code">{returnUrl}</Text>
+                </Text>
+              )}
 
-            <Text type="supporting">
-              Khi tiếp tục, bạn đồng ý với quy định sử dụng nội bộ của MYSP.
-            </Text>
+              <Text type="supporting">
+                Khi tiếp tục, bạn đồng ý với quy định sử dụng nội bộ của MYSP.
+              </Text>
+            </Stack>
 
             <Divider />
 
+            {/* No size override on the copyright: `supporting` is already the
+                theme's secondary tone, and dropping it another step is the one
+                move on this screen that could fall under 4.5:1. The divider
+                above it does the separating instead. */}
             <Stack direction="vertical" as="footer">
               <Text type="supporting">© MysP 2026. All right reserved.</Text>
             </Stack>
@@ -220,18 +250,27 @@ export function SignInScreen({
  * The left half. Pure typography and tokens — no bitmap collage, because the
  * only pictures this product owns are customer product photos and none of them
  * belong on a public sign-in page.
+ *
+ * The tinted half is `variant="muted"`, a theme token, not a gradient. An
+ * earlier revision mixed `accent -> muted -> background` through the Tailwind
+ * bridge, which pulls the legacy shadcn lavender while every Astryx control on
+ * the right half is drawn from theme-neutral: two accents on one screen. One
+ * flat muted plane keeps the split readable and leaves exactly one accent in
+ * the product.
  */
 function BrandColumn() {
   return (
-    <Section
-      variant="transparent"
-      padding={8}
-      // The one gradient on the screen, mixed from the app's own semantic
-      // tokens (accent -> muted -> background), so it re-values itself with the
-      // theme instead of freezing a pair of hex stops.
-      className="bg-linear-to-br from-accent/35 via-muted to-background"
-    >
-      <Stack direction="vertical" gap={6} height="100%" vAlign="center">
+    <Section variant="muted" padding={8}>
+      {/* Capped and centred: past ~520px the five value lines turn into a
+          single long measure that nobody finishes reading. */}
+      <Stack
+        direction="vertical"
+        gap={6}
+        height="100%"
+        vAlign="center"
+        maxWidth={480}
+        className="mx-auto"
+      >
         <Stack direction="horizontal" gap={2} align="center" as="header">
           <Text weight="bold" size="lg">
             MYSP
@@ -240,20 +279,26 @@ function BrandColumn() {
         </Stack>
 
         <Stack direction="vertical" gap={2}>
-          <Heading level={1} type="display-2">
+          <Heading level={1} type="display-2" textWrap="balance">
             Bắt đầu ngay hôm nay
           </Heading>
-          <Text type="supporting">
+          <Text type="supporting" textWrap="pretty">
             Công cụ soạn, duyệt và đăng bài đa nền tảng
           </Text>
         </Stack>
 
-        <Stack direction="vertical" gap={2} as="ul" className="list-none">
+        {/* Hairline between the promise and the proof. It replaces a bigger
+            gap, so the column keeps its rhythm without growing taller. */}
+        <Divider />
+
+        <Stack direction="vertical" gap={3} as="ul" className="list-none">
           {VALUE_POINTS.map((point) => (
             // The tick is decorative: the sentence beside it carries the whole
-            // meaning, so Icon stays aria-hidden (its default).
+            // meaning, so Icon stays aria-hidden (its default). `accent`, not
+            // `success` — nothing here has a pass/fail state, and a green tick
+            // would put a second colour on a screen that has one.
             <Stack key={point} direction="horizontal" gap={2} align="start" as="li">
-              <Icon icon="check" color="success" size="sm" />
+              <Icon icon="check" color="accent" size="sm" />
               <Text>{point}</Text>
             </Stack>
           ))}
@@ -281,41 +326,59 @@ function BrandColumn() {
  */
 function CredentialsPreview({ isSignUp }: { isSignUp: boolean }) {
   return (
-    <Stack direction="vertical" gap={3}>
-      <Stack direction="horizontal" gap={2} align="center" wrap="wrap">
-        <Text type="label">{isSignUp ? "Đăng ký bằng email" : "Đăng nhập bằng email"}</Text>
-        <Badge variant="neutral" label="Sắp ra mắt" />
-      </Stack>
+    // `Card variant="muted"` is the whole visual argument: the block is
+    // de-emphasised as one object, so the eye reads "not this one, the buttons
+    // below" before it reads any of the labels. Loose in the column, five
+    // greyed controls looked like a form that had failed to load.
+    <Card variant="muted" padding={4}>
+      <Stack direction="vertical" gap={3}>
+        <Stack direction="horizontal" gap={2} align="center" hAlign="between" wrap="wrap">
+          {/* h3 under the column's h2: the outline now runs h1 (brand) -> h2
+              (auth) -> h3, so a screen-reader user can jump straight here. */}
+          <Heading level={3}>
+            {isSignUp ? "Đăng ký bằng email" : "Đăng nhập bằng email"}
+          </Heading>
+          <Badge variant="neutral" label="Sắp ra mắt" />
+        </Stack>
 
-      {/* The single source of truth for "why is this dead". */}
-      <Text type="supporting">{COMING_SOON_REASON}</Text>
+        {/* The single source of truth for "why is this dead". */}
+        <Text type="supporting">{COMING_SOON_REASON}</Text>
 
-      <Stack direction="vertical" gap={2}>
-        <TextInput label="Email" type="email" value="" placeholder="ban@congty.com" isDisabled />
-        <TextInput
-          label={isSignUp ? "Mật khẩu mới" : "Mật khẩu"}
-          type="password"
-          value=""
-          placeholder={isSignUp ? "Đặt mật khẩu mới" : "Mật khẩu của bạn"}
+        <Stack direction="vertical" gap={2}>
+          <TextInput
+            label="Email"
+            type="email"
+            value=""
+            placeholder="ban@congty.com"
+            width="100%"
+            isDisabled
+          />
+          <TextInput
+            label={isSignUp ? "Mật khẩu mới" : "Mật khẩu"}
+            type="password"
+            value=""
+            placeholder={isSignUp ? "Đặt mật khẩu mới" : "Mật khẩu của bạn"}
+            width="100%"
+            isDisabled
+          />
+          {isSignUp ? null : (
+            <Stack direction="horizontal" hAlign="end">
+              <Link href="#" isDisabled isStandalone>
+                Quên mật khẩu
+              </Link>
+            </Stack>
+          )}
+        </Stack>
+
+        <Button
+          label={isSignUp ? "Đăng ký" : "Đăng nhập"}
+          variant="secondary"
+          size="lg"
+          width="100%"
           isDisabled
         />
-        {isSignUp ? null : (
-          <Stack direction="horizontal" hAlign="end">
-            <Link href="#" isDisabled isStandalone>
-              Quên mật khẩu
-            </Link>
-          </Stack>
-        )}
       </Stack>
-
-      <Button
-        label={isSignUp ? "Đăng ký" : "Đăng nhập"}
-        variant="secondary"
-        size="lg"
-        width="100%"
-        isDisabled
-      />
-    </Stack>
+    </Card>
   );
 }
 

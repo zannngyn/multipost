@@ -6,6 +6,10 @@ import { BulkRunScreen } from "@/ui/components/bulk/BulkRunScreen";
 
 /**
  * "Chạy hàng loạt" (E10.5). Server Component guard, client screen.
+ *
+ * The screen owns its own frame (Layout header + scrolling content), so this
+ * page adds no container: a centred max-width wrapper here would squeeze the
+ * per-code result rows, which are the whole point of the screen.
  */
 
 export const metadata: Metadata = {
@@ -23,9 +27,5 @@ export default async function BulkPage() {
   // Component must not trust that it was reached through the guard.
   if (!session) redirect("/signin?returnUrl=%2Fbulk");
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <BulkRunScreen />
-    </div>
-  );
+  return <BulkRunScreen />;
 }

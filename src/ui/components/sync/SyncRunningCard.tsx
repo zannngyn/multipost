@@ -1,5 +1,6 @@
 "use client";
 
+import { Heading, ProgressBar, Section, Stack, Text } from "@astryxdesign/core";
 import { useId } from "react";
 
 /**
@@ -12,39 +13,28 @@ import { useId } from "react";
  * invent a percentage), and "chặng 1/3" would be a guess — the server does not
  * say which stage it is in.
  *
+ * The bar is `isIndeterminate` for exactly that reason: it shows that work is
+ * happening and refuses to claim how much is left.
+ *
  * What it can say honestly is what is happening and how long it may take.
  */
 export function SyncRunningCard() {
   const headingId = `${useId()}-running`;
 
   return (
-    <section
-      aria-labelledby={headingId}
-      aria-busy="true"
-      className="bg-card border-border space-y-2.5 rounded-xl border p-4"
-    >
-      <div className="flex items-center gap-2.5">
-        <span
-          aria-hidden="true"
-          className="border-primary/30 border-t-primary size-4 shrink-0 rounded-full border-2 motion-safe:animate-spin"
-        />
-        <h2 id={headingId} className="text-sm font-semibold">
+    <Section variant="muted" padding={4} aria-labelledby={headingId} aria-busy="true">
+      <Stack direction="vertical" gap={2}>
+        <Heading level={2} id={headingId}>
           Đang đọc Drive và Sheet
-        </h2>
-      </div>
+        </Heading>
 
-      {/* Indeterminate on purpose: it pulses to show work, it does not fill. */}
-      <span
-        aria-hidden="true"
-        className="bg-muted flex h-1.5 w-full overflow-hidden rounded-full"
-      >
-        <span className="bg-primary/60 h-full w-full motion-safe:animate-pulse" />
-      </span>
+        <ProgressBar label="Đang chạy đồng bộ" isLabelHidden isIndeterminate />
 
-      <p className="text-muted-foreground text-sm">
-        Chưa có số liệu cho tới khi lần chạy kết thúc — hệ thống không báo được tiến độ giữa chừng.
-        Thư mục lớn có thể mất vài phút. Kết quả sẽ hiện ngay bên dưới khi xong.
-      </p>
-    </section>
+        <Text type="supporting">
+          Chưa có số liệu cho tới khi lần chạy kết thúc — hệ thống không báo được tiến độ giữa
+          chừng. Thư mục lớn có thể mất vài phút. Kết quả sẽ hiện ngay bên dưới khi xong.
+        </Text>
+      </Stack>
+    </Section>
   );
 }

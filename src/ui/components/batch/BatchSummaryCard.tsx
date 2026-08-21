@@ -1,13 +1,31 @@
-import { BatchStatusBadge } from "@/ui/components/post/PostStatusBadge";
 import {
+  Grid,
+  HStack,
+  Heading,
+  MetadataList,
+  MetadataListItem,
+  Stack,
+  StatusDot,
+  Text,
+} from "@astryxdesign/core";
+
+import {
+  POST_BATCH_STATUS_LABELS,
+  POST_BATCH_STATUS_TONES,
   formatDateTime,
   formatDurationMs,
   type BatchStatusResponse,
+  type StatusTone,
 } from "@/ui/schemas/post-batch.schema";
 
 /**
  * Batch header: what happened, to which product, and how long it took.
  * Presentational only.
+ *
+ * Not a Card: this is a page region, not a discrete item you could reorder or
+ * remove (`astryx component Card`). The counters are plain numbers on the page
+ * rather than six bordered tiles — a tile grid makes six equal claims, and only
+ * the non-zero ones are news.
  *
  * Business rule 2: the product CODE and colour are identity, not caption
  * material — and stock/price have no field here at all. Rule 6: `partial` is
@@ -15,70 +33,117 @@ import {
  */
 
 /**
- * "Facebook giữ lịch" is its own tile even though it is already counted inside
- * "Đang chạy": a batch that sits at 0 published for three days is alarming until
- * you can see that Facebook is holding the posts until their hour (E8.6).
+ * [dup-2/3] Same three-line map as `BulkProgressTable`. The DECISION (status ->
+ * tone) still lives once, in `post-batch.schema`; only this rendering detail is
+ * copied, and the shared pill component that would hold it
+ * (`post/PostStatusBadge`) belongs to another screen's scope.
+ */
+const DOT_VARIANT: Record<StatusTone, "success" | "warning" | "error" | "accent" | "neutral"> = {
+  neutral: "neutral",
+  info: "accent",
+  success: "success",
+  warning: "warning",
+  danger: "error",
+};
+
+/**
+ * "Facebook giữ lịch" is its own counter even though it is already inside
+ * "Đang chạy": a batch that sits at 0 published for three days is alarming
+ * until you can see that Facebook is holding the posts until their hour (E8.6).
+ *
+ * `alert` marks the counters that mean somebody has to do something. They get a
+ * dot ONLY when they are above zero — a red dot next to "0 lỗi" is noise.
  */
 const TOTALS_FIELDS = [
-  { key: "total", label: "Tổng số kênh" },
-  { key: "published", label: "Đã đăng" },
-  { key: "inProgress", label: "Đang chạy" },
-  { key: "scheduledOnFacebook", label: "Facebook giữ lịch" },
-  { key: "blocked", label: "Bị chặn" },
-  { key: "failed", label: "Lỗi" },
+  { key: "total", label: "Tổng số kênh", alert: null },
+  { key: "published", label: "Đã đăng", alert: null },
+  { key: "inProgress", label: "Đang chạy", alert: null },
+  { key: "scheduledOnFacebook", label: "Facebook giữ lịch", alert: null },
+  { key: "blocked", label: "Bị chặn", alert: "warning" },
+  { key: "failed", label: "Lỗi", alert: "error" },
 ] as const;
 
 export function BatchSummaryCard({ batch }: { batch: BatchStatusResponse }) {
+  const statusLabel = POST_BATCH_STATUS_LABELS[batch.status];
+
   return (
-    <section aria-labelledby="batch-summary-heading" className="bg-card space-y-4 rounded-xl border p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="batch-summary-heading" className="text-base font-semibold">
-          Tổng kết lô
-        </h2>
-        <BatchStatusBadge status={batch.status} />
-      </div>
+    <Stack as="section" direction="vertical" gap={4} aria-labelledby="batch-summary-heading">
+      <Stack direction="vertical" gap={1}>
+        <HStack gap={2} align="center" wrap="wrap">
+          <Heading level={2} id="batch-summary-heading">
+            Tổng kết lô
+          </Heading>
+          {/* Colour never carries the outcome alone: the dot repeats the word
+              beside it as its accessible name. */}
+          <StatusDot
+            variant={DOT_VARIANT[POST_BATCH_STATUS_TONES[batch.status]]}
+            label={statusLabel}
+            isPulsing={batch.status === "running"}
+          />
+          <Text weight="medium">{statusLabel}</Text>
+        </HStack>
+        <Text>{batch.summaryMessage}</Text>
+      </Stack>
 
-      <p className="text-sm">{batch.summaryMessage}</p>
+      <Grid columns={{ minWidth: 132, max: 6 }} gap={4}>
+        {TOTALS_FIELDS.map((field) => {
+          const value = batch.totals[field.key];
+          const isAlerting = field.alert !== null && value > 0;
 
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {TOTALS_FIELDS.map((field) => (
-          <div key={field.key} className="bg-muted/40 rounded-lg border p-3">
-            <dt className="text-muted-foreground text-xs">{field.label}</dt>
-            <dd className="text-lg font-semibold tabular-nums">{batch.totals[field.key]}</dd>
-          </div>
-        ))}
-      </dl>
+          return (
+            <Stack key={field.key} direction="vertical" gap={0.5}>
+              <HStack gap={1.5} align="center">
+                {isAlerting ? (
+                  <StatusDot
+                    variant={field.alert === "error" ? "error" : "warning"}
+                    label={`${field.label}: cần xử lý`}
+                  />
+                ) : null}
+                <Text
+                  size="2xl"
+                  weight="semibold"
+                  hasTabularNumbers
+                  // A zero counter is a fact, not a headline: it steps back so
+                  // the numbers that actually happened read first.
+                  color={value === 0 ? "placeholder" : "primary"}
+                >
+                  {value}
+                </Text>
+              </HStack>
+              <Text type="supporting">{field.label}</Text>
+            </Stack>
+          );
+        })}
+      </Grid>
 
-      <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Mã sản phẩm:</dt>
-          <dd className="font-medium">{batch.productCode}</dd>
-        </div>
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Màu:</dt>
-          <dd>{batch.color.trim().length > 0 ? batch.color : "Tất cả màu"}</dd>
-        </div>
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Bắt đầu:</dt>
-          <dd className="tabular-nums">{formatDateTime(batch.startedAt)}</dd>
-        </div>
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Kết thúc:</dt>
-          <dd className="tabular-nums">
+      <MetadataList columns={2} label={{ position: "start", width: 132 }}>
+        <MetadataListItem label="Mã sản phẩm">
+          <Text weight="medium">{batch.productCode}</Text>
+        </MetadataListItem>
+        <MetadataListItem label="Màu">
+          <Text>{batch.color.trim().length > 0 ? batch.color : "Tất cả màu"}</Text>
+        </MetadataListItem>
+        <MetadataListItem label="Bắt đầu">
+          <Text hasTabularNumbers>{formatDateTime(batch.startedAt)}</Text>
+        </MetadataListItem>
+        <MetadataListItem label="Kết thúc">
+          <Text hasTabularNumbers>
             {batch.finishedAt ? formatDateTime(batch.finishedAt) : "— (chưa xong)"}
-          </dd>
-        </div>
+          </Text>
+        </MetadataListItem>
         {batch.durationMs !== null ? (
-          <div className="flex gap-2">
-            <dt className="text-muted-foreground">Thời gian chạy:</dt>
-            <dd className="tabular-nums">{formatDurationMs(batch.durationMs)}</dd>
-          </div>
+          <MetadataListItem label="Thời gian chạy">
+            <Text hasTabularNumbers>{formatDurationMs(batch.durationMs)}</Text>
+          </MetadataListItem>
         ) : null}
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Mã lô:</dt>
-          <dd className="font-mono text-xs break-all">{batch.batchId}</dd>
-        </div>
-      </dl>
-    </section>
+        <MetadataListItem label="Mã lô">
+          {/* The string support asks for: kept whole, kept selectable, and not
+              allowed to stretch the column. */}
+          <Text type="code" size="2xs" maxLines={1} wordBreak="break-all">
+            {batch.batchId}
+          </Text>
+        </MetadataListItem>
+      </MetadataList>
+    </Stack>
   );
 }

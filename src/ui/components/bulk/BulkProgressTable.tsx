@@ -1,12 +1,22 @@
 "use client";
 
-import Link from "next/link";
+import {
+  HStack,
+  Link,
+  Stack,
+  StatusDot,
+  Table,
+  Text,
+  pixel,
+  proportional,
+} from "@astryxdesign/core";
+import type { TableColumn } from "@astryxdesign/core";
 
-import { Badge } from "@/ui/components/ui/badge";
 import {
   BULK_ROW_STATUS_LABELS,
   BULK_ROW_STATUS_TONES,
 } from "@/ui/schemas/bulk.schema";
+import type { StatusTone } from "@/ui/schemas/post-batch.schema";
 import type { BulkRunRow } from "@/ui/hooks/useBulkRun";
 
 /**
@@ -22,74 +32,119 @@ import type { BulkRunRow } from "@/ui/hooks/useBulkRun";
  *
  * Presentational: no fetching, no business branching.
  */
+
+/**
+ * [dup-2/3] Same three-line map as `BatchChannelTable`. The DECISION (status ->
+ * tone) still lives once, in the schemas; only this rendering detail is copied,
+ * and the shared pill component that would hold it (`post/PostStatusBadge`)
+ * belongs to another screen's scope. Third copy → extract it.
+ */
+const DOT_VARIANT: Record<StatusTone, "success" | "warning" | "error" | "accent" | "neutral"> = {
+  neutral: "neutral",
+  info: "accent",
+  success: "success",
+  warning: "warning",
+  danger: "error",
+};
+
+/** Table's generic needs an index signature; the ordinal is display-only. */
+type ProgressRow = BulkRunRow & { ordinal: number } & Record<string, unknown>;
+
+const COLUMNS: TableColumn<ProgressRow>[] = [
+  {
+    key: "ordinal",
+    header: "#",
+    width: pixel(56),
+    align: "end",
+    renderCell: (row) => (
+      <Text type="supporting" hasTabularNumbers>
+        {row.ordinal}
+      </Text>
+    ),
+  },
+  {
+    key: "code",
+    header: "Mã sản phẩm",
+    width: pixel(160),
+    renderCell: (row) => <Text type="code">{row.code}</Text>,
+  },
+  {
+    key: "productName",
+    header: "Sản phẩm",
+    width: proportional(2),
+    renderCell: (row) =>
+      row.productName ? (
+        <Text>{row.productName}</Text>
+      ) : (
+        // Not yet known: the loop learns the name when it reaches the code.
+        <Text color="placeholder">—</Text>
+      ),
+  },
+  {
+    key: "status",
+    header: "Trạng thái",
+    width: pixel(180),
+    renderCell: (row) => {
+      const label = BULK_ROW_STATUS_LABELS[row.status];
+      return (
+        <HStack gap={2} align="center">
+          {/* Colour never carries the meaning alone — the word is right next
+              to the dot, and the dot repeats it as its accessible name. */}
+          <StatusDot variant={DOT_VARIANT[BULK_ROW_STATUS_TONES[row.status]]} label={label} />
+          <Text>{label}</Text>
+        </HStack>
+      );
+    },
+  },
+  {
+    key: "reason",
+    header: "Lý do / ghi chú",
+    width: proportional(3),
+    renderCell: (row) => (
+      <Stack direction="vertical" gap={0.5}>
+        {row.reason ? <Text>{row.reason}</Text> : <Text color="placeholder">—</Text>}
+        {row.errorCode ? (
+          // Small and secondary: it is the string support asks for, not the
+          // sentence the operator acts on.
+          <Text type="code" size="2xs" color="secondary">
+            Mã lỗi: {row.errorCode}
+          </Text>
+        ) : null}
+      </Stack>
+    ),
+  },
+  {
+    key: "batchId",
+    header: "Lô đăng",
+    width: pixel(180),
+    renderCell: (row) =>
+      row.batchId ? (
+        <Link href={`/batches/${encodeURIComponent(row.batchId)}`}>
+          Xem lô ({row.channelCount} kênh)
+        </Link>
+      ) : (
+        <Text color="placeholder">—</Text>
+      ),
+  },
+];
+
 export function BulkProgressTable({ rows }: { rows: readonly BulkRunRow[] }) {
+  const data: ProgressRow[] = rows.map((row, index) => ({ ...row, ordinal: index + 1 }));
+
   return (
-    <div className="overflow-x-auto rounded-xl border">
-      <table className="w-full min-w-160 border-collapse text-sm">
-        <caption className="sr-only">
-          Tiến độ chạy hàng loạt: trạng thái từng mã sản phẩm và lô đăng đã tạo
-        </caption>
-        <thead className="bg-muted/50">
-          <tr className="text-left">
-            <th scope="col" className="px-3 py-2 font-medium">
-              #
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Mã sản phẩm
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Sản phẩm
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Trạng thái
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Lý do / ghi chú
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Lô đăng
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={`${row.code}-${index}`} className="border-t align-top">
-              <td className="text-muted-foreground px-3 py-2 tabular-nums">{index + 1}</td>
-              <td className="px-3 py-2 font-mono text-xs break-all">{row.code}</td>
-              <td className="px-3 py-2">{row.productName ?? "—"}</td>
-              <td className="px-3 py-2">
-                <Badge tone={BULK_ROW_STATUS_TONES[row.status]}>
-                  {BULK_ROW_STATUS_LABELS[row.status]}
-                </Badge>
-              </td>
-              <td className="px-3 py-2">
-                {row.reason ? (
-                  <span className="max-w-prose break-words">{row.reason}</span>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-                {row.errorCode ? (
-                  <span className="text-muted-foreground block font-mono text-xs">
-                    Mã lỗi: {row.errorCode}
-                  </span>
-                ) : null}
-              </td>
-              <td className="px-3 py-2">
-                {row.batchId ? (
-                  <Link
-                    href={`/batches/${encodeURIComponent(row.batchId)}`}
-                    className="underline underline-offset-4"
-                  >
-                    Xem lô ({row.channelCount} kênh)
-                  </Link>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table
+      data={data}
+      columns={COLUMNS}
+      // The same code may legitimately appear twice in a run list, so the
+      // ordinal is what makes a row unique.
+      idKey={(row) => `${row.code}-${row.ordinal}`}
+      density="compact"
+      // Reasons are full sentences: wrapping keeps them readable instead of
+      // hiding the half that says what to do.
+      textOverflow="wrap"
+      verticalAlign="top"
+      hasHover
+      rowCount={data.length}
+    />
   );
 }

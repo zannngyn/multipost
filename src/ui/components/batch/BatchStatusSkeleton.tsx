@@ -1,41 +1,63 @@
+"use client";
+
+import { Grid, HStack, Skeleton, Stack } from "@astryxdesign/core";
+
 /**
- * Skeleton shaped like the real batch screen: same card, same six totals, same
- * four table columns and row height — a skeleton of the wrong shape is just a
- * layout shift with extra steps (web-feedback-states / web-data-table rule 1).
+ * Skeleton shaped like the real batch screen: the same summary block with six
+ * counters, the same four table columns and row height — a skeleton of the
+ * wrong shape is just a layout shift with extra steps (web-feedback-states /
+ * web-data-table rule 1).
+ *
+ * `aria-hidden`: a screen reader gains nothing from grey boxes — the live region
+ * in the screen announces "đang tải".
  */
+
+/** Mirrors BatchChannelTable's column widths. */
+const COLUMNS = [220, 180, 104, null] as const;
+
 export function BatchStatusSkeleton() {
   return (
-    <div aria-hidden="true" className="space-y-6 motion-safe:animate-pulse">
-      <div className="bg-card space-y-4 rounded-xl border p-5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="bg-muted h-5 w-32 rounded" />
-          <div className="bg-muted h-5 w-24 rounded-full" />
-        </div>
-        <div className="bg-muted h-4 w-full max-w-md rounded" />
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          {[0, 1, 2, 3, 4, 5].map((cell) => (
-            <div key={cell} className="bg-muted/40 space-y-2 rounded-lg border p-3">
-              <div className="bg-muted h-3 w-16 rounded" />
-              <div className="bg-muted h-6 w-10 rounded" />
-            </div>
-          ))}
-        </div>
-      </div>
+    <Stack direction="vertical" gap={6} aria-hidden="true">
+      <Stack direction="vertical" gap={4}>
+        <Stack direction="vertical" gap={2}>
+          <HStack gap={2} align="center">
+            <Skeleton width={120} height={20} />
+            <Skeleton width={96} height={16} />
+          </HStack>
+          <Skeleton width="100%" height={16} />
+        </Stack>
 
-      <div className="space-y-3">
-        <div className="bg-muted h-5 w-48 rounded" />
-        <div className="overflow-hidden rounded-xl border">
-          <div className="bg-muted/50 h-9" />
-          {[0, 1, 2].map((row) => (
-            <div key={row} className="flex h-14 items-center gap-3 border-t px-3">
-              <div className="bg-muted h-4 w-1/5 rounded" />
-              <div className="bg-muted h-4 w-1/6 rounded" />
-              <div className="bg-muted h-4 w-10 rounded" />
-              <div className="bg-muted h-4 flex-1 rounded" />
-            </div>
+        <Grid columns={{ minWidth: 132, max: 6 }} gap={4}>
+          {[0, 1, 2, 3, 4, 5].map((cell) => (
+            <Stack key={cell} direction="vertical" gap={1}>
+              <Skeleton width={40} height={28} index={cell} />
+              <Skeleton width={88} height={12} index={cell} />
+            </Stack>
           ))}
-        </div>
-      </div>
-    </div>
+        </Grid>
+
+        <Grid columns={2} gap={3}>
+          {[0, 1, 2, 3].map((row) => (
+            <HStack key={row} gap={3} align="center">
+              <Skeleton width={112} height={12} />
+              <Skeleton width="100%" height={12} />
+            </HStack>
+          ))}
+        </Grid>
+      </Stack>
+
+      <Stack direction="vertical" gap={3}>
+        <Skeleton width={200} height={20} />
+        <Stack direction="vertical" gap={0}>
+          {[0, 1, 2].map((row) => (
+            <HStack key={row} gap={3} padding={3} align="center">
+              {COLUMNS.map((width, column) => (
+                <Skeleton key={column} width={width ?? "100%"} height={16} index={row} />
+              ))}
+            </HStack>
+          ))}
+        </Stack>
+      </Stack>
+    </Stack>
   );
 }

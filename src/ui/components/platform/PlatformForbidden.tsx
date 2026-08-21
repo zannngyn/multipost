@@ -27,14 +27,14 @@ export function PlatformForbidden({ email }: { email: string }) {
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <Stack direction="vertical" gap={1} padding={4}>
+          <Stack direction="vertical" gap={1} padding={4} maxWidth={640}>
             <Heading level={1}>Không mở được mục này</Heading>
             <Text type="supporting">Mục này dành cho quản trị hệ thống MYSP.</Text>
           </Stack>
         </LayoutHeader>
       }
       content={
-        <LayoutContent padding={4}>
+        <LayoutContent padding={6}>
           <EmptyState
             headingLevel={2}
             title="Bạn không có quyền xem mục này"

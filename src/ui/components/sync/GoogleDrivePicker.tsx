@@ -1,12 +1,25 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  Banner,
+  BreadcrumbItem,
+  Breadcrumbs,
+  Button,
+  EmptyState,
+  HStack,
+  MetadataList,
+  MetadataListItem,
+  Stack,
+  StatusDot,
+  Text,
+  TextInput,
+  VisuallyHidden,
+} from "@astryxdesign/core";
+import { Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { PickerList, PickerListSkeleton, type PickerRow } from "@/ui/components/sync/PickerList";
-import { Button } from "@/ui/components/ui/button";
-import { Input } from "@/ui/components/ui/input";
 import { useDebouncedValue } from "@/ui/hooks/useDebouncedValue";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useUpdateCatalogSource } from "@/ui/hooks/useCatalogProducts";
@@ -64,7 +77,6 @@ export function GoogleDrivePicker({
   onSaved: () => void;
   onCancel: () => void;
 }) {
-  const fieldId = useId();
   const confirmRef = useRef<HTMLButtonElement>(null);
 
   const [step, setStep] = useState<PickerStep>("folder");
@@ -174,41 +186,42 @@ export function GoogleDrivePicker({
 
   if (lostConnection) {
     return (
-      <div className="space-y-3">
-        <p role="alert" className="text-sm">
-          Kết nối Google không còn hiệu lực nên không đọc được Drive nữa. Hãy kết nối lại ở khối
-          phía trên, rồi chọn thư mục và bảng.
-        </p>
-        <Button type="button" variant="outline" onClick={onCancel}>
-          Đóng
-        </Button>
-      </div>
+      <Stack direction="vertical" gap={3}>
+        <Banner
+          role="alert"
+          status="error"
+          title="Kết nối Google không còn hiệu lực"
+          description="Không đọc được Drive nữa. Hãy kết nối lại ở khối phía trên, rồi chọn thư mục và bảng."
+          endContent={<Button variant="secondary" label="Đóng" onClick={onCancel} />}
+        />
+      </Stack>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <Stack direction="vertical" gap={4}>
       <StepIndicator step={step} />
 
       {/* Progress is announced without stealing focus from the list. */}
-      <p className="sr-only" role="status" aria-live="polite">
+      <VisuallyHidden as="div" role="status" aria-live="polite">
         {update.isPending ? "Đang lưu nguồn dữ liệu" : stepAnnouncement(step)}
-      </p>
+      </VisuallyHidden>
 
       {step === "folder" ? (
-        <section aria-label="Bước 1 — chọn thư mục ảnh" className="space-y-3">
+        <Stack as="section" direction="vertical" gap={3} aria-label="Bước 1 — chọn thư mục ảnh">
           <FolderBreadcrumb
             breadcrumb={breadcrumb.length > 0 ? breadcrumb : [here]}
             onNavigate={(item) => openFolder(item)}
           />
 
-          <SearchField
-            id={`${fieldId}-folder-search`}
+          <TextInput
             label="Tìm thư mục theo tên"
-            hint="Bỏ trống để xem toàn bộ thư mục con của thư mục đang mở."
+            description="Bỏ trống để xem toàn bộ thư mục con của thư mục đang mở."
             value={folderSearch}
             onChange={setFolderSearch}
             placeholder="Ví dụ: Ảnh sản phẩm"
+            startIcon={Search}
+            size="sm"
           />
 
           <ListBody
@@ -222,18 +235,22 @@ export function GoogleDrivePicker({
             empty={
               folderQuery.length > 0 ? (
                 <EmptyState
-                  kind="no-result"
+                  headingLevel={4}
+                  isCompact
                   title="Không có thư mục nào khớp"
                   description={`Không tìm thấy thư mục nào có tên chứa “${folderQuery}”.`}
-                  action={
-                    <Button type="button" variant="outline" onClick={() => setFolderSearch("")}>
-                      Xoá từ khoá
-                    </Button>
+                  actions={
+                    <Button
+                      variant="secondary"
+                      label="Xoá từ khoá"
+                      onClick={() => setFolderSearch("")}
+                    />
                   }
                 />
               ) : (
                 <EmptyState
-                  kind="done"
+                  headingLevel={4}
+                  isCompact
                   title="Thư mục này không có thư mục con"
                   description="Nếu đây đúng là thư mục chứa ảnh, bấm “Chọn thư mục này”. Nếu không, quay lại theo đường dẫn phía trên."
                 />
@@ -241,37 +258,42 @@ export function GoogleDrivePicker({
             }
           />
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" onClick={chooseFolder} disabled={isAtRoot}>
-              Chọn thư mục này
-            </Button>
-            <LoadMoreButton query={folders} label="Tải thêm thư mục" />
-            <Button type="button" variant="ghost" onClick={onCancel}>
-              Huỷ
-            </Button>
-          </div>
+          <Stack direction="vertical" gap={1}>
+            <HStack gap={2} align="center" wrap="wrap">
+              <Button
+                variant="primary"
+                label="Chọn thư mục này"
+                isDisabled={isAtRoot}
+                onClick={chooseFolder}
+              />
+              <LoadMoreButton query={folders} label="Tải thêm thư mục" />
+              <Button variant="ghost" label="Huỷ" onClick={onCancel} />
+            </HStack>
 
-          {isAtRoot ? (
-            <p className="text-muted-foreground text-xs">
-              Đang ở gốc Drive — mở một thư mục con trước, hệ thống không đọc cả Drive.
-            </p>
-          ) : (
-            <p className="text-muted-foreground text-xs">
-              Sẽ chọn thư mục <span className="text-foreground font-medium">{here.name}</span>.
-            </p>
-          )}
-        </section>
+            <Text type="supporting" size="2xs">
+              {isAtRoot
+                ? "Đang ở gốc Drive — mở một thư mục con trước, hệ thống không đọc cả Drive."
+                : `Sẽ chọn thư mục ${here.name}.`}
+            </Text>
+          </Stack>
+        </Stack>
       ) : null}
 
       {step === "spreadsheet" ? (
-        <section aria-label="Bước 2 — chọn bảng Google Sheet" className="space-y-3">
-          <SearchField
-            id={`${fieldId}-sheet-search`}
+        <Stack
+          as="section"
+          direction="vertical"
+          gap={3}
+          aria-label="Bước 2 — chọn bảng Google Sheet"
+        >
+          <TextInput
             label="Tìm bảng Google Sheet theo tên"
-            hint="Bỏ trống để xem các bảng sửa gần đây nhất trong Drive."
+            description="Bỏ trống để xem các bảng sửa gần đây nhất trong Drive."
             value={sheetSearch}
             onChange={setSheetSearch}
             placeholder="Ví dụ: Bảng sản phẩm 2026"
+            startIcon={Search}
+            size="sm"
           />
 
           <ListBody
@@ -285,18 +307,22 @@ export function GoogleDrivePicker({
             empty={
               sheetQuery.length > 0 ? (
                 <EmptyState
-                  kind="no-result"
+                  headingLevel={4}
+                  isCompact
                   title="Không có bảng nào khớp"
                   description={`Không tìm thấy bảng Google Sheet nào có tên chứa “${sheetQuery}”.`}
-                  action={
-                    <Button type="button" variant="outline" onClick={() => setSheetSearch("")}>
-                      Xoá từ khoá
-                    </Button>
+                  actions={
+                    <Button
+                      variant="secondary"
+                      label="Xoá từ khoá"
+                      onClick={() => setSheetSearch("")}
+                    />
                   }
                 />
               ) : (
                 <EmptyState
-                  kind="first-run"
+                  headingLevel={4}
+                  isCompact
                   title="Chưa thấy bảng Google Sheet nào"
                   description="Tài khoản Google đang kết nối không có bảng nào mà ứng dụng đọc được. Kiểm tra bạn đã kết nối đúng tài khoản, hoặc chia sẻ bảng cho tài khoản đó."
                 />
@@ -304,27 +330,27 @@ export function GoogleDrivePicker({
             }
           />
 
-          <div className="flex flex-wrap items-center gap-2">
+          <HStack gap={2} align="center" wrap="wrap">
             <LoadMoreButton query={spreadsheets} label="Tải thêm bảng" />
-            <Button type="button" variant="outline" onClick={() => setStep("folder")}>
-              Quay lại thư mục
-            </Button>
-            <Button type="button" variant="ghost" onClick={onCancel}>
-              Huỷ
-            </Button>
-          </div>
-        </section>
+            <Button
+              variant="secondary"
+              label="Quay lại thư mục"
+              onClick={() => setStep("folder")}
+            />
+            <Button variant="ghost" label="Huỷ" onClick={onCancel} />
+          </HStack>
+        </Stack>
       ) : null}
 
       {step === "tab" ? (
-        <section aria-label="Bước 3 — chọn tab của bảng" className="space-y-3">
-          <p className="text-muted-foreground text-sm">
+        <Stack as="section" direction="vertical" gap={3} aria-label="Bước 3 — chọn tab của bảng">
+          <Text type="supporting">
             Bảng đã chọn:{" "}
-            <span className="text-foreground font-medium">
+            <Text color="primary" weight="medium">
               {pickedSheet ? driveItemLabel(pickedSheet) : "—"}
-            </span>
+            </Text>
             . Chọn tab chứa danh sách sản phẩm.
-          </p>
+          </Text>
 
           <TabListBody
             query={tabs}
@@ -333,95 +359,93 @@ export function GoogleDrivePicker({
             onBack={() => setStep("spreadsheet")}
           />
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" onClick={() => setStep("spreadsheet")}>
-              Chọn bảng khác
-            </Button>
-            <Button type="button" variant="ghost" onClick={onCancel}>
-              Huỷ
-            </Button>
-          </div>
-        </section>
+          <HStack gap={2} align="center" wrap="wrap">
+            <Button
+              variant="secondary"
+              label="Chọn bảng khác"
+              onClick={() => setStep("spreadsheet")}
+            />
+            <Button variant="ghost" label="Huỷ" onClick={onCancel} />
+          </HStack>
+        </Stack>
       ) : null}
 
       {step === "review" ? (
-        <section aria-label="Xem lại nguồn sẽ lưu" className="space-y-3">
-          <dl className="border-border divide-border bg-card divide-y rounded-xl border">
-            <SummaryRow
-              label="Thư mục ảnh"
-              value={pickedFolder ? driveItemLabel(pickedFolder) : "—"}
-              id={pickedFolder?.id}
-            />
-            <SummaryRow
-              label="Bảng Sheet"
-              value={pickedSheet ? driveItemLabel(pickedSheet) : "—"}
-              id={pickedSheet?.id}
-            />
-            <SummaryRow label="Tab dữ liệu" value={pickedTab ?? "—"} />
-          </dl>
+        <Stack as="section" direction="vertical" gap={3} aria-label="Xem lại nguồn sẽ lưu">
+          <MetadataList label={{ position: "start", width: 128 }}>
+            <MetadataListItem label="Thư mục ảnh">
+              <SummaryValue
+                value={pickedFolder ? driveItemLabel(pickedFolder) : "—"}
+                id={pickedFolder?.id}
+              />
+            </MetadataListItem>
+            <MetadataListItem label="Bảng Sheet">
+              <SummaryValue
+                value={pickedSheet ? driveItemLabel(pickedSheet) : "—"}
+                id={pickedSheet?.id}
+              />
+            </MetadataListItem>
+            <MetadataListItem label="Tab dữ liệu">
+              <SummaryValue value={pickedTab ?? "—"} />
+            </MetadataListItem>
+          </MetadataList>
 
           {isConfirming ? (
-            <div
+            <Stack
+              direction="vertical"
               role="group"
               aria-label="Xác nhận lưu nguồn dữ liệu"
               onKeyDown={(event) => {
                 if (event.key === "Escape") setIsConfirming(false);
               }}
-              className="border-warning/40 bg-warning/5 space-y-3 rounded-xl border p-4"
             >
-              <p className="text-sm font-medium">Lưu nguồn dữ liệu cho đơn vị này?</p>
-              <p className="text-muted-foreground text-sm">
-                Lưu xong cần bấm <span className="text-foreground font-medium">Chạy đồng bộ</span>{" "}
-                lại. Lần đồng bộ kế tiếp sẽ xoá sản phẩm/ảnh không còn thuộc nguồn mới.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button ref={confirmRef} type="button" onClick={save}>
-                  Lưu nguồn
-                </Button>
-                <Button type="button" variant="outline" onClick={() => setIsConfirming(false)}>
-                  Xem lại
-                </Button>
-              </div>
-            </div>
+              <Banner
+                status="warning"
+                title="Lưu nguồn dữ liệu cho đơn vị này?"
+                description="Lưu xong cần bấm “Chạy đồng bộ” lại. Lần đồng bộ kế tiếp sẽ xoá sản phẩm/ảnh không còn thuộc nguồn mới."
+                endContent={
+                  <HStack gap={2} align="center" wrap="wrap">
+                    <Button ref={confirmRef} variant="primary" label="Lưu nguồn" onClick={save} />
+                    <Button
+                      variant="secondary"
+                      label="Xem lại"
+                      onClick={() => setIsConfirming(false)}
+                    />
+                  </HStack>
+                }
+              />
+            </Stack>
           ) : (
-            <div className="flex flex-wrap items-center gap-2">
+            <HStack gap={2} align="center" wrap="wrap">
               <Button
-                type="button"
+                variant="primary"
+                label={update.isPending ? "Đang lưu…" : "Lưu nguồn"}
+                isLoading={update.isPending}
+                isDisabled={update.isPending}
                 onClick={() => setIsConfirming(true)}
-                disabled={update.isPending}
-              >
-                {update.isPending ? "Đang lưu…" : "Lưu nguồn"}
-              </Button>
+              />
               <Button
-                type="button"
-                variant="outline"
+                variant="secondary"
+                label="Chọn lại"
+                isDisabled={update.isPending}
                 onClick={restart}
-                disabled={update.isPending}
-              >
-                Chọn lại
-              </Button>
+              />
               <Button
-                type="button"
                 variant="ghost"
+                label="Huỷ"
+                isDisabled={update.isPending}
                 onClick={onCancel}
-                disabled={update.isPending}
-              >
-                Huỷ
-              </Button>
-            </div>
+              />
+            </HStack>
           )}
-        </section>
+        </Stack>
       ) : null}
 
-      {saveIssue ? (
-        <p role="alert" className="text-destructive text-sm">
-          {saveIssue}
-        </p>
-      ) : null}
+      {saveIssue ? <Banner role="alert" status="error" title={saveIssue} /> : null}
 
       {/* The save failed on the server: shown in full, never swallowed. */}
       {update.isError ? <ApiErrorNotice error={update.error} /> : null}
-    </div>
+    </Stack>
   );
 }
 
@@ -434,38 +458,45 @@ function stepAnnouncement(step: PickerStep): string {
   return "Xem lại nguồn trước khi lưu";
 }
 
+/**
+ * Same dot-and-word vocabulary as the batch screen's stepper, so "đang làm" is
+ * one visual idea across the app rather than one per screen.
+ */
 function StepIndicator({ step }: { step: PickerStep }) {
   const activeIndex = STEP_LABELS.findIndex((item) => item.step === step);
   // The review screen belongs to the last step, not to none of them.
   const current = activeIndex === -1 ? STEP_LABELS.length - 1 : activeIndex;
 
   return (
-    <nav aria-label="Các bước chọn nguồn">
-      <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-        {STEP_LABELS.map((item, index) => (
-          <li key={item.step} className="flex items-center gap-2">
-            <span
-              aria-current={index === current ? "step" : undefined}
-              className={
-                index === current
-                  ? "text-foreground font-medium"
-                  : index < current
-                    ? "text-muted-foreground"
-                    : "text-muted-foreground/70"
-              }
+    <HStack as="ol" aria-label="Các bước chọn nguồn" gap={3} wrap="wrap" align="center">
+      {STEP_LABELS.map((item, index) => {
+        const isCurrent = index === current;
+        const isDone = index < current;
+
+        return (
+          <HStack
+            as="li"
+            key={item.step}
+            gap={1.5}
+            align="center"
+            aria-current={isCurrent ? "step" : undefined}
+          >
+            <StatusDot
+              variant={isDone ? "success" : isCurrent ? "accent" : "neutral"}
+              label={isDone ? "đã chọn xong" : isCurrent ? "đang làm" : "chưa tới"}
+              isPulsing={isCurrent}
+            />
+            <Text
+              size="2xs"
+              weight={isCurrent ? "medium" : "normal"}
+              color={isCurrent ? "primary" : isDone ? "secondary" : "placeholder"}
             >
               {index + 1}. {item.label}
-              {index < current ? <span className="sr-only"> (đã chọn xong)</span> : null}
-            </span>
-            {index < STEP_LABELS.length - 1 ? (
-              <span aria-hidden="true" className="text-muted-foreground/50">
-                ›
-              </span>
-            ) : null}
-          </li>
-        ))}
-      </ol>
-    </nav>
+            </Text>
+          </HStack>
+        );
+      })}
+    </HStack>
   );
 }
 
@@ -477,95 +508,41 @@ function FolderBreadcrumb({
   onNavigate: (item: DriveItem) => void;
 }) {
   return (
-    <nav aria-label="Đường dẫn thư mục">
-      <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
-        {breadcrumb.map((item, index) => {
-          const isLast = index === breadcrumb.length - 1;
-          const label = item.id === GOOGLE_DRIVE_ROOT_ID ? GOOGLE_DRIVE_ROOT_NAME : driveItemLabel(item);
+    <Breadcrumbs variant="supporting" label="Đường dẫn thư mục">
+      {breadcrumb.map((item, index) => {
+        const isLast = index === breadcrumb.length - 1;
+        const label =
+          item.id === GOOGLE_DRIVE_ROOT_ID ? GOOGLE_DRIVE_ROOT_NAME : driveItemLabel(item);
 
-          return (
-            <li key={`${item.id}-${index}`} className="flex items-center gap-1.5">
-              {isLast ? (
-                // aria-current="location": this crumb IS the folder on screen.
-                <span aria-current="location" className="text-foreground font-medium">
-                  {label}
-                </span>
-              ) : (
-                <Button
-                  type="button"
-                  variant="link"
-                  size="sm"
-                  className="h-auto px-0"
-                  onClick={() => onNavigate(item)}
-                >
-                  {label}
-                </Button>
-              )}
-              {isLast ? null : (
-                <span aria-hidden="true" className="text-muted-foreground">
-                  /
-                </span>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
+        return (
+          <BreadcrumbItem
+            key={`${item.id}-${index}`}
+            isCurrent={isLast}
+            onClick={isLast ? undefined : () => onNavigate(item)}
+          >
+            {label}
+          </BreadcrumbItem>
+        );
+      })}
+    </Breadcrumbs>
   );
 }
 
-function SummaryRow({ label, value, id }: { label: string; value: string; id?: string }) {
+function SummaryValue({ value, id }: { value: string; id?: string }) {
   return (
-    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 py-3">
-      <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className="flex min-w-0 flex-wrap items-baseline gap-x-3">
-        <span className="text-sm font-medium break-all">{value}</span>
-        {id ? (
-          <span className="text-muted-foreground font-mono text-xs" title={id}>
-            {shortenId(id)}
-          </span>
-        ) : null}
-      </dd>
-    </div>
-  );
-}
-
-function SearchField({
-  id,
-  label,
-  hint,
-  value,
-  onChange,
-  placeholder,
-}: {
-  id: string;
-  label: string;
-  hint: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-}) {
-  const hintId = `${id}-hint`;
-
-  return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="text-sm font-medium">
-        {label}
-      </label>
-      <Input
-        id={id}
-        type="search"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        aria-describedby={hintId}
-        autoComplete="off"
-        spellCheck={false}
-      />
-      <p id={hintId} className="text-muted-foreground text-xs">
-        {hint}
-      </p>
-    </div>
+    // `center`: Astryx has no baseline alignment. The two runs are close in
+    // size, so bottom-aligning would drop the tiny id into the descender space
+    // of the name and read as sunken.
+    <HStack gap={3} align="center" wrap="wrap">
+      <Text weight="medium" wordBreak="break-all">
+        {value}
+      </Text>
+      {id ? (
+        <Text type="code" size="2xs" color="secondary" maxLines={1} wordBreak="break-all">
+          {shortenId(id)}
+        </Text>
+      ) : null}
+    </HStack>
   );
 }
 
@@ -627,13 +604,11 @@ function LoadMoreButton({ query, label }: { query: ListQueryLike; label: string 
 
   return (
     <Button
-      type="button"
-      variant="outline"
+      variant="secondary"
+      label={query.isFetchingNextPage ? "Đang tải thêm…" : label}
+      isDisabled={query.isFetchingNextPage}
       onClick={() => void query.fetchNextPage()}
-      disabled={query.isFetchingNextPage}
-    >
-      {query.isFetchingNextPage ? "Đang tải thêm…" : label}
-    </Button>
+    />
   );
 }
 
@@ -669,14 +644,11 @@ function TabListBody({
   if (tabs.length === 0) {
     return (
       <EmptyState
-        kind="done"
+        headingLevel={4}
+        isCompact
         title="Bảng này không đọc được tab nào"
         description="Có thể bảng vừa bị đổi quyền chia sẻ, hoặc đây không phải bảng Google Sheet. Hãy chọn bảng khác."
-        action={
-          <Button type="button" variant="outline" onClick={onBack}>
-            Chọn bảng khác
-          </Button>
-        }
+        actions={<Button variant="secondary" label="Chọn bảng khác" onClick={onBack} />}
       />
     );
   }

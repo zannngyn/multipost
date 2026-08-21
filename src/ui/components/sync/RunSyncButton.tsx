@@ -1,8 +1,7 @@
 "use client";
 
+import { Banner, Button, HStack, Stack, Text } from "@astryxdesign/core";
 import { useEffect, useId, useRef, useState } from "react";
-
-import { Button } from "@/ui/components/ui/button";
 
 /**
  * "Chạy đồng bộ" with a confirmation step.
@@ -11,6 +10,10 @@ import { Button } from "@/ui/components/ui/button";
  * styleable, not translatable and blocks the whole tab) and rather than a modal
  * (nothing here needs to trap focus). Focus moves to the confirm button so a
  * keyboard user lands on the decision; Escape cancels.
+ *
+ * The confirmation is a warning `Banner`: the sync overwrites the catalogue and
+ * deletes what is no longer on the source, so the box says so in the design
+ * system's own "be careful" treatment instead of a hand-tinted panel.
  *
  * Presentational + local UI state only. The mutation lives in the hook above.
  */
@@ -58,52 +61,50 @@ export function RunSyncButton({
     const isBlocked = Boolean(disabled) && !isRunning && Boolean(disabledReason);
 
     return (
-      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <HStack gap={3} align="center" wrap="wrap">
         <Button
           ref={triggerRef}
-          type="button"
+          variant="primary"
           size="lg"
+          label={isRunning ? "Đang đồng bộ…" : "Chạy đồng bộ"}
+          isLoading={isRunning}
+          isDisabled={disabled || isRunning}
+          aria-describedby={isBlocked ? reasonId : undefined}
           onClick={() => setIsConfirming(true)}
-          disabled={disabled || isRunning}
-          aria-describedby={
-            isRunning ? `${panelId}-running` : isBlocked ? reasonId : undefined
-          }
-        >
-          {isRunning ? "Đang đồng bộ…" : "Chạy đồng bộ"}
-        </Button>
+        />
         {isBlocked ? (
-          <span id={reasonId} className="text-muted-foreground max-w-prose text-sm">
-            {disabledReason}
-          </span>
+          <Stack direction="vertical" maxWidth={340}>
+            <Text id={reasonId} type="supporting">
+              {disabledReason}
+            </Text>
+          </Stack>
         ) : null}
-      </span>
+      </HStack>
     );
   }
 
   return (
-    <div
+    <Stack
       id={panelId}
+      direction="vertical"
       role="group"
       aria-label="Xác nhận chạy đồng bộ"
+      maxWidth={560}
       onKeyDown={(event) => {
         if (event.key === "Escape") cancel();
       }}
-      className="border-warning/40 bg-warning/5 w-full max-w-xl space-y-3 rounded-xl border p-4"
     >
-      <p className="text-sm font-medium">Chạy đồng bộ toàn bộ dữ liệu?</p>
-      <p className="text-muted-foreground text-sm">
-        Hệ thống sẽ đọc lại toàn bộ thư mục Drive và bảng Sheet, ghi đè dữ liệu sản phẩm/ảnh hiện có
-        và xoá những mục không còn trên nguồn. Quá trình có thể mất vài phút — đừng đóng tab cho tới
-        khi có kết quả.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button ref={confirmRef} type="button" onClick={confirm}>
-          Chạy ngay
-        </Button>
-        <Button type="button" variant="outline" onClick={cancel}>
-          Huỷ
-        </Button>
-      </div>
-    </div>
+      <Banner
+        status="warning"
+        title="Chạy đồng bộ toàn bộ dữ liệu?"
+        description="Hệ thống sẽ đọc lại toàn bộ thư mục Drive và bảng Sheet, ghi đè dữ liệu sản phẩm/ảnh hiện có và xoá những mục không còn trên nguồn. Quá trình có thể mất vài phút — đừng đóng tab cho tới khi có kết quả."
+        endContent={
+          <HStack gap={2} align="center" wrap="wrap">
+            <Button ref={confirmRef} variant="primary" label="Chạy ngay" onClick={confirm} />
+            <Button variant="secondary" label="Huỷ" onClick={cancel} />
+          </HStack>
+        }
+      />
+    </Stack>
   );
 }

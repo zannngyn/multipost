@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, DropdownMenu, Text, useAnnounce } from "@astryxdesign/core";
+import { DropdownMenu, Text, useAnnounce } from "@astryxdesign/core";
 import type { DropdownMenuOption } from "@astryxdesign/core";
 import { Building2, Check, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -55,7 +55,9 @@ export function TenantSwitcher({ fallbackLabel }: { fallbackLabel: string | null
       description: `${MEMBERSHIP_ROLE_LABELS[item.role]} · ${planLabel(item.plan)}`,
       // A tick AND the position of the item — never colour alone.
       icon: isActive ? <Check aria-hidden="true" /> : undefined,
-      endContent: isActive ? <Badge variant="success" label="Đang dùng" /> : undefined,
+      // Plain supporting text rather than a badge: badges are for counts, and
+      // a green pill next to a tick says the same thing twice, loudly.
+      endContent: isActive ? <Text type="supporting">Đang dùng</Text> : undefined,
       isDisabled: switchTenant.isPending,
       onClick: () => {
         // Choosing the company already active is a no-op, not a round trip that
@@ -78,7 +80,7 @@ export function TenantSwitcher({ fallbackLabel }: { fallbackLabel: string | null
               {
                 id: "no-company",
                 label: isBootstrapAdmin
-                  ? "Phiên quản trị hệ thống — không gắn công ty"
+                  ? "Phiên quản trị hệ thống: không gắn công ty"
                   : "Chưa thuộc công ty nào",
                 isDisabled: true,
               },
@@ -125,7 +127,10 @@ export function TenantSwitcher({ fallbackLabel }: { fallbackLabel: string | null
         menuWidth={300}
         button={{
           label: switchTenant.isPending ? "Đang chuyển công ty…" : `Công ty: ${label}`,
-          variant: "ghost",
+          // Ghost once a company is established — it is a label you can act on,
+          // not an action. With none chosen it is the only thing on the bar the
+          // operator must do, so it stops whispering.
+          variant: tenant ? "ghost" : "secondary",
           size: "sm",
           icon: <Building2 aria-hidden="true" />,
           isLoading: switchTenant.isPending,

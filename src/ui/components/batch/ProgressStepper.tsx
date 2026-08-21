@@ -1,4 +1,5 @@
-import { cn } from "@/shared/utils";
+import { HStack, StatusDot, Text } from "@astryxdesign/core";
+
 import {
   STEP_STATE_LABELS,
   stepStates,
@@ -16,6 +17,9 @@ import {
  *
  * The labels come in from the server, which reads them from the domain: a stage
  * added there must not land on whatever index a screen happened to hardcode.
+ *
+ * There is no separator glyph between steps: each step already carries its own
+ * dot, and a chevron between them would be decoration standing in for an icon.
  *
  * NO `aria-live` here, on purpose: this list re-renders every 1.5s on every row,
  * and a live region per row turns a screen reader into noise. The batch summary
@@ -35,40 +39,47 @@ export function ProgressStepper({
   const states = stepStates(steps.length, currentIndex);
 
   return (
-    <ol aria-label={label} className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+    <HStack as="ol" aria-label={label} gap={3} wrap="wrap" align="center">
       {steps.map((step, position) => {
         const state = states[position] ?? "upcoming";
         return (
-          <li key={step} className="flex items-center gap-1.5">
-            <span
-              // State is spoken, never carried by colour alone (a11y).
-              aria-current={state === "current" ? "step" : undefined}
-              className={cn("flex items-center gap-1", toneOf(state))}
+          <HStack
+            as="li"
+            key={step}
+            gap={1.5}
+            align="center"
+            // State is spoken, never carried by colour alone (a11y).
+            aria-current={state === "current" ? "step" : undefined}
+          >
+            {/* The dot's accessible name IS the state, so the step reads as
+                "đã xong / Đóng gói ảnh" without a second hidden copy. */}
+            <StatusDot
+              variant={DOT_VARIANT[state]}
+              label={STEP_STATE_LABELS[state]}
+              isPulsing={state === "current"}
+            />
+            <Text
+              size="2xs"
+              color={TEXT_COLOR[state]}
+              weight={state === "current" ? "medium" : "normal"}
             >
-              <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", dotOf(state))} />
               {step}
-              <span className="sr-only"> — {STEP_STATE_LABELS[state]}</span>
-            </span>
-            {position < steps.length - 1 ? (
-              <span aria-hidden="true" className="text-foreground-subtle">
-                ›
-              </span>
-            ) : null}
-          </li>
+            </Text>
+          </HStack>
         );
       })}
-    </ol>
+    </HStack>
   );
 }
 
-function toneOf(state: StepState): string {
-  if (state === "current") return "text-foreground font-medium";
-  if (state === "done") return "text-muted-foreground";
-  return "text-foreground-subtle";
-}
+const DOT_VARIANT: Record<StepState, "success" | "accent" | "neutral"> = {
+  done: "success",
+  current: "accent",
+  upcoming: "neutral",
+};
 
-function dotOf(state: StepState): string {
-  if (state === "current") return "bg-primary";
-  if (state === "done") return "bg-success";
-  return "bg-border";
-}
+const TEXT_COLOR: Record<StepState, "primary" | "secondary" | "placeholder"> = {
+  done: "secondary",
+  current: "primary",
+  upcoming: "placeholder",
+};

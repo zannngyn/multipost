@@ -1,8 +1,21 @@
 "use client";
 
-import Link from "next/link";
+import {
+  Banner,
+  Button,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Selector,
+  Stack,
+  StackItem,
+  Text,
+  Token,
+} from "@astryxdesign/core";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useId, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
@@ -10,8 +23,6 @@ import { JobLogSkeleton } from "@/ui/components/jobs/JobLogSkeleton";
 import { JobLogTable } from "@/ui/components/jobs/JobLogTable";
 import { WorkerHealthBanner } from "@/ui/components/jobs/WorkerHealthBanner";
 import { presentWorkerHealth } from "@/ui/components/jobs/present-worker-health";
-import { Button } from "@/ui/components/ui/button";
-import { Select } from "@/ui/components/ui/select";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { usePostJobLog, useRetryPostJob } from "@/ui/hooks/usePostJobs";
@@ -21,11 +32,17 @@ import {
   POST_JOB_STATUS_LABELS,
   jobLogSearchParams,
   parseJobLogFilter,
+  type PostJobLogEntry,
   type PostJobStatus,
 } from "@/ui/schemas/post-batch.schema";
 
 /**
  * "Nhật ký đăng bài" (E11.1): component -> hook -> service -> internal API.
+ *
+ * Frame (`astryx docs layout`, console archetype): the header carries the title
+ * and the filter bar, the content region carries the rows edge-to-edge. The
+ * page used to be a padded 5xl column, which wasted a third of a desktop on a
+ * table whose whole job is to show eight columns at once.
  *
  * The filter lives in the URL, not in `useState` (core-data-list-query rule 1):
  * `/jobs?status=blocked` is shareable, survives F5 and makes Back behave. One
@@ -46,11 +63,14 @@ import {
  * answers that from a SEPARATE query, so a dead queue changes nothing about
  * the four states above — it only adds a sentence on top of them.
  */
+
+/** "Tất cả trạng thái" is a real option, not an empty placeholder. */
+const ALL_STATUSES = "";
+
 export function JobLogScreen() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const statusFilterId = useId();
 
   const filter = useMemo(
     () => parseJobLogFilter(new URLSearchParams(searchParams.toString())),
@@ -60,7 +80,7 @@ export function JobLogScreen() {
   const log = usePostJobLog(filter);
   const retry = useRetryPostJob();
   // Support mode is read-only (M3.3): re-queueing a job posts to the customer's
-  // Page. The table shows the button disabled with this sentence beside it.
+  // Page. The table shows the button disabled with this sentence on it.
   const readOnlyReason = useReadOnlyReason();
 
   // Separate query, separate failure: a job log that renders must not depend on
@@ -78,6 +98,17 @@ export function JobLogScreen() {
 
   const items = useMemo(() => log.data?.pages.flatMap((page) => page.items) ?? [], [log.data]);
   const hasFilter = filter.status !== null || filter.batchId !== null;
+
+  const statusOptions = useMemo(
+    () => [
+      { value: ALL_STATUSES, label: "Tất cả trạng thái" },
+      ...POST_JOB_STATUSES.map((status) => ({
+        value: status,
+        label: POST_JOB_STATUS_LABELS[status],
+      })),
+    ],
+    [],
+  );
 
   function applyStatus(next: string) {
     const status = POST_JOB_STATUSES.includes(next as PostJobStatus)
@@ -107,107 +138,179 @@ export function JobLogScreen() {
   }
 
   return (
-    <section className="space-y-6" aria-labelledby="jobs-heading">
-      <header className="space-y-1">
-        <h1 id="jobs-heading" className="text-2xl font-semibold tracking-tight">
-          Nhật ký đăng bài
-        </h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Mỗi dòng là một bài trên một kênh. Bài lỗi hoặc bị chặn có thể chạy lại — tồn kho vẫn được
-          kiểm tra lại ngay trước khi đăng. Bài ở trạng thái “Facebook giữ lịch” đã nằm trên Facebook
-          và Facebook sẽ tự đăng vào giờ đã hẹn, hệ thống chỉ theo dõi và cập nhật lại kết quả.
-        </p>
-      </header>
+    <Layout
+      height="fill"
+      header={
+        <LayoutHeader hasDivider>
+          <Stack direction="vertical" gap={3} padding={4}>
+            <Stack direction="vertical" gap={1}>
+              <Heading level={1}>Nhật ký đăng bài</Heading>
+              <Text type="supporting">
+                Mỗi dòng là một bài trên một kênh. Bài lỗi hoặc bị chặn có thể chạy lại — tồn kho
+                vẫn được kiểm tra lại ngay trước khi đăng. Bài ở trạng thái “Facebook giữ lịch” đã
+                nằm trên Facebook và Facebook sẽ tự đăng vào giờ đã hẹn, hệ thống chỉ theo dõi và
+                cập nhật lại kết quả.
+              </Text>
+            </Stack>
 
-      <WorkerHealthBanner
-        notice={healthNotice}
-        onRecheck={() => void workerHealth.refetch()}
-        isChecking={workerHealth.isFetching}
-      />
+            <HStack gap={3} align="end" wrap="wrap">
+              <Selector
+                label="Lọc theo trạng thái"
+                size="sm"
+                width={240}
+                options={statusOptions}
+                value={filter.status ?? ALL_STATUSES}
+                onChange={applyStatus}
+              />
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="min-w-0 basis-64 space-y-1.5">
-          <label htmlFor={statusFilterId} className="text-sm font-medium">
-            Lọc theo trạng thái
-          </label>
-          <Select
-            id={statusFilterId}
-            value={filter.status ?? ""}
-            onChange={(event) => applyStatus(event.target.value)}
-          >
-            <option value="">Tất cả trạng thái</option>
-            {POST_JOB_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {POST_JOB_STATUS_LABELS[status]}
-              </option>
-            ))}
-          </Select>
-        </div>
+              {/* The batch condition is shown as a chip so it is visible without
+                  opening anything — a filter hiding in the URL is the reason an
+                  operator blames the data (core-data-list-query §chip). It links
+                  to the lô it names, so the chip is also the way out. */}
+              {filter.batchId ? (
+                <Token
+                  label={`Lô ${filter.batchId}`}
+                  href={`/batches/${encodeURIComponent(filter.batchId)}`}
+                  description="Đang lọc theo lô này. Bấm để mở lô."
+                />
+              ) : null}
 
-        {filter.batchId ? (
-          <p className="text-muted-foreground basis-full text-sm">
-            Đang lọc theo lô{" "}
-            <span className="font-mono text-xs break-all">{filter.batchId}</span>{" "}
-            <Link
-              href={`/batches/${encodeURIComponent(filter.batchId)}`}
-              className="text-primary underline underline-offset-4"
-            >
-              (mở lô)
-            </Link>
-          </p>
-        ) : null}
+              {hasFilter ? (
+                <Button variant="ghost" size="sm" label="Bỏ bộ lọc" onClick={clearFilters} />
+              ) : null}
 
-        {hasFilter ? (
-          <Button type="button" variant="ghost" onClick={clearFilters}>
-            Bỏ bộ lọc
-          </Button>
-        ) : null}
+              <Button
+                variant="secondary"
+                size="sm"
+                label={log.isFetching ? "Đang tải…" : "Tải lại"}
+                isLoading={log.isFetching}
+                isDisabled={log.isFetching}
+                onClick={() => {
+                  // One button, both readings: an operator who just restarted the
+                  // publish worker expects "Tải lại" to clear the banner too.
+                  void log.refetch();
+                  void workerHealth.refetch();
+                }}
+              />
+            </HStack>
+          </Stack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={0} isScrollable>
+          <Stack direction="vertical" height="100%">
+            {/* Above the rows on purpose: "vì sao chưa có bài nào lên" is
+                answered here, before the operator starts reading statuses. */}
+            {healthNotice ? (
+              <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+                <WorkerHealthBanner
+                  notice={healthNotice}
+                  onRecheck={() => void workerHealth.refetch()}
+                  isChecking={workerHealth.isFetching}
+                />
+              </Stack>
+            ) : null}
 
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => {
-            // One button, both readings: an operator who just restarted the
-            // publish worker expects "Tải lại" to clear the banner too.
-            void log.refetch();
-            void workerHealth.refetch();
-          }}
-          disabled={log.isFetching}
-        >
-          {log.isFetching ? "Đang tải…" : "Tải lại"}
-        </Button>
-      </div>
+            {retryNotice ? (
+              <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+                <Banner
+                  status="success"
+                  role="status"
+                  isDismissable
+                  onDismiss={() => setRetryNotice(null)}
+                  title={retryNotice}
+                />
+              </Stack>
+            ) : null}
 
-      {retryNotice ? (
-        <p
-          role="status"
-          className="border-success/30 bg-success/10 text-success-foreground rounded-lg border px-3 py-2 text-sm"
-        >
-          {retryNotice}
-        </p>
-      ) : null}
+            {retry.isError ? (
+              <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+                <ApiErrorNotice error={retry.error} onRetry={() => void log.refetch()} />
+              </Stack>
+            ) : null}
 
-      {retry.isError ? (
-        <ApiErrorNotice error={retry.error} onRetry={() => void log.refetch()} />
-      ) : null}
+            <StackItem size="fill">
+              <JobLogBody
+                isFirstLoad={isFirstLoad}
+                showSkeleton={showSkeleton}
+                log={log}
+                items={items}
+                hasFilter={hasFilter}
+                readOnlyReason={readOnlyReason}
+                onRetryJob={handleRetry}
+                retryingJobId={retry.isPending ? (retry.variables?.postJobId ?? null) : null}
+                onClearFilters={clearFilters}
+              />
+            </StackItem>
 
-      {isFirstLoad ? showSkeleton ? <JobLogSkeleton /> : null : null}
+            {items.length > 0 ? (
+              <Stack direction="horizontal" gap={3} padding={3} align="center" justify="center">
+                <Text type="supporting" role="status" aria-live="polite">
+                  Đang hiển thị {items.length.toLocaleString("vi-VN")} bài
+                  {log.hasNextPage ? " (còn nữa)" : ". Đã hết danh sách."}
+                </Text>
+                {log.hasNextPage ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    label={log.isFetchingNextPage ? "Đang tải…" : "Tải thêm"}
+                    isLoading={log.isFetchingNextPage}
+                    isDisabled={log.isFetchingNextPage}
+                    onClick={() => void log.fetchNextPage()}
+                  />
+                ) : null}
+              </Stack>
+            ) : null}
+          </Stack>
+        </LayoutContent>
+      }
+    />
+  );
+}
 
-      {log.isError && items.length === 0 ? (
+function JobLogBody({
+  isFirstLoad,
+  showSkeleton,
+  log,
+  items,
+  hasFilter,
+  readOnlyReason,
+  onRetryJob,
+  retryingJobId,
+  onClearFilters,
+}: {
+  isFirstLoad: boolean;
+  showSkeleton: boolean;
+  log: ReturnType<typeof usePostJobLog>;
+  items: readonly PostJobLogEntry[];
+  hasFilter: boolean;
+  readOnlyReason: string | null;
+  onRetryJob: (postJobId: string) => void;
+  retryingJobId: string | null;
+  onClearFilters: () => void;
+}) {
+  // --- Loading (delayed so a fast answer does not flash) -------------------
+  if (isFirstLoad) return showSkeleton ? <JobLogSkeleton /> : null;
+
+  // --- Error, with nothing to fall back on ---------------------------------
+  if (log.isError && items.length === 0) {
+    return (
+      <Stack direction="vertical" padding={4}>
         <ApiErrorNotice error={log.error} onRetry={() => void log.refetch()} />
-      ) : null}
+      </Stack>
+    );
+  }
 
-      {!isFirstLoad && !log.isError && items.length === 0 ? (
-        hasFilter ? (
+  // --- Empty: the two cases are told apart on purpose -----------------------
+  if (items.length === 0) {
+    return (
+      <Stack direction="vertical" padding={4}>
+        {hasFilter ? (
           <EmptyState
             kind="no-result"
             title="Không có bài nào khớp bộ lọc"
             description="Không có bài đăng nào ở trạng thái đang chọn. Dữ liệu vẫn còn nguyên — hãy bỏ bộ lọc để xem toàn bộ nhật ký."
-            action={
-              <Button type="button" variant="outline" onClick={clearFilters}>
-                Bỏ bộ lọc
-              </Button>
-            }
+            action={<Button variant="secondary" label="Bỏ bộ lọc" onClick={onClearFilters} />}
           />
         ) : (
           <EmptyState
@@ -215,44 +318,37 @@ export function JobLogScreen() {
             title="Chưa có bài đăng nào"
             description="Chưa có lô đăng nào được tạo cho đơn vị này. Soạn một bài, chọn kênh rồi bấm “Tạo lô đăng” — mọi bài sẽ xuất hiện ở đây."
             action={
-              <Button asChild>
-                <Link href="/compose">Soạn bài</Link>
-              </Button>
+              // A real link, not a click handler: this is navigation, so
+              // Ctrl/Cmd+click, middle-click and "mở tab mới" all have to work,
+              // and a screen reader has to hear "liên kết", not "nút".
+              <Button variant="primary" label="Soạn bài" href="/compose" />
             }
           />
-        )
+        )}
+      </Stack>
+    );
+  }
+
+  // --- Data, possibly STALE -------------------------------------------------
+  // A refetch that failed while rows from an earlier answer are still on screen
+  // is said out loud rather than hidden: acting on a stale log is exactly how a
+  // job gets re-queued twice (business rule 5 at the UI layer).
+  return (
+    <Stack direction="vertical" height="100%">
+      {log.isError ? (
+        <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+          <ApiErrorNotice error={log.error} onRetry={() => void log.refetch()} />
+        </Stack>
       ) : null}
 
-      {items.length > 0 ? (
-        <>
-          <p role="status" aria-live="polite" className="text-muted-foreground text-sm">
-            Đang hiển thị {items.length.toLocaleString("vi-VN")} bài
-            {log.hasNextPage ? " (còn nữa)" : ""}.
-          </p>
-
-          <JobLogTable
-            items={items}
-            onRetry={handleRetry}
-            retryingJobId={retry.isPending ? (retry.variables?.postJobId ?? null) : null}
-            readOnlyReason={readOnlyReason}
-          />
-
-          {log.hasNextPage ? (
-            <div className="flex justify-center">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void log.fetchNextPage()}
-                disabled={log.isFetchingNextPage}
-              >
-                {log.isFetchingNextPage ? "Đang tải…" : "Tải thêm"}
-              </Button>
-            </div>
-          ) : (
-            <p className="text-muted-foreground text-center text-sm">Đã hết danh sách.</p>
-          )}
-        </>
-      ) : null}
-    </section>
+      <StackItem size="fill">
+        <JobLogTable
+          items={items}
+          onRetry={onRetryJob}
+          retryingJobId={retryingJobId}
+          readOnlyReason={readOnlyReason}
+        />
+      </StackItem>
+    </Stack>
   );
 }

@@ -1,13 +1,22 @@
 "use client";
 
-import Link from "next/link";
+import {
+  Banner,
+  Button,
+  EmptyState,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Stack,
+  Text,
+} from "@astryxdesign/core";
 
 import { BatchChannelTable } from "@/ui/components/batch/BatchChannelTable";
 import { BatchStatusSkeleton } from "@/ui/components/batch/BatchStatusSkeleton";
 import { BatchSummaryCard } from "@/ui/components/batch/BatchSummaryCard";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { EmptyState } from "@/ui/components/feedback/EmptyState";
-import { Button } from "@/ui/components/ui/button";
 import { useBatchStatus } from "@/ui/hooks/usePostBatch";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
@@ -17,9 +26,14 @@ import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
  * (docs/07 §4.1). The browser never talks to Graph API; it polls the DB read
  * model through our own endpoint (business rule: no long-held connection).
  *
+ * Frame (`astryx docs layout`, console archetype): the header carries the title
+ * and the two controls an operator uses while watching a batch (tải lại, mở
+ * nhật ký); the content region carries the summary and then the per-channel
+ * rows edge-to-edge.
+ *
  * The four mandatory states (core-feedback-states):
  *   loading — skeleton of the real layout, delayed 300ms
- *   data    — summary card + per-channel table, refreshed while jobs move
+ *   data    — summary block + per-channel table, refreshed while jobs move
  *   empty   — a batch with no channel row at all (nothing was fanned out)
  *   error   — 400 "không tìm thấy lô" (no retry button — retrying repeats it)
  *             vs 5xx (retryable), told apart by `presentApiError`
@@ -35,90 +49,129 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
   const data = batch.data;
   const settled = data ? isSettledBatchStatus(data.status) : false;
 
+  const liveMessage = batch.isError
+    ? "Không đọc được trạng thái lô."
+    : !data
+      ? "Đang tải trạng thái lô…"
+      : settled
+        ? "Lô đã kết thúc — trang dừng tự cập nhật."
+        : batch.isFetching
+          ? "Đang cập nhật…"
+          : "Trang tự cập nhật vài giây một lần khi còn bài đang chạy.";
+
   return (
-    <section className="space-y-6" aria-labelledby="batch-heading">
-      <header className="space-y-1">
-        <h1 id="batch-heading" className="text-2xl font-semibold tracking-tight">
-          Theo dõi lô đăng
-        </h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Mỗi kênh là một bài riêng: một kênh lỗi không làm dừng kênh khác. Trang này đọc trạng thái
-          từ hệ thống, bạn có thể đóng tab — lô vẫn chạy tiếp.
-        </p>
-      </header>
+    <Layout
+      height="fill"
+      header={
+        <LayoutHeader hasDivider>
+          <Stack direction="vertical" gap={3} padding={4}>
+            <Stack direction="vertical" gap={1}>
+              <Heading level={1}>Theo dõi lô đăng</Heading>
+              <Text type="supporting">
+                Mỗi kênh là một bài riêng: một kênh lỗi không làm dừng kênh khác. Trang này đọc
+                trạng thái từ hệ thống, bạn có thể đóng tab — lô vẫn chạy tiếp.
+              </Text>
+            </Stack>
 
-      {/* Live region: a screen reader hears the outcome without re-reading the page. */}
-      <p role="status" aria-live="polite" className="text-muted-foreground text-sm">
-        {batch.isError
-          ? "Không đọc được trạng thái lô."
-          : !data
-            ? "Đang tải trạng thái lô…"
-            : settled
-              ? "Lô đã kết thúc — trang dừng tự cập nhật."
-              : batch.isFetching
-                ? "Đang cập nhật…"
-                : "Trang tự cập nhật vài giây một lần khi còn bài đang chạy."}
-      </p>
+            <HStack gap={3} align="center" wrap="wrap">
+              <Button
+                variant="secondary"
+                size="sm"
+                label={batch.isFetching ? "Đang tải…" : "Tải lại"}
+                isDisabled={batch.isFetching}
+                onClick={() => void batch.refetch()}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                label="Nhật ký của lô này"
+                href={data ? `/jobs?batchId=${encodeURIComponent(data.batchId)}` : "/jobs"}
+              />
+              <Button variant="ghost" size="sm" label="Soạn bài khác" href="/compose" />
 
-      {isFirstLoad ? showSkeleton ? <BatchStatusSkeleton /> : null : null}
+              {/* Live region: a screen reader hears the outcome without
+                  re-reading the page. */}
+              <Text type="supporting" role="status" aria-live="polite">
+                {liveMessage}
+              </Text>
+            </HStack>
+          </Stack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={0} isScrollable>
+          <Stack direction="vertical" gap={6} paddingBlock={4}>
+            {isFirstLoad ? (
+              showSkeleton ? (
+                <Stack direction="vertical" paddingInline={4}>
+                  <BatchStatusSkeleton />
+                </Stack>
+              ) : null
+            ) : null}
 
-      {batch.isError && !data ? (
-        <ApiErrorNotice
-          error={batch.error}
-          onRetry={() => void batch.refetch()}
-          extraAction={
-            <Button asChild variant="outline">
-              <Link href="/jobs">Mở nhật ký đăng bài</Link>
-            </Button>
-          }
-        />
-      ) : null}
+            {batch.isError && !data ? (
+              <Stack direction="vertical" paddingInline={4}>
+                <ApiErrorNotice
+                  error={batch.error}
+                  onRetry={() => void batch.refetch()}
+                  extraAction={
+                    <Button variant="secondary" label="Mở nhật ký đăng bài" href="/jobs" />
+                  }
+                />
+              </Stack>
+            ) : null}
 
-      {data ? (
-        <>
-          {/* A stale-but-visible error: keep the last known table, say it is old. */}
-          {batch.isError ? (
-            <p
-              role="status"
-              className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
-            >
-              Lần cập nhật gần nhất thất bại — bảng bên dưới là dữ liệu cũ. Bấm “Tải lại” để thử
-              lại.
-            </p>
-          ) : null}
+            {data ? (
+              <>
+                {/* A stale-but-visible error: keep the last known table, say it
+                    is old. */}
+                {batch.isError ? (
+                  <Stack direction="vertical" paddingInline={4}>
+                    <Banner
+                      role="status"
+                      status="warning"
+                      title="Bảng bên dưới là dữ liệu cũ"
+                      description="Lần cập nhật gần nhất thất bại, nên những gì đang hiện là kết quả của lần đọc trước."
+                      endContent={
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          label="Thử lại"
+                          onClick={() => void batch.refetch()}
+                        />
+                      }
+                    />
+                  </Stack>
+                ) : null}
 
-          <BatchSummaryCard batch={data} />
+                <Stack direction="vertical" paddingInline={4}>
+                  <BatchSummaryCard batch={data} />
+                </Stack>
 
-          {data.channels.length === 0 ? (
-            <EmptyState
-              kind="no-result"
-              title="Lô này không có kênh nào"
-              description="Không có bài nào được tạo cho lô này. Hãy soạn lại bài và chọn ít nhất một kênh trước khi tạo lô."
-              action={
-                <Button asChild variant="outline">
-                  <Link href="/compose">Về màn soạn bài</Link>
-                </Button>
-              }
-            />
-          ) : (
-            <BatchChannelTable channels={data.channels} progressSteps={data.progressSteps} />
-          )}
-
-          <div className="flex flex-wrap gap-2 border-t pt-4">
-            <Button type="button" variant="outline" onClick={() => void batch.refetch()}>
-              Tải lại
-            </Button>
-            <Button asChild variant="ghost">
-              <Link href={`/jobs?batchId=${encodeURIComponent(data.batchId)}`}>
-                Xem nhật ký của lô này
-              </Link>
-            </Button>
-            <Button asChild variant="ghost">
-              <Link href="/compose">Soạn bài khác</Link>
-            </Button>
-          </div>
-        </>
-      ) : null}
-    </section>
+                {data.channels.length === 0 ? (
+                  <Stack direction="vertical" paddingInline={4}>
+                    <EmptyState
+                      headingLevel={2}
+                      title="Lô này không có kênh nào"
+                      description="Không có bài nào được tạo cho lô này. Hãy soạn lại bài và chọn ít nhất một kênh trước khi tạo lô."
+                      actions={
+                        <Button variant="secondary" label="Về màn soạn bài" href="/compose" />
+                      }
+                    />
+                  </Stack>
+                ) : (
+                  <Stack direction="vertical" paddingInline={4}>
+                    <BatchChannelTable
+                      channels={data.channels}
+                      progressSteps={data.progressSteps}
+                    />
+                  </Stack>
+                )}
+              </>
+            ) : null}
+          </Stack>
+        </LayoutContent>
+      }
+    />
   );
 }

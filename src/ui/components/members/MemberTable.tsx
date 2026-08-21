@@ -1,13 +1,14 @@
 "use client";
 
 import {
-  Badge,
   Button,
   HStack,
   Selector,
   Stack,
+  StatusDot,
   Table,
   Text,
+  Token,
   pixel,
   proportional,
 } from "@astryxdesign/core";
@@ -43,10 +44,36 @@ import { formatDateTime } from "@/ui/schemas/post-batch.schema";
  * What the ladder forbids is disabled here WITH ITS REASON in a tooltip — a
  * dead control with no explanation is the thing core-auth-session forbids. The
  * server still decides: a 403/409 lands in the notice above the table.
+ *
+ * Role is a category (Token), status is a state (StatusDot + its label in
+ * words). Badges are left for counts, so nothing in the list shouts by default.
  */
 
 /** Table's generic needs an index signature; the fields stay Member's. */
 type MemberRow = Member & Record<string, unknown>;
+
+/**
+ * Role is a CATEGORY, so it reads as a token, not a badge (astryx docs layout:
+ * badges are for counts and enumerated states). The ladder is legible at a
+ * glance because the colours climb with it: owner > admin > editor > viewer.
+ */
+const ROLE_TOKEN_COLORS: Record<MembershipRole, "purple" | "blue" | "teal" | "gray"> = {
+  owner: "purple",
+  admin: "blue",
+  editor: "teal",
+  viewer: "gray",
+};
+
+/**
+ * Status is a STATE, so it reads as a dot plus its label in words — never
+ * colour alone (core-accessibility §5). `memberStatusLabel` tolerates an
+ * unknown status from the server, so this map needs the same fallback.
+ */
+const MEMBER_STATUS_TONES: Record<string, "success" | "warning" | "neutral"> = {
+  active: "success",
+  suspended: "warning",
+  removed: "neutral",
+};
 
 interface PendingAction {
   membershipId: string;
@@ -94,11 +121,15 @@ export function MemberTable({
       renderCell: (member) => (
         <Stack direction="vertical" gap={0.5}>
           <HStack gap={2} align="center" wrap="wrap">
-            <Text>{memberDisplayName(member)}</Text>
+            <Text weight="medium">{memberDisplayName(member)}</Text>
             {member.isYou ? <Text type="supporting">(bạn)</Text> : null}
           </HStack>
           {member.email?.trim() ? (
-            <Text type="supporting">{member.email}</Text>
+            // One line with a tooltip: a long address must not push the row
+            // taller than every other row in the list.
+            <Text type="supporting" maxLines={1}>
+              {member.email}
+            </Text>
           ) : (
             <Text type="supporting" color="placeholder">
               Không có email — đăng nhập bằng tài khoản mạng xã hội
@@ -112,30 +143,34 @@ export function MemberTable({
       header: "Vai trò",
       width: pixel(150),
       renderCell: (member) => (
-        <Badge
-          variant={member.role === "owner" ? "purple" : "blue"}
-          label={MEMBERSHIP_ROLE_LABELS[member.role]}
-        />
+        <Token size="sm" color={ROLE_TOKEN_COLORS[member.role]} label={MEMBERSHIP_ROLE_LABELS[member.role]} />
       ),
     },
     {
       key: "status",
       header: "Trạng thái",
       width: pixel(140),
-      renderCell: (member) =>
-        member.status === "active" ? (
-          <Text color="secondary">{memberStatusLabel(member.status)}</Text>
-        ) : (
-          // Anything other than active is exceptional — that is what a badge is
-          // for, and the plain rows stay quiet around it.
-          <Badge variant="warning" label={memberStatusLabel(member.status)} />
-        ),
+      renderCell: (member) => (
+        <HStack gap={2} align="center">
+          <StatusDot
+            variant={MEMBER_STATUS_TONES[member.status] ?? "neutral"}
+            label={memberStatusLabel(member.status)}
+          />
+          <Text color={member.status === "active" ? "secondary" : "primary"}>
+            {memberStatusLabel(member.status)}
+          </Text>
+        </HStack>
+      ),
     },
     {
       key: "joinedAt",
       header: "Vào công ty",
       width: pixel(170),
-      renderCell: (member) => <Text color="secondary">{formatDateTime(member.joinedAt)}</Text>,
+      renderCell: (member) => (
+        <Text color="secondary" hasTabularNumbers>
+          {formatDateTime(member.joinedAt)}
+        </Text>
+      ),
     },
     {
       key: "actions",
@@ -157,7 +192,7 @@ export function MemberTable({
 
           return (
             <Stack direction="vertical" gap={2}>
-              <Text type="supporting" role="alert">
+              <Text type="supporting" color="primary" role="alert">
                 Đổi vai trò của {name}
                 {member.isYou ? " (chính bạn)" : ""}?
                 {member.isYou
@@ -207,7 +242,7 @@ export function MemberTable({
         if (isAsking && pending?.kind === "remove") {
           return (
             <Stack direction="vertical" gap={2}>
-              <Text type="supporting" role="alert">
+              <Text type="supporting" color="primary" role="alert">
                 Gỡ {member.isYou ? "chính bạn" : name} khỏi công ty?{" "}
                 {removeMemberConsequence(member)}
               </Text>
@@ -272,6 +307,7 @@ export function MemberTable({
   return (
     <Stack direction="vertical" isScrollable height="100%">
       <Table
+        aria-label="Thành viên của công ty"
         data={members as MemberRow[]}
         columns={columns}
         idKey="membershipId"

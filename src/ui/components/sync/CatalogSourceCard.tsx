@@ -1,16 +1,28 @@
 "use client";
 
+import {
+  Button,
+  Collapsible,
+  Divider,
+  HStack,
+  Heading,
+  Link,
+  MetadataList,
+  MetadataListItem,
+  Section,
+  Skeleton,
+  Stack,
+  StackItem,
+  Text,
+} from "@astryxdesign/core";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 
-import { cn } from "@/shared/utils";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { CatalogSourceForm } from "@/ui/components/sync/CatalogSourceForm";
 import { GoogleConnectionPanel } from "@/ui/components/sync/GoogleConnectionPanel";
 import { GoogleDrivePicker } from "@/ui/components/sync/GoogleDrivePicker";
-import { Badge } from "@/ui/components/ui/badge";
-import { Button } from "@/ui/components/ui/button";
 import { useCatalogSource } from "@/ui/hooks/useCatalogProducts";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { writeGate } from "@/ui/hooks/read-only-gate";
@@ -26,7 +38,11 @@ import {
  * "Nguồn đang đọc" — WHICH Drive folder and WHICH Sheet tab this tenant reads,
  * and HOW the tool is allowed to read them.
  *
- * The card is stacked in the order an operator sets things up:
+ * A `Section`, not a Card: this is a page region made of several sub-regions,
+ * which is the case Astryx says Section exists for. The regions are separated
+ * by dividers instead of nested boxes.
+ *
+ * The region is stacked in the order an operator sets things up:
  *  1. the Google connection (primary — connect once, then pick in-app);
  *  2. the source itself (facts, or the in-app picker while choosing);
  *  3. "Hoặc nhập link/ID thủ công" — the fallback for a tenant that runs on a
@@ -113,8 +129,8 @@ export function CatalogSourceCard({
   /**
    * A tenant that reads Drive with a Service Account never connects OAuth, so
    * the picker is not for it — the manual link/ID form is its ONLY way to change
-   * a source it already has. It stays a secondary, outline action next to the
-   * heading: connecting Google is still the primary route for everyone else.
+   * a source it already has. It stays a secondary action next to the heading:
+   * connecting Google is still the primary route for everyone else.
    */
   const needsManualEntry = !isConnectionFirstLoad && !isConnected;
 
@@ -140,40 +156,38 @@ export function CatalogSourceCard({
   }
 
   return (
-    <section
-      aria-labelledby={headingId}
-      className="@container bg-card border-border overflow-hidden rounded-xl border"
-    >
-      <div className="border-border flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
-        {/* Eyebrow styling on a real heading: the block needs a title in the
-            outline, and <Eyebrow> is a <p> by design. */}
-        <h2
-          id={headingId}
-          className="text-foreground-subtle font-mono text-xs tracking-widest uppercase"
-        >
-          Nguồn đang đọc
-        </h2>
-        <div className="flex flex-wrap items-center gap-2">
-          {source.isFetching || connection.isFetching ? (
-            <Badge tone="neutral">Đang làm mới…</Badge>
-          ) : null}
-          {/* Only for the tenants the picker cannot serve, and only once the
-              status is known — offering it while the answer is still loading
-              would flash a button at everyone. */}
-          {configured !== null && needsManualEntry && !isPicking && !gate.isDisabled ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-expanded={isManualOpen}
-              aria-controls={manualPanelId}
-              onClick={() => setIsManualOpen((open) => !open)}
-            >
-              Đổi nguồn
-            </Button>
-          ) : null}
-        </div>
-      </div>
+    // `role="region"`: Section renders a plain container, and this block is the
+    // one named area of the screen an operator navigates to on purpose.
+    <Section padding={0} role="region" aria-labelledby={headingId}>
+      <HStack gap={3} paddingInline={4} paddingBlock={2} align="center" wrap="wrap">
+        <StackItem size="fill">
+          <Heading level={2} id={headingId}>
+            Nguồn đang đọc
+          </Heading>
+        </StackItem>
+
+        {source.isFetching || connection.isFetching ? (
+          <Text type="supporting" role="status" aria-live="polite">
+            Đang làm mới…
+          </Text>
+        ) : null}
+
+        {/* Only for the tenants the picker cannot serve, and only once the
+            status is known — offering it while the answer is still loading
+            would flash a button at everyone. */}
+        {configured !== null && needsManualEntry && !isPicking && !gate.isDisabled ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            label="Đổi nguồn"
+            aria-expanded={isManualOpen}
+            aria-controls={manualPanelId}
+            onClick={() => setIsManualOpen((open) => !open)}
+          />
+        ) : null}
+      </HStack>
+
+      <Divider />
 
       <GoogleConnectionPanel
         connection={connection}
@@ -183,17 +197,16 @@ export function CatalogSourceCard({
         isPicking={isPicking}
       />
 
+      <Divider />
+
       {isPicking ? (
-        <div className="border-border space-y-3 border-b p-4">
-          <p className="text-muted-foreground max-w-prose text-sm">
+        <Stack direction="vertical" gap={3} padding={4}>
+          <Text type="supporting">
             Chọn thư mục ảnh, bảng Google Sheet và tab dữ liệu ngay tại đây. Nguồn chỉ được lưu ở
             bước cuối, sau khi bạn xác nhận.
-          </p>
-          <GoogleDrivePicker
-            onSaved={finishSourceChange}
-            onCancel={() => setIsPicking(false)}
-          />
-        </div>
+          </Text>
+          <GoogleDrivePicker onSaved={finishSourceChange} onCancel={() => setIsPicking(false)} />
+        </Stack>
       ) : (
         <SourceRegion
           isFirstLoad={isFirstLoad}
@@ -212,19 +225,36 @@ export function CatalogSourceCard({
       {/* The manual editor is not offered at all in read-only mode: a form
           whose save can only 403 invites typing that gets thrown away. */}
       {gate.isDisabled ? null : (
-        <ManualSourceDisclosure
-          panelId={manualPanelId}
-          isOpen={isManualOpen}
-          onToggle={() => setIsManualOpen((open) => !open)}
-        >
-          <CatalogSourceForm
-            current={configured ?? undefined}
-            onSaved={finishSourceChange}
-            onCancel={() => setIsManualOpen(false)}
-          />
-        </ManualSourceDisclosure>
+        <>
+          <Divider />
+          {/* A bare Collapsible is unpadded by design, so the inset that lines
+              it up with the blocks above comes from here. */}
+          <Stack direction="vertical" paddingInline={4} paddingBlock={2}>
+            <Collapsible
+              isOpen={isManualOpen}
+              onOpenChange={setIsManualOpen}
+              trigger={<Text weight="medium">Hoặc nhập link/ID thủ công</Text>}
+            >
+              {/* Unmounted when closed on purpose: a hidden form keeps draft
+                  values and server errors alive where nobody can see them. */}
+              {isManualOpen ? (
+                <Stack id={manualPanelId} direction="vertical" gap={3} paddingBlock={2}>
+                  <Text type="supporting">
+                    Dùng khi đơn vị đọc Drive bằng Service Account, hoặc khi bạn đã có sẵn link/ID.
+                    Không cần kết nối Google cho cách này.
+                  </Text>
+                  <CatalogSourceForm
+                    current={configured ?? undefined}
+                    onSaved={finishSourceChange}
+                    onCancel={() => setIsManualOpen(false)}
+                  />
+                </Stack>
+              ) : null}
+            </Collapsible>
+          </Stack>
+        </>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -261,9 +291,9 @@ function SourceRegion({
 
   if (isError) {
     return (
-      <div className="border-border border-b p-4">
+      <Stack direction="vertical" padding={4}>
         <ApiErrorNotice error={error} onRetry={onRetry} />
-      </div>
+      </Stack>
     );
   }
 
@@ -278,24 +308,24 @@ function SourceRegion({
     }
 
     return (
-      <div className="border-border space-y-3 border-b p-4">
-        <p className="text-muted-foreground max-w-prose text-sm">
+      <Stack direction="vertical" gap={3} padding={4}>
+        <Text type="supporting">
           Chưa cấu hình nguồn Drive/Sheet cho đơn vị này, nên chưa chạy đồng bộ được.
           {readOnlyReason
             ? ""
             : canPick
               ? " Chọn thư mục ảnh và bảng sản phẩm ngay trong app."
               : " Kết nối Google ở trên, hoặc nhập link/ID thủ công ở phần dưới."}
-        </p>
+        </Text>
         {/* In read-only mode the "làm gì tiếp theo" belongs to whoever owns the
             company, not to the person reading over their shoulder. */}
         <ReadOnlyNotice reason={readOnlyReason} />
         {canPick ? (
-          <Button type="button" onClick={onPick}>
-            Chọn thư mục và bảng
-          </Button>
+          <HStack gap={2} align="center">
+            <Button variant="primary" label="Chọn thư mục và bảng" onClick={onPick} />
+          </HStack>
         ) : null}
-      </div>
+      </Stack>
     );
   }
 
@@ -304,168 +334,85 @@ function SourceRegion({
 
 function SourceFacts({ source }: { source: CatalogSource }) {
   return (
-    <>
-      <dl className="grid grid-cols-1 @lg:grid-cols-2">
-        <SourceColumn
-          label="Thư mục Drive"
-          id={source.driveFolderId}
-          href={source.driveFolderUrl}
-          linkLabel="Mở thư mục"
-          className="border-border border-b @lg:border-r @lg:border-b-0"
-        />
-        <SourceColumn
-          label="Bảng Sheet"
-          id={source.spreadsheetId}
-          href={source.spreadsheetUrl}
-          linkLabel="Mở bảng"
-          extra={
-            <>
-              tab <span className="text-foreground font-medium">{source.sheetName}</span>
-            </>
-          }
-        />
-      </dl>
+    <Stack direction="vertical" gap={3} padding={4}>
+      <MetadataList columns={2} label={{ position: "top" }}>
+        <MetadataListItem label="Thư mục Drive">
+          <SourceValue
+            id={source.driveFolderId}
+            href={source.driveFolderUrl}
+            linkLabel="Mở thư mục"
+          />
+        </MetadataListItem>
+        <MetadataListItem label={`Bảng Sheet · tab ${source.sheetName}`}>
+          <SourceValue id={source.spreadsheetId} href={source.spreadsheetUrl} linkLabel="Mở bảng" />
+        </MetadataListItem>
+      </MetadataList>
 
-      <p className="text-muted-foreground border-border border-t border-b px-4 py-2 text-xs">
+      <Text type="supporting" size="2xs">
         Hệ thống chỉ đọc đúng hai nguồn trên. Đổi nguồn xong phải chạy đồng bộ lại — lần đồng bộ kế
         tiếp sẽ xoá sản phẩm/ảnh không còn thuộc nguồn mới.
-      </p>
-    </>
+      </Text>
+    </Stack>
   );
 }
 
-function SourceColumn({
-  label,
+function SourceValue({
   id,
   href,
   linkLabel,
-  extra,
-  className,
 }: {
-  label: string;
   id: string;
   href: string;
   linkLabel: string;
-  extra?: React.ReactNode;
-  className?: string;
 }) {
   return (
-    // One <div> per dt/dd pair — the only wrapper a <dl> may contain.
-    <div className={cn("space-y-1 px-4 py-3", className)}>
-      <dt className="text-muted-foreground text-xs">
-        {label}
-        {extra ? <> · {extra}</> : null}
-      </dt>
-      <dd className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        {/* `title` keeps the full id reachable without pasting 44 chars. */}
-        <span className="text-muted-foreground font-mono text-xs break-all" title={id}>
-          {shortenId(id)}
-        </span>
-        <a
-          href={href}
-          target="_blank"
-          // noopener: an external tab must not get a handle on this one.
-          rel="noopener noreferrer"
-          className="text-primary text-sm whitespace-nowrap underline underline-offset-4"
-        >
-          {linkLabel}
-          <span className="sr-only"> (mở tab mới)</span> <span aria-hidden="true">↗</span>
-        </a>
-      </dd>
-    </div>
-  );
-}
-
-/**
- * The manual escape hatch, demoted to a disclosure. Controlled rather than a
- * native <details> because the card opens it by itself when it is the only way
- * forward — and `aria-expanded` + `aria-controls` give a screen reader the same
- * information the chevron gives everyone else.
- */
-function ManualSourceDisclosure({
-  panelId,
-  isOpen,
-  onToggle,
-  children,
-}: {
-  /** Owned by the card: the header's "Đổi nguồn" points at this same panel. */
-  panelId: string;
-  isOpen: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <h3>
-        <button
-          type="button"
-          aria-expanded={isOpen}
-          aria-controls={panelId}
-          onClick={onToggle}
-          className="focus-visible:ring-ring/50 hover:bg-muted/50 flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-medium outline-none focus-visible:ring-3"
-        >
-          <span>Hoặc nhập link/ID thủ công</span>
-          <span aria-hidden="true" className="text-muted-foreground text-xs">
-            {isOpen ? "▲" : "▼"}
-          </span>
-        </button>
-      </h3>
-
-      {/* Unmounted when closed on purpose: a hidden form keeps draft values and
-          server errors alive where nobody can see them. */}
-      {isOpen ? (
-        <div id={panelId} className="space-y-3 px-4 pb-4">
-          <p className="text-muted-foreground max-w-prose text-sm">
-            Dùng khi đơn vị đọc Drive bằng Service Account, hoặc khi bạn đã có sẵn link/ID. Không
-            cần kết nối Google cho cách này.
-          </p>
-          {children}
-        </div>
-      ) : null}
-    </div>
+    // `center`: Astryx has no baseline alignment, and the id sits next to a
+    // normal-size link, so centring keeps the pair on one optical line.
+    <HStack gap={3} align="center" wrap="wrap">
+      {/* Shortened, with the truncation tooltip carrying the rest — an operator
+          never needs to read 44 characters, only to recognise them. */}
+      <Text type="code" size="2xs" color="secondary" maxLines={1} wordBreak="break-all">
+        {shortenId(id)}
+      </Text>
+      {/* External on purpose: an external tab must not get a handle on this one,
+          which `isExternalLink` takes care of. */}
+      <Link href={href} isExternalLink newTabLabel="(mở tab mới)">
+        {linkLabel}
+      </Link>
+    </HStack>
   );
 }
 
 /**
  * Placeholder for the empty state while the connection status decides WHICH
  * empty state it is. Same two lines + button height as the real block, so the
- * answer lands without pushing the card around.
+ * answer lands without pushing the region around.
  */
 function SourceEmptySkeleton() {
   return (
-    <div
-      aria-hidden="true"
-      className="border-border space-y-3 border-b p-4 motion-safe:animate-pulse"
-    >
-      <div className="space-y-2">
-        <div className="bg-muted h-4 w-full max-w-prose rounded" />
-        <div className="bg-muted h-4 w-2/3 max-w-prose rounded" />
-      </div>
-      <div className="bg-muted h-9 w-44 rounded-lg" />
-    </div>
+    <Stack direction="vertical" gap={3} padding={4} aria-hidden="true">
+      <Skeleton width="100%" height={16} />
+      <Skeleton width="66%" height={16} index={1} />
+      <Skeleton width={176} height={32} index={2} />
+    </Stack>
   );
 }
 
-/**
- * Same shape as the real facts block so nothing jumps (CLS = 0) — which means
- * the SAME breakpoint system too: a viewport breakpoint here would flip to two
- * columns at a width where the real card is still one, and the jump would be
- * back.
- */
+/** Same shape as the real facts block so nothing jumps (CLS = 0). */
 function SourceFactsSkeleton() {
   return (
-    <div aria-hidden="true" className="border-border border-b motion-safe:animate-pulse">
-      <div className="grid grid-cols-1 @lg:grid-cols-2">
+    <Stack direction="vertical" gap={3} padding={4} aria-hidden="true">
+      <HStack gap={4} align="start" wrap="wrap">
         {[0, 1].map((cell) => (
-          <div key={cell} className="space-y-2 px-4 py-3">
-            <div className="bg-muted h-3 w-28 rounded" />
-            <div className="bg-muted h-4 w-44 rounded" />
-          </div>
+          <StackItem key={cell} size="fill">
+            <Stack direction="vertical" gap={1.5}>
+              <Skeleton width={112} height={12} index={cell} />
+              <Skeleton width={176} height={16} index={cell} />
+            </Stack>
+          </StackItem>
         ))}
-      </div>
-      <div className="border-border border-t px-4 py-2">
-        <div className="bg-muted h-3 w-full rounded" />
-      </div>
-    </div>
+      </HStack>
+      <Skeleton width="100%" height={12} index={2} />
+    </Stack>
   );
 }

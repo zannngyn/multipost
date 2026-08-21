@@ -26,14 +26,14 @@ export function AccessForbidden({ email }: { email: string }) {
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <Stack direction="vertical" gap={1} padding={4}>
+          <Stack direction="vertical" gap={1} padding={4} maxWidth={640}>
             <Heading level={1}>Quyền truy cập</Heading>
             <Text type="supporting">Chỉ quản trị viên của đơn vị mới mở được mục này.</Text>
           </Stack>
         </LayoutHeader>
       }
       content={
-        <LayoutContent padding={4}>
+        <LayoutContent padding={6}>
           <EmptyState
             headingLevel={2}
             title="Bạn không có quyền xem mục này"

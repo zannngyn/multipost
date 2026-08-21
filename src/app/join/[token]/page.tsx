@@ -1,3 +1,4 @@
+import { Card, Stack } from "@astryxdesign/core";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
@@ -42,8 +43,23 @@ export default async function JoinPage({ params }: PageProps<"/join/[token]">) {
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-6 py-16">
-      <JoinInviteScreen token={token} />
+    // Frame, not content: one centred panel on an otherwise empty page.
+    //
+    // Card rather than a bare column because the invite result is exactly the
+    // case Astryx reserves Card for — a single discrete object with its own
+    // boundary. Left loose in the middle of a full-height body, the three
+    // states (pending / joined / dead link) floated with nothing to sit on, and
+    // the error state in particular read as a page that had broken rather than
+    // a link that had expired.
+    //
+    // 560px cap: the success copy is two sentences of Vietnamese prose, and past
+    // that width the second line starts hunting for its own start edge.
+    <main className="flex w-full flex-1">
+      <Stack direction="vertical" vAlign="center" width="100%" padding={6}>
+        <Card padding={6} width="100%" maxWidth={560} className="mx-auto">
+          <JoinInviteScreen token={token} />
+        </Card>
+      </Stack>
     </main>
   );
 }

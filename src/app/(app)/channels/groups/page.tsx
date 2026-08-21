@@ -9,6 +9,9 @@ import { ChannelGroupsScreen } from "@/ui/components/channels/ChannelGroupsScree
  *
  * Moved under /channels in E5.1: /channels now lists the connected Pages, and a
  * group is a shortcut built ON TOP of that list — the nesting says so.
+ *
+ * The screen owns its own frame (Layout + header + form panel), so this page
+ * adds no container of its own.
  */
 
 export const metadata: Metadata = {
@@ -26,9 +29,5 @@ export default async function ChannelGroupsPage() {
   // Component must not trust that it was reached through the guard.
   if (!session) redirect("/signin?returnUrl=%2Fchannels%2Fgroups");
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <ChannelGroupsScreen />
-    </div>
-  );
+  return <ChannelGroupsScreen />;
 }

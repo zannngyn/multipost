@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge, HStack, Stack, StatusDot, Table, Text, pixel, proportional } from "@astryxdesign/core";
+import { HStack, Stack, StatusDot, Table, Text, Token, pixel, proportional } from "@astryxdesign/core";
 import type { TableColumn } from "@astryxdesign/core";
 
 import {
@@ -58,11 +58,13 @@ export function AccessRequestTable({ items }: { items: readonly AccessRequest[] 
       width: proportional(2),
       renderCell: (request) => (
         <Stack direction="vertical" gap={0.5}>
-          <Text>{accessRequestDisplayName(request)}</Text>
+          <Text weight="medium">{accessRequestDisplayName(request)}</Text>
           {/* A provider that sent no e-mail is a fact, not a blank cell — and
               never the string "null". */}
           {hasEmail(request.email) ? (
-            <Text type="supporting">{accessRequestEmailLabel(request.email)}</Text>
+            <Text type="supporting" maxLines={1}>
+              {accessRequestEmailLabel(request.email)}
+            </Text>
           ) : (
             <Text type="supporting" color="placeholder">
               Không có email — nhận diện bằng mã tài khoản
@@ -76,8 +78,11 @@ export function AccessRequestTable({ items }: { items: readonly AccessRequest[] 
       header: "Đăng nhập bằng",
       width: pixel(140),
       renderCell: (request) => (
-        <Badge
-          variant={ACCESS_PROVIDER_TONES[request.provider]}
+        // The provider is a category, not a state — a token, so the row's one
+        // badge-weight element stays the thing that decides: its status.
+        <Token
+          size="sm"
+          color={ACCESS_PROVIDER_TONES[request.provider]}
           label={ACCESS_PROVIDER_LABELS[request.provider]}
         />
       ),
@@ -86,7 +91,11 @@ export function AccessRequestTable({ items }: { items: readonly AccessRequest[] 
       key: "providerAccountId",
       header: "Mã tài khoản",
       width: pixel(170),
-      renderCell: (request) => <Text color="secondary">{request.providerAccountId}</Text>,
+      renderCell: (request) => (
+        <Text color="secondary" hasTabularNumbers maxLines={1}>
+          {request.providerAccountId}
+        </Text>
+      ),
     },
     {
       key: "role",
@@ -103,7 +112,11 @@ export function AccessRequestTable({ items }: { items: readonly AccessRequest[] 
       key: "requestedAt",
       header: "Lúc yêu cầu",
       width: pixel(170),
-      renderCell: (request) => <Text color="secondary">{formatDateTime(request.requestedAt)}</Text>,
+      renderCell: (request) => (
+        <Text color="secondary" hasTabularNumbers>
+          {formatDateTime(request.requestedAt)}
+        </Text>
+      ),
     },
     {
       key: "decidedAt",
@@ -115,8 +128,10 @@ export function AccessRequestTable({ items }: { items: readonly AccessRequest[] 
           <Text color="placeholder">Không ai quyết định</Text>
         ) : (
           <Stack direction="vertical" gap={0.5}>
-            <Text type="supporting">{request.decidedByEmail ?? "Không rõ người quyết định"}</Text>
-            <Text type="supporting" color="secondary">
+            <Text type="supporting" maxLines={1}>
+              {request.decidedByEmail ?? "Không rõ người quyết định"}
+            </Text>
+            <Text type="supporting" color="secondary" hasTabularNumbers>
               {formatDateTime(request.decidedAt)}
             </Text>
           </Stack>
@@ -127,6 +142,7 @@ export function AccessRequestTable({ items }: { items: readonly AccessRequest[] 
   return (
     <Stack direction="vertical" isScrollable height="100%">
       <Table
+        aria-label="Lịch sử yêu cầu truy cập"
         data={items as AccessRequestRow[]}
         columns={columns}
         idKey="id"

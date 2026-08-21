@@ -1,9 +1,19 @@
 "use client";
 
+import {
+  Divider,
+  Grid,
+  HStack,
+  Heading,
+  ProgressBar,
+  Stack,
+  StackItem,
+  StatusDot,
+  Text,
+} from "@astryxdesign/core";
 import { Fragment, useId } from "react";
 
-import { cn } from "@/shared/utils";
-import { formatClock, formatCount, percentOf, segmentWidth } from "@/ui/components/sync/sync-format";
+import { formatClock, formatCount, percentOf } from "@/ui/components/sync/sync-format";
 import {
   buildStages,
   type SegmentTone,
@@ -19,22 +29,27 @@ import type { SyncRunCounts } from "@/ui/schemas/sync.schema";
  * Fifteen equal-sized counters could not answer "vì sao chỉ có 9.132 ảnh trong
  * hệ thống khi Drive có 14.987 file" — three stages with the losses named can.
  *
- * The stacked bar is an ILLUSTRATION: it is `aria-hidden`, and every number it
- * encodes is repeated as text in the legend right below it
- * (core-dashboard-analytics §7 — a chart with no textual equivalent is invisible
- * to a screen reader). The arithmetic lives in `sync-funnel-stages.ts`.
+ * The bar per stage is the SHARE THAT WENT ON, drawn with the design system's
+ * own ProgressBar. The previous version drew a stacked bar out of hand-sized
+ * spans, which meant a runtime `style={{width}}` on every segment and a private
+ * colour table; the segments are still all there, each with its own count and
+ * its own dot, right underneath. Nothing that was on screen was dropped — the
+ * geometry stopped being hand-drawn.
+ *
+ * The arithmetic lives in `sync-funnel-stages.ts`.
  */
 
-const SEGMENT_BAR: Record<SegmentTone, string> = {
-  kept: "bg-primary",
-  neutral: "bg-muted-foreground/40",
-  rejected: "bg-warning",
+/** Segment tone -> the dot beside its count. Colour never travels alone. */
+const SEGMENT_DOT: Record<SegmentTone, "accent" | "neutral" | "warning"> = {
+  kept: "accent",
+  neutral: "neutral",
+  rejected: "warning",
 };
 
-const SEGMENT_TEXT: Record<SegmentTone, string> = {
-  kept: "text-foreground",
-  neutral: "text-muted-foreground",
-  rejected: "text-warning-foreground",
+const SEGMENT_TEXT: Record<SegmentTone, "primary" | "secondary"> = {
+  kept: "primary",
+  neutral: "secondary",
+  rejected: "primary",
 };
 
 export function SyncFunnel({
@@ -49,34 +64,41 @@ export function SyncFunnel({
   const stages = buildStages(counts);
 
   return (
-    <section aria-labelledby={headingId} className="@container space-y-2.5">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 id={headingId} className="text-base font-semibold">
+    <Stack as="section" direction="vertical" gap={3} aria-labelledby={headingId}>
+      <Stack direction="vertical" gap={0.5}>
+        <Heading level={2} id={headingId}>
           Dòng dữ liệu của lần chạy này
-        </h2>
-        <p className="text-muted-foreground text-sm">Số vào → số bỏ lại → số đi tiếp.</p>
-      </div>
+        </Heading>
+        <Text type="supporting">Số vào → số bỏ lại → số đi tiếp.</Text>
+      </Stack>
 
-      <div className="bg-card border-border overflow-hidden rounded-xl border">
-        {stages.map((stage) => (
-          <StageRow key={stage.ordinal} stage={stage} />
+      <Stack direction="vertical" gap={0}>
+        {stages.map((stage, index) => (
+          <Fragment key={stage.ordinal}>
+            {index > 0 ? <Divider /> : null}
+            <StageRow stage={stage} />
+          </Fragment>
         ))}
 
-        <div className="border-border flex flex-col gap-3 border-t p-4 @lg:flex-row @lg:gap-4">
+        <Divider />
+
+        <HStack gap={4} paddingBlock={4} align="start" wrap="wrap">
           <StageHeading
             ordinal="03"
             title="Ghi vào hệ thống"
             detail={finishedAt ? `xong ${formatClock(finishedAt)}` : "chưa kết thúc"}
           />
-          <dl className="grid min-w-0 flex-1 grid-cols-2 gap-x-4 gap-y-3 @md:grid-cols-4">
-            <WriteCell label="Sản phẩm đã ghi" value={counts.productsWritten} />
-            <WriteCell label="File đã ghi" value={counts.mediaWritten} />
-            <WriteCell label="Sản phẩm đã xoá" value={counts.productsDeleted} />
-            <WriteCell label="File đã xoá" value={counts.mediaDeleted} />
-          </dl>
-        </div>
-      </div>
-    </section>
+          <StackItem size="fill">
+            <Grid columns={{ minWidth: 132, max: 4 }} gap={4}>
+              <WriteCell label="Sản phẩm đã ghi" value={counts.productsWritten} />
+              <WriteCell label="File đã ghi" value={counts.mediaWritten} />
+              <WriteCell label="Sản phẩm đã xoá" value={counts.productsDeleted} />
+              <WriteCell label="File đã xoá" value={counts.mediaDeleted} />
+            </Grid>
+          </StackItem>
+        </HStack>
+      </Stack>
+    </Stack>
   );
 }
 
@@ -84,85 +106,72 @@ function StageRow({ stage }: { stage: Stage }) {
   const share = percentOf(stage.forwardValue, stage.total);
 
   return (
-    <div className="border-border flex flex-col gap-3 border-b p-4 @lg:flex-row @lg:gap-4">
+    <HStack gap={4} paddingBlock={4} align="start" wrap="wrap">
       <StageHeading ordinal={stage.ordinal} title={stage.title} detail={stage.totalLabel} />
 
-      <div className="min-w-0 flex-1 space-y-2.5">
+      <StackItem size="fill">
         {/* No input means no percentage: "0%" would read as a loss that never
             happened (core-dashboard-analytics §4). */}
         {stage.total <= 0 ? (
-          <p className="text-muted-foreground text-sm">{stage.emptyLabel}</p>
+          <Text type="supporting">{stage.emptyLabel}</Text>
         ) : (
-          <>
-            <p className="flex flex-wrap items-baseline gap-x-2">
-              <span className="text-3xl leading-8 font-semibold tabular-nums">
+          <Stack direction="vertical" gap={2}>
+            {/* `end`, not `center`: Astryx has no baseline alignment, and a
+                supporting label centred against a 3xl number floats in the
+                middle of its line box. Bottom-aligned it sits on the number. */}
+            <HStack gap={2} align="end" wrap="wrap">
+              <Text size="3xl" weight="semibold" hasTabularNumbers>
                 {formatCount(stage.forwardValue)}
-              </span>
-              <span className="text-muted-foreground text-sm">
+              </Text>
+              <Text type="supporting">
                 {stage.forwardLabel}
                 {share !== null ? ` · ${share} số đã vào` : ""}
-              </span>
-            </p>
+              </Text>
+            </HStack>
 
-            <div
-              aria-hidden="true"
-              className="bg-muted flex h-2.5 w-full overflow-hidden rounded-full"
-            >
+            <ProgressBar
+              label={`${stage.forwardLabel} trên tổng số đã vào chặng ${stage.ordinal}`}
+              isLabelHidden
+              value={stage.forwardValue}
+              max={stage.total}
+            />
+
+            <HStack gap={4} align="center" wrap="wrap">
               {stage.segments.map((segment) => (
-                <span
-                  key={segment.key}
-                  className={cn("h-full", SEGMENT_BAR[segment.tone])}
-                  // Data-driven geometry, not a design value: the share of a
-                  // segment is only known at runtime, so it cannot be a class.
-                  style={{ width: segmentWidth(segment.value, stage.total) }}
-                />
+                <HStack key={segment.key} gap={1.5} align="center">
+                  <StatusDot variant={SEGMENT_DOT[segment.tone]} label={segment.label} />
+                  <Text color={SEGMENT_TEXT[segment.tone]}>{segment.label}</Text>
+                  <Text type="code" color={SEGMENT_TEXT[segment.tone]} hasTabularNumbers>
+                    {formatCount(segment.value)}
+                  </Text>
+                </HStack>
               ))}
-            </div>
+            </HStack>
 
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-              <dl className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                {stage.segments.map((segment) => (
-                  <div key={segment.key} className="flex items-center gap-1.5">
-                    <dt
-                      className={cn("flex items-center gap-1.5 text-sm", SEGMENT_TEXT[segment.tone])}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={cn("size-2 shrink-0 rounded-xs", SEGMENT_BAR[segment.tone])}
-                      />
-                      {segment.label}
-                    </dt>
-                    <dd
-                      className={cn("font-mono text-sm tabular-nums", SEGMENT_TEXT[segment.tone])}
-                    >
-                      {formatCount(segment.value)}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-              <StageNote facts={stage.facts} />
-            </div>
-          </>
+            <StageNote facts={stage.facts} />
+          </Stack>
         )}
-      </div>
-    </div>
+      </StackItem>
+    </HStack>
   );
 }
 
 /** "N mã không có trên Sheet · N file cần rà soát" — facts, not a sentence. */
 function StageNote({ facts }: { facts: readonly StageFact[] }) {
+  if (facts.length === 0) return null;
+
   return (
-    <p className="text-muted-foreground text-sm @lg:ml-auto">
+    <Text type="supporting">
       {facts.map((fact, index) => (
         <Fragment key={fact.key}>
           {index > 0 ? " · " : null}
-          <span className="text-foreground font-medium tabular-nums">
+          <Text color="primary" weight="medium" hasTabularNumbers>
             {formatCount(fact.value)}
-          </span>{" "}
+          </Text>{" "}
           {fact.label}
         </Fragment>
       ))}
-    </p>
+    </Text>
   );
 }
 
@@ -176,21 +185,27 @@ function StageHeading({
   detail: string;
 }) {
   return (
-    <div className="space-y-0.5 @lg:w-36 @lg:shrink-0">
-      <p className="text-foreground-subtle font-mono text-xs">{ordinal}</p>
-      <h3 className="text-sm font-semibold">{title}</h3>
-      <p className="text-muted-foreground font-mono text-xs tabular-nums">{detail}</p>
-    </div>
+    <Stack direction="vertical" gap={0.5} width={144}>
+      {/* The ordinal is not decoration: these three stages are a sequence, and
+          the number is how an operator names one out loud to support. */}
+      <Text type="code" size="2xs" color="secondary">
+        {ordinal}
+      </Text>
+      <Heading level={3}>{title}</Heading>
+      <Text type="code" size="2xs" color="secondary" hasTabularNumbers>
+        {detail}
+      </Text>
+    </Stack>
   );
 }
 
 function WriteCell({ label, value }: { label: string; value: number }) {
   return (
-    // DOM order stays dt -> dd (valid <dl>, and a screen reader hears the label
-    // before the number); the column is reversed visually, number on top.
-    <div className="flex flex-col-reverse gap-0.5">
-      <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className="text-2xl leading-8 font-semibold tabular-nums">{formatCount(value)}</dd>
-    </div>
+    <Stack direction="vertical" gap={0.5}>
+      <Text size="2xl" weight="semibold" hasTabularNumbers color={value === 0 ? "placeholder" : "primary"}>
+        {formatCount(value)}
+      </Text>
+      <Text type="supporting">{label}</Text>
+    </Stack>
   );
 }

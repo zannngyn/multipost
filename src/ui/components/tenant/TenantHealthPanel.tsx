@@ -1,11 +1,22 @@
 "use client";
 
+import {
+  Button,
+  Card,
+  Divider,
+  Heading,
+  HStack,
+  Stack,
+  Text,
+  VisuallyHidden,
+} from "@astryxdesign/core";
+import { RefreshCw } from "lucide-react";
 import { useId } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { TenantHealthCard } from "@/ui/components/tenant/TenantHealthCard";
 import { TenantHealthSkeleton } from "@/ui/components/tenant/TenantHealthSkeleton";
-import { Button } from "@/ui/components/ui/button";
 import { useActiveTenant } from "@/ui/hooks/useMe";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useTenantHealth } from "@/ui/hooks/useTenantHealth";
@@ -20,6 +31,10 @@ import { useTenantHealth } from "@/ui/hooks/useTenantHealth";
  * only one the server would accept — a box that could only ever be filled with
  * one correct value was a trap, not a feature.
  *
+ * One card, one job (Astryx §Cards vs Rows): a self-contained widget with its
+ * own title, its own action and its own four states, so the dashboard can grow
+ * a second widget beside it without this one being re-cut.
+ *
  * Covers the four mandatory states (core-feedback-states):
  * idle (company not known yet) · loading (skeleton) · data (card) · error,
  * classified by `presentApiError` so a 4xx never offers a pointless retry.
@@ -33,42 +48,51 @@ export function TenantHealthPanel() {
   const showSkeleton = useDelayedFlag(isFirstLoad);
 
   return (
-    <section className="space-y-4" aria-labelledby={headingId}>
-      <div className="space-y-1">
-        <h2 id={headingId} className="text-lg font-semibold">
-          Sức khoẻ đơn vị (tenant)
-        </h2>
-        <p className="text-muted-foreground text-sm">
-          Kiểm tra toàn tuyến: giao diện → API nội bộ → usecase → cơ sở dữ liệu. Kiểm tra chạy trên
-          công ty bạn đang làm việc
-          {tenant ? ` — ${tenant.name}` : ""}.
-        </p>
-      </div>
+    <Stack as="section" direction="vertical" aria-labelledby={headingId}>
+      <Card padding={5}>
+        <Stack direction="vertical" gap={4}>
+          <HStack gap={4} align="start" justify="between" wrap="wrap">
+            <Stack direction="vertical" gap={1} maxWidth="60ch">
+              <Heading level={2} id={headingId}>
+                Sức khoẻ hệ thống
+              </Heading>
+              <Text type="supporting">
+                Kiểm tra toàn tuyến từ giao diện xuống cơ sở dữ liệu, trên công ty bạn đang làm
+                việc{tenant ? `: ${tenant.name}` : ""}.
+              </Text>
+            </Stack>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <Button
-          type="button"
-          size="lg"
-          variant="outline"
-          disabled={!isResolved || query.isFetching}
-          onClick={() => void query.refetch()}
-        >
-          {query.isFetching ? "Đang kiểm tra…" : "Kiểm tra lại"}
-        </Button>
-      </div>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              icon={<RefreshCw aria-hidden="true" />}
+              label={query.isFetching ? "Đang kiểm tra…" : "Kiểm tra lại"}
+              isLoading={query.isFetching}
+              isDisabled={!isResolved || query.isFetching}
+              onClick={() => void query.refetch()}
+            />
+          </HStack>
 
-      {/* Announce state changes to screen readers without moving focus. */}
-      <p className="sr-only" role="status" aria-live="polite">
+          <Divider />
+
+          <TenantHealthResult
+            isResolved={isResolved}
+            showSkeleton={showSkeleton}
+            isFirstLoad={isFirstLoad}
+            query={query}
+          />
+        </Stack>
+      </Card>
+
+      {/* Announce state changes to screen readers without moving focus. Outside
+          the gapped stack above, so a hidden node cannot open a 16px hole in
+          the card. In the DOM from the first render: a live region created at
+          the moment it fills is a region nothing announces. */}
+      <VisuallyHidden as="div" role="status" aria-live="polite">
         {query.isFetching ? "Đang kiểm tra đơn vị" : ""}
-      </p>
-
-      <TenantHealthResult
-        isResolved={isResolved}
-        showSkeleton={showSkeleton}
-        isFirstLoad={isFirstLoad}
-        query={query}
-      />
-    </section>
+      </VisuallyHidden>
+    </Stack>
   );
 }
 
@@ -86,13 +110,11 @@ function TenantHealthResult({
   // --- Idle: the session's company is not known yet -------------------------
   if (!isResolved) {
     return (
-      <div className="text-muted-foreground bg-muted/30 rounded-xl border border-dashed p-6 text-sm">
-        <p className="text-foreground font-medium">Đang xác định công ty của bạn</p>
-        <p className="mt-1">
-          Kiểm tra này chạy trên công ty bạn đang làm việc, nên nó chờ hệ thống trả lời bạn thuộc
-          công ty nào.
-        </p>
-      </div>
+      <EmptyState
+        kind="idle"
+        title="Đang xác định công ty của bạn"
+        description="Kiểm tra này chạy trên công ty bạn đang làm việc, nên nó chờ hệ thống trả lời bạn thuộc công ty nào."
+      />
     );
   }
 
@@ -101,13 +123,7 @@ function TenantHealthResult({
 
   // --- Error: classified centrally; retry only where retrying can succeed --
   if (query.isError) {
-    return (
-      <ApiErrorNotice
-        className="mx-0 max-w-none"
-        error={query.error}
-        onRetry={() => void query.refetch()}
-      />
-    );
+    return <ApiErrorNotice error={query.error} onRetry={() => void query.refetch()} />;
   }
 
   // --- Data (with a non-blocking refresh indicator) ------------------------

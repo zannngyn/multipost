@@ -1,13 +1,14 @@
 "use client";
 
 import {
-  Badge,
   Button,
   HStack,
   Stack,
+  StatusDot,
   Table,
   Text,
   TextArea,
+  Token,
   pixel,
   proportional,
 } from "@astryxdesign/core";
@@ -99,13 +100,15 @@ export function PlatformTenantTable({
       renderCell: (tenant) => (
         <Stack direction="vertical" gap={0.5}>
           <HStack gap={2} align="center" wrap="wrap">
-            <Text>{tenant.name}</Text>
+            <Text weight="medium">{tenant.name}</Text>
             {/* The one row where "khoá công ty này" means "khoá chính chúng
                 ta" — worth a mark, not worth a colour of its own. */}
-            {isInternalTenant(tenant) ? <Badge variant="purple" label="Nội bộ MYSP" /> : null}
+            {isInternalTenant(tenant) ? (
+              <Token size="sm" color="purple" label="Nội bộ MYSP" />
+            ) : null}
           </HStack>
           {tenant.slug ? (
-            <Text type="supporting" color="secondary">
+            <Text type="supporting" color="secondary" maxLines={1}>
               /{tenant.slug}
             </Text>
           ) : (
@@ -120,17 +123,25 @@ export function PlatformTenantTable({
       key: "plan",
       header: "Gói",
       width: pixel(130),
-      renderCell: (tenant) => <Badge variant="blue" label={planLabel(tenant.plan)} />,
+      renderCell: (tenant) => <Token size="sm" color="blue" label={planLabel(tenant.plan)} />,
     },
     {
       key: "status",
       header: "Trạng thái",
       width: pixel(150),
+      // A dot plus the word: "đang khoá" is the fact this whole screen turns
+      // on, and colour alone must never be the only way to read it
+      // (core-accessibility §5).
       renderCell: (tenant) => (
-        <Badge
-          variant={TENANT_STATUS_TONES[tenant.status]}
-          label={TENANT_STATUS_LABELS[tenant.status]}
-        />
+        <HStack gap={2} align="center">
+          <StatusDot
+            variant={TENANT_STATUS_TONES[tenant.status]}
+            label={TENANT_STATUS_LABELS[tenant.status]}
+          />
+          <Text color={tenant.status === "suspended" ? "primary" : "secondary"}>
+            {TENANT_STATUS_LABELS[tenant.status]}
+          </Text>
+        </HStack>
       ),
     },
     {
@@ -138,7 +149,7 @@ export function PlatformTenantTable({
       header: "Thành viên",
       width: pixel(120),
       renderCell: (tenant) => (
-        <Text color="secondary">
+        <Text color="secondary" hasTabularNumbers>
           {tenant.memberCount === 0 ? "Chưa có ai" : `${tenant.memberCount} người`}
         </Text>
       ),
@@ -147,7 +158,11 @@ export function PlatformTenantTable({
       key: "createdAt",
       header: "Ngày tạo",
       width: pixel(170),
-      renderCell: (tenant) => <Text color="secondary">{formatDateTime(tenant.createdAt)}</Text>,
+      renderCell: (tenant) => (
+        <Text color="secondary" hasTabularNumbers>
+          {formatDateTime(tenant.createdAt)}
+        </Text>
+      ),
     },
   ];
 
@@ -188,7 +203,7 @@ export function PlatformTenantTable({
         if (confirmingId === tenant.id) {
           return (
             <Stack direction="vertical" gap={2}>
-              <Text type="supporting" role="alert">
+              <Text type="supporting" color="primary" role="alert">
                 {isSuspended
                   ? `Mở khoá ${tenant.name}? ${activateConsequence(tenant)}`
                   : `Khoá ${tenant.name}? ${suspendConsequence(tenant)}`}
@@ -257,6 +272,7 @@ export function PlatformTenantTable({
   return (
     <Stack direction="vertical" isScrollable height="100%">
       <Table
+        aria-label="Công ty khách đang chạy trên MYSP"
         data={tenants as PlatformTenantRow[]}
         columns={columns}
         idKey="id"

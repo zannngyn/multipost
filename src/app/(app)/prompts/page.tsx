@@ -6,6 +6,10 @@ import { PromptTemplatesScreen } from "@/ui/components/prompts/PromptTemplatesSc
 
 /**
  * "Mẫu prompt" (E10.7). Server Component guard, client screen.
+ *
+ * The screen owns its own frame (Layout + header + capped content column), so
+ * this page adds no container of its own — same shape as /members and
+ * /platform.
  */
 
 export const metadata: Metadata = {
@@ -23,9 +27,5 @@ export default async function PromptsPage() {
   // Component must not trust that it was reached through the guard.
   if (!session) redirect("/signin?returnUrl=%2Fprompts");
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <PromptTemplatesScreen />
-    </div>
-  );
+  return <PromptTemplatesScreen />;
 }

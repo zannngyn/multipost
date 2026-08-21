@@ -44,7 +44,8 @@ import {
  * refused — retiring a flow is not a reason to delete its history.
  *
  * Frame (`astryx docs layout`, tracker archetype): header carries the title and
- * the filter, the content region carries the rows edge-to-edge.
+ * the reload action, a toolbar row carries the filter and the result count, and
+ * the content region carries the rows edge-to-edge.
  *
  * The filter lives in the URL (core-data-list-query rule 1): `/access?status=
  * blocked` is shareable, survives F5 and makes Back behave. One builder writes
@@ -93,8 +94,10 @@ export function AccessRequestsScreen() {
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <Stack direction="vertical" gap={3} padding={4}>
-            <Stack direction="vertical" gap={1}>
+          {/* Title left, actions right. The status filter is NOT here: it
+              belongs beside the rows it filters, in the toolbar below. */}
+          <HStack gap={4} padding={4} justify="between" align="start" wrap="wrap">
+            <Stack direction="vertical" gap={1} maxWidth={640}>
               <Heading level={1}>Lịch sử duyệt</Heading>
               <Text type="supporting">
                 Lưu lại những tài khoản từng xin vào hệ thống theo luồng chờ duyệt cũ, ai quyết
@@ -102,31 +105,14 @@ export function AccessRequestsScreen() {
               </Text>
             </Stack>
 
-            <HStack gap={3} align="center" wrap="wrap">
-              <SegmentedControl
-                label="Lọc theo trạng thái yêu cầu"
-                value={status}
-                onChange={selectStatus}
-                size="sm"
-              >
-                {ACCESS_FILTER_STATUSES.map((value) => (
-                  <SegmentedControlItem
-                    key={value}
-                    value={value}
-                    label={ACCESS_FILTER_LABELS[value]}
-                  />
-                ))}
-              </SegmentedControl>
-
-              <Button
-                variant="secondary"
-                size="sm"
-                label={requests.isFetching ? "Đang tải…" : "Tải lại"}
-                isDisabled={requests.isFetching}
-                onClick={() => void requests.refetch()}
-              />
-            </HStack>
-          </Stack>
+            <Button
+              variant="secondary"
+              size="sm"
+              label={requests.isFetching ? "Đang tải…" : "Tải lại"}
+              isDisabled={requests.isFetching}
+              onClick={() => void requests.refetch()}
+            />
+          </HStack>
         </LayoutHeader>
       }
       content={
@@ -151,15 +137,42 @@ export function AccessRequestsScreen() {
               />
             </Stack>
 
-            <HStack gap={3} paddingInline={4} paddingBlock={3} align="center" wrap="wrap">
-              <Heading level={2}>Lịch sử yêu cầu</Heading>
-              {/* Only once the list is real: "0 yêu cầu" while loading reads as
-                  an answer, and an admin would act on it. */}
-              {requests.data ? (
-                <Text type="supporting" role="status" aria-live="polite">
-                  {items.length} yêu cầu · {ACCESS_FILTER_LABELS[status].toLowerCase()}
-                </Text>
-              ) : null}
+            {/* Toolbar: the filter sits with the rows it filters, and the
+                result count sits with the filter that produced it — so an
+                empty table is never read as missing data. */}
+            <HStack
+              gap={3}
+              paddingInline={4}
+              paddingBlock={3}
+              justify="between"
+              align="center"
+              wrap="wrap"
+            >
+              <HStack gap={3} align="center" wrap="wrap">
+                <Heading level={2}>Lịch sử yêu cầu</Heading>
+                {/* Only once the list is real: "0 yêu cầu" while loading reads
+                    as an answer, and an admin would act on it. */}
+                {requests.data ? (
+                  <Text type="supporting" role="status" aria-live="polite">
+                    {items.length} yêu cầu · {ACCESS_FILTER_LABELS[status].toLowerCase()}
+                  </Text>
+                ) : null}
+              </HStack>
+
+              <SegmentedControl
+                label="Lọc theo trạng thái yêu cầu"
+                value={status}
+                onChange={selectStatus}
+                size="sm"
+              >
+                {ACCESS_FILTER_STATUSES.map((value) => (
+                  <SegmentedControlItem
+                    key={value}
+                    value={value}
+                    label={ACCESS_FILTER_LABELS[value]}
+                  />
+                ))}
+              </SegmentedControl>
             </HStack>
 
             <StackItem size="fill">
@@ -219,7 +232,7 @@ function AccessRequestsBody({
       // Saying "chưa có ai chờ duyệt" alone would leave someone waiting for a
       // row that is never coming (core-feedback-states §Empty, kind "done").
       return (
-        <Stack direction="vertical" padding={4}>
+        <Stack direction="vertical" padding={6}>
           <EmptyState
             headingLevel={3}
             title="Không còn ai chờ duyệt"
@@ -234,7 +247,7 @@ function AccessRequestsBody({
 
     if (status === "all") {
       return (
-        <Stack direction="vertical" padding={4}>
+        <Stack direction="vertical" padding={6}>
           <EmptyState
             headingLevel={3}
             title="Chưa có yêu cầu nào trong lịch sử"
@@ -246,7 +259,7 @@ function AccessRequestsBody({
 
     // Filtered out, not lost: the data may well exist under another filter.
     return (
-      <Stack direction="vertical" padding={4}>
+      <Stack direction="vertical" padding={6}>
         <EmptyState
           headingLevel={3}
           title={`Không có yêu cầu nào ở trạng thái “${ACCESS_FILTER_LABELS[status]}”`}

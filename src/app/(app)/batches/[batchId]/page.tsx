@@ -31,9 +31,7 @@ export default async function BatchPage({ params }: { params: Promise<{ batchId:
     redirect(`/signin?returnUrl=${encodeURIComponent(`/batches/${batchId}`)}`);
   }
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <BatchStatusScreen batchId={batchId} />
-    </div>
-  );
+  // The screen owns its own frame (Layout header + scrolling content), so this
+  // page adds no container of its own.
+  return <BatchStatusScreen batchId={batchId} />;
 }

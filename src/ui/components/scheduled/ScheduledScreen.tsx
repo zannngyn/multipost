@@ -1,14 +1,25 @@
 "use client";
 
 import {
+  Banner,
+  Button,
   DateInput,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Link,
   SegmentedControl,
   SegmentedControlItem,
+  Selector,
+  Stack,
+  StackItem,
+  Text,
   type ISODateString,
 } from "@astryxdesign/core";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useId, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
@@ -21,8 +32,6 @@ import {
   ScheduledCalendarSkeleton,
   ScheduledSkeleton,
 } from "@/ui/components/scheduled/ScheduledSkeleton";
-import { Button } from "@/ui/components/ui/button";
-import { Select } from "@/ui/components/ui/select";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
@@ -39,6 +48,7 @@ import {
   scheduledSearchParams,
   timeZoneLabel,
   type ScheduledFilter,
+  type ScheduledJobEntry,
   type ScheduledViewState,
 } from "@/ui/schemas/scheduled.schema";
 import {
@@ -49,6 +59,11 @@ import {
 
 /**
  * "Bài đã hẹn" (E8.4): component -> hook -> service -> internal API.
+ *
+ * Frame (`astryx docs layout`, tracker archetype): the header carries the mode
+ * switch and the filters, the content region carries the timeline edge-to-edge.
+ * The page used to be a padded 5xl column, which squeezed a five-column table
+ * and a seven-column month grid into half a desktop.
  *
  * Soonest first, grouped by day: the screen answers "cái gì sắp lên?", so the
  * next event is at the top and the operator reads a timeline, not a table dump.
@@ -78,11 +93,14 @@ import {
  *             a third, "trống ở tháng này nhưng có bài ở tháng khác"
  *   error   — 4xx (sửa bộ lọc) vs 5xx (thử lại), via `presentApiError`
  */
+
+/** "Tất cả kênh" is a real option, not an empty placeholder. */
+const ALL_CHANNELS = "";
+
 export function ScheduledScreen() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const channelFilterId = useId();
   const nowMs = useNowMs();
 
   const filter = useMemo(
@@ -132,7 +150,12 @@ export function ScheduledScreen() {
     // Keep the active filter selectable even when its group was deleted, or the
     // select would silently jump back to "Tất cả kênh" while the URL says else.
     if (filter.channelId) ids.add(filter.channelId);
-    return [...ids].sort((a, b) => a.localeCompare(b, "vi"));
+    return [
+      { value: ALL_CHANNELS, label: "Tất cả kênh" },
+      ...[...ids]
+        .sort((a, b) => a.localeCompare(b, "vi"))
+        .map((channelId) => ({ value: channelId, label: channelId })),
+    ];
   }, [groups.data, filter.channelId]);
 
   const rescheduleId = searchParams.get(SCHEDULED_DIALOG_PARAMS.reschedule)?.trim() ?? "";
@@ -166,6 +189,10 @@ export function ScheduledScreen() {
     cancel.reset();
     const query = scheduledSearchParams(filter, view).toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }
+
+  function clearFilters() {
+    pushUrl({ channelId: null, from: null, to: null }, view);
   }
 
   function handleReschedule(params: { postJobId: string; scheduledAt: string }) {
@@ -207,289 +234,203 @@ export function ScheduledScreen() {
   }
 
   return (
-    <section className="space-y-6" aria-labelledby="scheduled-heading">
-      <header className="space-y-1">
-        <h1 id="scheduled-heading" className="text-2xl font-semibold tracking-tight">
-          Bài đã hẹn
-        </h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Những bài đang chờ tới giờ đăng. Chế độ Danh sách xếp bài sớm nhất lên trên; chế độ Lịch
-          tháng cho thấy công việc rải ra trong tháng — bấm vào một ngày để mở chi tiết. Giờ hiển
-          thị theo múi giờ máy bạn ({timeZoneLabel()}). Đổi giờ hoặc huỷ chỉ được trước khi tới giờ
-          — tồn kho vẫn được kiểm tra lại ngay trước khi đăng. Bài mang nhãn “Facebook giữ lịch” đã
-          nằm sẵn trên Facebook và Facebook sẽ tự đăng: bài đó không đổi giờ được nữa, muốn đổi thì
-          bấm Huỷ rồi soạn lại.
-        </p>
-      </header>
+    <>
+      <Layout
+        height="fill"
+        header={
+          <LayoutHeader hasDivider>
+            <Stack direction="vertical" gap={3} padding={4}>
+              <Stack direction="vertical" gap={1} maxWidth={760}>
+                <Heading level={1}>Bài đã hẹn</Heading>
+                <Text type="supporting">
+                  Những bài đang chờ tới giờ đăng. Chế độ Danh sách xếp bài sớm nhất lên trên; chế độ
+                  Lịch tháng cho thấy công việc rải ra trong tháng — bấm vào một ngày để mở chi tiết.
+                  Giờ hiển thị theo múi giờ máy bạn ({timeZoneLabel()}).
+                </Text>
+                <Text type="supporting" color="secondary">
+                  Đổi giờ hoặc huỷ chỉ được trước khi tới giờ — tồn kho vẫn được kiểm tra lại ngay
+                  trước khi đăng. Bài mang nhãn “Facebook giữ lịch” đã nằm sẵn trên Facebook và
+                  Facebook sẽ tự đăng: bài đó không đổi giờ được nữa, muốn đổi thì bấm Huỷ rồi soạn
+                  lại.
+                </Text>
+              </Stack>
 
-      <div className="flex flex-wrap items-end gap-3">
-        <SegmentedControl
-          label="Chế độ xem bài đã hẹn"
-          value={view.view}
-          size="sm"
-          // The mode is view state, so it rides in the URL but stays out of the
-          // query key — switching draws the same rows a second way, never
-          // refetches them. Turning the calendar on PINS the month it resolved
-          // to, so the link is already shareable before the operator touches
-          // anything; going back to the list drops both month and open day.
-          onChange={(next) =>
-            pushUrl(
-              filter,
-              next === "calendar"
-                ? { view: "calendar", month: monthKey, day: null }
-                : { ...view, view: "list" },
-            )
-          }
-        >
-          <SegmentedControlItem label="Danh sách" value="list" />
-          <SegmentedControlItem label="Lịch tháng" value="calendar" />
-        </SegmentedControl>
+              <HStack gap={3} align="end" wrap="wrap">
+                <SegmentedControl
+                  label="Chế độ xem bài đã hẹn"
+                  value={view.view}
+                  size="sm"
+                  // The mode is view state, so it rides in the URL but stays out
+                  // of the query key — switching draws the same rows a second
+                  // way, never refetches them. Turning the calendar on PINS the
+                  // month it resolved to, so the link is already shareable
+                  // before the operator touches anything; going back to the list
+                  // drops both month and open day.
+                  onChange={(next) =>
+                    pushUrl(
+                      filter,
+                      next === "calendar"
+                        ? { view: "calendar", month: monthKey, day: null }
+                        : { ...view, view: "list" },
+                    )
+                  }
+                >
+                  <SegmentedControlItem label="Danh sách" value="list" />
+                  <SegmentedControlItem label="Lịch tháng" value="calendar" />
+                </SegmentedControl>
 
-        <div className="min-w-0 basis-64 space-y-1.5">
-          <label htmlFor={channelFilterId} className="text-sm font-medium">
-            Lọc theo kênh
-          </label>
-          <Select
-            id={channelFilterId}
-            value={filter.channelId ?? ""}
-            onChange={(event) =>
-              pushUrl({ ...filter, channelId: event.target.value || null }, view)
-            }
-          >
-            <option value="">Tất cả kênh</option>
-            {channelOptions.map((channelId) => (
-              <option key={channelId} value={channelId}>
-                {channelId}
-              </option>
-            ))}
-          </Select>
-        </div>
+                <Selector
+                  label="Lọc theo kênh"
+                  size="sm"
+                  width={220}
+                  options={channelOptions}
+                  value={filter.channelId ?? ALL_CHANNELS}
+                  onChange={(next) =>
+                    pushUrl({ ...filter, channelId: next || null }, view)
+                  }
+                />
 
-        {/* Pure dates, kept as "YYYY-MM-DD" strings from the field to the URL to
-            the request builder — never through `new Date()`, which is the one
-            cause of the off-by-one-day (core-form-inputs). `max`/`min` state the
-            window BEFORE a choice is made; `parseScheduledFilter` re-checks it. */}
-        <DateInput
-          label="Từ ngày"
-          size="sm"
-          width={180}
-          hasClear
-          weekStartsOn="mon"
-          placeholder="dd/mm/yyyy"
-          format={formatDayInput}
-          value={(filter.from ?? undefined) as ISODateString | undefined}
-          max={(filter.to ?? undefined) as ISODateString | undefined}
-          onChange={(value) => pushUrl({ ...filter, from: normalizeDay(value) }, view)}
-        />
+                {/* Pure dates, kept as "YYYY-MM-DD" strings from the field to the
+                    URL to the request builder — never through `new Date()`,
+                    which is the one cause of the off-by-one-day
+                    (core-form-inputs). `max`/`min` state the window BEFORE a
+                    choice is made; `parseScheduledFilter` re-checks it. */}
+                <DateInput
+                  label="Từ ngày"
+                  size="sm"
+                  width={170}
+                  hasClear
+                  weekStartsOn="mon"
+                  placeholder="dd/mm/yyyy"
+                  format={formatDayInput}
+                  value={(filter.from ?? undefined) as ISODateString | undefined}
+                  max={(filter.to ?? undefined) as ISODateString | undefined}
+                  onChange={(value) => pushUrl({ ...filter, from: normalizeDay(value) }, view)}
+                />
 
-        <DateInput
-          label="Đến hết ngày"
-          size="sm"
-          width={180}
-          hasClear
-          weekStartsOn="mon"
-          placeholder="dd/mm/yyyy"
-          format={formatDayInput}
-          value={(filter.to ?? undefined) as ISODateString | undefined}
-          min={(filter.from ?? undefined) as ISODateString | undefined}
-          onChange={(value) => pushUrl({ ...filter, to: normalizeDay(value) }, view)}
-        />
+                <DateInput
+                  label="Đến hết ngày"
+                  size="sm"
+                  width={170}
+                  hasClear
+                  weekStartsOn="mon"
+                  placeholder="dd/mm/yyyy"
+                  format={formatDayInput}
+                  value={(filter.to ?? undefined) as ISODateString | undefined}
+                  min={(filter.from ?? undefined) as ISODateString | undefined}
+                  onChange={(value) => pushUrl({ ...filter, to: normalizeDay(value) }, view)}
+                />
 
-        {filtered ? (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => pushUrl({ channelId: null, from: null, to: null }, view)}
-          >
-            Bỏ bộ lọc
-          </Button>
-        ) : null}
+                {filtered ? (
+                  <Button variant="ghost" size="sm" label="Bỏ bộ lọc" onClick={clearFilters} />
+                ) : null}
 
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => void list.refetch()}
-          disabled={list.isFetching}
-        >
-          {list.isFetching ? "Đang tải…" : "Tải lại"}
-        </Button>
-      </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  label={list.isFetching ? "Đang tải…" : "Tải lại"}
+                  isLoading={list.isFetching}
+                  isDisabled={list.isFetching}
+                  onClick={() => void list.refetch()}
+                />
+              </HStack>
+            </Stack>
+          </LayoutHeader>
+        }
+        content={
+          <LayoutContent padding={0} isScrollable>
+            <Stack direction="vertical" height="100%">
+              {groups.isError ? (
+                <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+                  <Text type="supporting">
+                    Không tải được danh sách nhóm kênh nên ô lọc kênh đang trống. Bộ lọc ngày vẫn
+                    dùng được.
+                  </Text>
+                </Stack>
+              ) : null}
 
-      {groups.isError ? (
-        <p className="text-muted-foreground text-sm">
-          Không tải được danh sách nhóm kênh nên ô lọc kênh đang trống. Bộ lọc ngày vẫn dùng được.
-        </p>
-      ) : null}
+              {notice ? (
+                <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+                  <Banner
+                    status="success"
+                    role="status"
+                    isDismissable
+                    onDismiss={() => setNotice(null)}
+                    title={notice}
+                  />
+                </Stack>
+              ) : null}
 
-      {notice ? (
-        <p
-          role="status"
-          className="border-success/30 bg-success/10 text-success-foreground rounded-lg border px-3 py-2 text-sm"
-        >
-          {notice}
-        </p>
-      ) : null}
+              {warning ? (
+                <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+                  <Banner
+                    status="warning"
+                    role="alert"
+                    title="Đã lưu, nhưng hàng đợi chưa sạch"
+                    description={warning}
+                    endContent={
+                      <Link href="/jobs" isStandalone>
+                        Mở nhật ký đăng bài
+                      </Link>
+                    }
+                  />
+                </Stack>
+              ) : null}
 
-      {warning ? (
-        <p
-          role="alert"
-          className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
-        >
-          {warning}{" "}
-          <Link href="/jobs" className="underline underline-offset-4">
-            Mở nhật ký đăng bài
-          </Link>
-          .
-        </p>
-      ) : null}
-
-      {/* --- Loading: each mode keeps its OWN shape, so nothing jumps ------- */}
-      {isFirstLoad ? (
-        showSkeleton ? (
-          isCalendar ? (
-            <ScheduledCalendarSkeleton />
-          ) : (
-            <ScheduledSkeleton />
-          )
-        ) : null
-      ) : null}
-
-      {/* --- Error --------------------------------------------------------- */}
-      {isFatalError ? (
-        <ApiErrorNotice error={list.error} onRetry={() => void list.refetch()} />
-      ) : null}
-
-      {/* --- Empty, list mode only: the calendar tells its own three apart --- */}
-      {!isCalendar && !isFirstLoad && !list.isError && items.length === 0 ? (
-        filtered ? (
-          <EmptyState
-            kind="no-result"
-            title="Không có bài hẹn nào khớp bộ lọc"
-            description="Không có bài nào được hẹn trong khoảng thời gian hoặc trên kênh đang chọn. Dữ liệu vẫn còn nguyên — bỏ bộ lọc để xem toàn bộ."
-            action={
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => pushUrl({ channelId: null, from: null, to: null }, view)}
-              >
-                Bỏ bộ lọc
-              </Button>
-            }
-          />
-        ) : (
-          <EmptyState
-            kind="first-run"
-            title="Chưa có bài nào được hẹn giờ"
-            description="Khi soạn bài hoặc chạy hàng loạt, chọn “Hẹn giờ đăng” thay vì “Đăng ngay” — những bài đang chờ tới giờ sẽ hiện ở đây."
-            action={
-              <Button asChild>
-                <Link href="/compose">Soạn bài</Link>
-              </Button>
-            }
-          />
-        )
-      ) : null}
-
-      {/* --- Data, calendar mode -------------------------------------------
-          The grid is drawn even with nothing in it: an operator who lands on a
-          quiet month still needs the month navigation to get out of it.
-          `monthKey` is null only while the browser clock is unknown (server
-          render + first frame) — guessing a month there would make it jump. */}
-      {isCalendar && !isFirstLoad && !isFatalError ? (
-        monthKey === null ? (
-          <ScheduledCalendarSkeleton />
-        ) : (
-          <ScheduledCalendar
-            monthKey={monthKey}
-            selectedDayKey={view.day}
-            items={items}
-            nowMs={nowMs}
-            hasFilter={filtered}
-            loadMore={{
-              hasMore: list.hasNextPage,
-              isPending: list.isFetchingNextPage,
-              onLoadMore: () => void list.fetchNextPage(),
-            }}
-            onMonthChange={(nextMonth) =>
-              // The open day belongs to the month we are leaving, so it goes too.
-              pushUrl(filter, { view: "calendar", month: nextMonth, day: null })
-            }
-            onDaySelect={(dayKey) =>
-              pushUrl(filter, { view: "calendar", month: monthKey, day: dayKey })
-            }
-            onClearFilters={() => pushUrl({ channelId: null, from: null, to: null }, view)}
-            renderDayDetail={(dayKey, jobs) => (
-              <ScheduledJobTable
-                items={jobs}
-                headingId="scheduled-day-panel"
-                nowMs={nowMs}
-                hrefFor={hrefForDialog}
-                busyJobId={busyJobId}
-                readOnlyReason={readOnlyReason}
-              />
-            )}
-          />
-        )
-      ) : null}
-
-      {/* --- Data, list mode ------------------------------------------------ */}
-      {!isCalendar && items.length > 0 ? (
-        <div className="space-y-6">
-          {dayGroups.map((group) => {
-            const headingId = `scheduled-day-${group.dayKey}`;
-            return (
-              <section key={group.dayKey} className="space-y-2">
-                <h2 id={headingId} className="text-base font-semibold">
-                  {/* nowMs is 0 only on the server: the heading then shows the
-                      full date, never a wrong "Hôm nay". */}
-                  {formatDayHeading(group.dayKey, nowMs)}
-                  <span className="text-muted-foreground ml-2 text-sm font-normal">
-                    {group.items.length} bài
-                  </span>
-                </h2>
-                <ScheduledJobTable
-                  items={group.items}
-                  headingId={headingId}
+              <StackItem size="fill">
+                <ScheduledBody
+                  isCalendar={isCalendar}
+                  isFirstLoad={isFirstLoad}
+                  showSkeleton={showSkeleton}
+                  isFatalError={isFatalError}
+                  list={list}
+                  items={items}
+                  dayGroups={dayGroups}
+                  filtered={filtered}
+                  monthKey={monthKey}
+                  view={view}
+                  filter={filter}
                   nowMs={nowMs}
-                  hrefFor={hrefForDialog}
                   busyJobId={busyJobId}
                   readOnlyReason={readOnlyReason}
+                  hrefForDialog={hrefForDialog}
+                  onClearFilters={clearFilters}
+                  onPushUrl={pushUrl}
                 />
-              </section>
-            );
-          })}
-        </div>
-      ) : null}
+              </StackItem>
 
-      {/* --- How much is on screen, and whether that is all of it -----------
-          Shared by both modes. In the calendar this is the honest answer to
-          "is this month complete?": a cursor page still outstanding means the
-          grid may be missing cells, and saying so beats drawing a quiet month
-          that is only quiet because the rest has not arrived. */}
-      {!isFirstLoad && !isFatalError && items.length > 0 ? (
-        <div className="flex flex-col items-center gap-2">
-          <p role="status" aria-live="polite" className="text-muted-foreground text-sm">
-            Đang hiển thị {items.length.toLocaleString("vi-VN")} bài đã hẹn
-            {list.hasNextPage
-              ? isCalendar
-                ? " — chưa tải hết, lịch tháng có thể còn thiếu bài. Bấm “Tải thêm”."
-                : " (còn nữa)"
-              : "."}
-          </p>
-          {list.hasNextPage ? (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void list.fetchNextPage()}
-              disabled={list.isFetchingNextPage}
-            >
-              {list.isFetchingNextPage ? "Đang tải…" : "Tải thêm"}
-            </Button>
-          ) : (
-            <p className="text-muted-foreground text-sm">Đã hết danh sách.</p>
-          )}
-        </div>
-      ) : null}
+              {/* --- How much is on screen, and whether that is all of it -----
+                  Shared by both modes. In the calendar this is the honest answer
+                  to "is this month complete?": a cursor page still outstanding
+                  means the grid may be missing cells, and saying so beats
+                  drawing a quiet month that is only quiet because the rest has
+                  not arrived. */}
+              {!isFirstLoad && !isFatalError && items.length > 0 ? (
+                <Stack direction="horizontal" gap={3} padding={3} align="center" justify="center">
+                  <Text type="supporting" role="status" aria-live="polite">
+                    Đang hiển thị {items.length.toLocaleString("vi-VN")} bài đã hẹn
+                    {list.hasNextPage
+                      ? isCalendar
+                        ? " — chưa tải hết, lịch tháng có thể còn thiếu bài. Bấm “Tải thêm”."
+                        : " (còn nữa)"
+                      : ". Đã hết danh sách."}
+                  </Text>
+                  {list.hasNextPage ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      label={list.isFetchingNextPage ? "Đang tải…" : "Tải thêm"}
+                      isLoading={list.isFetchingNextPage}
+                      isDisabled={list.isFetchingNextPage}
+                      onClick={() => void list.fetchNextPage()}
+                    />
+                  ) : null}
+                </Stack>
+              ) : null}
+            </Stack>
+          </LayoutContent>
+        }
+      />
 
       {rescheduleId.length > 0 ? (
         <RescheduleDialog
@@ -520,7 +461,161 @@ export function ScheduledScreen() {
           error={cancel.isError ? cancel.error : null}
         />
       ) : null}
-    </section>
+    </>
+  );
+}
+
+function ScheduledBody({
+  isCalendar,
+  isFirstLoad,
+  showSkeleton,
+  isFatalError,
+  list,
+  items,
+  dayGroups,
+  filtered,
+  monthKey,
+  view,
+  filter,
+  nowMs,
+  busyJobId,
+  readOnlyReason,
+  hrefForDialog,
+  onClearFilters,
+  onPushUrl,
+}: {
+  isCalendar: boolean;
+  isFirstLoad: boolean;
+  showSkeleton: boolean;
+  isFatalError: boolean;
+  list: ReturnType<typeof useScheduledJobs>;
+  items: readonly ScheduledJobEntry[];
+  dayGroups: ReturnType<typeof groupScheduledByDay>;
+  filtered: boolean;
+  monthKey: string | null;
+  view: ScheduledViewState;
+  filter: ScheduledFilter;
+  nowMs: number;
+  busyJobId: string | null;
+  readOnlyReason: string | null;
+  hrefForDialog: (action: "reschedule" | "cancel", postJobId: string) => string;
+  onClearFilters: () => void;
+  onPushUrl: (filter: ScheduledFilter, view: ScheduledViewState) => void;
+}) {
+  // --- Loading: each mode keeps its OWN shape, so nothing jumps -------------
+  if (isFirstLoad) {
+    if (!showSkeleton) return null;
+    return isCalendar ? <ScheduledCalendarSkeleton /> : <ScheduledSkeleton />;
+  }
+
+  // --- Error, with nothing to fall back on ---------------------------------
+  if (isFatalError) {
+    return (
+      <Stack direction="vertical" padding={4}>
+        <ApiErrorNotice error={list.error} onRetry={() => void list.refetch()} />
+      </Stack>
+    );
+  }
+
+  // --- Data, calendar mode --------------------------------------------------
+  // The grid is drawn even with nothing in it: an operator who lands on a quiet
+  // month still needs the month navigation to get out of it. `monthKey` is null
+  // only while the browser clock is unknown (server render + first frame) —
+  // guessing a month there would make it jump.
+  if (isCalendar) {
+    if (monthKey === null) return <ScheduledCalendarSkeleton />;
+
+    return (
+      <Stack direction="vertical" padding={4}>
+        <ScheduledCalendar
+          monthKey={monthKey}
+          selectedDayKey={view.day}
+          items={items}
+          nowMs={nowMs}
+          hasFilter={filtered}
+          loadMore={{
+            hasMore: list.hasNextPage,
+            isPending: list.isFetchingNextPage,
+            onLoadMore: () => void list.fetchNextPage(),
+          }}
+          onMonthChange={(nextMonth) =>
+            // The open day belongs to the month we are leaving, so it goes too.
+            onPushUrl(filter, { view: "calendar", month: nextMonth, day: null })
+          }
+          onDaySelect={(dayKey) =>
+            onPushUrl(filter, { view: "calendar", month: monthKey, day: dayKey })
+          }
+          onClearFilters={onClearFilters}
+          renderDayDetail={(_dayKey, jobs) => (
+            <ScheduledJobTable
+              items={jobs}
+              headingId="scheduled-day-panel"
+              nowMs={nowMs}
+              hrefFor={hrefForDialog}
+              busyJobId={busyJobId}
+              readOnlyReason={readOnlyReason}
+            />
+          )}
+        />
+      </Stack>
+    );
+  }
+
+  // --- Empty, list mode only: the calendar tells its own three apart --------
+  if (items.length === 0) {
+    return (
+      <Stack direction="vertical" padding={4}>
+        {filtered ? (
+          <EmptyState
+            kind="no-result"
+            title="Không có bài hẹn nào khớp bộ lọc"
+            description="Không có bài nào được hẹn trong khoảng thời gian hoặc trên kênh đang chọn. Dữ liệu vẫn còn nguyên — bỏ bộ lọc để xem toàn bộ."
+            action={<Button variant="secondary" label="Bỏ bộ lọc" onClick={onClearFilters} />}
+          />
+        ) : (
+          <EmptyState
+            kind="first-run"
+            title="Chưa có bài nào được hẹn giờ"
+            description="Khi soạn bài hoặc chạy hàng loạt, chọn “Hẹn giờ đăng” thay vì “Đăng ngay” — những bài đang chờ tới giờ sẽ hiện ở đây."
+            action={
+              // A real link, not a click handler: this is navigation, so
+              // Ctrl/Cmd+click, middle-click and "mở tab mới" all have to work,
+              // and a screen reader has to hear "liên kết", not "nút".
+              <Button variant="primary" label="Soạn bài" href="/compose" />
+            }
+          />
+        )}
+      </Stack>
+    );
+  }
+
+  // --- Data, list mode ------------------------------------------------------
+  return (
+    <Stack direction="vertical" gap={6} paddingBlock={4}>
+      {dayGroups.map((group) => {
+        const headingId = `scheduled-day-${group.dayKey}`;
+        return (
+          <Stack as="section" key={group.dayKey} direction="vertical" gap={2}>
+            <HStack gap={2} paddingInline={4} align="center" wrap="wrap">
+              <Heading level={2} id={headingId}>
+                {/* nowMs is 0 only on the server: the heading then shows the
+                    full date, never a wrong "Hôm nay". */}
+                {formatDayHeading(group.dayKey, nowMs)}
+              </Heading>
+              <Text type="supporting">{group.items.length} bài</Text>
+            </HStack>
+            <ScheduledJobTable
+              items={group.items}
+              headingId={headingId}
+              nowMs={nowMs}
+              hrefFor={hrefForDialog}
+              busyJobId={busyJobId}
+              readOnlyReason={readOnlyReason}
+            />
+          </Stack>
+        );
+      })}
+    </Stack>
   );
 }
 

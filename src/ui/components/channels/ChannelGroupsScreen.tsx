@@ -1,14 +1,32 @@
 "use client";
 
-import Link from "next/link";
-import { useState } from "react";
+import {
+  Badge,
+  Banner,
+  Button,
+  Divider,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  LayoutPanel,
+  List,
+  ListItem,
+  Skeleton,
+  Stack,
+  StackItem,
+  Text,
+  Token,
+  VStack,
+  useMediaQuery,
+} from "@astryxdesign/core";
+import { useState, type ReactNode } from "react";
 
 import { ChannelGroupForm } from "@/ui/components/channels/ChannelGroupForm";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
-import { Badge } from "@/ui/components/ui/badge";
-import { Button } from "@/ui/components/ui/button";
 import {
   useChannelGroups,
   useCreateChannelGroup,
@@ -19,6 +37,7 @@ import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
+import type { ChannelGroup } from "@/ui/schemas/channel-group.schema";
 import { formatDateTime } from "@/ui/schemas/post-batch.schema";
 
 /**
@@ -28,15 +47,26 @@ import { formatDateTime } from "@/ui/schemas/post-batch.schema";
  * fan-out still creates one post_job per channel and the publish rules (kiểm
  * tồn lần 2, giãn cách, khoá chống trùng) are untouched by what is ticked here.
  *
+ * Frame (`astryx docs layout`, tracker archetype): the saved groups are rows in
+ * the content region and the create/edit form lives in a panel beside them. The
+ * screen used to be a scroll column of identical cards with a form on top —
+ * card soup, and the form pushed the list off the first screen. Rows also make
+ * the real question ("nhóm nào có kênh nào?") answerable without scrolling.
+ *
+ * Responsive contract:
+ *   > 1024px  content (rows) | panel 380 (form)
+ *   <= 1024px panel drops; the form renders above the rows, in the same order
+ *             an operator reads them
+ *
  * The four mandatory states:
- *   loading — skeleton cards, delayed 300ms
- *   data    — one card per group, each with edit + delete
+ *   loading — skeleton rows, delayed 300ms
+ *   data    — one row per group, each with sửa + xoá
  *   empty   — first-run box explaining what a group is for
  *   error   — via `presentApiError` (4xx: sửa dữ liệu; 5xx: thử lại)
  *
- * Delete asks first, in place — a two-step button instead of `confirm()`, which
- * cannot be styled, cannot be read properly by a screen reader on every browser
- * and blocks the main thread.
+ * Delete asks first, in place — the row's action slot swaps to a question and
+ * two buttons, the same gesture "Kênh" uses. No `confirm()`: it cannot be
+ * styled, blocks the main thread and is announced inconsistently.
  */
 export function ChannelGroupsScreen() {
   const groups = useChannelGroups();
@@ -44,6 +74,10 @@ export function ChannelGroupsScreen() {
   const update = useUpdateChannelGroup();
   const remove = useDeleteChannelGroup();
   const channels = useChannels();
+
+  // Below 1024px the panel would squeeze the rows to nothing, so it drops and
+  // the form takes its place at the top of the content region.
+  const isNarrow = useMediaQuery("(max-width: 1024px)");
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -70,225 +104,359 @@ export function ChannelGroupsScreen() {
   const readOnlyReason = useReadOnlyReason();
   const gate = writeGate(readOnlyReason);
 
+  const editing = items.find((group) => group.id === editingId) ?? null;
+
+  const formBlock = (
+    <VStack gap={3}>
+      <Heading level={2}>{editing ? `Sửa nhóm “${editing.name}”` : "Tạo nhóm mới"}</Heading>
+
+      {gate.isDisabled ? (
+        // The whole form goes, not just its button: a form nobody can submit
+        // invites typing that gets thrown away.
+        <ReadOnlyNotice reason={gate.reason} />
+      ) : editing ? (
+        <ChannelGroupForm
+          // Remounts per group: the fields must start from THAT group's values,
+          // and a stale error from the previous one must not survive.
+          key={editing.id}
+          mode="edit"
+          defaultValues={{ name: editing.name, channelIds: [...editing.channelIds] }}
+          channels={pickableChannels}
+          pending={update.isPending}
+          error={update.isError ? update.error : undefined}
+          onCancel={() => {
+            update.reset();
+            setEditingId(null);
+          }}
+          onSubmit={(values) => {
+            update.reset();
+            update.mutate(
+              { groupId: editing.id, ...values },
+              { onSuccess: () => setEditingId(null) },
+            );
+          }}
+        />
+      ) : (
+        <ChannelGroupForm
+          mode="create"
+          channels={pickableChannels}
+          pending={create.isPending}
+          error={create.isError ? create.error : undefined}
+          onSubmit={(values) => {
+            create.reset();
+            create.mutate(values);
+          }}
+        />
+      )}
+
+      {!editing && create.isSuccess ? (
+        <Banner
+          status="success"
+          role="status"
+          title={`Đã tạo nhóm “${create.data.name}” với ${create.data.channelCount} kênh.`}
+        />
+      ) : null}
+    </VStack>
+  );
+
   return (
-    <section className="space-y-6" aria-labelledby="channels-heading">
-      <header className="space-y-1">
-        <h1 id="channels-heading" className="text-2xl font-semibold tracking-tight">
-          Nhóm kênh
-        </h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Gom sẵn các kênh hay đăng cùng nhau để ở màn soạn bài chỉ cần tick một lần. Nhóm chỉ là
-          lối tắt chọn kênh — mọi quy tắc đăng (kiểm tồn, giãn cách, chống trùng) vẫn giữ nguyên.
-        </p>
-      </header>
+    <Layout
+      height="fill"
+      header={
+        <LayoutHeader hasDivider>
+          <Stack direction="vertical" gap={1} padding={4} maxWidth={760}>
+            <Heading level={1}>Nhóm kênh</Heading>
+            <Text type="supporting">
+              Gom sẵn các kênh hay đăng cùng nhau để ở màn soạn bài chỉ cần tick một lần. Nhóm chỉ
+              là lối tắt chọn kênh — mọi quy tắc đăng (kiểm tồn, giãn cách, chống trùng) vẫn giữ
+              nguyên.
+            </Text>
+          </Stack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={0} isScrollable>
+          <Stack direction="vertical" height="100%">
+            {isNarrow ? (
+              <>
+                <Stack direction="vertical" padding={4}>
+                  {formBlock}
+                </Stack>
+                <Divider />
+              </>
+            ) : null}
 
-      <section
-        aria-labelledby="channels-create-heading"
-        className="bg-card space-y-4 rounded-xl border p-5"
-      >
-        <h2 id="channels-create-heading" className="text-base font-semibold">
-          Tạo nhóm mới
-        </h2>
-        {gate.isDisabled ? (
-          // The whole form goes, not just its button: a form nobody can submit
-          // invites typing that gets thrown away.
-          <ReadOnlyNotice reason={gate.reason} />
-        ) : (
-          <ChannelGroupForm
-            mode="create"
-            channels={pickableChannels}
-            pending={create.isPending}
-            error={create.isError ? create.error : undefined}
-            onSubmit={(values) => {
-              create.reset();
-              create.mutate(values);
-            }}
-          />
-        )}
-        {create.isSuccess ? (
-          <p
-            role="status"
-            className="border-success/30 bg-success/10 text-success-foreground rounded-lg border px-3 py-2 text-sm"
+            <HStack gap={3} paddingInline={4} paddingBlock={3} align="center" wrap="wrap">
+              <Heading level={2}>Nhóm đã lưu</Heading>
+              {/* Only once the list is real: "0 nhóm" while loading reads as an
+                  answer, and the operator would act on it. */}
+              {groups.data ? (
+                <Text type="supporting" role="status" aria-live="polite">
+                  {items.length} nhóm
+                </Text>
+              ) : null}
+            </HStack>
+
+            {remove.isError ? (
+              <Stack direction="vertical" paddingInline={4} paddingBlock={0}>
+                <ApiErrorNotice error={remove.error} />
+              </Stack>
+            ) : null}
+
+            <StackItem size="fill">
+              <ChannelGroupsBody
+                isFirstLoad={isFirstLoad}
+                showSkeleton={showSkeleton}
+                isError={groups.isError}
+                error={groups.error}
+                onRetry={() => void groups.refetch()}
+                items={items}
+                editingId={editingId}
+                confirmingId={confirmingId}
+                isRemoving={remove.isPending}
+                gate={gate}
+                onEdit={(groupId) => {
+                  update.reset();
+                  setConfirmingId(null);
+                  setEditingId(groupId);
+                }}
+                onAskRemove={(groupId) => {
+                  remove.reset();
+                  setEditingId(null);
+                  setConfirmingId(groupId);
+                }}
+                onCancelRemove={() => setConfirmingId(null)}
+                onConfirmRemove={(groupId) => {
+                  remove.reset();
+                  remove.mutate({ groupId }, { onSuccess: () => setConfirmingId(null) });
+                }}
+              />
+            </StackItem>
+          </Stack>
+        </LayoutContent>
+      }
+      end={
+        isNarrow ? undefined : (
+          <LayoutPanel
+            width={380}
+            hasDivider
+            isScrollable
+            label={editing ? "Sửa nhóm kênh" : "Tạo nhóm kênh mới"}
           >
-            Đã tạo nhóm “{create.data.name}” với {create.data.channelCount} kênh.
-          </p>
-        ) : null}
-      </section>
-
-      <section aria-labelledby="channels-list-heading" className="space-y-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 id="channels-list-heading" className="text-base font-semibold">
-            Nhóm đã lưu
-          </h2>
-          {/* Only once the list is real: "0 nhóm" while loading reads as an
-              answer, and the operator would act on it. */}
-          {groups.data ? (
-            <p className="text-muted-foreground text-sm tabular-nums">{items.length} nhóm</p>
-          ) : null}
-        </div>
-
-        {isFirstLoad ? showSkeleton ? <ChannelGroupsSkeleton /> : null : null}
-
-        {groups.isError && items.length === 0 ? (
-          <ApiErrorNotice error={groups.error} onRetry={() => void groups.refetch()} />
-        ) : null}
-
-        {remove.isError ? <ApiErrorNotice error={remove.error} /> : null}
-
-        {!isFirstLoad && !groups.isError && items.length === 0 ? (
-          <EmptyState
-            kind="first-run"
-            title="Chưa có nhóm kênh nào"
-            description="Tạo nhóm đầu tiên bằng biểu mẫu phía trên. Khi đã có nhóm, màn soạn bài sẽ hiện danh sách kênh theo nhóm để tick nhanh."
-            action={
-              <Button asChild variant="outline">
-                <Link href="/compose">Về màn soạn bài</Link>
-              </Button>
-            }
-          />
-        ) : null}
-
-        <ul className="space-y-3">
-          {items.map((group) => (
-            <li key={group.id} className="bg-card space-y-3 rounded-xl border p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold">{group.name}</h3>
-                <Badge tone="info">{group.channelCount} kênh</Badge>
-              </div>
-
-              <ul className="flex flex-wrap gap-1.5">
-                {group.channelIds.map((channelId) => (
-                  <li
-                    key={channelId}
-                    className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 font-mono text-xs break-all"
-                  >
-                    {channelId}
-                  </li>
-                ))}
-              </ul>
-
-              <p className="text-muted-foreground text-xs tabular-nums">
-                Cập nhật: {formatDateTime(group.updatedAt)}
-              </p>
-
-              {editingId === group.id ? (
-                <div className="border-t pt-3">
-                  <ChannelGroupForm
-                    mode="edit"
-                    defaultValues={{
-                      name: group.name,
-                      channelIds: [...group.channelIds],
-                    }}
-                    channels={pickableChannels}
-                    pending={update.isPending}
-                    error={update.isError ? update.error : undefined}
-                    onCancel={() => {
-                      update.reset();
-                      setEditingId(null);
-                    }}
-                    onSubmit={(values) => {
-                      update.reset();
-                      update.mutate(
-                        { groupId: group.id, ...values },
-                        { onSuccess: () => setEditingId(null) },
-                      );
-                    }}
-                  />
-                </div>
-              ) : confirmingId === group.id ? (
-                <div
-                  role="alertdialog"
-                  aria-label={`Xác nhận xoá nhóm ${group.name}`}
-                  className="border-destructive/30 bg-destructive/5 space-y-2 rounded-lg border p-3"
-                >
-                  <p className="text-sm">
-                    Xoá nhóm “{group.name}”? Các bài đã đăng không bị ảnh hưởng — chỉ mất lối tắt
-                    chọn kênh này.
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      disabled={remove.isPending}
-                      onClick={() => {
-                        remove.reset();
-                        remove.mutate(
-                          { groupId: group.id },
-                          { onSuccess: () => setConfirmingId(null) },
-                        );
-                      }}
-                    >
-                      {remove.isPending ? "Đang xoá…" : "Xoá nhóm"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() => setConfirmingId(null)}
-                      disabled={remove.isPending}
-                    >
-                      Giữ lại
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={gate.isDisabled}
-                    onClick={() => {
-                      update.reset();
-                      setConfirmingId(null);
-                      setEditingId(group.id);
-                    }}
-                  >
-                    Sửa
-                    <span className="sr-only"> nhóm {group.name}</span>
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    disabled={gate.isDisabled}
-                    onClick={() => {
-                      remove.reset();
-                      setEditingId(null);
-                      setConfirmingId(group.id);
-                    }}
-                  >
-                    Xoá
-                    <span className="sr-only"> nhóm {group.name}</span>
-                  </Button>
-                  {/* One line per row, next to the buttons it explains. */}
-                  <ReadOnlyNotice reason={gate.reason} className="basis-full text-xs" />
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      </section>
-    </section>
+            <Stack direction="vertical" padding={4}>
+              {formBlock}
+            </Stack>
+          </LayoutPanel>
+        )
+      }
+    />
   );
 }
 
-/** Same card shape as a real group row — no jump when the data lands. */
+function ChannelGroupsBody({
+  isFirstLoad,
+  showSkeleton,
+  isError,
+  error,
+  onRetry,
+  items,
+  editingId,
+  confirmingId,
+  isRemoving,
+  gate,
+  onEdit,
+  onAskRemove,
+  onCancelRemove,
+  onConfirmRemove,
+}: {
+  isFirstLoad: boolean;
+  showSkeleton: boolean;
+  isError: boolean;
+  error: unknown;
+  onRetry: () => void;
+  items: readonly ChannelGroup[];
+  editingId: string | null;
+  confirmingId: string | null;
+  isRemoving: boolean;
+  gate: ReturnType<typeof writeGate>;
+  onEdit: (groupId: string) => void;
+  onAskRemove: (groupId: string) => void;
+  onCancelRemove: () => void;
+  onConfirmRemove: (groupId: string) => void;
+}) {
+  // --- Loading (delayed so a fast answer does not flash) -------------------
+  if (isFirstLoad) return showSkeleton ? <ChannelGroupsSkeleton /> : null;
+
+  // --- Error, with nothing to fall back on ---------------------------------
+  if (isError && items.length === 0) {
+    return (
+      <Stack direction="vertical" padding={4}>
+        <ApiErrorNotice error={error} onRetry={onRetry} />
+      </Stack>
+    );
+  }
+
+  // --- Empty: the whole point of this screen for a new tenant ---------------
+  if (items.length === 0) {
+    return (
+      <Stack direction="vertical" padding={4}>
+        <EmptyState
+          kind="first-run"
+          title="Chưa có nhóm kênh nào"
+          description="Tạo nhóm đầu tiên bằng biểu mẫu bên cạnh. Khi đã có nhóm, màn soạn bài sẽ hiện danh sách kênh theo nhóm để tick nhanh."
+          action={
+            // A real link, not a click handler: this is navigation, so
+            // Ctrl/Cmd+click, middle-click and "mở tab mới" all have to work,
+            // and a screen reader has to hear "liên kết", not "nút".
+            <Button variant="secondary" label="Về màn soạn bài" href="/compose" />
+          }
+        />
+      </Stack>
+    );
+  }
+
+  // --- Data -----------------------------------------------------------------
+  return (
+    <List hasDividers density="compact">
+      {items.map((group) => (
+        <ListItem
+          key={group.id}
+          label={group.name}
+          isSelected={editingId === group.id}
+          description={
+            <VStack gap={1.5}>
+              <HStack gap={1.5} wrap="wrap">
+                {group.channelIds.map((channelId) => (
+                  <Token key={channelId} size="sm" label={channelId} />
+                ))}
+              </HStack>
+              <Text type="supporting" size="2xs" hasTabularNumbers>
+                Cập nhật: {formatDateTime(group.updatedAt)}
+              </Text>
+            </VStack>
+          }
+          endContent={
+            <GroupActions
+              group={group}
+              isConfirming={confirmingId === group.id}
+              isRemoving={isRemoving}
+              gate={gate}
+              onEdit={() => onEdit(group.id)}
+              onAskRemove={() => onAskRemove(group.id)}
+              onCancelRemove={onCancelRemove}
+              onConfirmRemove={() => onConfirmRemove(group.id)}
+            />
+          }
+        />
+      ))}
+    </List>
+  );
+}
+
+/** The row's action slot: two buttons, or the delete question in their place. */
+function GroupActions({
+  group,
+  isConfirming,
+  isRemoving,
+  gate,
+  onEdit,
+  onAskRemove,
+  onCancelRemove,
+  onConfirmRemove,
+}: {
+  group: ChannelGroup;
+  isConfirming: boolean;
+  isRemoving: boolean;
+  gate: ReturnType<typeof writeGate>;
+  onEdit: () => void;
+  onAskRemove: () => void;
+  onCancelRemove: () => void;
+  onConfirmRemove: () => void;
+}): ReactNode {
+  if (isConfirming) {
+    return (
+      <VStack gap={1.5} align="end">
+        {/* Announced on mount: a keyboard user must hear the question, not just
+            see the buttons change. */}
+        <Text type="supporting" role="alert">
+          Xoá nhóm “{group.name}”? Bài đã đăng không bị ảnh hưởng — chỉ mất lối tắt chọn kênh này.
+        </Text>
+        <HStack gap={2} wrap="wrap">
+          <Button
+            size="sm"
+            variant="destructive"
+            label={`Xoá hẳn nhóm ${group.name}`}
+            isLoading={isRemoving}
+            isDisabled={isRemoving}
+            onClick={onConfirmRemove}
+          >
+            Xoá hẳn
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            label={`Giữ lại nhóm ${group.name}`}
+            isDisabled={isRemoving}
+            onClick={onCancelRemove}
+          >
+            Giữ lại
+          </Button>
+        </HStack>
+      </VStack>
+    );
+  }
+
+  return (
+    <HStack gap={2} align="center" wrap="wrap">
+      {/* Badge earns its place here: it is a count, nothing else. */}
+      <Badge variant="neutral" label={`${group.channelCount} kênh`} />
+      <Button
+        size="sm"
+        variant="secondary"
+        label={`Sửa nhóm ${group.name}`}
+        isDisabled={gate.isDisabled}
+        // Never a bare disabled button: with a tooltip Astryx keeps the control
+        // focusable (aria-disabled), so the reason is reachable by keyboard.
+        tooltip={gate.reason ?? undefined}
+        onClick={onEdit}
+      >
+        Sửa
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        label={`Xoá nhóm ${group.name}`}
+        isDisabled={gate.isDisabled}
+        tooltip={gate.reason ?? undefined}
+        onClick={onAskRemove}
+      >
+        Xoá
+      </Button>
+    </HStack>
+  );
+}
+
+/** Same row shape as a real group — no jump when the data lands. */
 function ChannelGroupsSkeleton() {
   return (
-    <div aria-hidden="true" className="space-y-3 motion-safe:animate-pulse">
-      {[0, 1].map((card) => (
-        <div key={card} className="bg-card space-y-3 rounded-xl border p-4">
-          <div className="flex items-center justify-between gap-2">
-            <div className="bg-muted h-4 w-40 rounded" />
-            <div className="bg-muted h-5 w-16 rounded-full" />
-          </div>
-          <div className="flex gap-1.5">
-            <div className="bg-muted h-5 w-24 rounded-md" />
-            <div className="bg-muted h-5 w-28 rounded-md" />
-          </div>
-          <div className="bg-muted h-3 w-48 rounded" />
-        </div>
+    <Stack direction="vertical" gap={0} aria-hidden="true">
+      {[0, 1, 2].map((row) => (
+        <HStack key={row} gap={3} paddingInline={4} paddingBlock={3} align="start">
+          <StackItem size="fill">
+            <VStack gap={1.5}>
+              <Skeleton width={180} height={16} index={row} />
+              <HStack gap={1.5}>
+                <Skeleton width={96} height={20} radius="rounded" index={row} />
+                <Skeleton width={112} height={20} radius="rounded" index={row} />
+              </HStack>
+              <Skeleton width={200} height={12} index={row} />
+            </VStack>
+          </StackItem>
+          <Skeleton width={72} height={20} radius="rounded" index={row} />
+          <Skeleton width={64} height={28} index={row} />
+          <Skeleton width={64} height={28} index={row} />
+        </HStack>
       ))}
-    </div>
+    </Stack>
   );
 }

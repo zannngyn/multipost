@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Badge,
   Banner,
   Button,
   EmptyState,
@@ -13,6 +12,7 @@ import {
   Stack,
   StackItem,
   Text,
+  Token,
 } from "@astryxdesign/core";
 import { useState } from "react";
 
@@ -113,12 +113,17 @@ export function PlatformScreen() {
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <Stack direction="vertical" gap={3} padding={4}>
-            <Stack direction="vertical" gap={1}>
+          {/* Title left, actions right — same app-bar shape as the other admin
+              screens, so "Tải lại" is always in the same corner. */}
+          <HStack gap={4} padding={4} justify="between" align="start" wrap="wrap">
+            <Stack direction="vertical" gap={1} maxWidth={640}>
               <HStack gap={2} align="center" wrap="wrap">
                 <Heading level={1}>Công ty khách</Heading>
-                <Badge
-                  variant={canAdminister ? "purple" : "neutral"}
+                {/* Which of the two platform roles you hold decides what this
+                    screen offers, so it is stated next to the title. */}
+                <Token
+                  size="sm"
+                  color={canAdminister ? "purple" : "gray"}
                   label={platformRoleLabel(platformRole)}
                 />
               </HStack>
@@ -126,9 +131,11 @@ export function PlatformScreen() {
                 Toàn bộ công ty đang chạy trên MYSP. Màn này đứng ngoài mọi công ty — thao tác ở đây
                 ảnh hưởng tới khách, không tới công ty bạn đang làm việc.
               </Text>
+              {/* Said once, at the top, instead of a column of dead buttons. */}
+              {supportNotice ? <Text type="supporting">{supportNotice}</Text> : null}
             </Stack>
 
-            <HStack gap={3} align="center" wrap="wrap">
+            <HStack gap={2} align="center" wrap="wrap">
               <Button
                 variant="secondary"
                 size="sm"
@@ -144,10 +151,8 @@ export function PlatformScreen() {
                   onClick={() => setIsCreateOpen(true)}
                 />
               ) : null}
-              {/* Said once, at the top, instead of a column of dead buttons. */}
-              {supportNotice ? <Text type="supporting">{supportNotice}</Text> : null}
             </HStack>
-          </Stack>
+          </HStack>
         </LayoutHeader>
       }
       content={
@@ -274,7 +279,7 @@ function PlatformListBody({
   // --- Empty: MYSP always operates at least its own workspace --------------
   if (items.length === 0) {
     return (
-      <Stack direction="vertical" padding={4}>
+      <Stack direction="vertical" padding={6}>
         <EmptyState
           headingLevel={3}
           title="Chưa có công ty nào"

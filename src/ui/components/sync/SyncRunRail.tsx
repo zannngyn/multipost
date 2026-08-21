@@ -1,12 +1,25 @@
 "use client";
 
+import {
+  Banner,
+  Button,
+  Divider,
+  HStack,
+  Heading,
+  List,
+  ListItem,
+  MetadataList,
+  MetadataListItem,
+  Stack,
+  StackItem,
+  StatusDot,
+  Text,
+} from "@astryxdesign/core";
 import { useEffect, useId, useState } from "react";
 
-import { cn } from "@/shared/utils";
-import { Badge } from "@/ui/components/ui/badge";
-import { Button } from "@/ui/components/ui/button";
 import { formatCount, formatDateTime, formatDuration } from "@/ui/components/sync/sync-format";
 import { shortenId } from "@/ui/schemas/catalog.schema";
+import type { StatusTone } from "@/ui/schemas/post-batch.schema";
 import {
   SYNC_STATUS_HINTS,
   SYNC_STATUS_LABELS,
@@ -23,91 +36,102 @@ import {
  * `partial` deliberately does not look like `succeeded`: the run finished, but
  * files were skipped and somebody has to look at them. The colour comes from
  * `SYNC_STATUS_TONES` so the banner in the main column cannot disagree.
+ *
+ * The two headings are plain headings now. They used to be styled as mono
+ * uppercase eyebrows, which is a label costume on top of a real heading — the
+ * words carry the section on their own.
  */
 
 type CopyState = "idle" | "copied" | "failed";
 
 /**
- * Dot colour per status. Same severity ladder as `SYNC_STATUS_TONES`, expressed
- * as the 6px dot the history list uses instead of a full badge — five badges
- * stacked in a 360px rail read as five alerts.
+ * Status -> dot, same severity ladder as `SYNC_STATUS_TONES`. Five stacked
+ * pills in a 360px rail read as five alerts, so the history list carries a dot
+ * and the status WORD instead.
  */
-const STATUS_DOT: Record<SyncRunStatus, string> = {
-  running: "bg-primary motion-safe:animate-pulse",
-  succeeded: "bg-success",
-  partial: "bg-warning",
-  failed: "bg-destructive",
+const DOT_VARIANT: Record<StatusTone, "success" | "warning" | "error" | "accent" | "neutral"> = {
+  neutral: "neutral",
+  info: "accent",
+  success: "success",
+  warning: "warning",
+  danger: "error",
 };
+
+function dotFor(status: SyncRunStatus) {
+  return DOT_VARIANT[SYNC_STATUS_TONES[status]];
+}
 
 export function SyncRunRail({ run }: { run: SyncRun }) {
   const duration = formatDuration(run.startedAt, run.finishedAt);
   const deletedProducts = run.counts?.productsDeleted ?? 0;
   const deletedMedia = run.counts?.mediaDeleted ?? 0;
+  const statusLabel = SYNC_STATUS_LABELS[run.status];
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          {/* Eyebrow styling on a real heading: the rail needs a landmark title
-              in the outline, and <Eyebrow> is a <p> by design. */}
-          <h2 className="text-foreground-subtle font-mono text-xs tracking-widest uppercase">
-            Lần chạy gần nhất
-          </h2>
-          <Badge tone={SYNC_STATUS_TONES[run.status]}>{SYNC_STATUS_LABELS[run.status]}</Badge>
-        </div>
-        <p className="text-muted-foreground text-sm">{SYNC_STATUS_HINTS[run.status]}</p>
-      </div>
+    <Stack direction="vertical" gap={4}>
+      <Stack direction="vertical" gap={2}>
+        <Heading level={2}>Lần chạy gần nhất</Heading>
+        <HStack gap={2} align="center">
+          <StatusDot
+            variant={dotFor(run.status)}
+            label={statusLabel}
+            isPulsing={run.status === "running"}
+          />
+          <Text weight="medium">{statusLabel}</Text>
+        </HStack>
+        <Text type="supporting">{SYNC_STATUS_HINTS[run.status]}</Text>
+      </Stack>
 
-      <dl className="space-y-1.5 text-sm">
-        <RailRow label="Bắt đầu" value={formatDateTime(run.startedAt)} />
-        <RailRow
-          label="Kết thúc"
-          value={run.finishedAt ? formatDateTime(run.finishedAt) : "— (chưa xong)"}
-        />
-        <RailRow label="Thời gian chạy" value={duration ?? "— (chưa xong)"} />
-        <div className="flex items-baseline gap-2">
-          <dt className="text-muted-foreground w-28 shrink-0 text-xs">Mã lần chạy</dt>
-          <dd className="flex min-w-0 flex-1 items-baseline gap-2">
-            <span className="text-muted-foreground truncate font-mono text-xs" title={run.syncRunId}>
+      <MetadataList label={{ position: "start", width: 112 }}>
+        <MetadataListItem label="Bắt đầu">
+          <Text type="code" size="2xs" hasTabularNumbers>
+            {formatDateTime(run.startedAt)}
+          </Text>
+        </MetadataListItem>
+        <MetadataListItem label="Kết thúc">
+          <Text type="code" size="2xs" hasTabularNumbers>
+            {run.finishedAt ? formatDateTime(run.finishedAt) : "— (chưa xong)"}
+          </Text>
+        </MetadataListItem>
+        <MetadataListItem label="Thời gian chạy">
+          <Text type="code" size="2xs" hasTabularNumbers>
+            {duration ?? "— (chưa xong)"}
+          </Text>
+        </MetadataListItem>
+        <MetadataListItem label="Mã lần chạy">
+          <Stack direction="vertical" gap={0.5}>
+            <Text type="code" size="2xs" maxLines={1} wordBreak="break-all">
               {shortenId(run.syncRunId, 8)}
-            </span>
+            </Text>
             <CopyRunId syncRunId={run.syncRunId} tenantId={run.tenantId} />
-          </dd>
-        </div>
-      </dl>
+          </Stack>
+        </MetadataListItem>
+      </MetadataList>
 
       {run.errorCode || run.errorMessage ? (
-        <p
+        <Banner
           role="alert"
-          className="border-destructive/30 bg-destructive/5 text-destructive rounded-xl border px-3 py-2 text-sm"
-        >
-          <span className="font-medium">Lý do dừng:</span> {run.errorMessage ?? "Không rõ"}
-          {run.errorCode ? <span className="font-mono text-xs"> ({run.errorCode})</span> : null}
-        </p>
+          status="error"
+          title="Lý do dừng"
+          description={`${run.errorMessage ?? "Không rõ"}${run.errorCode ? ` (${run.errorCode})` : ""}`}
+        />
       ) : null}
 
       {/* Past tense on purpose: these are the deletions the run ALREADY made.
           The API has no forecast for the next run, and labelling them as one
           would be an invented number. */}
       {deletedProducts + deletedMedia > 0 ? (
-        <div className="border-warning/40 space-y-1.5 rounded-xl border p-3">
-          <p className="text-warning-foreground text-sm font-semibold">
-            Lần chạy vừa rồi đã xoá
-          </p>
-          <p className="text-muted-foreground text-sm">
-            Sản phẩm và ảnh không còn thuộc nguồn hiện tại đã bị xoá khỏi hệ thống.
-          </p>
-          <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
-            <span className="font-mono tabular-nums">{formatCount(deletedProducts)}</span>
-            <span>sản phẩm</span>
-            <span className="font-mono tabular-nums">{formatCount(deletedMedia)}</span>
-            <span>file</span>
-          </p>
-        </div>
+        <Banner
+          status="warning"
+          title="Lần chạy vừa rồi đã xoá"
+          description={`${formatCount(deletedProducts)} sản phẩm và ${formatCount(deletedMedia)} file không còn thuộc nguồn hiện tại đã bị xoá khỏi hệ thống.`}
+        />
       ) : null}
 
+      <Divider />
+
       <RecentRunsList runs={run.recentRuns} currentRunId={run.syncRunId} />
-    </div>
+    </Stack>
   );
 }
 
@@ -134,26 +158,23 @@ function RecentRunsList({
   const previous = runs.filter((item) => item.syncRunId !== currentRunId);
 
   return (
-    <section aria-labelledby={headingId} className="border-border space-y-2 border-t pt-4">
-      <h3
-        id={headingId}
-        className="text-foreground-subtle font-mono text-xs tracking-widest uppercase"
-      >
+    <Stack as="section" direction="vertical" gap={2} aria-labelledby={headingId}>
+      <Heading level={3} id={headingId}>
         Các lần chạy trước
-      </h3>
+      </Heading>
 
       {previous.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
+        <Text type="supporting">
           Chưa có lần chạy nào khác để so sánh — đây là lần đồng bộ đầu tiên của đơn vị này.
-        </p>
+        </Text>
       ) : (
-        <ul className="space-y-1.5">
+        <List density="compact" hasDividers>
           {previous.map((item) => (
             <RecentRunRow key={item.syncRunId} run={item} />
           ))}
-        </ul>
+        </List>
       )}
-    </section>
+    </Stack>
   );
 }
 
@@ -163,51 +184,40 @@ function RecentRunRow({ run }: { run: RecentSyncRun }) {
   const isUnfinished = run.status === "running" || run.finishedAt === null;
   const duration = formatDuration(run.startedAt, run.finishedAt);
 
+  const detail = isUnfinished
+    ? "Chưa kết thúc — chưa có số liệu."
+    : `${duration ?? "—"}${
+        run.issuesTotal === null
+          ? " · không ghi được số vấn đề"
+          : ` · ${formatCount(run.issuesTotal)} vấn đề`
+      }`;
+
   return (
-    <li className="border-border flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border px-2.5 py-2 text-xs">
-      <span className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span
-          aria-hidden="true"
-          className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOT[run.status])}
+    <ListItem
+      // Colour is never the only carrier — the status word is the row label.
+      label={SYNC_STATUS_LABELS[run.status]}
+      startContent={
+        <StatusDot
+          variant={dotFor(run.status)}
+          label={SYNC_STATUS_LABELS[run.status]}
+          isPulsing={run.status === "running"}
         />
-        {/* Colour is never the only carrier — the status is written out too. */}
-        <span className="truncate font-medium">{SYNC_STATUS_LABELS[run.status]}</span>
-      </span>
-
-      <span className="text-muted-foreground shrink-0 font-mono tabular-nums">
-        {formatDateTime(run.startedAt)}
-      </span>
-
-      <span className="text-muted-foreground basis-full">
-        {isUnfinished ? (
-          "Chưa kết thúc — chưa có số liệu."
-        ) : (
-          <>
-            <span className="font-mono tabular-nums">{duration ?? "—"}</span>
-            {run.issuesTotal === null
-              ? " · không ghi được số vấn đề"
-              : ` · ${formatCount(run.issuesTotal)} vấn đề`}
-          </>
-        )}
-        {/* Outside the branch above: a run that died mid-way is BOTH unfinished
-            and failed, and the reason is the only useful thing left on it. */}
-        {run.errorCode ? (
-          <>
-            {" · dừng vì "}
-            <span className="font-mono">{run.errorCode}</span>
-          </>
-        ) : null}
-      </span>
-    </li>
-  );
-}
-
-function RailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <dt className="text-muted-foreground w-28 shrink-0 text-xs">{label}</dt>
-      <dd className="min-w-0 flex-1 font-mono text-xs tabular-nums">{value}</dd>
-    </div>
+      }
+      description={
+        <Text type="supporting" size="2xs" hasTabularNumbers>
+          {detail}
+          {/* Outside the branch above: a run that died mid-way is BOTH
+              unfinished and failed, and the reason is the only useful thing
+              left on it. */}
+          {run.errorCode ? ` · dừng vì ${run.errorCode}` : null}
+        </Text>
+      }
+      endContent={
+        <Text type="code" size="2xs" color="secondary" hasTabularNumbers>
+          {formatDateTime(run.startedAt)}
+        </Text>
+      }
+    />
   );
 }
 
@@ -253,21 +263,32 @@ function CopyRunId({ syncRunId, tenantId }: { syncRunId: string; tenantId: strin
   }
 
   return (
-    <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-      <Button type="button" variant="link" size="xs" onClick={() => void copy()}>
-        Sao chép
-        <span className="sr-only"> mã lần chạy</span>
-      </Button>
-      <span role="status" className="min-w-0 basis-full text-xs">
-        {state === "copied" ? <span className="text-muted-foreground">Đã chép.</span> : null}
-        {state === "failed" ? (
-          // A dead end is not acceptable: give back the full id to copy by hand.
-          <span className="text-destructive">
-            Trình duyệt chặn thao tác chép. Bôi đen mã đầy đủ:{" "}
-            <span className="font-mono break-all select-all">{syncRunId}</span>
-          </span>
-        ) : null}
-      </span>
-    </span>
+    <Stack direction="vertical" gap={1}>
+      <HStack gap={2} align="center">
+        <Button
+          variant="ghost"
+          size="sm"
+          label="Sao chép mã lần chạy"
+          onClick={() => void copy()}
+        >
+          Sao chép
+        </Button>
+        <StackItem size="fill">
+          <Text role="status" type="supporting" size="2xs">
+            {state === "copied" ? "Đã chép." : null}
+          </Text>
+        </StackItem>
+      </HStack>
+
+      {state === "failed" ? (
+        // A dead end is not acceptable: give back the full id to copy by hand.
+        <Banner
+          role="alert"
+          status="error"
+          title="Trình duyệt chặn thao tác chép"
+          description={`Bôi đen mã đầy đủ để chép tay: ${syncRunId}`}
+        />
+      ) : null}
+    </Stack>
   );
 }

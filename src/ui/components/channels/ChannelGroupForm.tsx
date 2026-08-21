@@ -1,13 +1,20 @@
 "use client";
 
+import {
+  Button,
+  CheckboxList,
+  CheckboxListItem,
+  HStack,
+  Link,
+  Skeleton,
+  Text,
+  TextInput,
+  VStack,
+} from "@astryxdesign/core";
 import { zodResolver } from "@hookform/resolvers/zod";
-import Link from "next/link";
-import { useId } from "react";
 import { Controller, useForm } from "react-hook-form";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { Button } from "@/ui/components/ui/button";
-import { Input } from "@/ui/components/ui/input";
 import {
   ChannelGroupFormSchema,
   MAX_CHANNELS_PER_GROUP,
@@ -29,9 +36,10 @@ import type { Channel } from "@/ui/schemas/channel.schema";
  * defaults, and duplicating it would guarantee the two drift apart
  * (core-component-reuse).
  *
- * a11y: the name field has a real <label>; the ticks live in a <fieldset> with
- * a <legend>, each with its own <label for> so they are reachable and toggleable
- * by keyboard, and the group's hint + error are wired through aria-describedby.
+ * a11y comes from the primitives rather than by hand: `TextInput` and
+ * `CheckboxList` each own their label, their description and their error
+ * wiring, which is what stops the three from drifting apart per form
+ * (core-form-architecture §a11y).
  */
 export function ChannelGroupForm({
   mode,
@@ -57,11 +65,6 @@ export function ChannelGroupForm({
   onSubmit: (values: { name: string; channelIds: string[] }) => void;
   onCancel?: () => void;
 }) {
-  const nameId = useId();
-  const channelsId = useId();
-  const channelsHintId = `${channelsId}-hint`;
-  const channelsErrorId = `${channelsId}-error`;
-
   const form = useForm<ChannelGroupFormValues>({
     resolver: zodResolver(ChannelGroupFormSchema),
     mode: "onSubmit",
@@ -92,169 +95,151 @@ export function ChannelGroupForm({
     orphanIds.length === 0
   ) {
     return (
-      <p className="text-muted-foreground text-sm">
-        Chưa có kênh nào đang bật để thêm vào nhóm. Hãy{" "}
-        <Link href="/channels" className="underline underline-offset-4">
-          kết nối Fanpage ở màn Kênh
-        </Link>{" "}
-        trước, rồi quay lại đây gom nhóm.
-      </p>
+      <VStack gap={2}>
+        <Text type="supporting">
+          Chưa có kênh nào đang bật để thêm vào nhóm. Hãy kết nối Fanpage ở màn Kênh trước, rồi quay
+          lại đây gom nhóm.
+        </Text>
+        <Link href="/channels" isStandalone>
+          Mở màn Kênh
+        </Link>
+      </VStack>
     );
   }
 
+  const channelsHint = `Tick những Page bài viết sẽ được đăng lên (tối đa ${MAX_CHANNELS_PER_GROUP} kênh). Danh sách chỉ hiện Page đang bật ở màn Kênh.`;
+
   return (
+    // noValidate: the messages below are ours, not the browser's.
     <form
       noValidate
-      className="space-y-4"
       onSubmit={form.handleSubmit((values) =>
         onSubmit({ name: values.name.trim(), channelIds: [...values.channelIds] }),
       )}
     >
-      <div className="space-y-1.5">
-        <label htmlFor={nameId} className="text-sm font-medium">
-          Tên nhóm kênh
-        </label>
-        <Input
-          id={nameId}
-          {...form.register("name")}
-          aria-invalid={nameError ? true : undefined}
-          aria-describedby={nameError ? `${nameId}-error` : undefined}
-          placeholder="Ví dụ: Fanpage chính"
-          autoComplete="off"
+      <VStack gap={4}>
+        <Controller
+          control={form.control}
+          name="name"
+          render={({ field }) => (
+            <TextInput
+              ref={field.ref}
+              label="Tên nhóm kênh"
+              htmlName={field.name}
+              value={field.value}
+              onChange={field.onChange}
+              onBlur={field.onBlur}
+              placeholder="Ví dụ: Fanpage chính"
+              isRequired
+              isDisabled={pending}
+              disabledMessage={pending ? "Đang lưu — chờ lưu xong rồi mới sửa tiếp được." : undefined}
+              status={nameError ? { type: "error", message: nameError } : undefined}
+              statusVariant="detached"
+              width="100%"
+            />
+          )}
         />
-        {nameError ? (
-          <p id={`${nameId}-error`} role="alert" className="text-destructive text-sm">
-            {nameError}
-          </p>
-        ) : null}
-      </div>
 
-      <Controller
-        control={form.control}
-        name="channelIds"
-        render={({ field }) => (
-          <fieldset
-            className="space-y-2"
-            aria-describedby={
-              channelsError ? `${channelsErrorId} ${channelsHintId}` : channelsHintId
+        <Controller
+          control={form.control}
+          name="channelIds"
+          render={({ field }) => {
+            // --- The picker's own three states, before the happy path -------
+            if (channels.isLoading) {
+              return (
+                <VStack gap={2} aria-busy="true">
+                  <Text type="label">Kênh trong nhóm</Text>
+                  {[0, 1, 2].map((row) => (
+                    <Skeleton key={row} width="70%" height={20} index={row} />
+                  ))}
+                </VStack>
+              );
             }
-          >
-            <legend className="text-sm font-medium">Kênh trong nhóm</legend>
-            <p id={channelsHintId} className="text-muted-foreground text-xs">
-              Tick những Page bài viết sẽ được đăng lên (tối đa {MAX_CHANNELS_PER_GROUP} kênh). Danh
-              sách chỉ hiện Page đang bật ở màn Kênh.
-            </p>
 
-            {channels.isLoading ? (
-              <div aria-hidden="true" className="space-y-2 motion-safe:animate-pulse">
-                {[0, 1].map((row) => (
-                  <div key={row} className="bg-muted h-6 w-64 rounded" />
+            if (channels.error) {
+              return (
+                <VStack gap={2}>
+                  <Text type="label">Kênh trong nhóm</Text>
+                  <ApiErrorNotice error={channels.error} onRetry={channels.onRetry} />
+                </VStack>
+              );
+            }
+
+            return (
+              <CheckboxList
+                label="Kênh trong nhóm"
+                description={channelsHint}
+                density="compact"
+                // Every row carries helper text under its label; without
+                // dividers the two blur together (CheckboxList best practice).
+                hasDividers
+                value={field.value}
+                onChange={field.onChange}
+                isDisabled={pending}
+                disabledMessage={pending ? "Đang lưu — chờ lưu xong rồi mới sửa tiếp được." : undefined}
+                status={channelsError ? { type: "error", message: channelsError } : undefined}
+                width="100%"
+              >
+                {channels.items.map((channel) => (
+                  <CheckboxListItem
+                    key={channel.channelId}
+                    value={channel.channelId}
+                    label={
+                      channel.name.trim().length > 0 ? channel.name : "(Page chưa có tên)"
+                    }
+                    description={channel.externalId}
+                  />
                 ))}
-              </div>
-            ) : channels.error ? (
-              <ApiErrorNotice error={channels.error} onRetry={channels.onRetry} />
-            ) : (
-              <ul className="space-y-1">
-                {channels.items.map((channel) => {
-                  const optionId = `${channelsId}-${channel.channelId}`;
-                  const checked = field.value.includes(channel.channelId);
 
-                  return (
-                    <li key={channel.channelId}>
-                      {/* Raw checkbox: the project has no ui/checkbox primitive,
-                          and the same shape is already used by the wizard's
-                          channel picker (core-component-reuse §element table). */}
-                      <input
-                        type="checkbox"
-                        id={optionId}
-                        className="accent-primary size-4 align-middle"
-                        value={channel.channelId}
-                        checked={checked}
-                        disabled={pending}
-                        onChange={(event) => {
-                          const next = event.target.checked
-                            ? [...field.value, channel.channelId]
-                            : field.value.filter((id) => id !== channel.channelId);
-                          field.onChange(next);
-                        }}
-                      />
-                      <label htmlFor={optionId} className="ml-2 align-middle text-sm">
-                        {channel.name.trim().length > 0 ? channel.name : "(Page chưa có tên)"}{" "}
-                        <span className="text-muted-foreground font-mono text-xs break-all">
-                          {channel.externalId}
-                        </span>
-                      </label>
-                    </li>
-                  );
-                })}
+                {orphanIds.map((channelId) => (
+                  // The server refuses a group containing a disabled or deleted
+                  // channel (CHANNEL_DISABLED), so the tick is a dead end. Say
+                  // what to DO, not just what happened — otherwise "Lưu" fails
+                  // and nothing on screen explains which row caused it.
+                  <CheckboxListItem
+                    key={channelId}
+                    value={channelId}
+                    label={channelId}
+                    aria-label={`Kênh ${channelId} — đã tắt hoặc đã bị gỡ`}
+                    description="Kênh này đã tắt hoặc đã bị gỡ ở màn Kênh. Bỏ tick kênh này để lưu được, hoặc bật lại nó ở màn Kênh trước."
+                  />
+                ))}
+              </CheckboxList>
+            );
+          }}
+        />
 
-                {orphanIds.map((channelId) => {
-                  const optionId = `${channelsId}-${channelId}`;
+        {error ? <ApiErrorNotice error={error} /> : null}
 
-                  return (
-                    <li key={channelId}>
-                      <input
-                        type="checkbox"
-                        id={optionId}
-                        className="accent-primary size-4 align-middle"
-                        value={channelId}
-                        checked={field.value.includes(channelId)}
-                        disabled={pending}
-                        onChange={(event) => {
-                          const next = event.target.checked
-                            ? [...field.value, channelId]
-                            : field.value.filter((id) => id !== channelId);
-                          field.onChange(next);
-                        }}
-                      />
-                      {/* The server refuses a group containing a disabled or
-                          deleted channel (CHANNEL_DISABLED), so the tick is a
-                          dead end. Say what to DO, not just what happened —
-                          otherwise "Lưu" fails and nothing on screen explains
-                          which row caused it. */}
-                      <label htmlFor={optionId} className="ml-2 align-middle text-sm">
-                        <span className="text-muted-foreground font-mono text-xs break-all">
-                          {channelId}
-                        </span>{" "}
-                        <span className="text-warning-foreground">
-                          — kênh này đã tắt hoặc đã bị gỡ ở màn Kênh.{" "}
-                          <strong className="font-medium">Bỏ tick kênh này để lưu được</strong>, hoặc
-                          bật lại nó ở màn Kênh trước.
-                        </span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-
-            {channelsError ? (
-              <p id={channelsErrorId} role="alert" className="text-destructive text-sm">
-                {channelsError}
-              </p>
-            ) : null}
-          </fieldset>
-        )}
-      />
-
-      {error ? <ApiErrorNotice error={error} /> : null}
-
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" disabled={pending}>
-          {pending
-            ? mode === "create"
-              ? "Đang tạo…"
-              : "Đang lưu…"
-            : mode === "create"
-              ? "Tạo nhóm"
-              : "Lưu thay đổi"}
-        </Button>
-        {onCancel ? (
-          <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
-            Huỷ
-          </Button>
-        ) : null}
-      </div>
+        <HStack gap={2} wrap="wrap">
+          {/* Never disabled on "invalid": the operator presses it and the field
+              says what is wrong (core-form-architecture §submit). */}
+          <Button
+            type="submit"
+            variant="primary"
+            label={
+              pending
+                ? mode === "create"
+                  ? "Đang tạo…"
+                  : "Đang lưu…"
+                : mode === "create"
+                  ? "Tạo nhóm"
+                  : "Lưu thay đổi"
+            }
+            isLoading={pending}
+            isDisabled={pending}
+          />
+          {onCancel ? (
+            <Button
+              type="button"
+              variant="ghost"
+              label="Huỷ"
+              isDisabled={pending}
+              onClick={onCancel}
+            />
+          ) : null}
+        </HStack>
+      </VStack>
     </form>
   );
 }

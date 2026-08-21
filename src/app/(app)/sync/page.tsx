@@ -31,14 +31,12 @@ export default async function SyncPage() {
   // Component must not trust that it was reached through the guard.
   if (!session) redirect("/signin?returnUrl=%2Fsync");
 
-  // Full-bleed: the screen owns its own sticky header, scroll region and right
-  // rail, so it takes the whole content area of the shell rather than sitting in
-  // a centred column (core-layout-shell §fixed shell).
+  // Full-bleed: the screen owns its own frame (Layout header, scrolling content
+  // and the end panel), so it takes the whole content area of the shell rather
+  // than sitting in a centred column (core-layout-shell §fixed shell).
   return (
-    <div className="h-full min-h-0">
-      <Suspense fallback={<SyncFallback />}>
-        <SyncScreen />
-      </Suspense>
-    </div>
+    <Suspense fallback={<SyncFallback />}>
+      <SyncScreen />
+    </Suspense>
   );
 }

@@ -1,10 +1,24 @@
 "use client";
 
+import {
+  Banner,
+  Button,
+  Divider,
+  EmptyState,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  LayoutPanel,
+  Stack,
+  Text,
+  VisuallyHidden,
+  useMediaQuery,
+} from "@astryxdesign/core";
 import { useState } from "react";
 
-import { cn } from "@/shared/utils";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { CatalogSourceCard } from "@/ui/components/sync/CatalogSourceCard";
 import { RunSyncButton } from "@/ui/components/sync/RunSyncButton";
 import { SyncFunnel } from "@/ui/components/sync/SyncFunnel";
@@ -12,7 +26,6 @@ import { SyncIssuesTable } from "@/ui/components/sync/SyncIssuesTable";
 import { SyncRunRail } from "@/ui/components/sync/SyncRunRail";
 import { SyncRunningCard } from "@/ui/components/sync/SyncRunningCard";
 import { SyncRailSkeleton, SyncStatusSkeleton } from "@/ui/components/sync/SyncStatusSkeleton";
-import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useActiveTenant } from "@/ui/hooks/useMe";
 import { useNowMs } from "@/ui/hooks/useNowMs";
@@ -23,7 +36,7 @@ import {
   useRunCatalogSync,
   useSyncStatus,
 } from "@/ui/hooks/useCatalogSync";
-import type { BadgeTone } from "@/ui/components/ui/badge";
+import type { StatusTone } from "@/ui/schemas/post-batch.schema";
 import {
   SYNC_STATUS_LABELS,
   SYNC_STATUS_TONES,
@@ -31,28 +44,33 @@ import {
 } from "@/ui/schemas/sync.schema";
 
 /**
- * Tone -> the tinted-notice surface. This is the paragraph equivalent of what
- * `Badge` does for a pill; the status -> tone decision itself is NOT repeated
- * here, it comes from `SYNC_STATUS_TONES`.
+ * Run status tone -> Banner status. The status -> tone decision itself is NOT
+ * repeated here: it comes from `SYNC_STATUS_TONES`, so the banner in the main
+ * column and the dot in the rail cannot disagree.
  */
-const NOTICE_TONE: Record<BadgeTone, string> = {
-  neutral: "border-border bg-muted/40 text-foreground",
-  info: "border-border bg-muted/40 text-foreground",
-  success: "border-success/30 bg-success/10 text-success-foreground",
-  warning: "border-warning/40 bg-warning/10 text-warning-foreground",
-  danger: "border-destructive/30 bg-destructive/10 text-destructive",
+const BANNER_STATUS: Record<StatusTone, "info" | "success" | "warning" | "error"> = {
+  neutral: "info",
+  info: "info",
+  success: "success",
+  warning: "warning",
+  danger: "error",
 };
 
 /**
  * "Đồng bộ dữ liệu" screen: component -> hook -> service -> internal HTTP API
  * (docs/07 §4.1). No Drive/Sheet call is made from the browser.
  *
- * Layout is "fixed shell, one scrolling region" (core-layout-shell): a sticky
- * page header, a scrolling main column, and a rail with the facts about the
- * latest run. The rail moves BELOW the main column when the content area gets
- * narrow — the switch is a container query, not a viewport breakpoint, because
- * the side nav already eats 256px and a 1280px window leaves far less room than
- * a screen breakpoint would assume.
+ * Frame (`astryx docs layout`, console archetype): `Layout` owns the shell — a
+ * header with the one action this screen exists for, a scrolling content column,
+ * and a 360px end panel with the facts about the latest run. The hand-rolled
+ * container-query two-column layout it replaces did the same job with its own
+ * scroll model; the design system's frame is one less thing to keep in sync.
+ *
+ * Responsive contract:
+ *   > 1024px  content | rail 360
+ *   <= 1024px the rail moves to the BOTTOM of the content column (it is not
+ *             dropped: the run id and the deletion count are the two facts an
+ *             operator reads before pressing "Chạy đồng bộ" again)
  *
  * The states this screen must tell apart (core-feedback-states):
  *   idle     — no tenant chosen yet
@@ -69,6 +87,9 @@ const NOTICE_TONE: Record<BadgeTone, string> = {
 export function SyncScreen() {
   /** Set right after a source change — the next sync is no longer optional. */
   const [sourceChanged, setSourceChanged] = useState(false);
+
+  // Below this width the rail would squeeze the funnel, so it moves under it.
+  const isNarrow = useMediaQuery("(max-width: 1024px)");
 
   /**
    * The company is no longer typed in (M1.4): it comes from the session. Until
@@ -109,27 +130,31 @@ export function SyncScreen() {
    */
   const isSyncStillRunning = run.isError && isSyncStillRunningError(run.error) && isRunningOnServer;
 
+  const rail = (
+    <SyncRailContent
+      isResolved={isResolved}
+      isFirstLoad={isFirstLoad}
+      showSkeleton={showSkeleton}
+      hasError={status.isError}
+      run={latestRun}
+    />
+  );
+
   return (
-    <div className="@container bg-background h-full min-h-0">
-      {/* Narrow: the whole thing is one scroll. Wide: two independent regions,
-          so the rail does not scroll away from the numbers it describes. */}
-      <div className="flex h-full min-h-0 flex-col overflow-y-auto @5xl:flex-row @5xl:overflow-hidden">
-        <div className="flex min-w-0 flex-1 flex-col @5xl:min-h-0 @5xl:overflow-y-auto @5xl:[scrollbar-gutter:stable]">
-          <header className="bg-background border-border sticky top-0 z-10 flex flex-wrap items-end justify-between gap-x-4 gap-y-3 border-b px-6 py-4">
-            <div className="min-w-0 space-y-1">
-              <h1 className="text-2xl leading-tight font-semibold tracking-tight">
-                Đồng bộ dữ liệu
-              </h1>
-              <p className="text-muted-foreground max-w-prose text-sm">
+    <Layout
+      height="fill"
+      header={
+        <LayoutHeader hasDivider>
+          <Stack direction="vertical" gap={3} padding={4}>
+            <Stack direction="vertical" gap={1}>
+              <Heading level={1}>Đồng bộ dữ liệu</Heading>
+              <Text type="supporting">
                 Đọc ảnh/video từ Drive và sản phẩm từ Sheet, rồi ghi vào hệ thống. Mọi file bị bỏ
                 qua đều được ghi nhận bên dưới.
-              </p>
-            </div>
+              </Text>
+            </Stack>
 
-            <div className="flex flex-wrap items-center gap-3">
-              {status.isFetching && !isFirstLoad ? (
-                <p className="text-muted-foreground text-sm">Đang làm mới…</p>
-              ) : null}
+            <HStack gap={3} align="center" wrap="wrap">
               <RunSyncButton
                 onConfirm={() => {
                   setSourceChanged(false);
@@ -148,76 +173,81 @@ export function SyncScreen() {
                     : undefined)
                 }
               />
-            </div>
-          </header>
+              {status.isFetching && !isFirstLoad ? (
+                <Text type="supporting" role="status" aria-live="polite">
+                  Đang làm mới…
+                </Text>
+              ) : null}
+            </HStack>
+          </Stack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={0} isScrollable>
+          <Stack direction="vertical" gap={5} paddingInline={4} paddingBlock={4}>
+            {/* Progress and results are announced without stealing focus. */}
+            <VisuallyHidden as="div" role="status" aria-live="polite">
+              {run.isPending
+                ? "Đang chạy đồng bộ, vui lòng đợi"
+                : run.isSuccess
+                  ? "Đồng bộ đã chạy xong"
+                  : isFirstLoad
+                    ? "Đang tải trạng thái đồng bộ"
+                    : ""}
+            </VisuallyHidden>
 
-          {/* Progress and results are announced without stealing focus. */}
-          <p className="sr-only" role="status" aria-live="polite">
-            {run.isPending
-              ? "Đang chạy đồng bộ, vui lòng đợi"
-              : run.isSuccess
-                ? "Đồng bộ đã chạy xong"
-                : isFirstLoad
-                  ? "Đang tải trạng thái đồng bộ"
-                  : ""}
-          </p>
-
-          <div className="flex min-w-0 flex-col gap-5 px-6 py-5">
             {run.isPending ? <SyncRunningCard /> : null}
 
             {/* A client timeout is NOT a failed sync: the request gave up at
                 120s while the handler keeps walking Drive. Showing it in red
                 with a "Thử lại" button would both lie and offer to start a
-                second run over the first — the rail below already follows the
-                real `sync_run` status, and it polls until that run settles.
-                Gated on that status, so this sentence is only ever said while
-                the server is still saying it. */}
+                second run over the first — the rail already follows the real
+                `sync_run` status, and it polls until that run settles. Gated on
+                that status, so this sentence is only ever said while the server
+                is still saying it. */}
             {isSyncStillRunning ? (
-              <div
+              <Banner
                 role="status"
-                className={cn(
-                  "flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3.5 py-2.5 text-sm",
-                  NOTICE_TONE.info,
-                )}
-              >
-                <p className="min-w-0">
-                  Lần đồng bộ này chạy lâu hơn thời gian chờ của trình duyệt —{" "}
-                  <span className="font-medium">đồng bộ vẫn đang chạy trên máy chủ</span>. Trang tự
-                  cập nhật khi có kết quả, đừng bấm chạy lại.
-                </p>
-                <Button type="button" variant="outline" onClick={() => void status.refetch()}>
-                  Tải lại trạng thái
-                </Button>
-              </div>
+                status="info"
+                title="Đồng bộ vẫn đang chạy trên máy chủ"
+                description="Lần đồng bộ này chạy lâu hơn thời gian chờ của trình duyệt. Trang tự cập nhật khi có kết quả, đừng bấm chạy lại."
+                endContent={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    label="Tải lại trạng thái"
+                    onClick={() => void status.refetch()}
+                  />
+                }
+              />
             ) : run.isError ? (
               <ApiErrorNotice
                 error={run.error}
                 onRetry={() => run.mutate()}
                 extraAction={
-                  <Button type="button" variant="outline" onClick={() => void status.refetch()}>
-                    Tải lại trạng thái
-                  </Button>
+                  <Button
+                    variant="secondary"
+                    label="Tải lại trạng thái"
+                    onClick={() => void status.refetch()}
+                  />
                 }
               />
             ) : null}
 
-            {/* The banner takes its colour from the SAME table as the rail
-                badge: "Xong nhưng có vấn đề" inside a green box is read as a
-                success long before anyone reaches the sentence. */}
+            {/* The banner takes its colour from the SAME table as the rail dot:
+                "Xong nhưng có vấn đề" inside a green box is read as a success
+                long before anyone reaches the sentence. */}
             {run.isSuccess ? (
-              <p
+              <Banner
                 role="status"
-                className={cn(
-                  "rounded-xl border px-3.5 py-2.5 text-sm",
-                  NOTICE_TONE[SYNC_STATUS_TONES[run.data.status]],
-                )}
-              >
-                Đồng bộ xong — trạng thái “{SYNC_STATUS_LABELS[run.data.status]}”. Số liệu bên dưới
-                đã được cập nhật.
-                {run.data.schemaDrift.length > 0
-                  ? ` Cảnh báo: thiếu hoặc đổi tên cột trên Sheet: ${run.data.schemaDrift.join(", ")}.`
-                  : ""}
-              </p>
+                status={BANNER_STATUS[SYNC_STATUS_TONES[run.data.status]]}
+                title={`Đồng bộ xong — trạng thái “${SYNC_STATUS_LABELS[run.data.status]}”`}
+                description={`Số liệu bên dưới đã được cập nhật.${
+                  run.data.schemaDrift.length > 0
+                    ? ` Cảnh báo: thiếu hoặc đổi tên cột trên Sheet: ${run.data.schemaDrift.join(", ")}.`
+                    : ""
+                }`}
+              />
             ) : null}
 
             {/* Which folder / which tab — first, because every number below only
@@ -225,14 +255,12 @@ export function SyncScreen() {
             <CatalogSourceCard onSourceChanged={() => setSourceChanged(true)} />
 
             {sourceChanged ? (
-              <p
+              <Banner
                 role="status"
-                className="border-warning/40 bg-warning/10 text-warning-foreground rounded-xl border px-3.5 py-2.5 text-sm"
-              >
-                Đã đổi nguồn dữ liệu. Số liệu bên dưới vẫn là của nguồn cũ cho tới khi bạn bấm{" "}
-                <span className="font-medium">Chạy đồng bộ</span> — lần chạy đó cũng sẽ xoá sản
-                phẩm/ảnh không còn thuộc nguồn mới.
-              </p>
+                status="warning"
+                title="Đã đổi nguồn dữ liệu"
+                description="Số liệu bên dưới vẫn là của nguồn cũ cho tới khi bạn bấm “Chạy đồng bộ” — lần chạy đó cũng sẽ xoá sản phẩm/ảnh không còn thuộc nguồn mới."
+              />
             ) : null}
 
             <SyncStatusResult
@@ -241,23 +269,29 @@ export function SyncScreen() {
               showSkeleton={showSkeleton}
               status={status}
             />
-          </div>
-        </div>
 
-        <aside
-          aria-label="Chi tiết lần chạy"
-          className="border-border bg-card shrink-0 border-t px-5 py-5 @5xl:w-90 @5xl:min-h-0 @5xl:overflow-y-auto @5xl:border-t-0 @5xl:border-l"
-        >
-          <SyncRailContent
-            isResolved={isResolved}
-            isFirstLoad={isFirstLoad}
-            showSkeleton={showSkeleton}
-            hasError={status.isError}
-            run={latestRun}
-          />
-        </aside>
-      </div>
-    </div>
+            {/* Responsive contract: below 1024px the panel would squeeze the
+                funnel, so the same rail runs at the bottom of this column
+                instead of disappearing. */}
+            {isNarrow ? (
+              <Stack as="section" direction="vertical" gap={4} aria-label="Chi tiết lần chạy">
+                <Divider />
+                {rail}
+              </Stack>
+            ) : null}
+          </Stack>
+        </LayoutContent>
+      }
+      end={
+        isNarrow ? undefined : (
+          <LayoutPanel width={360} hasDivider isScrollable label="Chi tiết lần chạy">
+            <Stack direction="vertical" padding={4}>
+              {rail}
+            </Stack>
+          </LayoutPanel>
+        )
+      }
+    />
   );
 }
 
@@ -278,9 +312,7 @@ function SyncRailContent({
   // Still working out which company this session belongs to.
   if (!isResolved) {
     return (
-      <p className="text-muted-foreground text-sm">
-        Đang xác định công ty của bạn để đọc lần chạy gần nhất.
-      </p>
+      <Text type="supporting">Đang xác định công ty của bạn để đọc lần chạy gần nhất.</Text>
     );
   }
 
@@ -290,17 +322,17 @@ function SyncRailContent({
   // would give the operator two buttons for one problem.
   if (hasError) {
     return (
-      <p className="text-muted-foreground text-sm">
-        Chưa đọc được trạng thái lần chạy. Xem thông báo lỗi ở cột bên trái.
-      </p>
+      <Text type="supporting">
+        Chưa đọc được trạng thái lần chạy. Xem thông báo lỗi ở cột nội dung.
+      </Text>
     );
   }
 
   if (!run) {
     return (
-      <p className="text-muted-foreground text-sm">
+      <Text type="supporting">
         Đơn vị này chưa từng đồng bộ, nên chưa có lần chạy nào để xem chi tiết.
-      </p>
+      </Text>
     );
   }
 
@@ -322,7 +354,7 @@ function SyncStatusResult({
   if (!isResolved) {
     return (
       <EmptyState
-        kind="idle"
+        headingLevel={2}
         title="Đang xác định công ty của bạn"
         description="Số liệu đồng bộ thuộc về một công ty cụ thể, nên màn này chờ biết bạn đang làm việc ở công ty nào."
       />
@@ -343,15 +375,9 @@ function SyncStatusResult({
   if (status.data.state === "never_synced") {
     return (
       <EmptyState
-        kind="first-run"
+        headingLevel={2}
         title="Đơn vị này chưa từng đồng bộ"
-        description={
-          <>
-            Chưa có dữ liệu sản phẩm hay ảnh nào trong hệ thống. Bấm{" "}
-            <span className="font-medium">Chạy đồng bộ</span> ở trên để đọc Drive và Sheet lần đầu.
-            Cần khai báo thư mục Drive và bảng Sheet cho đơn vị trước khi chạy.
-          </>
-        }
+        description="Chưa có dữ liệu sản phẩm hay ảnh nào trong hệ thống. Bấm “Chạy đồng bộ” ở trên để đọc Drive và Sheet lần đầu. Cần khai báo thư mục Drive và bảng Sheet cho đơn vị trước khi chạy."
       />
     );
   }
@@ -362,7 +388,7 @@ function SyncStatusResult({
   if (!run.counts) {
     return (
       <EmptyState
-        kind="done"
+        headingLevel={2}
         title="Lần chạy này chưa có số liệu"
         description="Số liệu chỉ được ghi khi lần đồng bộ kết thúc. Nếu trạng thái vẫn là “Đang chạy”, hãy đợi rồi tải lại trang."
       />
@@ -370,7 +396,7 @@ function SyncStatusResult({
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <Stack direction="vertical" gap={5}>
       <SyncFunnel counts={run.counts} finishedAt={run.finishedAt} />
       <SyncIssuesTable
         issues={run.issues}
@@ -378,6 +404,6 @@ function SyncStatusResult({
         total={run.counts.issuesTotal}
         truncated={run.counts.issuesTruncated}
       />
-    </div>
+    </Stack>
   );
 }

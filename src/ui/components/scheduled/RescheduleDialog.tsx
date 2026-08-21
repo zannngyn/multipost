@@ -1,18 +1,21 @@
 "use client";
 
+import {
+  Banner,
+  Button,
+  Dialog,
+  DialogHeader,
+  HStack,
+  Layout,
+  LayoutContent,
+  LayoutFooter,
+  Text,
+  VStack,
+} from "@astryxdesign/core";
 import { useId, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { ScheduleTimeField } from "@/ui/components/scheduled/ScheduleTimeField";
-import { Button } from "@/ui/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/ui/components/ui/dialog";
 import { useNowMs } from "@/ui/hooks/useNowMs";
 import {
   formatScheduledAt,
@@ -26,6 +29,9 @@ import type { ApiError } from "@/ui/services/api-error";
 /**
  * "Đổi giờ" (E8.4). Opened by a URL parameter, so F5 and a shared link both
  * land back on it with the list rendered behind (web-crud-inline-edit rule 1).
+ *
+ * `purpose="form"`: a mis-aimed click on the backdrop must not throw away the
+ * hour the operator just picked (core-form-architecture §bảng phân xử).
  *
  * `job === null` with the dialog open means the deep link points at a row that
  * is not in the loaded pages — usually because it already published or was
@@ -91,89 +97,109 @@ export function RescheduleDialog({
         "Bài này đã qua giờ hẹn nên không đổi giờ được nữa — hãy mở nhật ký để xem kết quả.")
       : null;
 
+  const subtitle = job
+    ? `Bài ${job.productCode}${job.color.trim() ? ` · ${job.color}` : ""} trên kênh ${job.channelId}. Đang hẹn lúc ${formatScheduledAt(job.scheduledAt)}.`
+    : "Không tìm thấy bài này trong danh sách đang xem — có thể bài đã đăng, đã huỷ, hoặc nằm ở trang khác.";
+
+  const header = (
+    <DialogHeader title="Đổi giờ đăng" subtitle={subtitle} onOpenChange={onOpenChange} />
+  );
+
+  // --- Nothing to edit: a dead end said plainly, with one way out ------------
+  if (!job || blockedReason) {
+    return (
+      <Dialog isOpen={open} onOpenChange={onOpenChange} purpose="info" width={520}>
+        <Layout
+          header={header}
+          content={
+            <LayoutContent>
+              {blockedReason ? (
+                <Banner status="warning" role="status" title={blockedReason} />
+              ) : (
+                <Text type="supporting" role="status">
+                  Đóng hộp thoại rồi bấm “Tải lại” để xem danh sách mới nhất. Nếu bài đã đăng hoặc
+                  đã huỷ, kết quả của nó nằm ở Nhật ký đăng bài.
+                </Text>
+              )}
+            </LayoutContent>
+          }
+          footer={
+            <LayoutFooter>
+              <HStack gap={2} hAlign="end">
+                <Button variant="primary" label="Đóng" onClick={() => onOpenChange(false)} />
+              </HStack>
+            </LayoutFooter>
+          }
+        />
+      </Dialog>
+    );
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent aria-describedby={`${fieldId}-dialog-description`}>
-        <DialogHeader>
-          <DialogTitle>Đổi giờ đăng</DialogTitle>
-          <DialogDescription id={`${fieldId}-dialog-description`}>
-            {job
-              ? `Bài ${job.productCode}${job.color.trim() ? ` · ${job.color}` : ""} trên kênh ${job.channelId}. Đang hẹn lúc ${formatScheduledAt(job.scheduledAt)}.`
-              : "Không tìm thấy bài này trong danh sách đang xem — có thể bài đã đăng, đã huỷ, hoặc nằm ở trang khác."}
-          </DialogDescription>
-        </DialogHeader>
+    <Dialog isOpen={open} onOpenChange={onOpenChange} purpose="form" width={520}>
+      {/* noValidate: the messages below are ours, not the browser's. */}
+      <form noValidate onSubmit={handleSubmit}>
+        <Layout
+          header={header}
+          content={
+            <LayoutContent>
+              <VStack gap={4}>
+                <ScheduleTimeField
+                  id={fieldId}
+                  label="Giờ đăng mới"
+                  value={value}
+                  onChange={(next) => {
+                    setFormError(null);
+                    setValue(next);
+                  }}
+                  disabled={isPending}
+                  disabledReason="Đang lưu giờ mới — chờ lưu xong rồi mới sửa tiếp được."
+                  error={formError}
+                  nowMs={nowMs}
+                />
 
-        {job && blockedReason ? (
-          <>
-            <p
-              role="status"
-              className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
-            >
-              {blockedReason}
-            </p>
-            <DialogFooter>
-              <Button type="button" onClick={() => onOpenChange(false)}>
-                Đóng
-              </Button>
-            </DialogFooter>
-          </>
-        ) : job ? (
-          <form noValidate className="space-y-4" onSubmit={handleSubmit}>
-            <ScheduleTimeField
-              id={fieldId}
-              label="Giờ đăng mới"
-              value={value}
-              onChange={(next) => {
-                setFormError(null);
-                setValue(next);
-              }}
-              disabled={isPending}
-              disabledReason="Đang lưu giờ mới — chờ lưu xong rồi mới sửa tiếp được."
-              error={formError}
-              nowMs={nowMs}
-            />
+                <Text type="supporting">
+                  Đổi giờ không bỏ qua bất kỳ quy tắc nào: tồn kho vẫn được kiểm tra lại ngay trước
+                  khi đăng, nên bài vẫn có thể bị chặn nếu lúc đó mã đã hết hàng.
+                </Text>
 
-            <p className="text-muted-foreground text-sm">
-              Đổi giờ không bỏ qua bất kỳ quy tắc nào: tồn kho vẫn được kiểm tra lại ngay trước khi
-              đăng, nên bài vẫn có thể bị chặn nếu lúc đó mã đã hết hàng.
-            </p>
-
-            {isQueueWarning ? (
-              <div className="border-warning/40 bg-warning/10 text-warning-foreground space-y-1 rounded-lg border px-3 py-2 text-sm">
-                <p className="font-medium">Giờ đã đổi, nhưng chưa vào được hàng đợi</p>
-                <p>
-                  Hệ thống đã lưu giờ mới, nhưng chưa xếp được bài vào hàng đợi đăng. Bài sẽ KHÔNG
-                  tự lên vào giờ mới cho tới khi thao tác này chạy lại thành công — và vẫn có thể
-                  lên vào giờ cũ. Hãy bấm “Lưu giờ mới” lần nữa sau ít phút; nếu vẫn lỗi, báo quản
-                  trị viên.
-                </p>
-              </div>
-            ) : error ? (
-              <ApiErrorNotice error={error} />
-            ) : null}
-
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => onOpenChange(false)}
-                disabled={isPending}
-              >
-                Đóng
-              </Button>
-              <Button type="submit" disabled={isPending}>
-                {isPending ? "Đang lưu…" : "Lưu giờ mới"}
-              </Button>
-            </DialogFooter>
-          </form>
-        ) : (
-          <DialogFooter>
-            <Button type="button" onClick={() => onOpenChange(false)}>
-              Đóng
-            </Button>
-          </DialogFooter>
-        )}
-      </DialogContent>
+                {isQueueWarning ? (
+                  <Banner
+                    status="warning"
+                    role="alert"
+                    title="Giờ đã đổi, nhưng chưa vào được hàng đợi"
+                    description="Hệ thống đã lưu giờ mới, nhưng chưa xếp được bài vào hàng đợi đăng. Bài sẽ KHÔNG tự lên vào giờ mới cho tới khi thao tác này chạy lại thành công — và vẫn có thể lên vào giờ cũ. Hãy bấm “Lưu giờ mới” lần nữa sau ít phút; nếu vẫn lỗi, báo quản trị viên."
+                  />
+                ) : error ? (
+                  <ApiErrorNotice error={error} />
+                ) : null}
+              </VStack>
+            </LayoutContent>
+          }
+          footer={
+            <LayoutFooter>
+              <HStack gap={2} hAlign="end">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  label="Đóng"
+                  isDisabled={isPending}
+                  onClick={() => onOpenChange(false)}
+                />
+                {/* Never disabled on "invalid": the operator presses it and the
+                    field says what is wrong (core-form-architecture §submit). */}
+                <Button
+                  type="submit"
+                  variant="primary"
+                  label={isPending ? "Đang lưu…" : "Lưu giờ mới"}
+                  isLoading={isPending}
+                  isDisabled={isPending}
+                />
+              </HStack>
+            </LayoutFooter>
+          }
+        />
+      </form>
     </Dialog>
   );
 }

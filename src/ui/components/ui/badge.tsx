@@ -19,7 +19,11 @@ const badgeVariants = cva(
         success: "border-success/30 bg-success/10 text-success-foreground",
         warning: "border-warning/40 bg-warning/10 text-warning-foreground",
         danger: "border-destructive/30 bg-destructive/10 text-destructive",
-        info: "border-border bg-background text-foreground",
+        // Same tint + hairline + readable-tone recipe as the three above. It
+        // used to be a bare outline, which made `info` look like "no tone at
+        // all" next to its siblings, and left the `--info` token pair that
+        // globals.css introduced for these pills unused.
+        info: "border-info/30 bg-info/10 text-info-foreground",
       },
     },
     defaultVariants: { tone: "neutral" },

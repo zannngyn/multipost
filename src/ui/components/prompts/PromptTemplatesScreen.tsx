@@ -1,14 +1,27 @@
 "use client";
 
+import {
+  Banner,
+  Button,
+  CodeBlock,
+  EmptyState,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Section,
+  Skeleton,
+  Stack,
+  StatusDot,
+  Text,
+} from "@astryxdesign/core";
 import { useEffect, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { PromptVersionForm } from "@/ui/components/prompts/PromptVersionForm";
 import { PromptVersionTable } from "@/ui/components/prompts/PromptVersionTable";
-import { Badge } from "@/ui/components/ui/badge";
-import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
-import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
@@ -32,16 +45,19 @@ import {
  * older one. Prompt rows are immutable, so there is no edit button anywhere —
  * "sửa" means "dùng làm bản nháp" then save a new version.
  *
+ * Frame (`astryx docs layout`, settings archetype): the app-bar carries the
+ * title and the one primary action, and the content column is capped so a
+ * prompt body stays readable on a wide monitor instead of running edge to edge.
+ *
  * The four mandatory states:
- *   loading — skeleton with the real columns, delayed 300ms
- *   data    — active banner + version table + create form
+ *   loading — skeleton shaped like the loaded screen, delayed 300ms
+ *   data    — "đang dùng" region + version rows + the create form
  *   empty   — cannot happen for the table (the built-in row is always there),
  *             so the empty state belongs to the tenant's OWN versions: it says
  *             "đang chạy mẫu mặc định", which is a different fact from "trống"
  *   error   — 4xx vs 5xx via <ApiErrorNotice>
  */
 export function PromptTemplatesScreen() {
-
   const versions = usePromptVersions(PROMPT_TASK, PROMPT_PLATFORM);
   const create = useCreatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
   const activate = useActivatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
@@ -123,144 +139,213 @@ export function PromptTemplatesScreen() {
 
   const data = versions.data;
   const tenantVersions = data?.versions.filter((item) => item.source === "tenant") ?? [];
+  /* One "tạo phiên bản" button on screen at a time: while the tenant has none,
+     the empty state owns that call to action. */
+  const showHeaderCreate = !gate.isDisabled && !formOpen && tenantVersions.length > 0;
 
   return (
-    <section className="space-y-6" aria-labelledby="prompts-heading">
-      <header className="space-y-1">
-        <h1 id="prompts-heading" className="text-2xl font-semibold tracking-tight">
-          Mẫu prompt AI
-        </h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Prompt dùng để AI viết caption Facebook. Mỗi lần sửa là một phiên bản mới — bản cũ giữ
-          nguyên để truy lại caption đã sinh. Chỉ một phiên bản được dùng tại một thời điểm.
-        </p>
-      </header>
+    <Layout
+      height="fill"
+      contentWidth={1120}
+      header={
+        <LayoutHeader hasDivider>
+          <HStack gap={4} padding={4} justify="between" align="start" wrap="wrap">
+            <Stack direction="vertical" gap={1} maxWidth={640}>
+              <Heading level={1}>Mẫu prompt AI</Heading>
+              <Text type="supporting">
+                Prompt dùng để AI viết caption Facebook. Mỗi lần sửa là một phiên bản mới — bản cũ
+                giữ nguyên để truy lại caption đã sinh. Chỉ một phiên bản được dùng tại một thời
+                điểm.
+              </Text>
+              {/* Said once, at the top, instead of beside every dead button. */}
+              {gate.isDisabled ? <ReadOnlyNotice reason={gate.reason} /> : null}
+            </Stack>
 
-      {notice ? (
-        <div
-          ref={noticeRef}
-          tabIndex={-1}
-          role="alert"
-          className="border-success/30 bg-success/10 text-success-foreground rounded-lg border px-3 py-2 text-sm outline-none"
-        >
-          {notice}
-        </div>
-      ) : null}
-
-      {/*
-        No retry button: the list was already re-read (onSettled), so the truth
-        on screen is fresh and the operator decides what to do next. A "Thử lại"
-        that only hides the message would be a lie (core-feedback-states).
-      */}
-      {activate.isError ? <ApiErrorNotice error={activate.error} /> : null}
-
-      {showSkeleton ? <PromptVersionsSkeleton /> : null}
-
-      {!showSkeleton && versions.isError ? (
-        <ApiErrorNotice error={versions.error} onRetry={() => void versions.refetch()} />
-      ) : null}
-
-      {!versions.isError && data ? (
-        <>
-          <section
-            aria-labelledby="prompt-active-heading"
-            className="bg-card space-y-3 rounded-xl border p-5"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 id="prompt-active-heading" className="text-base font-semibold">
-                Đang dùng
-              </h2>
-              <Badge tone={data.effective.source === "built_in" ? "neutral" : "success"}>
-                {data.effective.source === "built_in"
-                  ? "Mẫu mặc định của hệ thống"
-                  : `Phiên bản v${data.effective.version}`}
-              </Badge>
-            </div>
-            <p className="text-sm">
-              <span className="text-muted-foreground">Tên:</span>{" "}
-              <span className="font-medium break-words">{data.effective.name}</span>
-            </p>
-            <pre className="bg-muted/40 max-h-64 overflow-auto rounded-lg border p-3 text-xs break-words whitespace-pre-wrap">
-              {data.effective.body}
-            </pre>
-          </section>
-
-          {tenantVersions.length === 0 ? (
-            <EmptyState
-              kind="first-run"
-              title="Đơn vị này chưa có phiên bản riêng"
-              description="Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Tạo phiên bản riêng khi muốn đổi giọng văn, độ dài hay cách gắn hashtag."
-              action={
-                gate.isDisabled ? (
-                  <ReadOnlyNotice reason={gate.reason} />
-                ) : !formOpen ? (
-                  <Button type="button" onClick={openBlankForm}>
-                    Tạo phiên bản đầu tiên
-                  </Button>
-                ) : null
-              }
-            />
-          ) : null}
-
-          <section aria-labelledby="prompt-versions-heading" className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 id="prompt-versions-heading" className="text-lg font-semibold">
-                Các phiên bản ({data.versions.length})
-              </h2>
-              {gate.isDisabled ? (
-                <ReadOnlyNotice reason={gate.reason} />
-              ) : !formOpen ? (
-                <Button type="button" variant="outline" onClick={openBlankForm}>
-                  Tạo phiên bản mới
-                </Button>
-              ) : null}
-            </div>
-
-            <PromptVersionTable
-              versions={data.versions}
-              activatingVersion={activate.isPending ? (activate.variables?.version ?? null) : null}
-              disabled={gate.isDisabled}
-              onActivate={handleActivate}
-              onReuse={reuse}
-            />
-          </section>
-
-          {formOpen ? (
-            <section className="bg-card rounded-xl border p-5">
-              <PromptVersionForm
-                key={draftKey}
-                nextVersion={data.nextVersion}
-                defaultValues={draft}
-                pending={create.isPending}
-                error={create.isError ? create.error : undefined}
-                warnings={create.data?.warnings}
-                onSubmit={submit}
-                onCancel={() => {
-                  create.reset();
-                  setFormOpen(false);
-                }}
+            {showHeaderCreate ? (
+              <Button
+                variant="primary"
+                size="sm"
+                label="Tạo phiên bản mới"
+                onClick={openBlankForm}
               />
-            </section>
-          ) : null}
-        </>
-      ) : null}
-    </section>
+            ) : null}
+          </HStack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={4} isScrollable>
+          <Stack direction="vertical" gap={4}>
+            {notice ? (
+              <Banner
+                ref={noticeRef}
+                tabIndex={-1}
+                role="alert"
+                status="success"
+                isDismissable
+                onDismiss={() => setNotice(null)}
+                title="Đã lưu thay đổi"
+                description={notice}
+              />
+            ) : null}
+
+            {/*
+              No retry button: the list was already re-read (onSettled), so the
+              truth on screen is fresh and the operator decides what to do next.
+              A "Thử lại" that only hides the message would be a lie
+              (core-feedback-states).
+            */}
+            {activate.isError ? <ApiErrorNotice error={activate.error} /> : null}
+
+            {showSkeleton ? <PromptVersionsSkeleton /> : null}
+
+            {!showSkeleton && versions.isError ? (
+              <ApiErrorNotice error={versions.error} onRetry={() => void versions.refetch()} />
+            ) : null}
+
+            {!versions.isError && data ? (
+              <>
+                {/* What is live right now: the one fact the operator opens this
+                    screen for, so it sits first and reads as a region of the
+                    page (astryx docs Section), not as a card. `role="region"`
+                    because Astryx's Section is a visual container (a div), and
+                    this block was a landmark before the redesign — dropping it
+                    would cost a screen-reader user a jump target. */}
+                <Section
+                  variant="muted"
+                  padding={4}
+                  role="region"
+                  aria-labelledby="prompt-active-heading"
+                >
+                  <Stack direction="vertical" gap={3}>
+                    <HStack gap={3} justify="between" align="center" wrap="wrap">
+                      <Heading id="prompt-active-heading" level={2}>
+                        Đang dùng
+                      </Heading>
+                      <HStack gap={2} align="center">
+                        <StatusDot variant="success" label="Đang chạy" />
+                        <Text weight="medium">
+                          {data.effective.source === "built_in"
+                            ? "Mẫu mặc định của hệ thống"
+                            : `Phiên bản v${data.effective.version}`}
+                        </Text>
+                      </HStack>
+                    </HStack>
+
+                    <HStack gap={2} align="center" wrap="wrap">
+                      <Text type="supporting">Tên:</Text>
+                      <Text weight="medium">{data.effective.name}</Text>
+                    </HStack>
+
+                    {/* The live prompt, monospaced and copyable — an operator
+                        comparing it with a draft should not have to select it
+                        by hand. */}
+                    <CodeBlock
+                      code={data.effective.body}
+                      language="plaintext"
+                      isWrapped
+                      width="100%"
+                      maxHeight={280}
+                      container="card"
+                    />
+                  </Stack>
+                </Section>
+
+                {tenantVersions.length === 0 ? (
+                  <EmptyState
+                    headingLevel={2}
+                    title="Đơn vị này chưa có phiên bản riêng"
+                    description="Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Tạo phiên bản riêng khi muốn đổi giọng văn, độ dài hay cách gắn hashtag."
+                    actions={
+                      !gate.isDisabled && !formOpen ? (
+                        <Button
+                          variant="primary"
+                          label="Tạo phiên bản đầu tiên"
+                          onClick={openBlankForm}
+                        />
+                      ) : undefined
+                    }
+                  />
+                ) : null}
+
+                <Stack
+                  as="section"
+                  direction="vertical"
+                  gap={2}
+                  aria-labelledby="prompt-versions-heading"
+                >
+                  <HStack gap={3} align="center" wrap="wrap">
+                    <Heading id="prompt-versions-heading" level={2}>
+                      Các phiên bản
+                    </Heading>
+                    <Text type="supporting" role="status" aria-live="polite">
+                      {data.versions.length} phiên bản
+                    </Text>
+                  </HStack>
+
+                  <PromptVersionTable
+                    versions={data.versions}
+                    activatingVersion={
+                      activate.isPending ? (activate.variables?.version ?? null) : null
+                    }
+                    disabled={gate.isDisabled}
+                    onActivate={handleActivate}
+                    onReuse={reuse}
+                  />
+                </Stack>
+
+                {formOpen ? (
+                  <Section variant="section" padding={4} dividers={["top"]}>
+                    <PromptVersionForm
+                      key={draftKey}
+                      nextVersion={data.nextVersion}
+                      defaultValues={draft}
+                      pending={create.isPending}
+                      error={create.isError ? create.error : undefined}
+                      warnings={create.data?.warnings}
+                      onSubmit={submit}
+                      onCancel={() => {
+                        create.reset();
+                        setFormOpen(false);
+                      }}
+                    />
+                  </Section>
+                ) : null}
+              </>
+            ) : null}
+          </Stack>
+        </LayoutContent>
+      }
+    />
   );
 }
 
 /** Same shape as the loaded screen so nothing jumps when data arrives. */
 function PromptVersionsSkeleton() {
   return (
-    <div aria-hidden="true" className="space-y-4 motion-safe:animate-pulse">
-      <div className="space-y-2 rounded-xl border p-5">
-        <div className="bg-muted h-5 w-32 rounded" />
-        <div className="bg-muted h-24 w-full rounded" />
-      </div>
-      <div className="space-y-2 rounded-xl border p-3">
+    <Stack direction="vertical" gap={4} aria-hidden="true">
+      <Section variant="muted" padding={4}>
+        <Stack direction="vertical" gap={3}>
+          <HStack gap={3} justify="between" align="center">
+            <Skeleton width={140} height={24} />
+            <Skeleton width={180} height={20} />
+          </HStack>
+          <Skeleton width={320} height={16} />
+          <Skeleton width="100%" height={160} />
+        </Stack>
+      </Section>
+
+      <Stack direction="vertical" gap={2}>
+        <Skeleton width={200} height={24} />
         {[0, 1, 2].map((row) => (
-          <div key={row} className="bg-muted h-8 w-full rounded" />
+          <HStack key={row} gap={3} paddingBlock={2} align="center">
+            <Skeleton width={90} height={16} index={row} />
+            <Skeleton width="100%" height={16} index={row} />
+            <Skeleton width={140} height={16} index={row} />
+            <Skeleton width={160} height={16} index={row} />
+            <Skeleton width={340} height={16} index={row} />
+          </HStack>
         ))}
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }

@@ -1,8 +1,8 @@
 "use client";
 
+import { Button, Card, HStack, RadioList, RadioListItem, VStack } from "@astryxdesign/core";
 import { useId } from "react";
 
-import { cn } from "@/shared/utils";
 import { ScheduleTimeField } from "@/ui/components/scheduled/ScheduleTimeField";
 import { useNowMs } from "@/ui/hooks/useNowMs";
 import type { ScheduleChoice } from "@/ui/hooks/useScheduleChoice";
@@ -13,7 +13,8 @@ import type { ScheduleChoice } from "@/ui/hooks/useScheduleChoice";
  *
  * Radios, not a switch: two named options make the default visible. "Đăng ngay"
  * is preselected, and the scheduled branch only appears once it is chosen —
- * nothing on screen while it is irrelevant.
+ * nothing on screen while it is irrelevant. The branch sits on a muted card so
+ * it reads as "belongs to the option above", not as a second, unrelated field.
  *
  * PENDING(E8.1-per-channel): one time for every channel of the batch. The API
  * already accepts `scheduledAtByChannel` (a bad hour blocks ONE channel, not the
@@ -43,90 +44,68 @@ export function SchedulePicker({
   const slots = nowMs > 0 ? quickSlots(nowMs) : [];
 
   return (
-    <fieldset className="flex flex-col gap-2.5" aria-describedby={`${groupId}-hint`}>
-      <legend className="text-sm font-medium">Thời điểm đăng</legend>
-      <p id={`${groupId}-hint`} className="text-muted-foreground text-xs leading-relaxed">
-        {scopeNote}
-      </p>
-
-      {(
-        [
-          {
-            mode: "now" as const,
-            label: "Đăng ngay",
-            hint: "Bài vào hàng đợi ngay khi tạo lô; các kênh vẫn được đăng giãn cách theo cấu hình.",
-          },
-          {
-            mode: "scheduled" as const,
-            label: "Hẹn giờ đăng",
-            hint: "Bài chờ tới giờ đã hẹn. Trước khi tới giờ vẫn đổi giờ hoặc huỷ được ở màn “Bài đã hẹn”.",
-          },
-        ] as const
-      ).map((option) => (
-        <label
-          key={option.mode}
-          className={cn(
-            "bg-card border-border has-checked:border-primary has-checked:bg-accent/20 has-checked:ring-primary flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors has-checked:ring-1",
-            "has-focus-visible:ring-ring/50 has-focus-visible:ring-3",
-          )}
-        >
-          <input
-            type="radio"
-            name={groupId}
-            value={option.mode}
-            className="peer sr-only"
-            checked={choice.mode === option.mode}
-            disabled={disabled}
-            onChange={() => choice.setMode(option.mode)}
-          />
-          <span
-            aria-hidden="true"
-            className="border-input peer-checked:border-primary mt-0.5 size-4 shrink-0 rounded-full border-2 transition-colors peer-checked:bg-primary"
-          />
-          <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="text-sm font-medium">{option.label}</span>
-            <span className="text-muted-foreground text-xs leading-relaxed">{option.hint}</span>
-          </span>
-        </label>
-      ))}
+    <VStack gap={3}>
+      <RadioList
+        label="Thời điểm đăng"
+        description={scopeNote}
+        htmlName={groupId}
+        value={choice.mode}
+        onChange={(next) => choice.setMode(next as ScheduleChoice["mode"])}
+        isDisabled={disabled}
+        // Disabled always comes with a reason (core-auth-session): with this set
+        // Astryx keeps the radios focusable via aria-disabled, so the
+        // explanation is reachable by keyboard and not mouse-only.
+        disabledMessage={disabledReason}
+      >
+        <RadioListItem
+          value="now"
+          label="Đăng ngay"
+          description="Bài vào hàng đợi ngay khi tạo lô; các kênh vẫn được đăng giãn cách theo cấu hình."
+        />
+        <RadioListItem
+          value="scheduled"
+          label="Hẹn giờ đăng"
+          description="Bài chờ tới giờ đã hẹn. Trước khi tới giờ vẫn đổi giờ hoặc huỷ được ở màn “Bài đã hẹn”."
+        />
+      </RadioList>
 
       {choice.mode === "scheduled" ? (
-        <div className="bg-accent/15 flex flex-col gap-2.5 rounded-xl p-3.5">
-          <ScheduleTimeField
-            id={fieldId}
-            label="Giờ đăng"
-            value={choice.value}
-            onChange={choice.setValue}
-            disabled={disabled}
-            disabledReason={disabledReason}
-            error={choice.error}
-            nowMs={nowMs}
-          />
+        <Card variant="muted" padding={3}>
+          <VStack gap={3}>
+            <ScheduleTimeField
+              id={fieldId}
+              label="Giờ đăng"
+              value={choice.value}
+              onChange={choice.setValue}
+              disabled={disabled}
+              disabledReason={disabledReason}
+              error={choice.error}
+              nowMs={nowMs}
+            />
 
-          {slots.length > 0 ? (
-            <div role="group" aria-label="Giờ đăng gợi ý" className="flex flex-wrap gap-1.5">
-              {slots.map((slot) => (
-                <button
-                  key={slot.value}
-                  type="button"
-                  disabled={disabled}
-                  aria-pressed={choice.value === slot.value}
-                  onClick={() => choice.setValue(slot.value)}
-                  className={cn(
-                    "focus-visible:ring-ring/50 cursor-pointer rounded-full px-3 py-1 text-xs transition-colors outline-none focus-visible:ring-3 disabled:opacity-50",
-                    choice.value === slot.value
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-card text-accent-foreground hover:bg-accent/40",
-                  )}
-                >
-                  {slot.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
+            {slots.length > 0 ? (
+              // `aria-pressed`, not a second radio group: these are shortcuts
+              // that fill the field above, and the field stays the source of
+              // truth. A slot that no longer matches simply reads unpressed.
+              <HStack gap={1.5} wrap="wrap" role="group" aria-label="Giờ đăng gợi ý">
+                {slots.map((slot) => (
+                  <Button
+                    key={slot.value}
+                    size="sm"
+                    variant={choice.value === slot.value ? "primary" : "secondary"}
+                    label={slot.label}
+                    aria-pressed={choice.value === slot.value}
+                    isDisabled={disabled}
+                    tooltip={disabled ? disabledReason : undefined}
+                    onClick={() => choice.setValue(slot.value)}
+                  />
+                ))}
+              </HStack>
+            ) : null}
+          </VStack>
+        </Card>
       ) : null}
-    </fieldset>
+    </VStack>
   );
 }
 
@@ -155,7 +134,7 @@ function atLocalTime(baseMs: number, hours: number, minutes: number): Date {
   return date;
 }
 
-/** `<input type="datetime-local">` wants LOCAL wall time, so never touch toISOString(). */
+/** The time field wants LOCAL wall time, so never touch toISOString(). */
 function toDateTimeLocal(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;

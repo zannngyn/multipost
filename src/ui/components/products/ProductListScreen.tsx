@@ -249,8 +249,6 @@ function ProductListBody({
   onSelect: (code: string) => void;
   onClearFilters: () => void;
 }) {
-  const router = useRouter();
-
   // --- Loading (delayed so a fast answer does not flash) -------------------
   if (isFirstLoad) return showSkeleton ? <ProductTableSkeleton /> : null;
 
@@ -280,11 +278,8 @@ function ProductListBody({
             title="Chưa có sản phẩm nào trong hệ thống"
             description="Đơn vị này chưa đồng bộ lần nào, hoặc lần đồng bộ gần nhất không đọc được mã nào. Mở màn Đồng bộ dữ liệu, kiểm tra nguồn Drive/Sheet rồi chạy đồng bộ."
             actions={
-              <Button
-                variant="primary"
-                label="Mở màn Đồng bộ dữ liệu"
-                onClick={() => router.push("/sync")}
-              />
+              // A real link: navigation, so Ctrl+click and middle-click work.
+              <Button variant="primary" label="Mở màn Đồng bộ dữ liệu" href="/sync" />
             }
           />
         )}

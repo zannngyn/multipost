@@ -24,17 +24,20 @@ export function OnboardingPanel() {
   const join = useJoinTenant();
 
   return (
-    <Stack direction="vertical" gap={4}>
-      <Stack direction="vertical" gap={1}>
+    <Stack direction="vertical" gap={5}>
+      <Stack direction="vertical" gap={1} maxWidth="70ch">
         <Heading level={1}>Bắt đầu với MYSP</Heading>
         <Text type="supporting">
-          Bạn đã đăng nhập thành công — đây không phải lỗi. Dữ liệu trong MYSP luôn thuộc về một
-          công ty, nên hãy tạo công ty của bạn, hoặc dùng link mời nếu ai đó đã mời bạn vào công ty
-          của họ.
+          Bạn đã đăng nhập thành công, đây không phải lỗi. Dữ liệu trong MYSP luôn thuộc về một công
+          ty, nên hãy tạo công ty của bạn, hoặc dùng link mời nếu ai đó đã mời bạn vào công ty của
+          họ.
         </Text>
       </Stack>
 
-      <Card padding={4}>
+      {/* The two ways in are not equals: creating is what most people here need
+          to do, so it gets the surface and the invite path gets the muted one.
+          Two identical cards would make the operator choose before reading. */}
+      <Card padding={5}>
         <Stack direction="vertical" gap={3}>
           <Stack direction="vertical" gap={1}>
             <Heading level={2}>Tạo công ty của bạn</Heading>
@@ -56,9 +59,9 @@ export function OnboardingPanel() {
         </Stack>
       </Card>
 
-      <Divider />
+      <Divider label={<Text type="supporting">hoặc</Text>} />
 
-      <Card padding={4}>
+      <Card padding={5} variant="muted">
         <Stack direction="vertical" gap={3}>
           <Stack direction="vertical" gap={1}>
             <Heading level={2}>Có link mời? Dán vào đây</Heading>

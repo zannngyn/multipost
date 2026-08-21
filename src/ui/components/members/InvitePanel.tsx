@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Badge,
   Banner,
   Button,
   Divider,
@@ -11,9 +10,11 @@ import {
   Selector,
   Skeleton,
   Stack,
+  StatusDot,
   Table,
   Text,
   TextInput,
+  Token,
   pixel,
   proportional,
 } from "@astryxdesign/core";
@@ -92,7 +93,7 @@ export function InvitePanel({ actorRole }: { actorRole: MembershipRole | null })
 
   return (
     <Stack direction="vertical" gap={3}>
-      <Stack direction="vertical" gap={1}>
+      <Stack direction="vertical" gap={1} maxWidth={640}>
         <Heading level={2}>Link mời</Heading>
         <Text type="supporting">
           Gửi link cho người bạn muốn thêm vào công ty. Ai mở link và đăng nhập sẽ vào công ty với
@@ -139,6 +140,18 @@ export function InvitePanel({ actorRole }: { actorRole: MembershipRole | null })
       {revoke.isError ? <ApiErrorNotice error={revoke.error} /> : null}
 
       <Divider />
+
+      <HStack gap={3} align="center" wrap="wrap">
+        <Heading level={3}>Link đã tạo</Heading>
+        {/* Only once the list is real: "0 link" while loading reads as an
+            answer, and an operator would mint a second link on the strength
+            of it. */}
+        {invites.data ? (
+          <Text type="supporting" role="status" aria-live="polite">
+            {items.length} link
+          </Text>
+        ) : null}
+      </HStack>
 
       <InviteListBody
         isFirstLoad={isFirstLoad}
@@ -255,6 +268,40 @@ function CopyInviteUrl({ url, inviteId }: { url: string; inviteId: string }) {
 /** Table's generic needs an index signature; the fields stay Invite's. */
 type InviteRow = Invite & Record<string, unknown>;
 
+/**
+ * [dup-2/3] Same ladder of colours as `MemberTable` — on purpose: a link that
+ * grants "Quản trị" must look like the "Quản trị" rows it will produce. Third
+ * copy means it moves to a shared module.
+ */
+const INVITE_ROLE_TOKEN_COLORS: Record<MembershipRole, "purple" | "blue" | "teal" | "gray"> = {
+  owner: "purple",
+  admin: "blue",
+  editor: "teal",
+  viewer: "gray",
+};
+
+/** Column widths mirror the real table so the rows land where these sat. */
+const INVITE_SKELETON_COLUMNS = [130, 140, 110, 170, null, 300] as const;
+
+/**
+ * Loading placeholder shaped like the invite table — same columns, same row
+ * height. Two grey bars of the wrong size are worse than none
+ * (web-feedback-states §1: skeleton phải khớp layout thật).
+ */
+function InviteTableSkeleton() {
+  return (
+    <Stack direction="vertical" gap={0} aria-hidden="true">
+      {[0, 1, 2].map((row) => (
+        <HStack key={row} gap={3} paddingBlock={2} align="center">
+          {INVITE_SKELETON_COLUMNS.map((width, column) => (
+            <Skeleton key={column} width={width ?? "100%"} height={16} index={row} />
+          ))}
+        </HStack>
+      ))}
+    </Stack>
+  );
+}
+
 function InviteListBody({
   isFirstLoad,
   showSkeleton,
@@ -279,14 +326,7 @@ function InviteListBody({
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   // --- Loading (delayed so a fast answer does not flash) --------------------
-  if (isFirstLoad) {
-    return showSkeleton ? (
-      <Stack direction="vertical" gap={2} aria-hidden="true">
-        <Skeleton width="100%" height={16} />
-        <Skeleton width="100%" height={16} />
-      </Stack>
-    ) : null;
-  }
+  if (isFirstLoad) return showSkeleton ? <InviteTableSkeleton /> : null;
 
   // --- Error, with nothing to fall back on ----------------------------------
   if (isError && items.length === 0) {
@@ -297,7 +337,8 @@ function InviteListBody({
   if (items.length === 0) {
     return (
       <EmptyState
-        headingLevel={3}
+        isCompact
+        headingLevel={4}
         title="Chưa có link mời nào"
         description="Khi bạn tạo link mời, link sẽ được liệt kê ở đây để theo dõi và thu hồi. Nội dung link chỉ hiện đúng một lần lúc tạo."
       />
@@ -310,7 +351,7 @@ function InviteListBody({
       header: "Vai trò",
       width: pixel(130),
       renderCell: (invite) => (
-        <Badge variant="blue" label={MEMBERSHIP_ROLE_LABELS[invite.role]} />
+        <Token size="sm" color={INVITE_ROLE_TOKEN_COLORS[invite.role]} label={MEMBERSHIP_ROLE_LABELS[invite.role]} />
       ),
     },
     {
@@ -319,20 +360,37 @@ function InviteListBody({
       width: pixel(140),
       renderCell: (invite) => {
         const status = inviteStatus(invite, nowMs);
-        return <Badge variant={INVITE_STATUS_TONES[status]} label={INVITE_STATUS_LABELS[status]} />;
+        // Dot + label in words: colour alone would leave "còn dùng được" and
+        // "đã thu hồi" indistinguishable (core-accessibility §5).
+        return (
+          <HStack gap={2} align="center">
+            <StatusDot variant={INVITE_STATUS_TONES[status]} label={INVITE_STATUS_LABELS[status]} />
+            <Text color={status === "open" ? "primary" : "secondary"}>
+              {INVITE_STATUS_LABELS[status]}
+            </Text>
+          </HStack>
+        );
       },
     },
     {
       key: "usedCount",
       header: "Đã dùng",
       width: pixel(110),
-      renderCell: (invite) => <Text color="secondary">{inviteUsageLabel(invite)}</Text>,
+      renderCell: (invite) => (
+        <Text color="secondary" hasTabularNumbers>
+          {inviteUsageLabel(invite)}
+        </Text>
+      ),
     },
     {
       key: "expiresAt",
       header: "Hết hạn",
       width: pixel(170),
-      renderCell: (invite) => <Text color="secondary">{formatDateTime(invite.expiresAt)}</Text>,
+      renderCell: (invite) => (
+        <Text color="secondary" hasTabularNumbers>
+          {formatDateTime(invite.expiresAt)}
+        </Text>
+      ),
     },
     {
       key: "createdByEmail",
@@ -340,7 +398,9 @@ function InviteListBody({
       width: proportional(1),
       renderCell: (invite) =>
         invite.createdByEmail?.trim() ? (
-          <Text color="secondary">{invite.createdByEmail}</Text>
+          <Text color="secondary" maxLines={1}>
+            {invite.createdByEmail}
+          </Text>
         ) : (
           <Text color="placeholder">Không rõ</Text>
         ),
@@ -361,7 +421,7 @@ function InviteListBody({
         if (confirmingId === invite.id) {
           return (
             <Stack direction="vertical" gap={2}>
-              <Text type="supporting" role="alert">
+              <Text type="supporting" color="primary" role="alert">
                 Thu hồi link này? Ai đang giữ link sẽ không dùng được nữa; người đã vào bằng link
                 này vẫn ở trong công ty.
               </Text>
@@ -422,6 +482,7 @@ function InviteListBody({
         />
       ) : null}
       <Table
+        aria-label="Link mời đã tạo"
         data={items as InviteRow[]}
         columns={columns}
         idKey="id"

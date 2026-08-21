@@ -1,11 +1,18 @@
 "use client";
 
+import {
+  Banner,
+  Button,
+  HStack,
+  Skeleton,
+  Stack,
+  StatusDot,
+  Text,
+  VisuallyHidden,
+} from "@astryxdesign/core";
 import { useEffect, useRef, useState } from "react";
 
-import { cn } from "@/shared/utils";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { Badge } from "@/ui/components/ui/badge";
-import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useDisconnectGoogle, type GoogleConnectionQuery } from "@/ui/hooks/useGoogleDrive";
 import {
@@ -35,7 +42,11 @@ import { googleConnectHref } from "@/ui/services/google-drive.api";
  *    Collapsing it into `not_connected` would hide a running failure
  *    (business rule 5: nothing is silently swallowed).
  *
- * The connect action is a real <a> to `/api/catalog/google/connect`: that route
+ * Every tinted panel here is a `Banner`: severity now comes from the design
+ * system's own status scale instead of a hand-mixed border/background pair, so
+ * "cảnh báo" looks the same on this screen as it does on every other.
+ *
+ * The connect action is a real link to `/api/catalog/google/connect`: that route
  * answers 302 to Google, so it has to leave the app. Fetching it would either
  * be blocked by CORS or land Google's consent page in a JSON parser
  * (web-auth-methods §1: redirect, not popup, not XHR).
@@ -75,16 +86,16 @@ export function GoogleConnectionPanel({
   }, [outcome, refetchConnection]);
 
   return (
-    <div className="border-border space-y-3 border-b p-4">
+    <Stack direction="vertical" gap={3} padding={4}>
       {outcome ? <ConnectOutcomeNotice outcome={outcome} onDismiss={onDismissOutcome} /> : null}
 
       {/* --- Loading (delayed so a fast answer does not flash) -------------- */}
       {isFirstLoad ? (
         showSkeleton ? (
-          <div aria-hidden="true" className="space-y-2 motion-safe:animate-pulse">
-            <div className="bg-muted h-4 w-56 rounded" />
-            <div className="bg-muted h-8 w-48 rounded-lg" />
-          </div>
+          <Stack direction="vertical" gap={2} aria-hidden="true">
+            <Skeleton width={224} height={16} />
+            <Skeleton width={192} height={32} />
+          </Stack>
         ) : null
       ) : connection.isError ? (
         // --- Error: reading the status failed, but CONNECTING does not go
@@ -92,9 +103,7 @@ export function GoogleConnectionPanel({
         <ApiErrorNotice
           error={connection.error}
           onRetry={() => void connection.refetch()}
-          extraAction={
-            <ConnectLink label="Kết nối Google Drive" variant="outline" />
-          }
+          extraAction={<ConnectLink label="Kết nối Google Drive" variant="secondary" />}
         />
       ) : connection.data ? (
         <ConnectionFacts
@@ -108,49 +117,51 @@ export function GoogleConnectionPanel({
       ) : null}
 
       {isConfirmingDisconnect ? (
-        <div
+        <Stack
+          direction="vertical"
           role="group"
           aria-label="Xác nhận ngắt kết nối Google"
           onKeyDown={(event) => {
             if (event.key === "Escape") setIsConfirmingDisconnect(false);
           }}
-          className="border-warning/40 bg-warning/5 space-y-3 rounded-xl border p-4"
         >
-          <p className="text-sm font-medium">Ngắt kết nối Google của đơn vị này?</p>
-          <p className="text-muted-foreground text-sm">
-            Sau khi ngắt, đồng bộ sẽ dừng và không chọn được thư mục/bảng trong app cho tới khi kết
-            nối lại. Nguồn đang lưu không bị xoá.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              ref={confirmRef}
-              type="button"
-              variant="destructive"
-              onClick={() => {
-                setIsConfirmingDisconnect(false);
-                disconnect.mutate();
-              }}
-            >
-              Ngắt kết nối
-            </Button>
-            <Button type="button" variant="outline" onClick={() => setIsConfirmingDisconnect(false)}>
-              Giữ nguyên
-            </Button>
-          </div>
-        </div>
+          <Banner
+            status="warning"
+            title="Ngắt kết nối Google của đơn vị này?"
+            description="Sau khi ngắt, đồng bộ sẽ dừng và không chọn được thư mục/bảng trong app cho tới khi kết nối lại. Nguồn đang lưu không bị xoá."
+            endContent={
+              <HStack gap={2} align="center" wrap="wrap">
+                <Button
+                  ref={confirmRef}
+                  variant="destructive"
+                  label="Ngắt kết nối"
+                  onClick={() => {
+                    setIsConfirmingDisconnect(false);
+                    disconnect.mutate();
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  label="Giữ nguyên"
+                  onClick={() => setIsConfirmingDisconnect(false)}
+                />
+              </HStack>
+            }
+          />
+        </Stack>
       ) : null}
 
-      <p className="sr-only" role="status" aria-live="polite">
+      <VisuallyHidden as="div" role="status" aria-live="polite">
         {disconnect.isPending
           ? "Đang ngắt kết nối Google"
           : isFirstLoad
             ? "Đang đọc trạng thái kết nối Google"
             : ""}
-      </p>
+      </VisuallyHidden>
 
       {/* A failed disconnect is never swallowed — the token is still stored. */}
       {disconnect.isError ? <ApiErrorNotice error={disconnect.error} /> : null}
-    </div>
+    </Stack>
   );
 }
 
@@ -172,16 +183,19 @@ function ConnectionFacts({
 }) {
   if (data.state === "not_connected") {
     return (
-      <div className="space-y-3">
-        <div className="space-y-1">
-          <p className="text-sm font-medium">Chưa kết nối Google Drive</p>
-          <p className="text-muted-foreground max-w-prose text-sm">
+      <Stack direction="vertical" gap={3}>
+        <Stack direction="vertical" gap={1}>
+          <HStack gap={2} align="center">
+            <StatusDot variant="neutral" label="Chưa kết nối" />
+            <Text weight="medium">Chưa kết nối Google Drive</Text>
+          </HStack>
+          <Text type="supporting">
             Kết nối để chọn thư mục và bảng ngay trong app, không cần copy link. Hệ thống chỉ xin
             quyền đọc Drive và Google Sheet của tài khoản bạn chọn.
-          </p>
-        </div>
+          </Text>
+        </Stack>
         <ConnectLink label="Kết nối Google Drive" />
-      </div>
+      </Stack>
     );
   }
 
@@ -194,30 +208,31 @@ function ConnectionFacts({
 
   if (data.state === "expired") {
     return (
-      <div role="alert" className="border-warning/40 bg-warning/10 space-y-3 rounded-xl border p-3.5">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <Badge tone="warning">Kết nối đã hết hạn</Badge>
-          {data.email ? <p className="text-sm break-all">{data.email}</p> : null}
-        </div>
-        <p className="text-sm">
-          Kết nối đã hết hạn hoặc bị thu hồi — đồng bộ sẽ dừng cho tới khi kết nối lại. Sản phẩm và
-          ảnh đã có vẫn giữ nguyên, nhưng sẽ không được cập nhật.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <ConnectLink label="Kết nối lại Google Drive" />
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onAskDisconnect}
-            disabled={isDisconnecting || isConfirmingDisconnect}
-          >
-            {isDisconnecting ? "Đang ngắt…" : "Ngắt kết nối"}
-          </Button>
-        </div>
-        {data.reason ? (
-          <p className="text-muted-foreground font-mono text-xs">Mã tham chiếu: {data.reason}</p>
+      <Banner
+        role="alert"
+        status="warning"
+        title="Kết nối Google đã hết hạn"
+        description={`Kết nối đã hết hạn hoặc bị thu hồi — đồng bộ sẽ dừng cho tới khi kết nối lại. Sản phẩm và ảnh đã có vẫn giữ nguyên, nhưng sẽ không được cập nhật.${
+          data.reason ? ` Mã tham chiếu: ${data.reason}.` : ""
+        }`}
+        endContent={
+          <HStack gap={2} align="center" wrap="wrap">
+            <ConnectLink label="Kết nối lại Google Drive" />
+            <Button
+              variant="secondary"
+              label={isDisconnecting ? "Đang ngắt…" : "Ngắt kết nối"}
+              isDisabled={isDisconnecting || isConfirmingDisconnect}
+              onClick={onAskDisconnect}
+            />
+          </HStack>
+        }
+      >
+        {data.email ? (
+          <Text type="code" size="2xs" wordBreak="break-all">
+            {data.email}
+          </Text>
         ) : null}
-      </div>
+      </Banner>
     );
   }
 
@@ -230,60 +245,67 @@ function ConnectionFacts({
   const warning = data.sourceAccess ? sourceAccessWarning(data.sourceAccess) : null;
 
   return (
-    <div className="space-y-3">
+    <Stack direction="vertical" gap={3}>
       {/* Above the "đã kết nối" row on purpose: this is the sentence that stops
           an operator from pressing "Chạy đồng bộ" and wiping the catalogue. */}
       {warning ? (
         <SourceAccessNotice warning={warning} onPickSource={onPickSource} isPicking={isPicking} />
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <Badge tone={warning ? "warning" : "success"}>
-          {warning ? "Đã kết nối — nguồn chưa đọc được" : "Đã kết nối Google"}
-        </Badge>
+      <Stack direction="vertical" gap={1}>
+        <HStack gap={2} align="center" wrap="wrap">
+          <StatusDot
+            variant={warning ? "warning" : "success"}
+            label={warning ? "Đã kết nối nhưng chưa đọc được nguồn" : "Đã kết nối"}
+          />
+          <Text weight="medium">
+            {warning ? "Đã kết nối — nguồn chưa đọc được" : "Đã kết nối Google"}
+          </Text>
+        </HStack>
+
         {data.email ? (
-          <p className="text-sm">
-            Tài khoản <span className="font-medium break-all">{data.email}</span>
-            {connectedAt ? (
-              <span className="text-muted-foreground"> · kết nối lúc {connectedAt}</span>
-            ) : null}
-          </p>
+          <Text type="supporting">
+            Tài khoản{" "}
+            <Text color="primary" weight="medium" wordBreak="break-all">
+              {data.email}
+            </Text>
+            {connectedAt ? ` · kết nối lúc ${connectedAt}` : ""}
+          </Text>
         ) : (
           // The connection itself is public to the tenant; WHICH account it is
           // is not. Saying so beats a blank space where a name should be.
-          <p className="text-muted-foreground text-sm">
-            Chi tiết tài khoản chỉ hiện với quản trị viên của đơn vị.
-          </p>
+          <Text type="supporting">Chi tiết tài khoản chỉ hiện với quản trị viên của đơn vị.</Text>
         )}
-      </div>
+      </Stack>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <HStack gap={2} align="center" wrap="wrap">
         {/* When the warning is up it already carries this action as its primary
             button; a second identical button would only split the decision. */}
         {warning ? null : (
-          <Button type="button" onClick={onPickSource} disabled={isPicking}>
-            Chọn lại thư mục/bảng
-          </Button>
+          <Button
+            variant="primary"
+            label="Chọn lại thư mục/bảng"
+            isDisabled={isPicking}
+            onClick={onPickSource}
+          />
         )}
         <Button
-          type="button"
-          variant="outline"
+          variant="secondary"
+          label={isDisconnecting ? "Đang ngắt…" : "Ngắt kết nối"}
+          isDisabled={isDisconnecting || isConfirmingDisconnect}
           onClick={onAskDisconnect}
-          disabled={isDisconnecting || isConfirmingDisconnect}
-        >
-          {isDisconnecting ? "Đang ngắt…" : "Ngắt kết nối"}
-        </Button>
-      </div>
-    </div>
+        />
+      </HStack>
+    </Stack>
   );
 }
 
 /**
  * "The account you just connected cannot read the folder/sheet we have stored."
  *
- * Warning colours, not destructive ones: nothing is broken and nothing is lost
- * yet — the sync will refuse to run, which is the SAFE outcome. Destructive red
- * here would read as "data already gone".
+ * Warning status, not error: nothing is broken and nothing is lost yet — the
+ * sync will refuse to run, which is the SAFE outcome. Red here would read as
+ * "data already gone".
  *
  * `role="status"` (polite), not `alert`: it is part of the status this panel
  * renders when it loads, not something that interrupts mid-task. Assertive
@@ -299,35 +321,36 @@ function SourceAccessNotice({
   isPicking: boolean;
 }) {
   return (
-    <div
+    <Banner
       role="status"
-      className="border-warning/40 bg-warning/10 text-warning-foreground space-y-2.5 rounded-xl border border-l-4 p-3.5"
-    >
-      <p className="text-sm font-semibold">{warning.title}</p>
-      <p className="max-w-prose text-sm">{warning.message}</p>
-      <Button type="button" onClick={onPickSource} disabled={isPicking}>
-        {warning.actionLabel}
-      </Button>
-    </div>
+      status="warning"
+      title={warning.title}
+      description={warning.message}
+      endContent={
+        <Button
+          variant="primary"
+          label={warning.actionLabel}
+          isDisabled={isPicking}
+          onClick={onPickSource}
+        />
+      }
+    />
   );
 }
 
 /**
- * Leaves the app on purpose. `Button asChild` keeps the primary-action styling
- * on a real anchor, so middle-click, "mở tab mới" and the status bar all work.
+ * Leaves the app on purpose. Astryx `Button href` renders a real anchor with
+ * button styling, so middle-click, "mở tab mới" and the status bar all work.
  */
 function ConnectLink({
   label,
-  variant = "default",
+  variant = "primary",
 }: {
   label: string;
-  variant?: "default" | "outline";
+  variant?: "primary" | "secondary";
 }) {
-  return (
-    <Button asChild variant={variant}>
-      <a href={googleConnectHref()}>{label}</a>
-    </Button>
-  );
+  // A plain <a>, not the app router: this route 302s out to Google.
+  return <Button variant={variant} label={label} href={googleConnectHref()} as="a" />;
 }
 
 /**
@@ -342,12 +365,8 @@ function ConnectOutcomeNotice({
   outcome: GoogleConnectOutcome;
   onDismiss: () => void;
 }) {
-  const tone =
-    outcome.kind === "connected"
-      ? "border-success/30 bg-success/10 text-success-foreground"
-      : outcome.kind === "cancelled"
-        ? "border-border bg-muted/40 text-foreground"
-        : "border-destructive/30 bg-destructive/10 text-destructive";
+  const status =
+    outcome.kind === "connected" ? "success" : outcome.kind === "cancelled" ? "info" : "error";
 
   const message =
     outcome.kind === "connected"
@@ -357,23 +376,18 @@ function ConnectOutcomeNotice({
         : googleConnectErrorMessage(outcome.reason);
 
   return (
-    <div
+    <Banner
       // An error must be announced; a normal outcome must not interrupt.
       role={outcome.kind === "error" ? "alert" : "status"}
-      className={cn(
-        "flex flex-wrap items-start justify-between gap-3 rounded-xl border px-3.5 py-2.5",
-        tone,
-      )}
-    >
-      <div className="min-w-0 space-y-1">
-        <p className="text-sm">{message}</p>
-        {outcome.kind === "error" && outcome.reason ? (
-          <p className="font-mono text-xs opacity-80">Mã tham chiếu: {outcome.reason}</p>
-        ) : null}
-      </div>
-      <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
-        Đóng
-      </Button>
-    </div>
+      status={status}
+      title={message}
+      description={
+        outcome.kind === "error" && outcome.reason
+          ? `Mã tham chiếu: ${outcome.reason}`
+          : undefined
+      }
+      isDismissable
+      onDismiss={onDismiss}
+    />
   );
 }

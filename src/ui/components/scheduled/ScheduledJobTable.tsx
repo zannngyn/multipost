@@ -1,10 +1,15 @@
 "use client";
 
-import Link from "next/link";
+import { HStack, Link, Stack, StatusDot, Table, Text, VStack, pixel, proportional } from "@astryxdesign/core";
+import type { TableColumn } from "@astryxdesign/core";
+import NextLink from "next/link";
+import type { ComponentProps } from "react";
 
-import { JobStatusBadge } from "@/ui/components/post/PostStatusBadge";
-import { Badge } from "@/ui/components/ui/badge";
-import { Button } from "@/ui/components/ui/button";
+import {
+  POST_JOB_STATUS_LABELS,
+  POST_JOB_STATUS_TONES,
+  type StatusTone,
+} from "@/ui/schemas/post-batch.schema";
 import {
   formatCountdown,
   formatScheduledTime,
@@ -14,25 +19,58 @@ import {
 } from "@/ui/schemas/scheduled.schema";
 
 /**
- * One day of the "Bài đã hẹn" timeline (E8.4).
+ * One day of the "Bài đã hẹn" timeline (E8.4), as rows rather than cards
+ * (`astryx docs layout`: dense data an operator scans belongs in a Table).
  *
  * Presentational: it opens no dialog and calls no API — the action links only
  * add a query parameter, and the screen above turns that into a dialog. That is
- * what makes "Đổi giờ" survive F5 and be shareable (web-crud-inline-edit r.1).
+ * what makes "Đổi giờ" survive F5 and be shareable (web-crud-inline-edit r.1),
+ * and it is why they are real links: Ctrl+Click and the browser's Back button
+ * both keep working.
  *
  * `canReschedule` / `canCancel` are decided by the SERVER. A row past its hour
- * shows the "Quá giờ" badge and NO action: a worker may already be publishing
- * it, so a button here could only ever produce a 409.
+ * shows no action at all: a worker may already be publishing it, so a control
+ * here could only ever produce a 409. When an action is missing, the REASON
+ * takes its place in the cell — never an empty box the operator has to guess at.
  *
  * Every row also shows WHO is holding the post (E8.6): "Chờ đăng" = our queue,
  * "Facebook giữ lịch" = the post already sits on Facebook and Facebook will
- * publish it. The second one cannot be rescheduled — the row keeps a disabled
- * "Đổi giờ" with the reason next to it rather than letting the operator find out
- * through an error dialog.
+ * publish it. The second one cannot be rescheduled, and the row says so.
  *
  * Business rule 2: the caption preview is the only content shown. No stock, no
  * price, no note — those never travel with a post job.
  */
+
+/** Table's generic needs an index signature; the fields stay the entry's. */
+type ScheduledRow = ScheduledJobEntry & Record<string, unknown>;
+
+/**
+ * Schema tone -> Astryx StatusDot variant. Astryx names the two extremes
+ * `accent` and `error`; the schema calls them `info` and `danger`.
+ *
+ * [dup-2/3] Same map in `jobs/JobLogTable.tsx`. The third copy should be the
+ * trigger to move it next to the labels, in `post/PostStatusBadge.tsx`.
+ */
+const STATUS_DOT_VARIANT: Record<
+  StatusTone,
+  "success" | "warning" | "error" | "accent" | "neutral"
+> = {
+  neutral: "neutral",
+  info: "accent",
+  success: "success",
+  warning: "warning",
+  danger: "error",
+};
+
+/**
+ * `next/link` with `scroll={false}` baked in. Opening a dialog only adds a query
+ * parameter; without this Next would scroll the timeline back to the top and
+ * throw the operator out of the day they were reading.
+ */
+function DialogLink(props: ComponentProps<typeof NextLink>) {
+  return <NextLink {...props} scroll={false} />;
+}
+
 export function ScheduledJobTable({
   items,
   headingId,
@@ -58,168 +96,169 @@ export function ScheduledJobTable({
 }) {
   const zone = timeZoneLabel();
 
+  const columns: TableColumn<ScheduledRow>[] = [
+    {
+      key: "scheduledAt",
+      header: `Giờ đăng (${zone})`,
+      width: pixel(200),
+      renderCell: (job) => {
+        // Countdown against the ABSOLUTE instant, never a decremented counter;
+        // before the browser clock is known we show the value the server
+        // computed at read time.
+        const deltaMs =
+          nowMs > 0 ? new Date(job.scheduledAt).getTime() - nowMs : job.startsInMs;
+
+        return (
+          <VStack gap={1}>
+            <Text weight="medium" hasTabularNumbers>
+              {formatScheduledTime(job.scheduledAt)}
+            </Text>
+            <Text type="supporting" size="2xs">
+              {formatCountdown(deltaMs)}
+            </Text>
+            <HStack gap={2} align="center" wrap="wrap">
+              <StatusDot
+                variant={STATUS_DOT_VARIANT[POST_JOB_STATUS_TONES[job.status]]}
+                label={POST_JOB_STATUS_LABELS[job.status]}
+              />
+              <Text type="supporting" size="2xs">
+                {POST_JOB_STATUS_LABELS[job.status]}
+              </Text>
+              {/* Never colour alone: the word is the signal, the tone only
+                  makes it findable in a long day (core-accessibility §5). */}
+              {job.overdue ? (
+                <Text type="supporting" size="2xs" color="accent" weight="semibold">
+                  Quá giờ
+                </Text>
+              ) : null}
+            </HStack>
+          </VStack>
+        );
+      },
+    },
+    {
+      key: "productCode",
+      header: "Mã SP / màu",
+      width: pixel(170),
+      renderCell: (job) => (
+        <VStack gap={0.5}>
+          <Text weight="medium">{job.productCode}</Text>
+          <Text type="supporting" size="2xs">
+            {job.color.trim().length > 0 ? job.color : "mọi màu"}
+          </Text>
+        </VStack>
+      ),
+    },
+    {
+      key: "channelId",
+      header: "Kênh",
+      width: pixel(150),
+      renderCell: (job) => <Text color="secondary">{job.channelId}</Text>,
+    },
+    {
+      key: "captionPreview",
+      header: "Caption · ảnh",
+      width: proportional(2),
+      renderCell: (job) => (
+        <VStack gap={1}>
+          <Text color="secondary" maxLines={3}>
+            {job.captionPreview.trim().length > 0 ? job.captionPreview : "(chưa có caption)"}
+          </Text>
+
+          <HStack gap={3} align="center" wrap="wrap">
+            <Text type="supporting" size="2xs">
+              {job.mediaCount} ảnh
+            </Text>
+            <Link href={`/batches/${encodeURIComponent(job.batchId)}`}>Xem lô</Link>
+          </HStack>
+
+          {job.overdue ? (
+            <HStack gap={2} align="center" wrap="wrap">
+              <Text type="supporting" size="2xs" color="accent">
+                {job.userMessage}
+              </Text>
+              <Link href={`/jobs?batchId=${encodeURIComponent(job.batchId)}`}>Xem nhật ký</Link>
+            </HStack>
+          ) : null}
+        </VStack>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Thao tác",
+      width: pixel(210),
+      renderCell: (job) => {
+        const isBusy = busyJobId === job.postJobId;
+        // Read-only wins over the per-row rule: when nothing may be written at
+        // all, "bài đã tới giờ" is not the answer to give.
+        const blockedReason = readOnlyReason ?? rescheduleBlockedReason(job);
+        const canReschedule = job.canReschedule && readOnlyReason === null;
+        const canCancel = job.canCancel && readOnlyReason === null;
+
+        if (!canReschedule && !canCancel && !blockedReason) {
+          // No dead controls: an action that can only 409 should not be on
+          // screen at all (core-feedback-states).
+          return <Text type="supporting">Đã tới giờ — không sửa được nữa</Text>;
+        }
+
+        return (
+          <VStack gap={1}>
+            <HStack gap={3} align="center" wrap="wrap">
+              {canReschedule ? (
+                <Link
+                  as={DialogLink}
+                  href={hrefFor("reschedule", job.postJobId)}
+                  isDisabled={isBusy}
+                  label={`Đổi giờ bài ${job.productCode} trên kênh ${job.channelId}`}
+                >
+                  Đổi giờ
+                </Link>
+              ) : null}
+              {canCancel ? (
+                <Link
+                  as={DialogLink}
+                  href={hrefFor("cancel", job.postJobId)}
+                  isDisabled={isBusy}
+                  label={`Huỷ bài ${job.productCode} trên kênh ${job.channelId}`}
+                >
+                  Huỷ
+                </Link>
+              ) : null}
+            </HStack>
+
+            {/* The reason takes the place of the missing control instead of
+                sitting behind a click that 409s (core-auth-session tree). */}
+            {blockedReason ? (
+              <Text type="supporting" size="2xs">
+                {blockedReason}
+              </Text>
+            ) : null}
+          </VStack>
+        );
+      },
+    },
+  ];
+
   return (
-    <div
-      className="overflow-x-auto rounded-xl border"
-      tabIndex={0}
+    <Stack
+      direction="vertical"
+      isScrollable
       role="region"
       aria-labelledby={headingId}
+      tabIndex={0}
     >
-      <table className="w-full border-collapse text-sm">
-        <caption className="sr-only">
-          Bài đã hẹn trong ngày: giờ đăng, mã sản phẩm, màu, kênh, caption, số ảnh và thao tác
-        </caption>
-        <colgroup>
-          <col className="w-[16%]" />
-          <col className="w-[16%]" />
-          <col className="w-[14%]" />
-          <col className="w-[34%]" />
-          <col className="w-[20%]" />
-        </colgroup>
-        <thead className="bg-muted/50">
-          <tr className="text-left">
-            <th scope="col" className="px-3 py-2 font-medium">
-              Giờ đăng ({zone})
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Mã SP / màu
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Kênh
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Caption · ảnh
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Thao tác
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((job) => {
-            // Countdown against the ABSOLUTE instant, never a decremented
-            // counter; before the browser clock is known we show the value the
-            // server computed at read time.
-            const deltaMs =
-              nowMs > 0 ? new Date(job.scheduledAt).getTime() - nowMs : job.startsInMs;
-            const isBusy = busyJobId === job.postJobId;
-            // Read-only wins over the per-row rule: when nothing may be
-            // written at all, "bài đã tới giờ" is not the answer to give.
-            const blockedReason = readOnlyReason ?? rescheduleBlockedReason(job);
-            const canReschedule = job.canReschedule && readOnlyReason === null;
-            const canCancel = job.canCancel && readOnlyReason === null;
-            const reasonId = `reschedule-blocked-${job.postJobId}`;
-
-            return (
-              <tr key={job.postJobId} className="border-t align-top">
-                <th scope="row" className="px-3 py-2 text-left font-medium tabular-nums">
-                  {formatScheduledTime(job.scheduledAt)}
-                  <span className="text-muted-foreground block text-xs font-normal">
-                    {formatCountdown(deltaMs)}
-                  </span>
-                  <span className="mt-1 flex flex-wrap gap-1 font-normal">
-                    <JobStatusBadge status={job.status} />
-                    {job.overdue ? <Badge tone="warning">Quá giờ</Badge> : null}
-                  </span>
-                </th>
-                <td className="px-3 py-2 break-all">
-                  {job.productCode}
-                  <span className="text-muted-foreground block text-xs">
-                    {job.color.trim().length > 0 ? job.color : "mọi màu"}
-                  </span>
-                </td>
-                <td className="px-3 py-2 break-all">{job.channelId}</td>
-                <td className="px-3 py-2">
-                  <p className="text-muted-foreground line-clamp-3">
-                    {job.captionPreview.trim().length > 0
-                      ? job.captionPreview
-                      : "(chưa có caption)"}
-                  </p>
-                  <p className="text-muted-foreground/80 mt-1 text-xs">
-                    {job.mediaCount} ảnh ·{" "}
-                    <Link
-                      href={`/batches/${encodeURIComponent(job.batchId)}`}
-                      className="underline underline-offset-4"
-                    >
-                      Xem lô
-                    </Link>
-                  </p>
-                  {job.overdue ? (
-                    <p className="text-warning-foreground mt-1 text-xs">
-                      {job.userMessage}{" "}
-                      <Link
-                        href={`/jobs?batchId=${encodeURIComponent(job.batchId)}`}
-                        className="underline underline-offset-4"
-                      >
-                        Xem nhật ký
-                      </Link>
-                    </p>
-                  ) : null}
-                </td>
-                <td className="px-3 py-2">
-                  {canReschedule || canCancel ? (
-                    <div className="space-y-1.5">
-                      <div className="flex flex-wrap gap-2">
-                        {canReschedule ? (
-                          <Button asChild size="sm" variant="outline" disabled={isBusy}>
-                            <Link href={hrefFor("reschedule", job.postJobId)} scroll={false}>
-                              Đổi giờ
-                              <span className="sr-only">
-                                {" "}
-                                bài {job.productCode} trên kênh {job.channelId}
-                              </span>
-                            </Link>
-                          </Button>
-                        ) : blockedReason ? (
-                          // Shown and disabled WITH the reason, not hidden: the
-                          // operator asks "vì sao không đổi giờ được?" and the
-                          // answer must be on the row, not behind a click that
-                          // 409s (core-auth-session decision tree).
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled
-                            aria-describedby={reasonId}
-                          >
-                            Đổi giờ
-                            <span className="sr-only">
-                              {" "}
-                              bài {job.productCode} trên kênh {job.channelId}
-                            </span>
-                          </Button>
-                        ) : null}
-                        {canCancel ? (
-                          <Button asChild size="sm" variant="destructive" disabled={isBusy}>
-                            <Link href={hrefFor("cancel", job.postJobId)} scroll={false}>
-                              Huỷ
-                              <span className="sr-only">
-                                {" "}
-                                bài {job.productCode} trên kênh {job.channelId}
-                              </span>
-                            </Link>
-                          </Button>
-                        ) : null}
-                      </div>
-                      {blockedReason ? (
-                        <p id={reasonId} className="text-muted-foreground text-xs">
-                          {blockedReason}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : (
-                    // No disabled buttons: an action that can only 409 should
-                    // not be on screen at all (core-feedback-states).
-                    <span className="text-muted-foreground text-xs">
-                      Đã tới giờ — không sửa được nữa
-                    </span>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+      <Table
+        data={items as ScheduledRow[]}
+        columns={columns}
+        idKey="postJobId"
+        density="compact"
+        hasHover
+        // The caption and the reason are the point of the row — they wrap.
+        // Fixed-width columns still clip, so the grid keeps its alignment.
+        textOverflow="wrap"
+        verticalAlign="top"
+        rowCount={items.length}
+      />
+    </Stack>
   );
 }

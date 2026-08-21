@@ -42,7 +42,11 @@ export function SupportModeBanner() {
     <Banner
       role="status"
       status="warning"
-      title={`Đang hỗ trợ ${supportSession.tenantName} — chỉ đọc`}
+      // `section`, not the default card: the shell hands its content zero
+      // padding, so a rounded card here would float half-off the edge. A
+      // page-level banner runs edge to edge and pushes the screen down.
+      container="section"
+      title={`Đang hỗ trợ ${supportSession.tenantName} (chỉ đọc)`}
       description={`Bạn đang xem dữ liệu của khách, không phải công ty của bạn. Mọi thao tác ghi đều bị từ chối. Phiên hỗ trợ ${remaining}.`}
       endContent={
         <Button
@@ -74,7 +78,7 @@ export function formatRemaining(expiresAt: string, nowMs: number): string {
   if (Number.isNaN(expiresAtMs)) return "sẽ tự hết hạn";
 
   const remainingMs = expiresAtMs - nowMs;
-  if (remainingMs <= 0) return "đã hết hạn — hãy thoát rồi vào lại nếu còn cần";
+  if (remainingMs <= 0) return "đã hết hạn, hãy thoát rồi vào lại nếu còn cần";
 
   const minutes = Math.floor(remainingMs / 60_000);
   if (minutes < 1) return "còn dưới 1 phút";

@@ -29,7 +29,10 @@ function DialogContent({
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay
         data-slot="dialog-overlay"
-        className="fixed inset-0 z-50 bg-black/50 data-[state=open]:motion-safe:animate-in data-[state=open]:motion-safe:fade-in-0 data-[state=closed]:motion-safe:animate-out data-[state=closed]:motion-safe:fade-out-0"
+        // Scrim tinted with the app's ink, not pure black: on a warm wash a
+        // black veil reads cold and grey (core-design-tokens §dark mode / the
+        // same reason the hairlines are ink at low alpha).
+        className="fixed inset-0 z-50 bg-foreground/50 data-[state=open]:motion-safe:animate-in data-[state=open]:motion-safe:fade-in-0 data-[state=closed]:motion-safe:animate-out data-[state=closed]:motion-safe:fade-out-0"
       />
       <DialogPrimitive.Content
         data-slot="dialog-content"

@@ -3,13 +3,13 @@
 import {
   Banner,
   Button,
-  Divider,
   EmptyState,
   HStack,
   Heading,
   Layout,
   LayoutContent,
   LayoutHeader,
+  Section,
   Stack,
   StackItem,
   Text,
@@ -105,23 +105,16 @@ export function MembersScreen() {
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <Stack direction="vertical" gap={3} padding={4}>
-            <Stack direction="vertical" gap={1}>
+          {/* Title left, actions right — the app-bar shape every admin screen
+              here uses. The prose is capped so a wide monitor does not stretch
+              it into one 200-character line. */}
+          <HStack gap={4} padding={4} justify="between" align="start" wrap="wrap">
+            <Stack direction="vertical" gap={1} maxWidth={640}>
               <Heading level={1}>Thành viên</Heading>
               <Text type="supporting">
                 Ai đang làm việc trong {tenant?.name ?? "công ty này"} và với quyền gì. Mỗi công ty
                 có danh sách thành viên riêng — đổi công ty ở thanh trên cùng để xem công ty khác.
               </Text>
-            </Stack>
-
-            <HStack gap={3} align="center" wrap="wrap">
-              <Button
-                variant="secondary"
-                size="sm"
-                label={members.isFetching ? "Đang tải…" : "Tải lại"}
-                isDisabled={members.isFetching}
-                onClick={() => void members.refetch()}
-              />
               {/* Said once, at the top: it explains every disabled button below
                   before the operator hovers one to find out. */}
               {isResolved && !canManageMembers(actorRole) ? (
@@ -130,8 +123,16 @@ export function MembersScreen() {
                   xem được danh sách.
                 </Text>
               ) : null}
-            </HStack>
-          </Stack>
+            </Stack>
+
+            <Button
+              variant="secondary"
+              size="sm"
+              label={members.isFetching ? "Đang tải…" : "Tải lại"}
+              isDisabled={members.isFetching}
+              onClick={() => void members.refetch()}
+            />
+          </HStack>
         </LayoutHeader>
       }
       content={
@@ -172,11 +173,13 @@ export function MembersScreen() {
               </Stack>
             ) : null}
 
-            <Stack direction="vertical" padding={4}>
+            {/* Two page regions, told apart by their background rather than by
+                a hairline: "cách thêm người" sits in its own band, "ai đang ở
+                đây" runs edge-to-edge below it (astryx docs layout §Cards vs
+                Rows — Section for regions, never a Card around each row). */}
+            <Section variant="muted" padding={4} dividers={["bottom"]}>
               <InvitePanel actorRole={actorRole} />
-            </Stack>
-
-            <Divider />
+            </Section>
 
             <HStack gap={3} paddingInline={4} paddingBlock={3} align="center" wrap="wrap">
               <Heading level={2}>Danh sách thành viên</Heading>
@@ -249,7 +252,7 @@ function MemberListBody({
   // an empty list is a symptom, not a starting point.
   if (items.length === 0) {
     return (
-      <Stack direction="vertical" padding={4}>
+      <Stack direction="vertical" padding={6}>
         <EmptyState
           headingLevel={3}
           title="Danh sách thành viên đang trống"

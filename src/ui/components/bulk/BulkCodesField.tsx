@@ -1,5 +1,6 @@
 "use client";
 
+import { Banner, Field, List, ListItem, Stack, Text } from "@astryxdesign/core";
 import type { UseFormRegisterReturn } from "react-hook-form";
 
 import { Textarea } from "@/ui/components/ui/textarea";
@@ -12,6 +13,12 @@ import { MAX_BULK_CODES, type ParsedBulkCodes } from "@/ui/schemas/bulk.schema";
  * codes, which lines are not codes, how many repeats were dropped. A paste from
  * the Sheet that silently loses three rows is the failure mode this block
  * exists to prevent (core-bulk-actions: never silently drop a selection).
+ *
+ * The control stays the repo `Textarea`: it is bound with react-hook-form
+ * `register()`, and Astryx `TextArea` is a controlled `value`/`onChange(value)`
+ * component, so swapping it would rewrite the form wiring rather than the
+ * presentation. `Field` supplies the label, description and status shell around
+ * it, which is exactly what `Field` is for.
  *
  * Presentational: parsing happens in `ui/schemas/bulk.schema.ts`, the value is
  * owned by the form in the parent.
@@ -40,67 +47,75 @@ export function BulkCodesField({
     .join(" ");
 
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="text-sm font-medium">
-        Mã sản phẩm cần đăng
-      </label>
-      <Textarea
-        id={id}
-        {...registration}
-        rows={8}
-        disabled={disabled}
-        spellCheck={false}
-        autoComplete="off"
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy}
-        placeholder={"MGKVX6310\nMGKVX6311\nMGKVX6312"}
-        className="font-mono text-sm"
-      />
-
-      <p id={hintId} className="text-muted-foreground text-xs">
-        Mỗi dòng một mã, hoặc dán thẳng một cột từ Sheet. Nhiều mã trên cùng một dòng thì ngăn bằng
-        dấu phẩy. Tối đa {MAX_BULK_CODES} mã mỗi lượt; mã trùng nhau chỉ chạy một lần.
-      </p>
+    <Stack direction="vertical" gap={2}>
+      <Field
+        label="Mã sản phẩm cần đăng"
+        inputID={id}
+        descriptionID={hintId}
+        description={`Mỗi dòng một mã, hoặc dán thẳng một cột từ Sheet. Nhiều mã trên cùng một dòng thì ngăn bằng dấu phẩy. Tối đa ${MAX_BULK_CODES} mã mỗi lượt; mã trùng nhau chỉ chạy một lần.`}
+        isDisabled={disabled}
+        // Detached: the control is a plain bordered textarea, so an attached
+        // message would sit on top of its own border.
+        statusVariant="detached"
+        status={error ? { type: "error", message: error, messageID: errorId } : undefined}
+      >
+        <Textarea
+          id={id}
+          {...registration}
+          rows={8}
+          disabled={disabled}
+          spellCheck={false}
+          autoComplete="off"
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+          placeholder={"MGKVX6310\nMGKVX6311\nMGKVX6312"}
+          // Pasted codes are data, so they line up in a monospace column.
+          className="font-mono"
+        />
+      </Field>
 
       {/* Polite: the count changes on every keystroke, it must not interrupt. */}
-      <p id={summaryId} role="status" aria-live="polite" className="text-muted-foreground text-xs">
+      <Text id={summaryId} type="supporting" role="status" aria-live="polite">
         Đã đọc được {parsed.codes.length} mã hợp lệ
         {parsed.duplicates > 0 ? ` · bỏ ${parsed.duplicates} mã trùng` : ""}
         {parsed.invalid.length > 0 ? ` · ${parsed.invalid.length} dòng chưa đúng` : ""}
         {parsed.overLimit.length > 0 ? ` · ${parsed.overLimit.length} mã vượt giới hạn` : ""}.
-      </p>
-
-      {error ? (
-        <p id={errorId} role="alert" className="text-destructive text-sm">
-          {error}
-        </p>
-      ) : null}
+      </Text>
 
       {parsed.invalid.length > 0 ? (
-        <div
+        <Banner
           id={issuesId}
-          className="border-warning/40 bg-warning/10 max-h-48 overflow-auto rounded-lg border p-3"
+          status="warning"
+          title={`${parsed.invalid.length} dòng không phải mã sản phẩm`}
+          description="Những dòng này sẽ không được chạy. Sửa hoặc xoá chúng khỏi ô trên."
+          // Open on arrival: an operator who just pasted needs to see WHICH
+          // lines were dropped, not a closed drawer promising to say later.
+          defaultIsExpanded
         >
-          <p className="text-warning-foreground text-xs font-medium">
-            Các dòng sau không phải mã sản phẩm:
-          </p>
-          <ul className="mt-1 space-y-1">
+          <List density="compact" hasDividers>
             {parsed.invalid.map((issue, index) => (
-              <li key={`${issue.line}-${index}`} className="text-xs">
-                <span className="font-medium">Dòng {issue.line}:</span>{" "}
-                <span className="font-mono break-all">{issue.raw}</span> — {issue.message}
-              </li>
+              <ListItem
+                key={`${issue.line}-${index}`}
+                label={`Dòng ${issue.line}`}
+                description={
+                  <Text type="supporting">
+                    <Text type="code">{issue.raw}</Text> {issue.message}
+                  </Text>
+                }
+              />
             ))}
-          </ul>
-        </div>
+          </List>
+        </Banner>
       ) : null}
 
       {parsed.overLimit.length > 0 ? (
-        <p role="alert" className="text-destructive text-xs">
-          Vượt giới hạn {MAX_BULK_CODES} mã: {parsed.overLimit.map((item) => item.code).join(", ")}.
-          Hãy bỏ bớt rồi chạy lượt sau.
-        </p>
+        <Banner
+          role="alert"
+          status="error"
+          title={`Vượt giới hạn ${MAX_BULK_CODES} mã mỗi lượt`}
+          description={`Sẽ không chạy: ${parsed.overLimit.map((item) => item.code).join(", ")}. Bỏ bớt rồi chạy lượt sau.`}
+        />
       ) : null}
-    </div>
+    </Stack>
   );
 }
