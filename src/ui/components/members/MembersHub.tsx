@@ -136,7 +136,7 @@ export function MembersHub({
                 </Stack>
               ) : active === "history" ? (
                 canViewHistory ? (
-                  <AccessRequestsScreen onGoToMembers={() => goToTab("members")} />
+                  <AccessRequestsScreen onGoToInvites={() => goToTab("invites")} />
                 ) : (
                   <AccessForbidden email={operatorEmail} />
                 )

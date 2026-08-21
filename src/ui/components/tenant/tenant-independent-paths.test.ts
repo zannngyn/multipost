@@ -16,11 +16,12 @@ describe("isTenantIndependentPath", () => {
   });
 
   it("keeps every tenant-scoped screen behind the boundary", () => {
-    // Live routes since the wave-1 IA: "/channels/groups" and "/access" are now
-    // redirects into "/channels?tab=groups" and "/members?tab=history", so the
-    // two hubs are what this rule has to keep behind the boundary. Both hubs
-    // are listed below, so nothing lost its cover.
-    for (const path of ["/", "/members", "/sync", "/channels", "/posts"]) {
+    // The wave-1 IA turned "/channels/groups" and "/access" into redirects into
+    // "/channels?tab=groups" and "/members?tab=history", so the two hubs are
+    // what this rule really has to cover — both are listed. "/access" stays in
+    // the list anyway: a redirect is still tenant-scoped, and the assertion is
+    // what stops somebody adding it to TENANT_INDEPENDENT_PREFIXES later.
+    for (const path of ["/", "/members", "/sync", "/access", "/channels", "/posts"]) {
       expect(isTenantIndependentPath(path)).toBe(false);
     }
   });

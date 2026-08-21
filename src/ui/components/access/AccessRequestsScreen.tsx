@@ -65,12 +65,14 @@ import {
  */
 export function AccessRequestsScreen({
   /**
-   * Takes the operator to the tab that can actually add someone. A tab switch,
-   * not a navigation: the invite block lives on the same address now.
+   * Takes the operator to the tab that can actually add someone — "Link mời",
+   * the successor of this retired queue, NOT the member list (which only shows
+   * people who are already in). A tab switch, not a navigation: both views live
+   * on the same address now.
    */
-  onGoToMembers,
+  onGoToInvites,
 }: {
-  onGoToMembers: () => void;
+  onGoToInvites: () => void;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -150,12 +152,10 @@ export function AccessRequestsScreen({
           title="Luồng duyệt đã nghỉ hưu"
           description="Giờ thêm người bằng link mời ở tab “Link mời”: bạn chọn sẵn vai trò, gửi link, người nhận đăng nhập là vào thẳng công ty. Bảng dưới đây được giữ lại để tra cứu lịch sử."
           endContent={
-            <Button
-              variant="secondary"
-              size="sm"
-              label="Mở tab Thành viên"
-              onClick={onGoToMembers}
-            />
+            // The button has to land where the sentence above points: sending
+            // the operator to the member list would leave them looking for an
+            // invite form that lives one tab further on.
+            <Button variant="secondary" size="sm" label="Mở tab Link mời" onClick={onGoToInvites} />
           }
         />
       </Stack>
@@ -244,7 +244,7 @@ function AccessRequestsBody({
           <EmptyState
             headingLevel={4}
             title="Chưa có yêu cầu nào trong lịch sử"
-            description="Không tài khoản nào từng đi qua luồng chờ duyệt của đơn vị này. Thành viên hiện tại được thêm bằng link mời — xem ở tab “Link mời”."
+            description="Không tài khoản nào từng đi qua luồng chờ duyệt của đơn vị này. Ai đang ở trong công ty thì xem ở tab “Thành viên”; muốn thêm người mới thì tạo link mời ở tab “Link mời”."
           />
         </Stack>
       );
