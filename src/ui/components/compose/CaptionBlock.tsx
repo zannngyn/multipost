@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 
 import { CAPTION_TONES, CAPTION_TONE_LABELS, type CaptionTone } from "@/shared/caption-tone";
 import { cn } from "@/shared/utils";
@@ -288,47 +288,15 @@ export function CaptionBlock({
       >
         {/* --- Channel tabs: one caption per Page ------------------------- */}
         {showTabs ? (
-          <div
-            role="tablist"
-            aria-label="Caption theo từng kênh"
-            className="flex flex-wrap items-center gap-2 px-4 pt-3.5"
-          >
-            {selectedIds.map((channelId) => {
-              const name = nameOf(channelId);
-              const state = channelCaptionState(captionSources, channelId);
-              const isActive = channelId === activeId;
-
-              return (
-                <button
-                  key={channelId}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => onActiveChannelChange(channelId)}
-                  className={cn(
-                    "focus-visible:ring-ring flex h-9 cursor-pointer items-center gap-2 rounded-full py-0 pr-3 pl-1 text-[13px] transition-colors outline-none focus-visible:ring-3",
-                    isActive
-                      ? "bg-[var(--accent)] font-semibold shadow-[inset_0_0_0_1.5px_var(--primary)]"
-                      : "bg-[var(--card)] shadow-[inset_0_0_0_1px_var(--border)]",
-                  )}
-                >
-                  <span
-                    aria-hidden="true"
-                    style={avatarToneStyle(name)}
-                    className="flex size-7 items-center justify-center rounded-full text-[10px] font-semibold"
-                  >
-                    {channelInitials(name)}
-                  </span>
-                  <span className="max-w-35 truncate">{name}</span>
-                  <TabState
-                    state={state}
-                    running={fanOut.statuses[channelId]}
-                    duplicate={Boolean(duplicates[channelId])}
-                  />
-                </button>
-              );
-            })}
-          </div>
+          <ChannelTabStrip
+            channelIds={selectedIds}
+            activeId={activeId}
+            nameOf={nameOf}
+            onSelect={onActiveChannelChange}
+            stateOf={(channelId) => channelCaptionState(captionSources, channelId)}
+            runningOf={(channelId) => fanOut.statuses[channelId]}
+            isDuplicate={(channelId) => Boolean(duplicates[channelId])}
+          />
         ) : null}
 
         {/* --- Tier 1: header (template 83–95) --------------------------- */}
@@ -588,6 +556,124 @@ function NoChannelYet({ onOpenPicker }: { onOpenPicker: () => void }) {
       >
         Chọn kênh đăng
       </button>
+    </div>
+  );
+}
+
+/**
+ * The row of channel tabs — one per ticked Page, each owning a caption.
+ *
+ * ITS OWN COMPONENT for the keyboard: a tablist is a SINGLE tab stop with the
+ * arrows moving between tabs inside it (WAI-ARIA APG, Tabs pattern), and that
+ * needs a ref per tab. Before this, every Page was its own tab stop and an
+ * operator with five Pages ticked had to Tab five times to reach the caption
+ * box — while a screen reader still announced "tab, 1 of 5" and offered arrow
+ * keys that did nothing.
+ *
+ * Roving tabindex: the selected tab is the only one at `tabIndex={0}`, so
+ * Tab lands on the tab that is open and Shift+Tab leaves the strip in one press.
+ * `activeId` is always one of `channelIds` (see `activeCaptionChannel`), so
+ * exactly one tab is reachable — never zero.
+ *
+ * ACTIVATION FOLLOWS FOCUS, deliberately: moving to a tab opens it, exactly as
+ * clicking it does. That is the APG default for a panel that is already in the
+ * DOM and costs nothing to show — and it calls the SAME `onSelect` the click
+ * calls, so there is one selection rule, not a keyboard copy of it.
+ */
+function ChannelTabStrip({
+  channelIds,
+  activeId,
+  nameOf,
+  onSelect,
+  stateOf,
+  runningOf,
+  isDuplicate,
+}: {
+  channelIds: readonly string[];
+  activeId: string;
+  nameOf: (channelId: string) => string;
+  onSelect: (channelId: string) => void;
+  stateOf: (channelId: string) => ChannelCaptionState;
+  runningOf: (channelId: string) => CaptionFanOutStatus | undefined;
+  isDuplicate: (channelId: string) => boolean;
+}) {
+  const tabRefs = useRef(new Map<string, HTMLButtonElement>());
+
+  function focusTab(channelId: string) {
+    onSelect(channelId);
+    // The element exists because it is rendered from the same array this index
+    // came from; the guard is for the render that has not committed yet.
+    tabRefs.current.get(channelId)?.focus();
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    const last = channelIds.length - 1;
+    // Guard clause first: anything not in this list (Tab, Enter, typing) is the
+    // browser's to handle, untouched.
+    const target =
+      event.key === "ArrowRight"
+        ? channelIds[index === last ? 0 : index + 1]
+        : event.key === "ArrowLeft"
+          ? channelIds[index === 0 ? last : index - 1]
+          : event.key === "Home"
+            ? channelIds[0]
+            : event.key === "End"
+              ? channelIds[last]
+              : undefined;
+    if (target === undefined) return;
+
+    // Home/End would otherwise scroll the page out from under the strip, and
+    // the arrows would scroll it sideways.
+    event.preventDefault();
+    focusTab(target);
+  }
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Caption theo từng kênh"
+      className="flex flex-wrap items-center gap-2 px-4 pt-3.5"
+    >
+      {channelIds.map((channelId, index) => {
+        const name = nameOf(channelId);
+        const isActive = channelId === activeId;
+
+        return (
+          <button
+            key={channelId}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            tabIndex={isActive ? 0 : -1}
+            ref={(node) => {
+              if (node) tabRefs.current.set(channelId, node);
+              else tabRefs.current.delete(channelId);
+            }}
+            onClick={() => onSelect(channelId)}
+            onKeyDown={(event) => handleKeyDown(event, index)}
+            className={cn(
+              "focus-visible:ring-ring flex h-9 cursor-pointer items-center gap-2 rounded-full py-0 pr-3 pl-1 text-[13px] transition-colors outline-none focus-visible:ring-3",
+              isActive
+                ? "bg-[var(--accent)] font-semibold shadow-[inset_0_0_0_1.5px_var(--primary)]"
+                : "bg-[var(--card)] shadow-[inset_0_0_0_1px_var(--border)]",
+            )}
+          >
+            <span
+              aria-hidden="true"
+              style={avatarToneStyle(name)}
+              className="flex size-7 items-center justify-center rounded-full text-[10px] font-semibold"
+            >
+              {channelInitials(name)}
+            </span>
+            <span className="max-w-35 truncate">{name}</span>
+            <TabState
+              state={stateOf(channelId)}
+              running={runningOf(channelId)}
+              duplicate={isDuplicate(channelId)}
+            />
+          </button>
+        );
+      })}
     </div>
   );
 }

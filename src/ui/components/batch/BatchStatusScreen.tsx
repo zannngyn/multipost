@@ -76,7 +76,7 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
           onRetry={() => void batch.refetch()}
           extraAction={
             <Button asChild variant="outline">
-              <Link href="/jobs">Mở nhật ký đăng bài</Link>
+              <Link href="/posts?tab=log">Mở nhật ký đăng bài</Link>
             </Button>
           }
         />

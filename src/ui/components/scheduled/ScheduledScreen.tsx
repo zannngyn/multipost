@@ -451,14 +451,18 @@ export function ScheduledScreen() {
             const headingId = `scheduled-day-${group.dayKey}`;
             return (
               <section key={group.dayKey} className="space-y-2">
-                <h2 id={headingId} className="text-base font-semibold">
+                {/* h3, not h2: this screen is a TAB inside /posts, so the hub
+                    owns the h1, the screen title above owns the h2, and a day
+                    group sits one level under it. Two h2s would have read as
+                    two sibling screens (core-accessibility §1). */}
+                <h3 id={headingId} className="text-base font-semibold">
                   {/* nowMs is 0 only on the server: the heading then shows the
                       full date, never a wrong "Hôm nay". */}
                   {formatDayHeading(group.dayKey, nowMs)}
                   <span className="text-muted-foreground ml-2 text-sm font-normal">
                     {group.items.length} bài
                   </span>
-                </h2>
+                </h3>
                 <ScheduledJobTable
                   items={group.items}
                   headingId={headingId}
