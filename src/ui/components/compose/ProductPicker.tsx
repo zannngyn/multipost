@@ -242,8 +242,14 @@ export function ProductPicker({
                         aria-hidden="true"
                         className={cn(
                           "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg font-mono text-xs",
+                          // `text-muted-foreground`, NOT `text-foreground-subtle`:
+                          // subtle only clears 4.5:1 on the page and card inks —
+                          // on `--muted` it measures 4.36:1 (light) / 4.07:1
+                          // (dark), i.e. under the floor for text this small.
+                          // Muted-foreground is the tone the swatch scale keeps
+                          // for exactly this pairing.
                           item.disabled
-                            ? "bg-muted text-foreground-subtle"
+                            ? "bg-muted text-muted-foreground"
                             : "bg-accent/40 text-accent-foreground",
                         )}
                       >

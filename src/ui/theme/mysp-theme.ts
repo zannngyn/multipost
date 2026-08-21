@@ -47,7 +47,12 @@ export const myspTheme = defineTheme({
      * says "off", so the two never get confused.
      */
     "--color-text-disabled": "color-mix(in oklch, var(--muted-foreground) 55%, transparent)",
-    /** Links and accented text: the indigo dye, not the neutral theme's blue. */
+    /**
+     * Links and accented text: the indigo dye. The neutral theme does NOT ship
+     * a blue here — its `--color-text-accent` is `light-dark(#262626, #ebebeb)`,
+     * a near-black/near-white that makes an accented word indistinguishable
+     * from body copy. This is what gives a link its colour back.
+     */
     "--color-text-accent": "var(--primary)",
   },
 });

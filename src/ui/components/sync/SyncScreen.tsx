@@ -112,9 +112,13 @@ export function SyncScreen() {
   return (
     <div className="@container bg-background h-full min-h-0">
       {/* Narrow: the whole thing is one scroll. Wide: two independent regions,
-          so the rail does not scroll away from the numbers it describes. */}
-      <div className="flex h-full min-h-0 flex-col overflow-y-auto @5xl:flex-row @5xl:overflow-hidden">
-        <div className="flex min-w-0 flex-1 flex-col @5xl:min-h-0 @5xl:overflow-y-auto @5xl:[scrollbar-gutter:stable]">
+          so the rail does not scroll away from the numbers it describes.
+          `relative` on every scroller: this screen owns its own scroll boxes,
+          and an absolutely positioned `sr-only` node inside an unpositioned one
+          anchors OUTSIDE it — see the note in AppFrame for what that does to the
+          document height. */}
+      <div className="relative flex h-full min-h-0 flex-col overflow-y-auto @5xl:flex-row @5xl:overflow-hidden">
+        <div className="relative flex min-w-0 flex-1 flex-col @5xl:min-h-0 @5xl:overflow-y-auto @5xl:[scrollbar-gutter:stable]">
           <header className="bg-background border-border sticky top-0 z-10 flex flex-wrap items-end justify-between gap-x-4 gap-y-3 border-b px-6 py-4">
             <div className="min-w-0 space-y-1">
               <h1 className="text-2xl leading-tight font-semibold tracking-tight">
@@ -246,7 +250,7 @@ export function SyncScreen() {
 
         <aside
           aria-label="Chi tiết lần chạy"
-          className="border-border bg-card shrink-0 border-t px-5 py-5 @5xl:w-90 @5xl:min-h-0 @5xl:overflow-y-auto @5xl:border-t-0 @5xl:border-l"
+          className="border-border bg-card relative shrink-0 border-t px-5 py-5 @5xl:w-90 @5xl:min-h-0 @5xl:overflow-y-auto @5xl:border-t-0 @5xl:border-l"
         >
           <SyncRailContent
             isResolved={isResolved}

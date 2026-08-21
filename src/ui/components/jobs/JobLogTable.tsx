@@ -48,6 +48,14 @@ export function JobLogTable({
    */
   readOnlyReason?: string | null;
 }) {
+  // ONE call for the whole list, indexed by row, instead of one call per row:
+  // the rule rebuilds a Map of every channel each time it is asked, so calling
+  // it inside the map made naming a 200-row log O(rows × channels).
+  const channelLabels = resolveGroupChannelLabels(
+    items.map((job) => job.channelId),
+    channels,
+  );
+
   return (
     <div
       className="overflow-x-auto rounded-xl border"
@@ -98,15 +106,16 @@ export function JobLogTable({
           </tr>
         </thead>
         <tbody>
-          {items.map((job) => {
+          {items.map((job, index) => {
             const link =
               job.publishedUrl ??
               (job.publishedPostId ? facebookPostUrl(job.publishedPostId) : null);
             const isRetrying = retryingJobId === job.postJobId;
-            // One id at a time, through the SAME rule the channel-group cards
-            // use: a Page that left the list is "đã gỡ" there and must not be
-            // something else here.
-            const [channel] = resolveGroupChannelLabels([job.channelId], channels);
+            // Same rule the channel-group cards use: a Page that left the list
+            // is "đã gỡ" there and must not be something else here. The rule
+            // returns one label per input id, in order, so the row index IS the
+            // label index.
+            const channel = channelLabels[index];
 
             return (
               <tr key={job.postJobId} className="border-t align-top">

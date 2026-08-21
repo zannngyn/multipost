@@ -69,7 +69,19 @@ export function AppFrame({
               a customer's company, no screen may look like their own. It pushes
               content down instead of floating over it. */}
           <SupportModeBanner />
-          {children}
+          {/* `relative`, and it is load-bearing.
+              `sr-only` is `position: absolute`, so every visually hidden node
+              anchors to the nearest POSITIONED ancestor. AppShell's content
+              element is `position: static`, so they were escaping the scroll
+              container entirely and landing at their un-scrolled static
+              position on the shell wrapper above it — which stretched
+              `documentElement.scrollHeight` past the viewport (1382 vs 900 on
+              /sync, 3625 on the job log) and let the whole page drag down onto
+              a band of empty background. Nothing visible moved, so the only
+              symptom was a scrollbar with nothing in it.
+              `h-full`, not auto: screens size themselves with `h-full` against
+              this box, exactly as they did against the content element. */}
+          <div className="relative h-full min-h-0">{children}</div>
         </AppShell>
       </Theme>
     </LinkProvider>

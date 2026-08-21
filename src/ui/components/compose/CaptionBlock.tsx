@@ -145,6 +145,23 @@ export function CaptionBlock({
     requested: activeChannelId,
   });
   const showTabs = activeId !== null && selectedIds.length > 1;
+  /**
+   * The tab ↔ panel pair, by DOM id (WAI-ARIA APG, Tabs pattern): every tab
+   * points at the panel it opens, and the panel is named by the tab that is
+   * open. ONE panel, reused — the editor swaps its contents rather than
+   * mounting a box per channel — so every tab's `aria-controls` is the same id
+   * and only `aria-labelledby` moves.
+   *
+   * Ids are built from the tab's INDEX, never from `channelId`: a channel id is
+   * server data and has no business being spliced into an id attribute.
+   */
+  const panelId = `${fieldId}-panel`;
+  const tabId = (index: number) => `${fieldId}-tab-${index}`;
+  // `-1` cannot happen (`activeCaptionChannel` only ever returns a ticked
+  // channel) but a label pointing at an id that is not on screen would be worse
+  // than no label, so it is checked rather than assumed.
+  const activeTabIndex = activeId === null ? -1 : selectedIds.indexOf(activeId);
+  const activeTabId = showTabs && activeTabIndex >= 0 ? tabId(activeTabIndex) : undefined;
   const target: CaptionTarget = activeId
     ? { kind: "channel", channelId: activeId }
     : SHARED_TARGET;
@@ -296,9 +313,21 @@ export function CaptionBlock({
             stateOf={(channelId) => channelCaptionState(captionSources, channelId)}
             runningOf={(channelId) => fanOut.statuses[channelId]}
             isDuplicate={(channelId) => Boolean(duplicates[channelId])}
+            tabId={tabId}
+            panelId={panelId}
           />
         ) : null}
 
+        {/* Everything below the strip IS the open tab's panel — the header, the
+            per-tab notices and the editor all change with the tab. `role` and
+            the label are only set when the strip is on screen: a lone tabpanel
+            with nothing controlling it is a lie to a screen reader. */}
+        <div
+          id={panelId}
+          role={showTabs ? "tabpanel" : undefined}
+          aria-labelledby={activeTabId}
+          className="flex flex-col"
+        >
         {/* --- Tier 1: header (template 83–95) --------------------------- */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-3.5 pb-3">
           <h3 id={`${fieldId}-heading`} className="text-sm font-semibold">
@@ -460,6 +489,7 @@ export function CaptionBlock({
           hashtagsFromAi={isThisTarget ? generated?.hashtags : undefined}
           provider={isThisTarget && captions.isSuccess ? generated : undefined}
         />
+        </div>
       </section>
 
       )}
@@ -588,6 +618,8 @@ function ChannelTabStrip({
   stateOf,
   runningOf,
   isDuplicate,
+  tabId,
+  panelId,
 }: {
   channelIds: readonly string[];
   activeId: string;
@@ -596,6 +628,9 @@ function ChannelTabStrip({
   stateOf: (channelId: string) => ChannelCaptionState;
   runningOf: (channelId: string) => CaptionFanOutStatus | undefined;
   isDuplicate: (channelId: string) => boolean;
+  /** Owned by the caller, because the panel it names is rendered there. */
+  tabId: (index: number) => string;
+  panelId: string;
 }) {
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
 
@@ -643,6 +678,8 @@ function ChannelTabStrip({
             key={channelId}
             type="button"
             role="tab"
+            id={tabId(index)}
+            aria-controls={panelId}
             aria-selected={isActive}
             tabIndex={isActive ? 0 : -1}
             ref={(node) => {

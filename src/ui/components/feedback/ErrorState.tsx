@@ -52,9 +52,16 @@ export function ErrorState({
   const hasBody = (details && details.length > 0) || referenceCode !== undefined;
 
   // Move focus to the alert so keyboard/screen-reader users land on the message.
+  //
+  // `preventScroll`: the focus moves, the viewport does NOT. An error that is
+  // already on screen when the page settles — a restored draft whose code no
+  // longer exists, say — was dragging the scroll container down to itself, so
+  // "Soạn bài" and the draft line were off screen before the operator had
+  // touched anything. The message still announces (`role="alert"`) and still
+  // holds focus, so the next Tab continues from here.
   useEffect(() => {
     if (!shouldFocus) return;
-    containerRef.current?.focus();
+    containerRef.current?.focus({ preventScroll: true });
   }, [shouldFocus]);
 
   return (
