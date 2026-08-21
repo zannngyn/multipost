@@ -59,6 +59,17 @@ describe("NAV_SECTIONS", () => {
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 
+  it("keeps the people screens in their own section, apart from settings", () => {
+    const section = NAV_SECTIONS.find((candidate) => candidate.title === "Tổ chức");
+
+    expect(section?.items.map((item) => item.href)).toEqual(["/members", "/access"]);
+    expect(
+      NAV_SECTIONS.find((candidate) => candidate.title === "Cấu hình")?.items.map(
+        (item) => item.href,
+      ),
+    ).toEqual(["/channels", "/channels/groups", "/prompts"]);
+  });
+
   it("flattens to one searchable entry per destination, keeping its section", () => {
     const flat = flattenNavItems();
     const hrefs = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.href));

@@ -15,7 +15,8 @@ import { SupportModeBanner } from "@/ui/components/shell/SupportModeBanner";
  * content in as children.
  *
  * Two bands, as in the sync-flow design: a full-width identity bar on top
- * (brand, shop, search, account), the destination list down the side. AppShell
+ * (brand, shop, search), the destination list and the account block down the
+ * side. AppShell
  * owns the scroll model — the frame is fixed and only the content scrolls — so
  * neither band may grow with the page.
  *
@@ -41,14 +42,10 @@ export function AppFrame({
       <Theme theme={neutralTheme}>
         <AppShell
           contentPadding={0}
-          topNav={
-            <AppTopBar
-              operatorLabel={operatorLabel}
-              tenantName={tenantName}
-              onSignOut={signOutAction}
-            />
-          }
-          sideNav={<AppSideNav />}
+          topNav={<AppTopBar tenantName={tenantName} />}
+          // The account block lives at the foot of the nav, so the session props
+          // travel down this side of the shell.
+          sideNav={<AppSideNav operatorLabel={operatorLabel} onSignOut={signOutAction} />}
         >
           {/* Above every screen, on purpose (M3.3): while MYSP staff are inside
               a customer's company, no screen may look like their own. It pushes
