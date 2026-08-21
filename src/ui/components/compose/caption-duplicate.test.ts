@@ -3,6 +3,15 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+// Tests may cross layers on purpose — `eslint.config.mjs` §4 and
+// `.dependency-cruiser.cjs` `exclude` both exempt `*.test.ts`. Importing the
+// core rule is the ONLY way to prove the browser copy still behaves like it.
+import {
+  MAX_SHARED_WORD_RUN as CORE_MAX_SHARED_WORD_RUN,
+  findSharedWordRun as coreFindSharedWordRun,
+  toWords as coreToWords,
+} from "@/core/domain/caption";
+
 import {
   MAX_SHARED_WORD_RUN,
   findDuplicateCaptions,
@@ -129,5 +138,90 @@ describe("the browser's D1 mirrors the server's", () => {
     const match = /export const MAX_SHARED_WORD_RUN = (\d+);/.exec(core);
     expect(match).not.toBeNull();
     expect(Number(match?.[1])).toBe(MAX_SHARED_WORD_RUN);
+  });
+
+  // Belt AND braces: the constant above is only one of the two ways the mirror
+  // can drift. Changing `toWords` or the n-gram search in core would leave that
+  // check green while the two sides quietly started disagreeing — which is the
+  // worst outcome of all, because the warning would then either cry wolf or go
+  // silent right up until a post is blocked at publish time.
+  it("exports the same threshold constant as core", () => {
+    expect(MAX_SHARED_WORD_RUN).toBe(CORE_MAX_SHARED_WORD_RUN);
+  });
+
+  /**
+   * A corpus built to hit every way the two implementations could part company:
+   * punctuation, case, NFC vs NFD, digits, Vietnamese marks, the 8-word
+   * boundary and the 9-word violation, and the degenerate inputs.
+   */
+  const SHARED_8 = "váy hoa nhí dáng suông chất đũi mềm";
+  const SHARED_9 = `${SHARED_8} mát`;
+
+  const CORPUS: readonly string[] = [
+    "",
+    "   ",
+    ".,!?—",
+    "Váy",
+    SHARED_8,
+    SHARED_9,
+    `Mở đầu ${SHARED_9} và kết thúc`,
+    `KHÁC HẲN ${SHARED_9.toUpperCase()} RỒI`,
+    `Dấu câu: ${SHARED_9}!!! (thật)`,
+    `Trước ${SHARED_8}, sau nữa`,
+    // Same words, composed vs decomposed — the NFC step is what must equalise
+    // them, on both sides or neither.
+    SHARED_9.normalize("NFD"),
+    `${SHARED_9.normalize("NFD")} thêm chữ`,
+    "mã MR0SQ6114 size S M L XL còn hàng nhé bạn ơi",
+    "MÃ mr0sq6114 SIZE s m l xl CÒN hàng nhé bạn ơi",
+    "một hai ba bốn năm sáu bảy tám chín mười mười một",
+    "một   hai\nba\tbốn năm sáu bảy tám chín mười mười một",
+    "Set sơ mi kẻ phối quần ống rộng lên dáng cực tôn nha",
+    "🌸 emoji 🌸 giữa các từ vẫn tách đúng chứ không dính vào nhau đâu",
+  ];
+
+  it("splits words exactly like core's toWords, over the whole corpus", () => {
+    for (const text of CORPUS) {
+      expect(toCompareWords(text), `toWords disagreed on: ${JSON.stringify(text)}`).toEqual(
+        coreToWords(text),
+      );
+    }
+  });
+
+  it("answers identically to core's findSharedWordRun for EVERY pair", () => {
+    // Every ordered pair, including a string against itself: the run search is
+    // not symmetric in its implementation (one side builds the n-gram set), so
+    // both directions have to be checked.
+    for (const left of CORPUS) {
+      for (const right of CORPUS) {
+        expect(
+          findSharedWordRun(left, right),
+          `disagreed on: ${JSON.stringify(left)} vs ${JSON.stringify(right)}`,
+        ).toBe(coreFindSharedWordRun(left, right));
+      }
+    }
+  });
+
+  it("agrees at every threshold, including the degenerate ones", () => {
+    for (const maxRun of [0, -1, 1, 2, 8, 9, 50]) {
+      for (const left of CORPUS) {
+        for (const right of CORPUS) {
+          expect(
+            findSharedWordRun(left, right, maxRun),
+            `maxRun=${maxRun} disagreed on: ${JSON.stringify(left)} vs ${JSON.stringify(right)}`,
+          ).toBe(coreFindSharedWordRun(left, right, maxRun));
+        }
+      }
+    }
+  });
+
+  it("the corpus actually exercises both verdicts", () => {
+    // A differential test over inputs that never trigger anything would pass
+    // against a mirror that always returns null.
+    const verdicts = CORPUS.flatMap((left) =>
+      CORPUS.map((right) => findSharedWordRun(left, right)),
+    );
+    expect(verdicts.some((verdict) => verdict !== null)).toBe(true);
+    expect(verdicts.some((verdict) => verdict === null)).toBe(true);
   });
 });
