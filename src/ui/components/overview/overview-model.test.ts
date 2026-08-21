@@ -6,8 +6,10 @@ import {
   failureReason,
   formatLoadedCount,
   pickAttentionItems,
+  pickRunningBatches,
   statValue,
   type FailedJobInput,
+  type RunningJobInput,
   type UpcomingJobInput,
 } from "@/ui/components/overview/overview-model";
 import type { Channel } from "@/ui/schemas/channel.schema";
@@ -112,6 +114,85 @@ describe("pickAttentionItems", () => {
     });
     expect(items.map((item) => item.id)).toEqual(["a", "b", "c", "d", "e", "f"]);
     expect(items.every((item) => item.kind === "failed")).toBe(true);
+  });
+});
+
+function running(batchId: string, overrides: Partial<RunningJobInput> = {}): RunningJobInput {
+  return {
+    batchId,
+    status: "publishing",
+    code: "MGK1000",
+    scheduledAt: null,
+    ...overrides,
+  };
+}
+
+describe("pickRunningBatches", () => {
+  // --- Edge cases first ------------------------------------------------------
+  it("returns [] for anything that is not a list of jobs", () => {
+    expect(pickRunningBatches([])).toEqual([]);
+    expect(pickRunningBatches(undefined as unknown as RunningJobInput[])).toEqual([]);
+    expect(pickRunningBatches(null as unknown as RunningJobInput[])).toEqual([]);
+  });
+
+  it("drops rows with no lot to link to", () => {
+    expect(pickRunningBatches([running(""), running("   "), null as unknown as RunningJobInput]))
+      .toEqual([]);
+  });
+
+  it("keeps only the two statuses a worker is actually moving", () => {
+    const lots = pickRunningBatches([
+      running("b1", { status: "published" }),
+      running("b2", { status: "failed" }),
+      running("b3", { status: "blocked" }),
+      running("b4", { status: "draft" }),
+      running("b5", { status: "scheduled_on_facebook" }),
+      running("b6", { status: "publishing" }),
+    ]);
+    expect(lots.map((lot) => lot.batchId)).toEqual(["b6"]);
+  });
+
+  it("does not call a post waiting for its hour 'đang chạy'", () => {
+    // `queued` holds two populations: a post meant to go out now (no hour) and
+    // one parked until its hour (E8.4). The tape already counts the second as
+    // "Đang chờ giờ"; counting it here too would say a lot is running when
+    // nothing is moving. `publishing` means the worker holds it RIGHT NOW, so
+    // an hour on that row changes nothing.
+    const lots = pickRunningBatches([
+      running("waiting", { status: "queued", scheduledAt: "2026-08-21T18:00:00.000Z" }),
+      running("now", { status: "queued", scheduledAt: null }),
+      running("held", { status: "publishing", scheduledAt: "2026-08-21T18:00:00.000Z" }),
+    ]);
+    expect(lots.map((lot) => lot.batchId)).toEqual(["now", "held"]);
+  });
+
+  // --- The rule the section exists for --------------------------------------
+  it("groups jobs into one lot per batch, in the order they arrived", () => {
+    const lots = pickRunningBatches([
+      running("b2"),
+      running("b1"),
+      running("b2", { status: "queued" }),
+      running("b1"),
+      running("b1"),
+    ]);
+    expect(lots).toEqual([
+      { batchId: "b2", jobCount: 2, code: "MGK1000" },
+      { batchId: "b1", jobCount: 3, code: "MGK1000" },
+    ]);
+  });
+
+  it("names the lot only when every running job of it shares one code", () => {
+    const lots = pickRunningBatches([
+      running("mixed", { code: "MGK1000" }),
+      running("mixed", { code: "MGK2000" }),
+      running("blank", { code: "   " }),
+    ]);
+    expect(lots).toEqual([
+      { batchId: "mixed", jobCount: 2, code: null },
+      // A lot whose only running row has no code is still a lot: it is counted
+      // and linked, it just goes unnamed rather than printing an empty string.
+      { batchId: "blank", jobCount: 1, code: null },
+    ]);
   });
 });
 

@@ -5,15 +5,19 @@ import { ArrowRight, Clock3, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useId, useMemo, useState } from "react";
 
+import { cn } from "@/shared/utils";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import {
   ATTENTION_LIMIT,
+  RUNNING_BATCH_LIMIT,
   channelLabel,
   failureReason,
   pickAttentionItems,
+  pickRunningBatches,
   statValue,
   type AttentionItem,
+  type RunningBatch,
   type StatValue,
 } from "@/ui/components/overview/overview-model";
 import { TenantHealthPanel } from "@/ui/components/tenant/TenantHealthPanel";
@@ -86,6 +90,7 @@ const BLOCKED_PRODUCTS_HREF = "/products?status=blocked";
 export function OverviewScreen() {
   const attentionHeadingId = useId();
   const composeHeadingId = useId();
+  const runningHeadingId = useId();
   const nowMs = useNowMs();
 
   const scheduled = useScheduledJobs(ALL_SCHEDULED);
@@ -135,6 +140,30 @@ export function OverviewScreen() {
         })),
       }),
     [failedItems, scheduledItems, channels.data],
+  );
+
+  /**
+   * The lots with work in flight, DERIVED from the job pages this screen has
+   * already loaded — no query of its own (docs/07 §4.1: the overview reads,
+   * never fetches for a second reason).
+   *
+   * KNOWN LIMIT, stated here because the section looks broken otherwise: the
+   * only job-log query on this screen is filtered to `status=failed`, so a
+   * running job cannot appear in it today and the section stays hidden. The day
+   * this screen loads an unfiltered page — or the log filter grows a
+   * "đang chạy" value — the cards light up with no further change here.
+   */
+  const runningBatches = useMemo(
+    () =>
+      pickRunningBatches(
+        failedItems.map((job) => ({
+          batchId: job.batchId,
+          status: job.status,
+          code: job.productCode,
+          scheduledAt: job.scheduledAt,
+        })),
+      ),
+    [failedItems],
   );
 
   const isRefreshing = scheduled.isFetching || failed.isFetching;
@@ -201,50 +230,65 @@ export function OverviewScreen() {
               showSkeleton={showSkeleton}
             />
 
-            {/* Per-source errors, each naming its source: the tape above keeps
-                showing the count the OTHER query returned. */}
+            {/* Per-source errors. The source is IN the notice's own title —
+                a kicker above a notice is a label doing the heading's job
+                (craft floor), and the notice already has a heading. */}
             {scheduled.isError ? (
-              <div className="space-y-2">
-                <Eyebrow>Nguồn: bài đã hẹn</Eyebrow>
-                <ApiErrorNotice
-                  className="mx-0 max-w-none"
-                  error={scheduled.error}
-                  onRetry={() => void scheduled.refetch()}
-                  // One of two sources on a screen that still works: the tape
-                  // and the other list are on screen and readable. Both
-                  // notices grabbing focus would also mean the second one wins
-                  // and the first is never seen.
-                  shouldFocus={false}
-                />
-              </div>
+              <ApiErrorNotice
+                className="mx-0 max-w-none"
+                source="Bài đã hẹn"
+                error={scheduled.error}
+                onRetry={() => void scheduled.refetch()}
+                // One of two sources on a screen that still works: the tape
+                // and the other list are on screen and readable. Both
+                // notices grabbing focus would also mean the second one wins
+                // and the first is never seen.
+                shouldFocus={false}
+              />
             ) : null}
 
             {failed.isError ? (
-              <div className="space-y-2">
-                <Eyebrow>Nguồn: nhật ký bài lỗi</Eyebrow>
-                <ApiErrorNotice
-                  className="mx-0 max-w-none"
-                  error={failed.error}
-                  onRetry={() => void failed.refetch()}
-                  shouldFocus={false}
-                />
-              </div>
+              <ApiErrorNotice
+                className="mx-0 max-w-none"
+                source="Nhật ký đăng"
+                error={failed.error}
+                onRetry={() => void failed.refetch()}
+                shouldFocus={false}
+              />
             ) : null}
 
-            <AttentionBlock
-              headingId={attentionHeadingId}
-              items={attention}
-              nowMs={nowMs}
-              // Rows the moment ANY source has them: a list that already has
-              // work on it must not go back to a skeleton because the other
-              // query is still trying.
-              isLoading={attention.length === 0 && (scheduledWaiting || failedWaiting)}
-              showSkeleton={showSkeleton}
-              hasBrokenSource={scheduled.isError || failed.isError}
-              hasUnnamedChannels={channels.isError}
-            />
+            {/* Two columns from @4xl, one before that (density contract above).
+                The action column is FIRST in the DOM at every width: stacked on
+                a phone it must not sit under six rows of to-do, and reading
+                "what this screen is for" before "what is broken" is the same
+                order in both layouts — no re-ordering between breakpoints, so
+                the tab order never disagrees with the page. */}
+            <div className="grid grid-cols-1 gap-x-8 gap-y-10 @4xl:grid-cols-[minmax(0,1fr)_21rem]">
+              <div className="space-y-8 @4xl:col-start-2 @4xl:row-start-1">
+                <ComposeCard headingId={composeHeadingId} />
+                <RunningBatches
+                  headingId={runningHeadingId}
+                  lots={runningBatches}
+                  // A cursor page still outstanding means there may be more
+                  // lots than we can see: "3+ lô", never a flat "3".
+                  hasMore={failed.hasNextPage === true}
+                />
+              </div>
 
-            <ComposeCard headingId={composeHeadingId} />
+              <AttentionBlock
+                className="@4xl:col-start-1 @4xl:row-start-1"
+                headingId={attentionHeadingId}
+                items={attention}
+                nowMs={nowMs}
+                // Rows the moment ANY source has them: a list that already has
+                // work on it must not go back to a skeleton because the other
+                // query is still trying.
+                isLoading={attention.length === 0 && (scheduledWaiting || failedWaiting)}
+                showSkeleton={showSkeleton}
+                hasBrokenSource={scheduled.isError || failed.isError}
+                hasUnnamedChannels={channels.isError}
+              />
+            </div>
 
             <HealthDisclosure />
           </div>
@@ -404,6 +448,7 @@ function AttentionBlock({
   showSkeleton,
   hasBrokenSource,
   hasUnnamedChannels,
+  className,
 }: {
   headingId: string;
   items: readonly AttentionItem[];
@@ -412,9 +457,11 @@ function AttentionBlock({
   showSkeleton: boolean;
   hasBrokenSource: boolean;
   hasUnnamedChannels: boolean;
+  /** Grid placement from the caller — the block never picks its own column. */
+  className?: string;
 }) {
   return (
-    <section aria-labelledby={headingId} className="space-y-3">
+    <section aria-labelledby={headingId} className={cn("space-y-3", className)}>
       <div className="space-y-1">
         <h2 id={headingId} className="text-xl font-semibold tracking-tight">
           Việc cần chú ý
@@ -566,6 +613,102 @@ function ComposeCard({ headingId }: { headingId: string }) {
       </Link>
     </section>
   );
+}
+
+/**
+ * "Lô đang chạy" — the batches with work in flight, as swatch cards.
+ *
+ * Same stepped-tab geometry as the compose card (the signature shape of this
+ * world) at a smaller size and on the plain card surface, so it reads as
+ * another card from the same fan without competing with the one primary action
+ * sitting above it.
+ *
+ * NO empty state on purpose: "không có lô nào đang chạy" is the normal state of
+ * a quiet morning, and a placeholder saying so every day would be a permanent
+ * empty box next to the action. Nothing running, nothing drawn.
+ */
+function RunningBatches({
+  headingId,
+  lots,
+  hasMore,
+}: {
+  headingId: string;
+  lots: readonly RunningBatch[];
+  /** A cursor page is still outstanding, so this list may be partial. */
+  hasMore: boolean;
+}) {
+  if (lots.length === 0) return null;
+
+  const shown = lots.slice(0, RUNNING_BATCH_LIMIT);
+  const overflow = lots.length - shown.length;
+
+  return (
+    <section aria-labelledby={headingId} className="space-y-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 id={headingId} className="text-xl font-semibold tracking-tight">
+          Lô đang chạy
+        </h2>
+        {/* "3+" whenever a page is outstanding: this count is what the client
+            has read, never a server total (business rule 5). */}
+        <span className="text-muted-foreground text-sm tabular-nums">
+          {lots.length}
+          {hasMore ? "+" : ""} lô
+        </span>
+      </div>
+
+      <ul className="space-y-4">
+        {shown.map((lot) => (
+          <RunningBatchCard key={lot.batchId} lot={lot} />
+        ))}
+      </ul>
+
+      {overflow > 0 ? (
+        <p className="text-muted-foreground text-sm">
+          Và {overflow} lô nữa — mở nhật ký để xem hết.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function RunningBatchCard({ lot }: { lot: RunningBatch }) {
+  return (
+    <li className="relative pt-2.5">
+      <Link
+        href={`/batches/${encodeURIComponent(lot.batchId)}`}
+        className="group border-border bg-card hover:bg-accent/40 focus-visible:ring-ring/50 relative flex items-center justify-between gap-4 rounded-md border px-4 py-3.5 transition-colors outline-none focus-visible:ring-3"
+      >
+        {/* The one stepped tab of a card still in the fan. Decorative — the
+            link carries the meaning. */}
+        <span
+          aria-hidden="true"
+          className="bg-accent absolute -top-2.5 left-6 h-2.5 w-12 rounded-t-sm"
+        />
+
+        <span className="min-w-0 space-y-0.5">
+          {/* Mono ledger rule: a product code, or the lot id when the running
+              jobs of the lot do not agree on one. */}
+          <span className="block truncate font-mono text-sm font-semibold">
+            {lot.code ?? shortBatchId(lot.batchId)}
+          </span>
+          <span className="text-muted-foreground block text-sm">
+            {lot.jobCount} bài đang chạy
+          </span>
+        </span>
+
+        <ArrowRight aria-hidden="true" className="text-muted-foreground size-4 shrink-0" />
+        <span className="sr-only">— mở tiến độ lô</span>
+      </Link>
+    </li>
+  );
+}
+
+/**
+ * A lot id an operator can read out loud. The full UUID is in the URL of the
+ * link, so nothing is lost — a 36-character id in a 21rem column is not.
+ */
+function shortBatchId(batchId: string): string {
+  return `Lô ${batchId.slice(0, 8)}`;
 }
 
 /**

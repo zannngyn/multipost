@@ -96,6 +96,97 @@ export function pickAttentionItems(input: {
   return items;
 }
 
+// --- "Lô đang chạy" ---------------------------------------------------------
+
+/** One job row of the loaded log pages, reduced to what a lot needs. */
+export interface RunningJobInput {
+  readonly batchId: string;
+  /** A `PostJobStatus` on the wire; typed wide so a new one cannot crash this. */
+  readonly status: string;
+  readonly code: string;
+  /** ISO hour the job waits for, `null` when it is meant to go out now. */
+  readonly scheduledAt?: string | null;
+}
+
+/** A batch with at least one job a worker is moving right now. */
+export interface RunningBatch {
+  readonly batchId: string;
+  /** Running jobs of this lot among the pages loaded — never a server total. */
+  readonly jobCount: number;
+  /** The product code when every running job shares one, else `null`. */
+  readonly code: string | null;
+}
+
+/** Cards on the overview. The batch screen behind each one owns the detail. */
+export const RUNNING_BATCH_LIMIT = 4;
+
+/**
+ * Statuses that mean "a worker is going to move this on its own", mirroring
+ * `ACTIVE_JOB_STATUSES` in `usePostJobs` — the same two the log polls for.
+ */
+const RUNNING_JOB_STATUSES: readonly string[] = ["queued", "publishing"];
+
+function trimmed(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Is this row something an operator would call "đang chạy"?
+ *
+ * `queued` holds two very different populations (same trap as the worker-health
+ * probe): a post meant to go out NOW, and a post parked until its hour. The
+ * second one is already counted by the tape as "Đang chờ giờ", and calling it
+ * running would claim movement where there is none — so a `queued` row with an
+ * hour on it is not running. `publishing` means the worker holds it at this
+ * moment, which an hour on the row does not change.
+ */
+function isRunning(job: RunningJobInput): boolean {
+  const status = trimmed(job.status);
+  if (!RUNNING_JOB_STATUSES.includes(status)) return false;
+  if (status === "queued" && trimmed(job.scheduledAt).length > 0) return false;
+  return true;
+}
+
+/**
+ * The lots with work in flight, derived from the job pages the screen ALREADY
+ * loaded — this adds no request of its own, so it can only ever describe rows
+ * that are on the client. That is why `jobCount` is documented as "among the
+ * pages loaded": the screen says "N+ lô" whenever a cursor page is outstanding
+ * rather than pretending the number is a total (business rule 5).
+ *
+ * Source order is kept (the log arrives newest first), so the lot that started
+ * most recently is the first card.
+ */
+export function pickRunningBatches(jobs: readonly RunningJobInput[]): RunningBatch[] {
+  if (!Array.isArray(jobs)) return [];
+
+  const order: string[] = [];
+  const byBatch = new Map<string, { jobCount: number; code: string | null; mixed: boolean }>();
+
+  for (const job of jobs) {
+    if (!job || !isRunning(job)) continue;
+    const batchId = trimmed(job.batchId);
+    if (batchId.length === 0) continue;
+
+    const code = trimmed(job.code);
+    const lot = byBatch.get(batchId);
+    if (!lot) {
+      order.push(batchId);
+      byBatch.set(batchId, { jobCount: 1, code: code.length > 0 ? code : null, mixed: false });
+      continue;
+    }
+    lot.jobCount += 1;
+    // Two codes in one lot, or a row that cannot name itself: the card then
+    // shows the lot without a name instead of picking one of them.
+    if (lot.code === null || lot.code !== code) lot.mixed = true;
+  }
+
+  return order.map((batchId) => {
+    const lot = byBatch.get(batchId)!;
+    return { batchId, jobCount: lot.jobCount, code: lot.mixed ? null : lot.code };
+  });
+}
+
 /**
  * The number on a stat tile, from ONE cursor page.
  *
