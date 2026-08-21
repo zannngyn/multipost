@@ -32,13 +32,13 @@ thu) chưa làm, và UAT với Facebook thật chưa diễn ra (mục 6). Không
 
 ## 2. Cơ sở đối chiếu
 
-Số liệu **đo lại 20/08/2026** trên worktree ngang `origin/dev` (`42b8b9b`), kèm lệnh đo:
+Số liệu **đo lại 21/08/2026** trên worktree ngang `origin/dev` (`58aa907`), kèm lệnh đo:
 
 - `pnpm typecheck` · `pnpm lint` — sạch (exit 0)
 - `pnpm depcruise` — `no dependency violations found (565 modules, 2541 dependencies cruised)`
 - `pnpm exec vitest run` — **3341 test xanh / 125 skip** (3466 tổng, đo 21/08 tại `58aa907`) · **195 file pass / 14 file skip** trên 209 file. File skip là integration test cần DB/key thật (15 file `*.integration.test.ts` trong repo)
 - `pnpm build` — exit 0, artifact thật có (`.next/BUILD_ID` sinh lúc build)
-- Phân bố file test theo tầng (`find src -name '*.test.ts' -o -name '*.test.tsx'` gom theo thư mục cấp 1): core 60 · adapters 49 · app 42 · ui 32 · composition 9 · worker 5 · shared 1 = 198
+- Phân bố file test theo tầng (`find src -name '*.test.ts' -o -name '*.test.tsx'` gom theo thư mục cấp 1): core 61 · adapters 49 · app 42 · ui 41 · composition 9 · worker 5 · shared 2 = 209
 - **54 API route** (`find src/app/api -name route.ts | wc -l`)
 - **16 màn** (`find src/app -name page.tsx`): **14 dưới `app/(app)/`** + `/join/[token]` và `/signin` cố ý nằm ngoài app shell
 - **22 bảng DB** (`grep -h "= pgTable(" src/adapters/db/schema/*.ts | wc -l` — đếm biểu thức khai bảng, không dính dòng import như cách đếm cũ; mỗi file schema đúng 1 bảng)
