@@ -16,7 +16,10 @@ describe("isTenantIndependentPath", () => {
   });
 
   it("keeps every tenant-scoped screen behind the boundary", () => {
-    for (const path of ["/", "/members", "/sync", "/access", "/channels/groups"]) {
+    // Live routes since the wave-1 IA: "/channels/groups" is now a redirect
+    // into "/channels?tab=groups", so the hub itself is what this rule has to
+    // keep behind the boundary.
+    for (const path of ["/", "/members", "/sync", "/access", "/channels", "/posts"]) {
       expect(isTenantIndependentPath(path)).toBe(false);
     }
   });
