@@ -106,9 +106,9 @@ export function SignInScreen({
             maxWidth={420}
             className="mx-auto"
             as="section"
-            aria-label="Đăng nhập hoặc đăng ký"
+            aria-label="Tự động hóa cùng MysP ngay"
           >
-            <Heading level={2}>Đăng nhập hoặc đăng ký</Heading>
+            <Heading level={2}>Tự động hóa cùng MysP ngay</Heading>
 
             {/* Neither banner is decoration: they are the only explanation an
                 operator gets for a round trip that ended back here. */}
@@ -121,7 +121,7 @@ export function SignInScreen({
                 status="info"
                 role="status"
                 title="Tài khoản đang chờ quản trị viên duyệt"
-                description="Yêu cầu truy cập của bạn đã được ghi nhận — đây không phải là bị từ chối. Khi quản trị viên duyệt xong, bạn chỉ cần đăng nhập lại là vào được. Cần gấp thì báo trực tiếp cho quản trị viên."
+                description="Yêu cầu truy cập của bạn đã được ghi nhận. Vui lòng đợi quản trị viên duyệt."
               />
             ) : null}
 
@@ -149,7 +149,7 @@ export function SignInScreen({
               value={tab}
               onChange={(value) => setTab(value as AuthTab)}
               hasDivider
-              aria-label="Chọn đăng nhập hoặc đăng ký"
+              aria-label="Tự động hóa với MysP ngay"
             >
               <Tab value="signin" label="Đăng nhập" />
               <Tab value="signup" label="Đăng ký" />
@@ -157,7 +157,7 @@ export function SignInScreen({
 
             <CredentialsPreview isSignUp={isSignUp} />
 
-            <Divider label="Bạn cũng có thể dùng" />
+            <Divider label="Hoặc" />
 
             {/* Two independent forms, not one with two buttons: each carries its
                 own Server Action, and a failure of one must not touch the other.
@@ -190,8 +190,7 @@ export function SignInScreen({
               {/* One shared line for both buttons. Two separate paragraphs said
                   the same thing twice and pushed the terms line off the fold. */}
               <Text type="supporting">
-                Chỉ tài khoản đã được cấp quyền mới vào được; đăng nhập bằng Facebook lấy luôn danh
-                sách Fanpage.
+                Liên hệ với MysP ngay để nhận hỗ trợ.
               </Text>
             </Stack>
 
@@ -208,7 +207,7 @@ export function SignInScreen({
             <Divider />
 
             <Stack direction="vertical" as="footer">
-              <Text type="supporting">© MYSP — công cụ nội bộ của đội vận hành.</Text>
+              <Text type="supporting">© MysP 2026. All right reserved.</Text>
             </Stack>
           </Stack>
         </Stack>
@@ -245,8 +244,7 @@ function BrandColumn() {
             Bắt đầu ngay hôm nay
           </Heading>
           <Text type="supporting">
-            Công cụ nội bộ cho đội vận hành: soạn, duyệt và đăng bài Facebook hàng loạt từ dữ liệu
-            sản phẩm có sẵn.
+            Công cụ soạn, duyệt và đăng bài đa nền tảng
           </Text>
         </Stack>
 
