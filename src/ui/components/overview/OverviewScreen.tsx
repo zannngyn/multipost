@@ -1,7 +1,7 @@
 "use client";
 
 import { Collapsible, Heading, Layout, LayoutContent, LayoutHeader, Text } from "@astryxdesign/core";
-import { Clock3, TriangleAlert } from "lucide-react";
+import { ArrowRight, Clock3, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useId, useMemo, useState } from "react";
 
@@ -41,15 +41,18 @@ import {
  * counts come from the FIRST cursor page of a list the operator can open, and
  * say "25+" rather than invent a total (docs/07 §4.1 + business rule 5).
  *
- * Density contract (raise 4 — reflow in declared steps, never freely):
+ * Density contract (raise 4 — reflow in declared steps, never freely), measured
+ * on the CONTENT box of the column (`@container`), which is the page width minus
+ * the shell, the max-width cap and this column's own padding:
  *   < 42rem  the stat tape is one column, one label + one value per row
  *   ≥ 42rem  two columns
- *   ≥ 64rem  four columns, a single woven strip
+ *   ≥ 56rem  four columns, a single woven strip (the widest the column gets is
+ *            64rem − 3rem of padding, so a 64rem step would never fire)
  *
  * Motion contract (raise 2 + 3 — one event at a time, settled things stand
- * still): the only authored moments are a count that CHANGED fading in, and the
- * compose card lifting out of its sleeve under the pointer. Nothing loops,
- * nothing idles, and both are `motion-safe:` only.
+ * still): the only authored moments are a count that CHANGED settling into
+ * place, and the compose card lifting out of its sleeve under the pointer.
+ * Nothing loops, nothing idles, and both are `motion-safe:` only.
  *
  * The four states, per source, on purpose: the two lists are independent
  * queries and a failure of one must not blank the other (core-feedback-states).
@@ -78,7 +81,6 @@ const BLOCKED_PRODUCTS_HREF = "/products?status=blocked";
 export function OverviewScreen() {
   const attentionHeadingId = useId();
   const composeHeadingId = useId();
-  const healthHeadingId = useId();
   const nowMs = useNowMs();
 
   const scheduled = useScheduledJobs(ALL_SCHEDULED);
@@ -87,9 +89,18 @@ export function OverviewScreen() {
   // rather than waiting for this query (see `channelLabel`).
   const channels = useChannels();
 
-  const scheduledFirstLoad = scheduled.isPending && scheduled.fetchStatus === "fetching";
-  const failedFirstLoad = failed.isPending && failed.fetchStatus === "fetching";
-  const showSkeleton = useDelayedFlag(scheduledFirstLoad || failedFirstLoad);
+  /**
+   * "Still on its way here", derived from DATA, not from `isPending`.
+   *
+   * The regression this exists for: a query that fails and then retries goes
+   * back to pending for a few seconds, and a screen keyed on `isPending` reads
+   * that as "first load" — the tape printed a confident `0` for a list it had
+   * never managed to read, and the attention block blanked itself every retry
+   * cycle even though the OTHER source had rows on screen. No page, no number.
+   */
+  const scheduledWaiting = scheduled.data === undefined && !scheduled.isError;
+  const failedWaiting = failed.data === undefined && !failed.isError;
+  const showSkeleton = useDelayedFlag(scheduledWaiting || failedWaiting);
 
   const scheduledItems = useMemo(
     () => scheduled.data?.pages.flatMap((page) => page.items) ?? [],
@@ -157,22 +168,22 @@ export function OverviewScreen() {
 
             <StatTape
               scheduled={{
-                value: scheduled.isError
-                  ? null
-                  : formatLoadedCount({
+                value: scheduled.data
+                  ? formatLoadedCount({
                       loaded: scheduledItems.length,
                       hasNextPage: scheduled.hasNextPage,
-                    }),
-                isLoading: scheduledFirstLoad,
+                    })
+                  : null,
+                isLoading: scheduledWaiting,
               }}
               failed={{
-                value: failed.isError
-                  ? null
-                  : formatLoadedCount({
+                value: failed.data
+                  ? formatLoadedCount({
                       loaded: failedItems.length,
                       hasNextPage: failed.hasNextPage,
-                    }),
-                isLoading: failedFirstLoad,
+                    })
+                  : null,
+                isLoading: failedWaiting,
               }}
               showSkeleton={showSkeleton}
             />
@@ -205,7 +216,10 @@ export function OverviewScreen() {
               headingId={attentionHeadingId}
               items={attention}
               nowMs={nowMs}
-              isLoading={scheduledFirstLoad || failedFirstLoad}
+              // Rows the moment ANY source has them: a list that already has
+              // work on it must not go back to a skeleton because the other
+              // query is still trying.
+              isLoading={attention.length === 0 && (scheduledWaiting || failedWaiting)}
               showSkeleton={showSkeleton}
               hasBrokenSource={scheduled.isError || failed.isError}
               hasUnnamedChannels={channels.isError}
@@ -213,7 +227,7 @@ export function OverviewScreen() {
 
             <ComposeCard headingId={composeHeadingId} />
 
-            <HealthDisclosure headingId={healthHeadingId} />
+            <HealthDisclosure />
           </div>
         </LayoutContent>
       }
@@ -249,7 +263,7 @@ function StatTape({
     <nav aria-label="Số liệu nhanh">
       {/* gap-px over the border colour draws every stitch line once, at any
           column count — no per-cell borders to double up when it reflows. */}
-      <ul className="bg-border border-border grid grid-cols-1 gap-px overflow-hidden rounded-md border @2xl:grid-cols-2 @5xl:grid-cols-4">
+      <ul className="bg-border border-border grid grid-cols-1 gap-px overflow-hidden rounded-md border @2xl:grid-cols-2 @4xl:grid-cols-4">
         <StatCell
           label="Đang chờ giờ"
           href={SCHEDULED_HREF}
@@ -334,10 +348,15 @@ function StatCell({
                 {/* Keyed by the value: a count that CHANGED is the one thing on
                     this screen allowed to move (raise 2). Same value, same key,
                     no animation — a poll that changes nothing looks like
-                    nothing. */}
+                    nothing.
+
+                    It SETTLES rather than fades: the digit is at full ink for
+                    every frame it exists (craft floor — animate from an
+                    already-visible default), so a dropped frame or a throttled
+                    tab can never leave a washed-out number on screen. */}
                 <span
                   key={source.value}
-                  className="font-mono text-4xl leading-none font-semibold tabular-nums motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-500 motion-safe:ease-out"
+                  className="font-mono text-4xl leading-none font-semibold tabular-nums motion-safe:animate-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-500 motion-safe:ease-out"
                 >
                   {source.value}
                 </span>
@@ -457,7 +476,10 @@ function AttentionRow({ item, nowMs }: { item: AttentionItem; nowMs: number }) {
             <span className="text-muted-foreground text-sm">· {item.channelName}</span>
           </span>
 
-          <span className="text-muted-foreground line-clamp-2 block text-sm">
+          {/* No `block` next to `line-clamp-2`: the clamp needs
+              `display:-webkit-box`, and a display utility beside it silently
+              turns the clamp off — three-line reasons in a six-row list. */}
+          <span className="text-muted-foreground line-clamp-2 text-sm">
             {isFailed ? item.reason : upcomingLine(item.scheduledAt, nowMs)}
           </span>
         </span>
@@ -491,19 +513,24 @@ function upcomingLine(scheduledAt: string, nowMs: number): string {
  */
 function ComposeCard({ headingId }: { headingId: string }) {
   return (
-    <section aria-labelledby={headingId} className="relative pb-3">
+    <section aria-labelledby={headingId} className="relative pb-4">
       {/* The sleeve the card sits in. Decorative: the link below carries the
           whole meaning, so this is hidden from the accessibility tree. */}
       <span
         aria-hidden="true"
-        className="border-border bg-secondary absolute inset-x-5 bottom-0 h-12 rounded-md border"
+        className="border-border bg-secondary absolute inset-x-6 bottom-0 h-14 rounded-md border"
       />
 
       <Link
         href="/compose"
         className="group border-primary bg-primary text-primary-foreground focus-visible:ring-ring/50 relative flex items-center justify-between gap-6 rounded-md border px-6 py-6 shadow-sm transition duration-300 ease-out outline-none hover:shadow-md focus-visible:ring-3 motion-safe:hover:-translate-y-1.5 motion-safe:focus-visible:-translate-y-1.5"
       >
-        {/* The stepped tab that identifies a swatch card in this world. */}
+        {/* The stepped tabs that identify a swatch card in this world: the card
+            in hand, and the next one in the fan behind it. */}
+        <span
+          aria-hidden="true"
+          className="bg-accent absolute -top-3.5 left-26 h-3.5 w-14 rounded-t-sm"
+        />
         <span
           aria-hidden="true"
           className="bg-primary absolute -top-2.5 left-8 h-2.5 w-20 rounded-t-sm"
@@ -517,6 +544,10 @@ function ComposeCard({ headingId }: { headingId: string }) {
             Chọn mã và màu, duyệt caption từng kênh, rồi đăng.
           </span>
         </span>
+
+        {/* Static: the card lifting under the pointer is this page's one motion
+            moment, and an arrow sliding beside it would make two. */}
+        <ArrowRight aria-hidden="true" className="size-5 shrink-0" />
       </Link>
     </section>
   );
@@ -527,15 +558,18 @@ function ComposeCard({ headingId }: { headingId: string }) {
  * line of it, and its query only runs once somebody opens the panel — a check
  * nobody asked for must not fire on every visit to the home screen.
  */
-function HealthDisclosure({ headingId }: { headingId: string }) {
+function HealthDisclosure() {
   const [isOpen, setIsOpen] = useState(false);
   const [hasOpened, setHasOpened] = useState(false);
 
   return (
-    <section aria-labelledby={headingId} className="border-border bg-card rounded-md border px-2">
-      <h2 id={headingId} className="sr-only">
-        Sức khoẻ hệ thống
-      </h2>
+    // Named by `aria-label`, not by a visually hidden heading: the trigger
+    // below already carries the words, and a heading with the same text made a
+    // screen reader say "Sức khoẻ hệ thống" twice in a row.
+    <section
+      aria-label="Sức khoẻ hệ thống"
+      className="border-border bg-card rounded-md border px-2"
+    >
       <Collapsible
         trigger={<span className="text-sm font-medium">Sức khoẻ hệ thống</span>}
         isOpen={isOpen}
