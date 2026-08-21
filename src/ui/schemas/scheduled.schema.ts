@@ -188,12 +188,85 @@ export function parseScheduledFilter(params: URLSearchParams): ScheduledFilter {
   };
 }
 
+// --- View state: mode, anchored month, opened day --------------------------
+
+/**
+ * Which mode is on screen, which month it is anchored to and which day is open.
+ *
+ * These live in the URL next to the filter (web-calendar-view rule 1: a calendar
+ * whose anchor is not in the URL cannot be shared), but they are deliberately
+ * NOT part of `ScheduledFilter`: they change what is DRAWN, never what is
+ * FETCHED. Folding them into the filter would put them in the query key and make
+ * "walk to next month" refetch the list — same reason the product screen keeps
+ * its selected row out of `ProductFilter`.
+ */
+export const SCHEDULED_VIEW_PARAM = "che-do";
+export const SCHEDULED_MONTH_PARAM = "thang";
+export const SCHEDULED_DAY_PARAM = "ngay";
+
+export type ScheduledView = "list" | "calendar";
+
+const VIEW_BY_SLUG: Record<string, ScheduledView> = {
+  "danh-sach": "list",
+  lich: "calendar",
+};
+
+export interface ScheduledViewState {
+  view: ScheduledView;
+  /** "YYYY-MM" — the anchored month. `null` = let the screen resolve it. */
+  month: string | null;
+  /** "YYYY-MM-DD" — the day whose detail list is open. */
+  day: string | null;
+}
+
+/** The list, no month, no open day — what a bare `/scheduled` means. */
+export const SCHEDULED_DEFAULT_VIEW: ScheduledViewState = {
+  view: "list",
+  month: null,
+  day: null,
+};
+
+const MONTH_ONLY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+export function isMonthKey(value: unknown): value is string {
+  return typeof value === "string" && MONTH_ONLY_PATTERN.test(value);
+}
+
+/**
+ * Reads `?che-do=&thang=&ngay=`. Anything unrecognised falls back to the
+ * default instead of throwing: this string was typed by a human, and a bad
+ * `?thang=` must not be able to blank the screen.
+ */
+export function parseScheduledView(params: URLSearchParams): ScheduledViewState {
+  const rawView = params.get(SCHEDULED_VIEW_PARAM)?.trim() ?? "";
+  const rawMonth = params.get(SCHEDULED_MONTH_PARAM)?.trim() ?? "";
+  const rawDay = params.get(SCHEDULED_DAY_PARAM)?.trim() ?? "";
+
+  return {
+    view: VIEW_BY_SLUG[rawView] ?? SCHEDULED_DEFAULT_VIEW.view,
+    month: isMonthKey(rawMonth) ? rawMonth : null,
+    day: isDateOnly(rawDay) ? rawDay : null,
+  };
+}
+
 /** THE single query-string builder. Defaults are omitted so a link stays clean. */
-export function scheduledSearchParams(filter: ScheduledFilter): URLSearchParams {
+export function scheduledSearchParams(
+  filter: ScheduledFilter,
+  view: ScheduledViewState = SCHEDULED_DEFAULT_VIEW,
+): URLSearchParams {
   const params = new URLSearchParams();
   if (filter.channelId) params.set("channelId", filter.channelId);
   if (filter.from) params.set("from", filter.from);
   if (filter.to) params.set("to", filter.to);
+
+  // The month and the open day only mean something inside the calendar, so
+  // leaving it drops them rather than dragging dead parameters into the list.
+  if (view.view === "calendar") {
+    params.set(SCHEDULED_VIEW_PARAM, "lich");
+    if (view.month) params.set(SCHEDULED_MONTH_PARAM, view.month);
+    if (view.day) params.set(SCHEDULED_DAY_PARAM, view.day);
+  }
+
   return params;
 }
 
@@ -295,6 +368,19 @@ export function formatScheduledAt(iso: string): string {
     dateStyle: "short",
     timeStyle: "short",
   }).format(date);
+}
+
+/**
+ * "2026-08-13" -> "13/08/2026", for a date FIELD.
+ *
+ * Pure string work on purpose (core-form-inputs): a pure date must never go
+ * through `new Date()`, which is the one and only cause of the classic
+ * off-by-one-day. Junk comes back unchanged rather than as a plausible date.
+ */
+export function formatDayInput(dateOnly: string): string {
+  if (!isDateOnly(dateOnly)) return dateOnly;
+  const [year, month, day] = dateOnly.split("-");
+  return `${day}/${month}/${year}`;
 }
 
 /** "15:30" — used inside a day group, where the date is in the heading. */

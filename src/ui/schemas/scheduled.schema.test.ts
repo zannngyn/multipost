@@ -11,8 +11,10 @@ import {
   hasScheduledFilter,
   isDateOnly,
   isHeldByPlatform,
+  isMonthKey,
   localDayKey,
   parseScheduledFilter,
+  parseScheduledView,
   rescheduleBlockedReason,
   scheduleInputBounds,
   scheduledSearchParams,
@@ -70,6 +72,68 @@ describe("parseScheduledFilter", () => {
       "channelId=fbpage-a&from=2026-08-13&to=2026-08-14",
     );
     expect(scheduledSearchParams({ channelId: null, from: null, to: null }).toString()).toBe("");
+  });
+});
+
+describe("isMonthKey", () => {
+  it("rejects anything that is not a real month", () => {
+    expect(isMonthKey(undefined)).toBe(false);
+    expect(isMonthKey("2026-00")).toBe(false);
+    expect(isMonthKey("2026-13")).toBe(false);
+    expect(isMonthKey("2026-8")).toBe(false);
+    expect(isMonthKey("2026-08-13")).toBe(false);
+  });
+
+  it("accepts a padded month", () => {
+    expect(isMonthKey("2026-01")).toBe(true);
+    expect(isMonthKey("2026-12")).toBe(true);
+  });
+});
+
+describe("parseScheduledView", () => {
+  it("falls back to the list for junk instead of blanking the screen", () => {
+    expect(
+      parseScheduledView(
+        new URLSearchParams({ "che-do": "biểu-đồ", thang: "2026-99", ngay: "hôm qua" }),
+      ),
+    ).toEqual({ view: "list", month: null, day: null });
+    expect(parseScheduledView(new URLSearchParams())).toEqual({
+      view: "list",
+      month: null,
+      day: null,
+    });
+  });
+
+  it("reads the calendar with its anchored month and open day", () => {
+    expect(
+      parseScheduledView(
+        new URLSearchParams({ "che-do": "lich", thang: "2026-08", ngay: "2026-08-13" }),
+      ),
+    ).toEqual({ view: "calendar", month: "2026-08", day: "2026-08-13" });
+  });
+
+  it("keeps the view even when the month is unusable — the screen resolves one", () => {
+    expect(parseScheduledView(new URLSearchParams({ "che-do": "lich", thang: "" }))).toEqual({
+      view: "calendar",
+      month: null,
+      day: null,
+    });
+  });
+
+  it("round-trips through the query-string builder, and the list carries no calendar cruft", () => {
+    const filter = parseScheduledFilter(new URLSearchParams({ channelId: "fbpage-a" }));
+    const view = parseScheduledView(
+      new URLSearchParams({ "che-do": "lich", thang: "2026-08", ngay: "2026-08-13" }),
+    );
+
+    const query = scheduledSearchParams(filter, view);
+    expect(query.toString()).toBe("channelId=fbpage-a&che-do=lich&thang=2026-08&ngay=2026-08-13");
+    expect(parseScheduledView(query)).toEqual(view);
+
+    // Back to the list: the month and the open day mean nothing there.
+    expect(scheduledSearchParams(filter, { ...view, view: "list" }).toString()).toBe(
+      "channelId=fbpage-a",
+    );
   });
 });
 
