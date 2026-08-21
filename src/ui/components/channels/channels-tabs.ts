@@ -60,11 +60,18 @@ export function resolveActiveChannelsTab(
 /**
  * The parameters the Facebook callback writes on its way back to `/channels`.
  *
- * Spelt here as well as in `parseConnectOutcome` (schemas are out of this
- * change's reach), so `channels-tabs.test.ts` pins the two together: it asserts
- * that after this strip, `parseConnectOutcome` reads nothing at all.
+ * ALL of them, taken from `app/api/channels/callback/route.ts` — which writes
+ * four different shapes:
+ *   `?connected=N&new=X&skipped=Y` · `?connect=cancelled` ·
+ *   `?connect=error&reason=…`
+ *
+ * `new` and `skipped` are NOT read by `parseConnectOutcome`, so leaving them out
+ * of this list did not break any banner — it just left `?new=1&skipped=3` stuck
+ * in the address bar for the rest of the session. Hence the test pins this list
+ * against the callback's real strings, not against what the parser happens to
+ * look at.
  */
-const CONNECT_CALLBACK_PARAMS = ["connected", "connect", "reason"] as const;
+const CONNECT_CALLBACK_PARAMS = ["connected", "new", "skipped", "connect", "reason"] as const;
 
 /**
  * Drops the OAuth callback params and keeps everything else.
