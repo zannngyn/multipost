@@ -1,9 +1,9 @@
 "use client";
 
 import { AppShell, LinkProvider, Theme } from "@astryxdesign/core";
-import NextLink from "next/link";
 import type { ReactNode } from "react";
 
+import { AppLink } from "@/ui/components/shell/AppLink";
 import { AppSideNav } from "@/ui/components/shell/AppSideNav";
 import { AppTopBar } from "@/ui/components/shell/AppTopBar";
 import { SupportModeBanner } from "@/ui/components/shell/SupportModeBanner";
@@ -48,7 +48,9 @@ export function AppFrame({
   navDefaultCollapsed: boolean;
 }) {
   return (
-    <LinkProvider component={NextLink}>
+    // Every Astryx link in the app goes through AppLink — see the note there
+    // for the `to` attribute it exists to swallow.
+    <LinkProvider component={AppLink}>
       <Theme theme={myspTheme}>
         <AppShell
           contentPadding={0}

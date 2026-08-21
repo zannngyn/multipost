@@ -45,8 +45,14 @@ import { useMe } from "@/ui/hooks/useMe";
  * Astryx ships no domain icons — its semantic registry is 28 utility names — but
  * `SideNavItem.icon` accepts `ComponentType<SVGProps<SVGSVGElement>>`, so these
  * come from lucide-react, already in the project's dependencies.
+ *
+ * Exported for `nav-icons.test.ts`, which pins one entry per destination: a nav
+ * row whose icon is missing renders a hole where every neighbour has a glyph,
+ * and in the collapsed rail — where the icon IS the row — it renders nothing at
+ * all. A new entry in NAV_SECTIONS with no icon here fails that test instead of
+ * shipping.
  */
-const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
+export const NAV_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "/": LayoutDashboard,
   "/compose": PenLine,
   "/bulk": Layers,
@@ -146,7 +152,7 @@ export function AppSideNav({
               key={item.href}
               href={item.href}
               label={item.label}
-              icon={ICONS[item.href]}
+              icon={NAV_ICONS[item.href]}
               // A batch detail page has no nav entry of its own; keep "Bài đăng"
               // lit while one is open, so the operator does not lose track of
               // where they came from.
