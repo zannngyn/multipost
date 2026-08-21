@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { flattenNavItems } from "@/ui/components/shell/nav-items";
 import {
   OUT_OF_TENANT_LABEL,
+  PLATFORM_ROOT,
   isPlatformContext,
 } from "@/ui/components/shell/platform-context";
 
@@ -30,6 +32,12 @@ describe("isPlatformContext", () => {
     expect(isPlatformContext("/platform/")).toBe(true);
     expect(isPlatformContext("/platform/tenants")).toBe(true);
     expect(isPlatformContext("/platform/tenants/abc-123")).toBe(true);
+  });
+
+  // The badge and the nav must point at the SAME path. Move the nav entry and
+  // this goes red, instead of the badge quietly never appearing again.
+  it("is locked to the path the nav actually links to", () => {
+    expect(flattenNavItems().some((item) => item.href === PLATFORM_ROOT)).toBe(true);
   });
 
   it("keeps the operator-facing wording in one place", () => {

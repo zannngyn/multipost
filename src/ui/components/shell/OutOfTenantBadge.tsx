@@ -4,6 +4,7 @@ import { Badge } from "@astryxdesign/core";
 import { usePathname } from "next/navigation";
 
 import { OUT_OF_TENANT_LABEL, isPlatformContext } from "@/ui/components/shell/platform-context";
+import { useMe } from "@/ui/hooks/useMe";
 
 /**
  * The standing marker for MYSP's own admin screens, sitting beside the company
@@ -24,11 +25,24 @@ import { OUT_OF_TENANT_LABEL, isPlatformContext } from "@/ui/components/shell/pl
  */
 export function OutOfTenantBadge() {
   const pathname = usePathname();
+  const me = useMe();
+
+  /**
+   * The same test the sidebar and the palette use, for the same reason: an
+   * account without a platform role gets `PlatformForbidden` at this URL, so
+   * telling them they are "trong màn quản trị MYSP" would be a plain lie about
+   * a screen they cannot see.
+   *
+   * False while `/api/me` is still loading, so the badge is never painted and
+   * then taken away — same rule as `visibleNavSections`.
+   */
+  const hasPlatformRole = (me.data?.account?.platformRole ?? null) !== null;
 
   // Every other screen: nothing rendered at all. A badge that says "trong công
   // ty" on ten screens would be the noise Astryx warns about, and would stop
   // being noticed on the one screen it matters.
   if (!isPlatformContext(pathname)) return null;
+  if (!hasPlatformRole) return null;
 
   return <Badge variant="info" label={OUT_OF_TENANT_LABEL} />;
 }
