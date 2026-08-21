@@ -189,9 +189,12 @@ export function ComposeFocus() {
   return (
     // The palette wrapper. Everything below reads its colours from here, so the
     // screen can be re-skinned in one file (compose-theme.ts).
+    // `relative` is load-bearing: without it the absolutely positioned `sr-only`
+    // nodes anchor to the AppShell row instead of this scroll area and stretch
+    // the document, adding a phantom second scrollbar.
     <div
       style={COMPOSE_PALETTE}
-      className="h-full min-h-0 overflow-y-auto bg-[var(--background)] text-[var(--foreground)]"
+      className="relative h-full min-h-0 overflow-y-auto bg-[var(--background)] text-[var(--foreground)]"
     >
       <div className="@container mx-auto flex w-full max-w-[1440px] flex-col gap-4 p-5">
         <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
