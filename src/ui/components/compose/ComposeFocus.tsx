@@ -5,6 +5,7 @@ import { useWatch } from "react-hook-form";
 
 import { cn } from "@/shared/utils";
 import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
+import { activeCaptionChannel } from "@/ui/components/compose/caption-targets";
 import { ChannelChoice } from "@/ui/components/compose/ChannelChoice";
 import { ChannelPickerDialog } from "@/ui/components/compose/ChannelPickerDialog";
 import { publishableChannels } from "@/ui/components/compose/channel-picker";
@@ -151,8 +152,20 @@ export function ComposeFocus() {
    * The preview follows the caption tab: the text of the channel being edited,
    * under the name of that Page. Showing tab A's caption over page B's name is
    * exactly the confusion a per-channel editor has to avoid.
+   *
+   * It asks `activeCaptionChannel` — the SAME function the editor asks — rather
+   * than re-deriving "which tab is open" here. Two copies of that rule is how
+   * the editor and the payload came apart in the first place; a requested tab
+   * that has since been unticked must resolve identically in both.
    */
-  const previewChannelId = activeChannelId ?? publish.selectedIds[0] ?? null;
+  const previewChannelId =
+    activeCaptionChannel({
+      shareCaption: publish.shareCaption,
+      selectedIds: publish.selectedIds,
+      requested: activeChannelId,
+    }) ??
+    publish.selectedIds[0] ??
+    null;
   const previewCaption = previewChannelId
     ? publish.captionFor(previewChannelId)
     : (wizard.captionValues?.[PREVIEW_CHANNEL] ?? "");
@@ -387,11 +400,26 @@ export function ComposeFocus() {
                   <VideoSpecCard video={composed.video} clip={composed.media[0]} />
                 ) : null}
 
+                <span aria-hidden="true" className={COMPOSE_RULE} />
+
+                {/* KÊNH ĐĂNG BEFORE CAPTION (PM, 21/08/2026): a caption is
+                    written per Fanpage, so "đăng lên đâu" has to be answered
+                    before there is anything to write. The caption block below
+                    says so in words when nothing is ticked yet. */}
+                <ChannelChoice
+                  publish={publish}
+                  onOpenPicker={() => setPickerOpen(true)}
+                  readOnlyReason={readOnlyReason}
+                />
+
+                <span aria-hidden="true" className={COMPOSE_RULE} />
+
                 <CaptionBlock
                   wizard={wizard}
                   publish={publish}
                   activeChannelId={activeChannelId}
                   onActiveChannelChange={setActiveChannelId}
+                  onOpenPicker={() => setPickerOpen(true)}
                   readOnlyReason={readOnlyReason}
                 />
               </>
@@ -400,12 +428,6 @@ export function ComposeFocus() {
             )}
 
             <span aria-hidden="true" className={COMPOSE_RULE} />
-
-            <ChannelChoice
-              publish={publish}
-              onOpenPicker={() => setPickerOpen(true)}
-              readOnlyReason={readOnlyReason}
-            />
 
             {publish.formError ? (
               <p role="alert" className="text-[13px] text-[var(--destructive)]">

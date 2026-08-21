@@ -128,6 +128,7 @@ export function RescheduleDialog({
                 setValue(next);
               }}
               disabled={isPending}
+              disabledReason="Đang lưu giờ mới — chờ lưu xong rồi mới sửa tiếp được."
               error={formError}
               nowMs={nowMs}
             />
