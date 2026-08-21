@@ -38,6 +38,23 @@ describe("membership role badge tones", () => {
   });
 
   /**
+   * The values are pinned, not just their relationship — and they CHANGED with
+   * the swatch-book redesign: owner used to be `purple`, and purple is the
+   * accent of the generic admin SaaS this design refuses. Owner wears the
+   * world's indigo now, the other three the neutral of a woven label. Anyone
+   * reaching for a decorative colour here has to come through this assertion.
+   */
+  it("dresses the roles in the world's own colours, never purple", () => {
+    expect(MEMBERSHIP_ROLE_BADGE_TONES).toEqual({
+      owner: "blue",
+      admin: "neutral",
+      editor: "neutral",
+      viewer: "neutral",
+    });
+    expect(Object.values(MEMBERSHIP_ROLE_BADGE_TONES)).not.toContain("purple");
+  });
+
+  /**
    * Structural, for the same reason as `members-hub-sweep.test.ts`: vitest runs
    * in `environment: "node"` and this repo has no jsdom, so there is nothing to
    * render into. Coarse on purpose — it asks "does this file decide a role
@@ -55,9 +72,12 @@ describe("membership role badge tones", () => {
 
     it("never spells a role colour out on the spot", () => {
       // Status badges (`variant={INVITE_STATUS_TONES[...]}`, `variant="warning"`)
-      // are a different vocabulary and stay allowed; these two are the category
+      // are a different vocabulary and stay allowed; these are the category
       // colours, and a literal one here means a second opinion about a role.
-      expect(code).not.toMatch(/variant="(purple|blue)"/);
+      // `purple` stays in the list although no role wears it any more: a file
+      // spelling it out would be reintroducing exactly the tone the redesign
+      // took out.
+      expect(code).not.toMatch(/variant="(purple|blue|neutral)"/);
       expect(code).not.toMatch(/=== "owner" \?/);
     });
   });

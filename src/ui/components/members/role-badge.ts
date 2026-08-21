@@ -14,10 +14,17 @@ import type { MembershipRole } from "@/ui/schemas/me.schema";
  * anybody else on the screen. The other three read as one family on purpose —
  * the label carries the difference, colour is never the only signal
  * (core-accessibility §5).
+ *
+ * WHY NOT PURPLE any more: purple is the accent of the generic admin SaaS this
+ * app's whole design refuses (thesis, docs/superpowers/specs §26). Owner now
+ * wears the indigo of the world — the dye every primary surface is cut from —
+ * and the other three the neutral of a woven label. That is one colour idea
+ * across members, invites and the history tab (which prints roles as plain
+ * text, so it needs no tone of its own).
  */
-export const MEMBERSHIP_ROLE_BADGE_TONES: Record<MembershipRole, "purple" | "blue"> = {
-  owner: "purple",
-  admin: "blue",
-  editor: "blue",
-  viewer: "blue",
+export const MEMBERSHIP_ROLE_BADGE_TONES: Record<MembershipRole, "blue" | "neutral"> = {
+  owner: "blue",
+  admin: "neutral",
+  editor: "neutral",
+  viewer: "neutral",
 };

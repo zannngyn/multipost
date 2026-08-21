@@ -447,7 +447,12 @@ export function ComposeFocus() {
                 place, the moment "Hẹn lịch" is pressed, and nowhere else on the
                 screen.
                 --------------------------------------------------------------- */}
-            <div className="border-border bg-background/95 sticky bottom-0 z-10 -mx-6 -mb-6 flex flex-col gap-3.5 rounded-b-xl border-t px-6 py-4 backdrop-blur">
+            {/* A plane of its own, not a pane of glass: `bg-background/95` +
+                `backdrop-blur` let the rows underneath print through the
+                buttons on a phone, where the tray covers a third of the
+                screen. Opaque card surface, one hairline to say where the card
+                ends and the press begins. */}
+            <div className="border-border bg-card sticky bottom-0 z-10 -mx-6 -mb-6 flex flex-col gap-3.5 rounded-b-xl border-t px-6 py-4">
               {publish.formError ? (
                 <p role="alert" className="text-destructive text-[13px]">
                   {publish.formError}
