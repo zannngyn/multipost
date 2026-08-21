@@ -1,11 +1,16 @@
 # Tiến độ dự án
 
-> Cập nhật lần cuối: **20/08/2026** · Nhánh đối chiếu: `dev` tại `42b8b9b` (PR #19)
+> Cập nhật lần cuối: **21/08/2026** · Nhánh đối chiếu: `dev` tại `58aa907` (PR #22)
 >
-> Lần cập nhật này gộp **4 merge** mà bản trước (15/08, `f5afc2b`) chưa phủ:
-> PR #16 `6f9d757` (Drive OAuth + access approval + nền đa tenant M0–M1.2) ·
-> PR #17 `4a2aec4` (M1.3–M1.5 — **B-8 đóng**) · PR #18 `8b94a3a` (onboarding tự
-> phục vụ M2.1–M2.4) · PR #19 `42b8b9b` (platform M3.1–M3.3 + redesign `/compose`).
+> Bản 21/08 gộp thêm **2 merge**: PR #20 `91f66ae` (`/compose` bám sát mẫu PM —
+> trang đơn, modal chọn kênh/nhóm, tone caption, ảnh preview; sweep read-only chế
+> độ hỗ trợ; che token/sig ở log Caddy edge) · PR #22 `58aa907` (**caption riêng
+> từng kênh** — chi tiết ở dòng E10).
+>
+> Bản 20/08 (`42b8b9b`) gộp 4 merge trước đó: PR #16 `6f9d757` (Drive OAuth +
+> access approval + nền đa tenant M0–M1.2) · PR #17 `4a2aec4` (M1.3–M1.5 — **B-8
+> đóng**) · PR #18 `8b94a3a` (onboarding tự phục vụ M2.1–M2.4) · PR #19 `42b8b9b`
+> (platform M3.1–M3.3 + redesign `/compose` đợt đầu).
 >
 > File này ghi **hiện trạng đã kiểm chứng được từ repo**, đối chiếu với WBS ở
 > `03-WBS-va-estimate.md`. Mọi dòng đều phải kèm bằng chứng (đường dẫn file,
@@ -31,7 +36,7 @@ Số liệu **đo lại 20/08/2026** trên worktree ngang `origin/dev` (`42b8b9b
 
 - `pnpm typecheck` · `pnpm lint` — sạch (exit 0)
 - `pnpm depcruise` — `no dependency violations found (565 modules, 2541 dependencies cruised)`
-- `pnpm exec vitest run` — **3146 test xanh / 125 skip** (3271 tổng) · **184 file pass / 14 file skip** trên 198 file. File skip là integration test cần DB/key thật (15 file `*.integration.test.ts` trong repo)
+- `pnpm exec vitest run` — **3341 test xanh / 125 skip** (3466 tổng, đo 21/08 tại `58aa907`) · **195 file pass / 14 file skip** trên 209 file. File skip là integration test cần DB/key thật (15 file `*.integration.test.ts` trong repo)
 - `pnpm build` — exit 0, artifact thật có (`.next/BUILD_ID` sinh lúc build)
 - Phân bố file test theo tầng (`find src -name '*.test.ts' -o -name '*.test.tsx'` gom theo thư mục cấp 1): core 60 · adapters 49 · app 42 · ui 32 · composition 9 · worker 5 · shared 1 = 198
 - **54 API route** (`find src/app/api -name route.ts | wc -l`)
@@ -54,8 +59,8 @@ Số liệu **đo lại 20/08/2026** trên worktree ngang `origin/dev` (`42b8b9b
 | E4 AI sinh caption | ✅ | `adapters/ai/{google,openai,registry-store,prompt-store,generation-log,cache}`, usecase `generate-captions.ts`, bảng `ai_generation` + `ai_prompt_template` + `ai_model_policy_override`, màn `/prompts`. Chạy OpenAI-only từ 15/08/2026 (B-5) |
 | E5 Adapter Facebook | 🟡 | Đăng bài ✅ `adapters/meta/{graph-client,facebook-publisher,graph-error-map,fake-publisher}.ts`. E5.1 kết nối kênh: xem mục 3.2 — code xong cả hai cửa (dán token / OAuth), `META_APP_SECRET` + `TENANT_SECRETS_ENC_KEY` nay đã có trong `.env` (đo 20/08 — B-6/B-7 đã gỡ), **còn thiếu duy nhất lần chạy với Page thật = UAT** |
 | E7 Điều phối đa kênh | ✅ | usecase `publish-post.ts` + `retry-post-job.ts` + `reap-post-jobs.ts`, bảng `post_job`/`post_batch`/`channel_group`, `worker/jobs/publish-post-job.ts`, màn `/channels/groups`. Từ M1.3b worker có suspended-guard (tenant bị khoá thì job không chạy) |
-| E10 Giao diện (lõi) | ✅ | **14 màn dưới `app/(app)/`**: `/`, `/compose`, `/bulk`, `/scheduled`, `/jobs`, `/products`, `/sync`, `/channels`, `/channels/groups`, `/prompts`, `/batches/[batchId]`, **`/members`** (thành viên + link mời, M2.3), **`/access`** (nay là *Lịch sử duyệt* read-only, M2.4), **`/platform`** (quản trị MYSP, M3.2); ngoài shell: **`/join/[token]`** (nhận lời mời, M2.2) + `/signin`. **`/compose` redesign theo mẫu PM duyệt** (wave M3.3, PR #19). **Ảnh hiện ra nơi soạn bài**: route session-backed `/api/media/preview/[driveFileId]` + usecase `get-media-preview.ts`, component `MediaThumb`/`FacebookPreview` — tầng media ký HMAC (tầng P) không mất một dòng verify nào, tái chứng minh bằng 3 ca giả mạo của M1.5. UI hết biết tenant từ M1.4: `DEMO_TENANT_ID` = 0 chỗ, query key theo `useActiveTenant()`, `TenantBoundary` + `TenantSwitcher` |
-| E12 Kiểm thử (rút gọn) | 🟡 | 3146 test xanh (`vitest run`, xem mục 2); 15 file integration (`find src -name '*.integration.test.ts'` — DB write path, AI gateway); 10 smoke script ở `scripts/`; negative matrix đa tenant 12/12 chạy thật qua HTTP (M1.5, docs/09 §5). **E12.3 chạy thật đầu-cuối với Facebook thật và E12.4 UAT: chưa làm** |
+| E10 Giao diện (lõi) | ✅ | **14 màn dưới `app/(app)/`**: `/`, `/compose`, `/bulk`, `/scheduled`, `/jobs`, `/products`, `/sync`, `/channels`, `/channels/groups`, `/prompts`, `/batches/[batchId]`, **`/members`** (thành viên + link mời, M2.3), **`/access`** (nay là *Lịch sử duyệt* read-only, M2.4), **`/platform`** (quản trị MYSP, M3.2); ngoài shell: **`/join/[token]`** (nhận lời mời, M2.2) + `/signin`. **`/compose` redesign trung thành mẫu PM** (PR #19 đợt đầu; PR #20 bám sát mẫu: trang đơn `ComposeFocus.tsx`, modal chọn kênh/nhóm `ChannelPickerDialog.tsx`, tone caption `shared/caption-tone.ts`). **Caption riêng từng kênh** (PR #22 `58aa907`): chọn kênh TRƯỚC khối caption, công tắc "dùng riêng" là dòng đầu, một nút "Viết caption cho N trang" fan-out concurrency 3 + retry từng tab (`caption-fanout.ts`, `useCaptionFanOut.ts`), cảnh báo trùng D1 sớm trên trình duyệt (`caption-duplicate.ts` mirror `core/domain/caption.ts`, test vi phân mirror-vs-core chống drift thuật toán); editor/preview/payload cùng đọc qua một luật `caption-targets.ts` (đóng lỗ B1 editor hiện caption chung nhưng payload gửi caption riêng). **Ảnh hiện ra nơi soạn bài**: route session-backed `/api/media/preview/[driveFileId]` + usecase `get-media-preview.ts`, component `MediaThumb`/`FacebookPreview` — tầng media ký HMAC (tầng P) không mất một dòng verify nào, tái chứng minh bằng 3 ca giả mạo của M1.5. UI hết biết tenant từ M1.4: `DEMO_TENANT_ID` = 0 chỗ, query key theo `useActiveTenant()`, `TenantBoundary` + `TenantSwitcher` |
+| E12 Kiểm thử (rút gọn) | 🟡 | 3341 test xanh (`vitest run`, xem mục 2); 15 file integration (`find src -name '*.integration.test.ts'` — DB write path, AI gateway); 10 smoke script ở `scripts/`; negative matrix đa tenant 12/12 chạy thật qua HTTP (M1.5, docs/09 §5). **E12.3 chạy thật đầu-cuối với Facebook thật và E12.4 UAT: chưa làm** |
 
 ### Hệ đa tenant & phân quyền (ngoài WBS gốc — track riêng)
 
@@ -200,8 +205,8 @@ inspector của B1; các màn mới của lộ trình đa tenant (**`/members`, 
 cũng trên Astryx (grep 20/08: 15 file import `@astryxdesign` trong 3 thư mục
 `ui/components/{members,platform,access}`). Màn **Nhóm kênh** (`/channels/groups`) vẫn shadcn
 (grep: `ui/components/channels/ChannelGroupsScreen.tsx` không import Astryx). **`/compose`
-được redesign theo mẫu PM ở wave M3.3** nhưng không import Astryx trực tiếp — vẫn nằm trong
-diện B2–B9 khi tới lượt.
+được redesign theo mẫu PM** (đợt đầu wave M3.3, hoàn thiện + caption riêng từng kênh ở
+PR #20/#22) nhưng không import Astryx trực tiếp — vẫn nằm trong diện B2–B9 khi tới lượt.
 
 ## 6. Việc tiếp theo — đề xuất
 
