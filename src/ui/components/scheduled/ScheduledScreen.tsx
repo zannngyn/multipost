@@ -336,7 +336,7 @@ export function ScheduledScreen() {
           className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
         >
           {warning}{" "}
-          <Link href="/jobs" className="underline underline-offset-4">
+          <Link href="/posts?tab=log" className="underline underline-offset-4">
             Mở nhật ký đăng bài
           </Link>
           .
