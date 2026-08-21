@@ -1,5 +1,6 @@
 # The verification gate, in one place so CI and Deploy cannot drift apart.
-# Called by ci.yml (pull requests) and by deploy.yml (before anything is built).
+# Called by ci.yml (pull requests) and by deploy.yml (in parallel with the
+# image build; the deploy job waits for both).
 #
 # `pnpm build` is deliberately NOT here: the Docker image build runs it, so
 # duplicating it would double the slowest step to catch the same failure twice.
