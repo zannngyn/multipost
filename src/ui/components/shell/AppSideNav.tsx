@@ -13,7 +13,6 @@ import {
 } from "@astryxdesign/core";
 import {
   Building2,
-  CalendarClock,
   FolderSync,
   Layers,
   LayoutDashboard,
@@ -24,7 +23,6 @@ import {
   PenLine,
   Radio,
   ScrollText,
-  Share2,
   Sparkles,
   Users,
 } from "lucide-react";
@@ -52,15 +50,12 @@ const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "/": LayoutDashboard,
   "/compose": PenLine,
   "/bulk": Layers,
-  "/scheduled": CalendarClock,
-  "/jobs": ScrollText,
+  "/posts": ScrollText,
   "/products": ListChecks,
   "/sync": FolderSync,
   "/channels": Radio,
-  "/channels/groups": Share2,
   "/prompts": Sparkles,
   "/members": Users,
-  "/access": ScrollText,
   "/platform": Building2,
 };
 
@@ -152,12 +147,12 @@ export function AppSideNav({
               href={item.href}
               label={item.label}
               icon={ICONS[item.href]}
-              // A batch detail page has no nav entry of its own; keep the log
-              // section lit while one is open, so the operator does not lose
-              // track of where they came from.
+              // A batch detail page has no nav entry of its own; keep "Bài đăng"
+              // lit while one is open, so the operator does not lose track of
+              // where they came from.
               isSelected={
                 isNavItemActive(pathname, item.href, { exact: item.isExact }) ||
-                (item.href === "/jobs" && isNavItemActive(pathname, "/batches"))
+                (item.href === "/posts" && isNavItemActive(pathname, "/batches"))
               }
             />
           ))}
