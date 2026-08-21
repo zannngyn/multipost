@@ -59,6 +59,14 @@ export const NAV_SECTIONS: readonly NavSection[] = [
       { href: "/channels", label: "Kênh", isExact: true },
       { href: "/channels/groups", label: "Nhóm kênh" },
       { href: "/prompts", label: "Mẫu prompt" },
+    ],
+  },
+  {
+    // People, not settings: who may use this company and what was decided about
+    // them. Kept apart from "Cấu hình" so an operator looking for a person does
+    // not have to read past channel and prompt settings.
+    title: "Tổ chức",
+    items: [
       { href: "/members", label: "Thành viên" },
       // Read-only history since M2.4 — the label says so, so nobody opens it
       // expecting to add someone.
