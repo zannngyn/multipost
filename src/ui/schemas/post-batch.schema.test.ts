@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { batchPollInterval } from "@/ui/hooks/usePostBatch";
+import { jobLogPollInterval, nextJobLogPoll } from "@/ui/hooks/usePostJobs";
 
 import {
   BatchStatusResponseSchema,
@@ -15,6 +16,9 @@ import {
   jobLogSearchParams,
   parseJobLogFilter,
   type BatchStatusResponse,
+  type PostJobLogEntry,
+  type PostJobLogResponse,
+  type PostJobStatus,
 } from "./post-batch.schema";
 
 /**
@@ -118,6 +122,139 @@ describe("batchPollInterval", () => {
       channels: [makeChannel({ status: "publishing" })],
     });
     expect(batchPollInterval(settled, 1)).toBe(false);
+  });
+});
+
+function makeJobEntry(overrides: Partial<PostJobLogEntry> = {}): PostJobLogEntry {
+  return {
+    postJobId: "job-1",
+    batchId: "batch-1",
+    productCode: "MGKVX6310",
+    color: "KEM",
+    channelId: "fbpage-a",
+    format: "image_post",
+    status: "published",
+    attemptCount: 1,
+    lastErrorCode: null,
+    userMessage: "Đã đăng",
+    publishedPostId: "1234_5678",
+    publishedUrl: "https://www.facebook.com/1234_5678",
+    publishedAt: "2026-08-12T03:01:00.000Z",
+    scheduledAt: null,
+    createdAt: "2026-08-12T03:00:00.000Z",
+    updatedAt: "2026-08-12T03:01:00.000Z",
+    canRetry: false,
+    ...overrides,
+  };
+}
+
+function makeJobPage(statuses: readonly PostJobStatus[]): PostJobLogResponse {
+  return {
+    tenantId: "00000000-0000-0000-0000-000000000001",
+    items: statuses.map((status, index) =>
+      makeJobEntry({ postJobId: `job-${index}`, status, canRetry: status === "failed" }),
+    ),
+    nextCursor: null,
+    limit: 25,
+  };
+}
+
+describe("jobLogPollInterval", () => {
+  it("does not poll before the first page arrives", () => {
+    expect(jobLogPollInterval(undefined, 0)).toBe(false);
+    expect(jobLogPollInterval([], 0)).toBe(false);
+  });
+
+  it("does not poll an empty log — there is nothing that can change", () => {
+    expect(jobLogPollInterval([makeJobPage([])], 0)).toBe(false);
+  });
+
+  it("stops polling when every loaded job has settled", () => {
+    expect(jobLogPollInterval([makeJobPage(["published", "failed", "blocked"])], 5)).toBe(false);
+  });
+
+  it("polls fast while a job is queued or publishing, backing off to a ceiling", () => {
+    expect(jobLogPollInterval([makeJobPage(["queued"])], 0)).toBe(2_000);
+    expect(jobLogPollInterval([makeJobPage(["publishing"])], 3)).toBe(5_000);
+    expect(jobLogPollInterval([makeJobPage(["queued"])], 99)).toBe(15_000);
+  });
+
+  it("never answers with a negative interval, whatever the tick count says", () => {
+    // TanStack quietly declines to schedule a negative timeout, so a negative
+    // number here is not a small mistake — it is polling that stops silently.
+    expect(jobLogPollInterval([makeJobPage(["queued"])], -16)).toBe(2_000);
+  });
+
+  it("keeps polling when the active job is on a later page", () => {
+    const pages = [makeJobPage(["published"]), makeJobPage(["published", "publishing"])];
+    expect(jobLogPollInterval(pages, 0)).toBe(2_000);
+  });
+
+  it("leaves a Facebook-held or draft job alone — neither moves in seconds", () => {
+    // `scheduled_on_facebook` is not settled, but it changes on the
+    // reconciliation sweep hours later; a 2s poll would ask forever.
+    expect(jobLogPollInterval([makeJobPage(["scheduled_on_facebook"])], 0)).toBe(false);
+    expect(jobLogPollInterval([makeJobPage(["draft"])], 0)).toBe(false);
+    expect(isSettledJobStatus("scheduled_on_facebook")).toBe(false);
+  });
+});
+
+describe("nextJobLogPoll", () => {
+  const activePages = [makeJobPage(["queued"])];
+
+  it("slows down on a failing query instead of giving up on it", () => {
+    // Neither extreme is right. The fast curve on top of a 500 is a request
+    // storm; `false` is worse, because the operator watching a batch drain
+    // never blurs the tab, so focus-refetch cannot rescue the screen and one
+    // unlucky 500 would freeze the log until a manual reload.
+    expect(nextJobLogPoll({ isError: true, pages: activePages, updateCount: 40, base: 37 })).toEqual(
+      { interval: 30_000, base: null },
+    );
+  });
+
+  /**
+   * The regression that made this an object instead of a bare number: `base`
+   * lives in a hook ref, `dataUpdateCount` lives on the Query object, and
+   * changing the status filter swaps the Query without remounting the hook. A
+   * negative elapsed reached `refetchInterval` as a negative interval, which
+   * TanStack silently refuses to schedule (`isValidTimeout` wants >= 0) —
+   * polling stopped with no error anywhere.
+   */
+  it("never produces a negative interval when the anchor outlives its query", () => {
+    const stale = nextJobLogPoll({
+      isError: false,
+      pages: activePages,
+      updateCount: 2,
+      base: 18,
+    });
+    expect(stale.interval === false || stale.interval >= 0).toBe(true);
+    // And it does not merely clamp to something absurd: the curve restarts.
+    expect(stale.interval).toBe(2_000);
+  });
+
+  it("starts a new session at the fast end however old the query is", () => {
+    // The bug this guards: a tab open all day has a huge `dataUpdateCount`, so
+    // feeding it raw would open a brand new batch at the 15s ceiling.
+    expect(nextJobLogPoll({ isError: false, pages: activePages, updateCount: 400, base: null })
+      ).toEqual({ interval: 2_000, base: 400 });
+  });
+
+  it("backs off by the ticks of THIS session, not of the whole query", () => {
+    expect(
+      nextJobLogPoll({ isError: false, pages: activePages, updateCount: 403, base: 400 }),
+    ).toEqual({ interval: 5_000, base: 400 });
+  });
+
+  it("drops the anchor when the session ends, so the next batch starts fast", () => {
+    const settled = [makeJobPage(["published"])];
+    expect(nextJobLogPoll({ isError: false, pages: settled, updateCount: 405, base: 400 })).toEqual({
+      interval: false,
+      base: null,
+    });
+    // …and the batch after it opens at the minimum again.
+    expect(
+      nextJobLogPoll({ isError: false, pages: activePages, updateCount: 406, base: null }).interval,
+    ).toBe(2_000);
   });
 });
 
