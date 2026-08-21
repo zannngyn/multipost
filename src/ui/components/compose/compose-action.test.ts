@@ -214,3 +214,30 @@ describe("channels are chosen before the caption is written", () => {
     expect(source).toContain("fanOut.run(selectedIds)");
   });
 });
+
+/**
+ * Two invariants of the LAYOUT that a re-arrangement can break silently, and
+ * that no unit test on a pure function can see.
+ */
+describe("compose layout invariants", () => {
+  it("keeps the internal warnings above and OUTSIDE the caption block", () => {
+    // Business rule 2: tồn kho và cảnh báo là thông tin nội bộ. Selecting the
+    // caption to copy it must never be able to pick one up.
+    const source = readCompose("./ComposeFocus.tsx");
+    const warnings = source.indexOf('aria-label="Cảnh báo nội bộ"');
+    const caption = source.indexOf("<CaptionBlock");
+    expect(warnings).toBeGreaterThan(-1);
+    expect(caption).toBeGreaterThan(-1);
+    expect(warnings).toBeLessThan(caption);
+  });
+
+  it("has exactly ONE place to answer “đăng ngay hay hẹn giờ”", () => {
+    // A second SchedulePicker anywhere on this screen means one post can be
+    // given two different times by two controls that never agree.
+    const source = readCompose("./ComposeFocus.tsx");
+    expect(source.match(/<SchedulePicker/g) ?? []).toHaveLength(1);
+    expect(readCompose("./ChannelChoice.tsx")).not.toContain("<SchedulePicker");
+    // And it opens in the sticky tray, beside the button that spends it.
+    expect(source).toMatch(/sticky bottom-0[\s\S]*?<SchedulePicker[\s\S]*?<ComposeActionBar/);
+  });
+});
