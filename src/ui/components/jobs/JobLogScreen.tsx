@@ -13,6 +13,7 @@ import { WorkerHealthBanner } from "@/ui/components/jobs/WorkerHealthBanner";
 import { presentWorkerHealth } from "@/ui/components/jobs/present-worker-health";
 import { Button } from "@/ui/components/ui/button";
 import { Select } from "@/ui/components/ui/select";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { usePostJobLog, useRetryPostJob } from "@/ui/hooks/usePostJobs";
@@ -60,6 +61,12 @@ export function JobLogScreen() {
 
   const log = usePostJobLog(filter);
   const retry = useRetryPostJob();
+  /**
+   * Names for the "Kênh" column. A THIRD independent query: if it fails, the
+   * log still renders — the column falls back to the raw ids, which is exactly
+   * what it showed before this query existed (core-feedback-states §Partial).
+   */
+  const channels = useChannels();
   // Support mode is read-only (M3.3): re-queueing a job posts to the customer's
   // Page. The table shows the button disabled with this sentence beside it.
   const readOnlyReason = useReadOnlyReason();
@@ -238,10 +245,19 @@ export function JobLogScreen() {
             {log.hasNextPage ? " (còn nữa)" : ""}.
           </p>
 
+          {/* Said once, above the table, instead of eight identical ids
+              explaining themselves row by row. */}
+          {channels.isError ? (
+            <p className="text-muted-foreground text-sm">
+              Không tải được danh sách Page nên cột “Kênh” đang hiện mã kênh thay vì tên Page.
+            </p>
+          ) : null}
+
           <JobLogTable
             items={items}
             onRetry={handleRetry}
             retryingJobId={retry.isPending ? (retry.variables?.postJobId ?? null) : null}
+            channels={channels.data?.channels}
             readOnlyReason={readOnlyReason}
           />
 
