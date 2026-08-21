@@ -274,6 +274,7 @@ export function BulkRunScreen() {
         <SchedulePicker
           choice={schedule}
           disabled={isRunning}
+          disabledReason="Lô đang chạy — chờ chạy xong rồi mới đổi được giờ đăng."
           scopeNote="Áp dụng cho mọi mã và mọi kênh trong lượt chạy này. Các bài vẫn được đăng giãn cách theo cấu hình kênh, không lên cùng lúc."
         />
 

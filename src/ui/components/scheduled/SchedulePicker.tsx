@@ -23,10 +23,17 @@ import type { ScheduleChoice } from "@/ui/hooks/useScheduleChoice";
 export function SchedulePicker({
   choice,
   disabled,
+  disabledReason,
   scopeNote,
 }: {
   choice: ScheduleChoice;
   disabled?: boolean;
+  /**
+   * WHY the control is locked, forwarded to the time field. Only THIS screen
+   * knows — "đang chạy lô" and "chế độ hỗ trợ chỉ được xem" are both `disabled`
+   * here but are not the same sentence to an operator.
+   */
+  disabledReason?: string;
   /** What "mọi kênh" means on this screen (one post vs a whole run). */
   scopeNote: string;
 }) {
@@ -91,6 +98,7 @@ export function SchedulePicker({
             value={choice.value}
             onChange={choice.setValue}
             disabled={disabled}
+            disabledReason={disabledReason}
             error={choice.error}
             nowMs={nowMs}
           />
