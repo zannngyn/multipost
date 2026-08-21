@@ -8,7 +8,9 @@ import { JobLogScreen } from "@/ui/components/jobs/JobLogScreen";
 import {
   POSTS_TABS,
   POSTS_TAB_LABELS,
+  POSTS_TAB_PARAM,
   parsePostsTab,
+  resolveActiveTab,
   type PostsTab,
 } from "@/ui/components/posts/posts-tabs";
 import { ScheduledScreen } from "@/ui/components/scheduled/ScheduledScreen";
@@ -39,8 +41,9 @@ export function PostsHub({ tab }: { tab: PostsTab }) {
 
   // The URL wins once the client is live (Back/Forward and the redirect from
   // `/jobs` both land here); `tab` is what the server already parsed, used
-  // until the browser has search params of its own.
-  const active = searchParams.has("tab") ? parsePostsTab(searchParams.get("tab")) : tab;
+  // until the browser has search params of its own. The rule itself lives in
+  // `resolveActiveTab` so it can be tested without rendering.
+  const active = resolveActiveTab(searchParams.get(POSTS_TAB_PARAM), tab);
 
   const handleChange = useCallback(
     (value: string) => {
@@ -53,7 +56,7 @@ export function PostsHub({ tab }: { tab: PostsTab }) {
       // replace(), not push(): this is one page seen two ways, and pushing
       // would make Back walk the operator through every tab click before it
       // leaves the screen (core-routing-patterns §"Điều hướng").
-      router.replace(`/posts?tab=${next}`, { scroll: false });
+      router.replace(`/posts?${POSTS_TAB_PARAM}=${next}`, { scroll: false });
     },
     [active, router],
   );

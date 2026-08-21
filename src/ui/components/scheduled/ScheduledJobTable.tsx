@@ -148,7 +148,7 @@ export function ScheduledJobTable({
                     <p className="text-warning-foreground mt-1 text-xs">
                       {job.userMessage}{" "}
                       <Link
-                        href={`/jobs?batchId=${encodeURIComponent(job.batchId)}`}
+                        href={`/posts?tab=log&batchId=${encodeURIComponent(job.batchId)}`}
                         className="underline underline-offset-4"
                       >
                         Xem nhật ký

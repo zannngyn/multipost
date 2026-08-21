@@ -12,6 +12,7 @@ import { useId, useMemo, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
 import { resolveMonthKey } from "@/ui/components/scheduled/calendar-grid";
 import { CancelDialog } from "@/ui/components/scheduled/CancelDialog";
 import { RescheduleDialog } from "@/ui/components/scheduled/RescheduleDialog";
@@ -150,21 +151,30 @@ export function ScheduledScreen() {
   function pushUrl(nextFilter: ScheduledFilter, nextView: ScheduledViewState) {
     setNotice(null);
     setWarning(null);
-    const query = scheduledSearchParams(nextFilter, nextView).toString();
+    // The hub's `?tab=` rides along on every rewrite: this screen replaces the
+    // WHOLE query, and dropping the tab would bounce the operator to the other
+    // tab on the next server render.
+    const query = withTabParam(
+      scheduledSearchParams(nextFilter, nextView).toString(),
+      searchParams.get(POSTS_TAB_PARAM),
+    );
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   function hrefForDialog(action: "reschedule" | "cancel", postJobId: string): string {
     const params = scheduledSearchParams(filter, view);
     params.set(SCHEDULED_DIALOG_PARAMS[action], postJobId);
-    return `${pathname}?${params.toString()}`;
+    return `${pathname}?${withTabParam(params.toString(), searchParams.get(POSTS_TAB_PARAM))}`;
   }
 
-  /** Closing a dialog only drops its parameter — filter and month must survive. */
+  /** Closing a dialog only drops its parameter — filter, month and tab survive. */
   function closeDialogs() {
     reschedule.reset();
     cancel.reset();
-    const query = scheduledSearchParams(filter, view).toString();
+    const query = withTabParam(
+      scheduledSearchParams(filter, view).toString(),
+      searchParams.get(POSTS_TAB_PARAM),
+    );
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
@@ -209,9 +219,11 @@ export function ScheduledScreen() {
   return (
     <section className="space-y-6" aria-labelledby="scheduled-heading">
       <header className="space-y-1">
-        <h1 id="scheduled-heading" className="text-2xl font-semibold tracking-tight">
+        {/* h2: since the wave-1 IA this screen is a TAB inside /posts, and the
+            hub above it owns the page's h1 (core-accessibility §1). */}
+        <h2 id="scheduled-heading" className="text-2xl font-semibold tracking-tight">
           Bài đã hẹn
-        </h1>
+        </h2>
         <p className="text-muted-foreground max-w-prose text-sm">
           Những bài đang chờ tới giờ đăng. Chế độ Danh sách xếp bài sớm nhất lên trên; chế độ Lịch
           tháng cho thấy công việc rải ra trong tháng — bấm vào một ngày để mở chi tiết. Giờ hiển
