@@ -23,7 +23,7 @@ describe("isNavItemActive", () => {
   });
 
   it("does not match a path that merely shares a prefix", () => {
-    expect(isNavItemActive("/jobsomething", "/jobs")).toBe(false);
+    expect(isNavItemActive("/productsomething", "/products")).toBe(false);
   });
 
   it("ignores a trailing slash", () => {
@@ -33,10 +33,12 @@ describe("isNavItemActive", () => {
   it("stops matching sub-paths when the entry is exact", () => {
     // No nav entry sets `exact` since the wave-1 IA (no entry owns another's
     // prefix any more), but the option is what keeps that possible — a nested
-    // destination would light two rows at once without it.
-    expect(isNavItemActive("/channels/groups", "/channels", { exact: true })).toBe(false);
-    expect(isNavItemActive("/channels", "/channels", { exact: true })).toBe(true);
-    expect(isNavItemActive("/channels/groups", "/channels/groups")).toBe(true);
+    // destination would light two rows at once without it. The paths here are
+    // deliberately made up: pinning the option's behaviour to a route that was
+    // later retired is how a test starts asserting the shape of a 404.
+    expect(isNavItemActive("/parent/child", "/parent", { exact: true })).toBe(false);
+    expect(isNavItemActive("/parent", "/parent", { exact: true })).toBe(true);
+    expect(isNavItemActive("/parent/child", "/parent/child")).toBe(true);
   });
 });
 

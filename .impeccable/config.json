@@ -1,26 +1,7 @@
 {
   "detector": {
     "ignoreRules": [],
-    "ignoreFiles": [],
-    "ignoreValues": [
-      {
-        "rule": "design-system-font-size",
-        "value": "13px",
-        "createdAt": "2026-08-21T15:06:07.363Z",
-        "reason": "PM ruling 21/08/2026 (wave-1 critique): the 13/11/10px steps on the compose screen are legitimised as-is; task-8 is explicitly forbidden from normalising them"
-      },
-      {
-        "rule": "design-system-font-size",
-        "value": "11px",
-        "createdAt": "2026-08-21T15:06:07.434Z",
-        "reason": "PM ruling 21/08/2026 (wave-1 critique): the 13/11/10px steps on the compose screen are legitimised as-is; task-8 is explicitly forbidden from normalising them"
-      },
-      {
-        "rule": "design-system-font-size",
-        "value": "10px",
-        "createdAt": "2026-08-21T15:06:07.503Z",
-        "reason": "PM ruling 21/08/2026 (wave-1 critique): the 13/11/10px steps on the compose screen are legitimised as-is; task-8 is explicitly forbidden from normalising them"
-      }
-    ]
+    "ignoreFiles": ["src/ui/theme/mysp.css"],
+    "ignoreValues": []
   }
 }
