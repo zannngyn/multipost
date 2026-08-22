@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  inspectorRecovery,
   isInspectorDrawerOpen,
   productInspectorState,
   type ProductInspectorState,
@@ -121,5 +122,32 @@ describe("isInspectorDrawerOpen", () => {
     expect(isInspectorDrawerOpen(true, found)).toBe(true);
     expect(isInspectorDrawerOpen(true, loading)).toBe(true);
     expect(isInspectorDrawerOpen(true, missing)).toBe(true);
+  });
+});
+
+describe("inspectorRecovery", () => {
+  it("offers nothing when the whole catalogue is already on screen", () => {
+    // No filter and no further pages: the code is genuinely not in the data.
+    // A button here would promise a fix that does not exist.
+    expect(inspectorRecovery({ hasFilter: false, hasNextPage: false })).toBeNull();
+  });
+
+  it("undoes the filter first — it is the operator's own doing", () => {
+    expect(inspectorRecovery({ hasFilter: true, hasNextPage: true })).toEqual({
+      kind: "clear-filter",
+      label: "Bỏ bộ lọc và tìm lại",
+    });
+  });
+
+  it("falls back to fetching the pages that are not loaded yet", () => {
+    expect(inspectorRecovery({ hasFilter: false, hasNextPage: true })).toEqual({
+      kind: "load-more",
+      label: "Tải thêm sản phẩm",
+    });
+  });
+
+  it("always names its action — the label is what the button says", () => {
+    const plan = inspectorRecovery({ hasFilter: true, hasNextPage: false });
+    expect(plan?.label.trim().length).toBeGreaterThan(0);
   });
 });

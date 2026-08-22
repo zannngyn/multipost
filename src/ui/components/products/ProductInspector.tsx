@@ -15,7 +15,10 @@ import {
 } from "@astryxdesign/core";
 import { useRouter } from "next/navigation";
 
-import type { ProductInspectorState } from "@/ui/components/products/product-inspector-state";
+import type {
+  InspectorRecoveryAction,
+  ProductInspectorState,
+} from "@/ui/components/products/product-inspector-state";
 import { productStatus } from "@/ui/components/products/product-status";
 import {
   INVENTORY_STATUS_LABELS,
@@ -43,7 +46,29 @@ function blockedBannerText(product: CatalogProduct): string {
   );
 }
 
-export function ProductInspector({ state }: { state: ProductInspectorState }) {
+export function ProductInspector({
+  state,
+  /**
+   * 2 in the panel, where this body is the first heading under the page title.
+   * 3 in the drawer, where DialogHeader's title already took h2 — two peer
+   * headings would tell a screen-reader user the box holds two sections.
+   */
+  headingLevel = 2,
+  /** The button offered when the selected code is not on screen. */
+  recovery = null,
+  /**
+   * Astryx's own rule: "start" for short values, "top" for long ones. In the
+   * 380px panel the labels sit beside the values; in a drawer on a split-screen
+   * phone (195px measured) a 120px label column leaves ~75px for the value and
+   * "Xuân hè 2026" breaks one character per line.
+   */
+  labelPosition = "start",
+}: {
+  state: ProductInspectorState;
+  headingLevel?: 2 | 3;
+  recovery?: InspectorRecoveryAction | null;
+  labelPosition?: "start" | "top";
+}) {
   const router = useRouter();
 
   // --- Nothing asked for ---------------------------------------------------
@@ -51,7 +76,7 @@ export function ProductInspector({ state }: { state: ProductInspectorState }) {
     return (
       <EmptyState
         isCompact
-        headingLevel={2}
+        headingLevel={headingLevel}
         title="Chưa chọn sản phẩm nào"
         description="Bấm vào mã sản phẩm trong bảng để xem tồn kho, ảnh và lý do bị chặn."
       />
@@ -75,9 +100,24 @@ export function ProductInspector({ state }: { state: ProductInspectorState }) {
     return (
       <EmptyState
         isCompact
-        headingLevel={2}
+        headingLevel={headingLevel}
         title={`Không thấy mã ${state.code} trong danh sách`}
-        description="Mã này không nằm trong phần danh sách đã tải: có thể bộ lọc đang loại nó ra, hoặc chưa cuộn tới trang chứa nó. Bỏ bộ lọc rồi bấm “Tải thêm” để tìm."
+        // Each case names ITS own cause. One sentence covering all three would
+        // tell an operator with no filter on that their filter might be to blame.
+        description={
+          recovery === null
+            ? "Danh sách đã tải hết và không có mã này. Kiểm tra lại mã, hoặc chạy đồng bộ nếu Sheet vừa thêm mã mới."
+            : recovery.kind === "clear-filter"
+              ? "Bộ lọc đang bật có thể đang loại mã này ra khỏi danh sách."
+              : "Danh sách mới tải một phần — mã này có thể nằm ở những trang chưa tải."
+        }
+        // The action lives INSIDE the modal. Pointing at a control on the page
+        // behind is pointing at something the dialog has made inert.
+        actions={
+          recovery ? (
+            <Button variant="secondary" label={recovery.label} onClick={recovery.onPress} />
+          ) : undefined
+        }
       />
     );
   }
@@ -94,11 +134,14 @@ export function ProductInspector({ state }: { state: ProductInspectorState }) {
     inventory.operatorMessage !== null && inventory.operatorMessage !== blockedMessage;
 
   return (
-    <Stack direction="vertical" gap={4} padding={4} isScrollable height="100%">
+    // No scroll container here: the frame around this body owns overflow
+    // (LayoutPanel above 1024px, LayoutContent inside the drawer). Two nested
+    // scrollers is how the drawer ended up with a body that could not move.
+    <Stack direction="vertical" gap={4} padding={4}>
       <Stack direction="vertical" gap={1}>
         <Stack direction="horizontal" gap={2} align="center">
           <StatusDot variant={status.variant} label={status.label} />
-          <Heading level={2}>{product.code}</Heading>
+          <Heading level={headingLevel}>{product.code}</Heading>
         </Stack>
         <Text type="supporting">
           {product.name.trim().length > 0 ? product.name : "(tên trống trên Sheet)"}
@@ -107,7 +150,9 @@ export function ProductInspector({ state }: { state: ProductInspectorState }) {
 
       <Divider />
 
-      <MetadataList label={{ position: "start", width: 120 }}>
+      <MetadataList
+        label={labelPosition === "top" ? { position: "top" } : { position: "start", width: 120 }}
+      >
         <MetadataListItem label="Chủng loại">{product.category ?? "—"}</MetadataListItem>
         <MetadataListItem label="Mùa vụ">{product.season ?? "—"}</MetadataListItem>
         <MetadataListItem label="Tồn kho">

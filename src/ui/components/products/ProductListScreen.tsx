@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import {
+  inspectorRecovery,
   isInspectorDrawerOpen,
   productInspectorState,
 } from "@/ui/components/products/product-inspector-state";
@@ -160,6 +161,62 @@ export function ProductListScreen() {
     pushUrl({ status, q: filter.q }, selectedCode);
   }
 
+  // --- Focus, across the drawer's life -------------------------------------
+  /**
+   * Which element opened the drawer, so closing can hand focus back to it.
+   *
+   * The native <dialog> restores focus when IT closes — but this drawer closes
+   * by unmounting (the selection lives in the URL, and clearing it removes the
+   * dialog from the tree), so the browser has nothing to restore to and focus
+   * falls to <body>. A keyboard user would then be back at the top of the page
+   * with the row they were reading nowhere near the caret (core-accessibility).
+   *
+   * The row's code button is rendered inside Astryx's Table, so there is no ref
+   * to reach for; the element that had focus at the moment of the press is the
+   * same element and needs no plumbing through the table.
+   */
+  const invokerRef = useRef<HTMLElement | null>(null);
+  const shouldRestoreFocus = useRef(false);
+
+  useEffect(() => {
+    if (isDrawerOpen || !shouldRestoreFocus.current) return;
+    shouldRestoreFocus.current = false;
+
+    const invoker = invokerRef.current;
+    invokerRef.current = null;
+    // The row may have been re-rendered away (a filter change, a refetch).
+    // Silently doing nothing is right: there is nothing to go back to.
+    if (invoker?.isConnected) invoker.focus();
+  }, [isDrawerOpen]);
+
+  function selectProduct(code: string) {
+    const active = document.activeElement;
+    invokerRef.current = active instanceof HTMLElement ? active : null;
+    pushUrl(filter, code);
+  }
+
+  function closeDrawer() {
+    shouldRestoreFocus.current = true;
+    pushUrl(filter, null);
+  }
+
+  /**
+   * What the drawer offers when the selected code is not among the loaded rows.
+   * Clearing the filter KEEPS `?chon=`, so the drawer stays open and fills
+   * itself in as the unfiltered page arrives — one press, no re-finding.
+   */
+  const recoveryPlan = inspectorRecovery({ hasFilter, hasNextPage: products.hasNextPage });
+  const recovery =
+    recoveryPlan === null
+      ? null
+      : {
+          ...recoveryPlan,
+          onPress:
+            recoveryPlan.kind === "clear-filter"
+              ? clearFilters
+              : () => void products.fetchNextPage(),
+        };
+
   /**
    * The status filter. The counts ride in the labels on a wide viewport, where
    * three segments plus two numbers fit; on a narrow one they are dropped —
@@ -273,7 +330,7 @@ export function ProductListScreen() {
               filter={filter}
               hasFilter={hasFilter}
               selectedCode={selectedCode}
-              onSelect={(code) => pushUrl(filter, code)}
+              onSelect={selectProduct}
               onClearFilters={clearFilters}
             />
           </LayoutContent>
@@ -281,18 +338,22 @@ export function ProductListScreen() {
         end={
           isNarrow ? undefined : (
             <LayoutPanel width={380} hasDivider label="Chi tiết sản phẩm">
-              <ProductInspector state={inspector} />
+              {/* The panel is not modal, so the header controls stay usable —
+                  but one press beats two, here as much as in the drawer. */}
+              <ProductInspector state={inspector} recovery={recovery} />
             </LayoutPanel>
           )
         }
       />
 
       {/* Same inspector, other frame. Closing clears `?chon=` so Back does not
-          re-open a drawer the operator just dismissed. */}
+          re-open a drawer the operator just dismissed, and hands focus back to
+          the row that opened it. */}
       <ProductInspectorDrawer
         state={inspector}
         isOpen={isDrawerOpen}
-        onClose={() => pushUrl(filter, null)}
+        onClose={closeDrawer}
+        recovery={recovery}
       />
     </>
   );

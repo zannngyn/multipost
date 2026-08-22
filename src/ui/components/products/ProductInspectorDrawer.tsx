@@ -1,8 +1,11 @@
 "use client";
 
-import { Dialog, DialogHeader, Layout, LayoutContent } from "@astryxdesign/core";
+import { Dialog, DialogHeader, Layout, LayoutContent, useMediaQuery } from "@astryxdesign/core";
 
-import type { ProductInspectorState } from "@/ui/components/products/product-inspector-state";
+import type {
+  InspectorRecoveryAction,
+  ProductInspectorState,
+} from "@/ui/components/products/product-inspector-state";
 import { ProductInspector } from "@/ui/components/products/ProductInspector";
 
 /**
@@ -28,11 +31,24 @@ export function ProductInspectorDrawer({
   state,
   isOpen,
   onClose,
+  recovery,
 }: {
   state: ProductInspectorState;
   isOpen: boolean;
   onClose: () => void;
+  /**
+   * The way out of the `missing` state, as a button INSIDE the modal. The copy
+   * used to point at "Bỏ bộ lọc" and "Tải thêm", both of which sit on the page
+   * behind — inert while the dialog is open, so the instruction could not be
+   * followed without first guessing that the box had to be closed.
+   */
+  recovery: InspectorRecoveryAction | null;
 }) {
+  // Split-screen and folded phones get down here: below ~340px a label column
+  // beside the value leaves too little room for the value. Hook first — the
+  // early return below must not sit between renders with different hook counts.
+  const stackLabels = useMediaQuery("(max-width: 340px)");
+
   // Rendering the body of a closed drawer would keep a second copy of the
   // inspector (and its router hook) alive behind the page for nothing.
   if (!isOpen) return null;
@@ -51,18 +67,21 @@ export function ProductInspectorDrawer({
         if (!open) onClose();
       }}
       purpose="info"
-      // Pinned to the inline end and to the top, capped at the viewport: it
-      // enters from the side the panel lives on above 1024px, so the same
-      // information keeps the same place on screen. It grows with its content
-      // and scrolls at 100dvh instead of always being a full-height slab — a
-      // stretched empty column on a 900px tablet reads as a broken layout.
-      // (`variant="fullscreen"` was the alternative and does exactly that.)
-      width="min(420px, 100vw)"
-      maxHeight="100dvh"
-      position={{ top: 0, end: 0 }}
+      /*
+       * `fullscreen`, and NOT a `maxHeight` + `position` sheet. The sheet looked
+       * more like a drawer and was a reflow bug (WCAG 1.4.10): a <dialog> with a
+       * max-height has an INDEFINITE height, so `height: 100%` inside it does not
+       * resolve, no descendant can become a scroll container, and the body is
+       * simply clipped at the viewport edge. Measured at 195×422 the "Soạn bài"
+       * button sat at y=945 and the wheel moved nothing — exactly the P1 bug this
+       * component exists to fix, one layer down.
+       * `fullscreen` gives the dialog a definite viewport-sized box, which is what
+       * `Layout height="fill"` and the scrollable content region below need.
+       */
+      variant="fullscreen"
     >
       <Layout
-        height="auto"
+        height="fill"
         header={
           <DialogHeader
             title="Chi tiết sản phẩm"
@@ -78,8 +97,18 @@ export function ProductInspectorDrawer({
           // No padding here: DialogHeader brings its own inset and the inspector
           // body brings a matching one, so the two line up. A third from the
           // content slot would push the body out of line with the title.
-          <LayoutContent padding={0}>
-            <ProductInspector state={state} />
+          // THIS is the scroll container — the one place in the drawer that owns
+          // overflow, so a long product (conflict banner + note + block reason)
+          // scrolls instead of running off the bottom edge.
+          <LayoutContent padding={0} isScrollable>
+            {/* h2 belongs to DialogHeader's title; the product code under it is
+                h3, or the drawer would announce two peer headings. */}
+            <ProductInspector
+              state={state}
+              headingLevel={3}
+              recovery={recovery}
+              labelPosition={stackLabels ? "top" : "start"}
+            />
           </LayoutContent>
         }
       />

@@ -45,6 +45,45 @@ export function productInspectorState(
 }
 
 /**
+ * The one action that can bring a `missing` code back into view, offered where
+ * the operator is standing.
+ *
+ * A modal makes the page behind it inert, so "bỏ bộ lọc rồi bấm Tải thêm" — both
+ * controls living out there — was an instruction that could not be carried out
+ * from inside the drawer.
+ */
+export type InspectorRecoveryKind = "clear-filter" | "load-more";
+
+export interface InspectorRecovery {
+  kind: InspectorRecoveryKind;
+  label: string;
+}
+
+/** The same thing once the screen has attached the handler that performs it. */
+export type InspectorRecoveryAction = InspectorRecovery & { onPress: () => void };
+
+const RECOVERY_LABELS: Record<InspectorRecoveryKind, string> = {
+  "clear-filter": "Bỏ bộ lọc và tìm lại",
+  "load-more": "Tải thêm sản phẩm",
+};
+
+/**
+ * Which one, in the order of what is most likely hiding the code: the filter
+ * first (the operator set it, so it is the fastest thing to undo), then the
+ * pages not fetched yet. When neither applies, the whole catalogue is on screen
+ * and the code is genuinely not in it — no button fixes that, and offering one
+ * would be a lie.
+ */
+export function inspectorRecovery(options: {
+  hasFilter: boolean;
+  hasNextPage: boolean;
+}): InspectorRecovery | null {
+  if (options.hasFilter) return { kind: "clear-filter", label: RECOVERY_LABELS["clear-filter"] };
+  if (options.hasNextPage) return { kind: "load-more", label: RECOVERY_LABELS["load-more"] };
+  return null;
+}
+
+/**
  * Below 1024px the inspector is a modal drawer, so it must not open by itself.
  * It opens for any code the operator asked for — including one still loading and
  * one that turned out not to be on screen, because those answers are the whole
