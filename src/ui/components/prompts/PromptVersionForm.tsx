@@ -48,6 +48,14 @@ import {
  * Astryx fields are controlled, so every input goes through `Controller`: the
  * schema and the messages stay exactly where they were.
  */
+
+/**
+ * Said by every control that goes quiet during a save. It is also load-bearing
+ * mechanically: Astryx keeps a control focusable (`aria-disabled`) only when it
+ * has a message to reach, so without this the keyboard would land on <body> the
+ * moment the operator pressed save.
+ */
+const SAVING_MESSAGE = "Đang lưu phiên bản…";
 export function PromptVersionForm({
   nextVersion,
   defaultValues,
@@ -61,9 +69,12 @@ export function PromptVersionForm({
   nextVersion: number;
   defaultValues?: Partial<PromptVersionFormValues>;
   /**
-   * BUSY, not read-only: a save of this panel's own is in flight. It disables
-   * the controls and spins the save button — it never unmounts anything and
-   * never changes a sentence (`prompt-write-access.ts`).
+   * BUSY, not read-only: a save of this panel's own is in flight. It puts EVERY
+   * field and BOTH buttons out of action for the length of the request — each
+   * one saying so through `disabledMessage`/`tooltip`, which is also what keeps
+   * them focusable (Astryx only swaps native `disabled` for `aria-disabled`
+   * when there is a message to reach). It never unmounts anything and never
+   * changes a sentence (`prompt-write-access.ts`).
    */
   pending: boolean;
   /** Server refusal for THIS form (INVALID_INPUT naming the variables). */
@@ -174,6 +185,7 @@ export function PromptVersionForm({
               hasAutoFocus
               width="100%"
               isDisabled={pending}
+              disabledMessage={SAVING_MESSAGE}
               status={
                 errors.name ? { type: "error", message: errors.name.message } : undefined
               }
@@ -198,6 +210,7 @@ export function PromptVersionForm({
               hasSpellCheck={false}
               width="100%"
               isDisabled={pending}
+              disabledMessage={SAVING_MESSAGE}
               status={
                 errors.systemPrompt
                   ? { type: "error", message: errors.systemPrompt.message }
@@ -231,6 +244,7 @@ export function PromptVersionForm({
               hasSpellCheck={false}
               width="100%"
               isDisabled={pending}
+              disabledMessage={SAVING_MESSAGE}
               placeholder={
                 "Viết caption cho sản phẩm {{product.name}}...\n\nRàng buộc: {{constraints}}"
               }
@@ -254,6 +268,7 @@ export function PromptVersionForm({
               rows={2}
               width="100%"
               isDisabled={pending}
+              disabledMessage={SAVING_MESSAGE}
               isRequired
               placeholder="Ví dụ: bỏ emoji ở câu mở, thêm nhắc size"
               status={
@@ -277,6 +292,7 @@ export function PromptVersionForm({
               onBlur={field.onBlur}
               htmlName={field.name}
               isDisabled={pending}
+              disabledMessage={SAVING_MESSAGE}
             />
           )}
         />
@@ -300,6 +316,10 @@ export function PromptVersionForm({
             label={`Lưu phiên bản v${nextVersion}`}
             isLoading={pending}
             isDisabled={pending}
+            // Without a tooltip Astryx uses NATIVE disabled, and a natively
+            // disabled button that had focus drops the keyboard on <body> —
+            // which is precisely what pressing this button does.
+            tooltip={pending ? SAVING_MESSAGE : undefined}
           />
           {onCancel ? (
             <Button
@@ -307,6 +327,7 @@ export function PromptVersionForm({
               variant="ghost"
               label="Huỷ tạo phiên bản mới"
               isDisabled={pending}
+              tooltip={pending ? SAVING_MESSAGE : undefined}
               onClick={onCancel}
             >
               Huỷ

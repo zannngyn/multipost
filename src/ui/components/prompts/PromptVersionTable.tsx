@@ -13,7 +13,7 @@ import {
   proportional,
 } from "@astryxdesign/core";
 import type { TableColumn } from "@astryxdesign/core";
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
   PROMPT_STATUS_BADGE_VARIANTS,
@@ -80,6 +80,12 @@ export function PromptVersionTable({
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   /** Row toggles, so closing the detail panel can hand focus back to its opener. */
   const toggleRefs = useRef(new Map<string, HTMLButtonElement>());
+
+  /** Stable, so the row's own ref callback below can be memoised too. */
+  const registerToggle = useCallback((key: string, node: HTMLButtonElement | null) => {
+    if (node) toggleRefs.current.set(key, node);
+    else toggleRefs.current.delete(key);
+  }, []);
 
   const rows = describePromptVersions(versions) as readonly VersionRow[];
   const open = rows.find((row) => row.key === openKey) ?? null;
@@ -175,10 +181,8 @@ export function PromptVersionTable({
           readOnlyReason={readOnlyReason}
           isBusy={isBusy}
           activatingVersion={activatingVersion}
-          registerToggleRef={(node) => {
-            if (node) toggleRefs.current.set(row.key, node);
-            else toggleRefs.current.delete(row.key);
-          }}
+          rowKey={row.key}
+          registerToggle={registerToggle}
           onToggleDetail={() => (openKey === row.key ? closeDetail() : setOpenKey(row.key))}
           onStartConfirm={() => setConfirmKey(row.key)}
           onCancelConfirm={() => setConfirmKey(null)}
@@ -217,7 +221,8 @@ function RowActions({
   readOnlyReason,
   isBusy,
   activatingVersion,
-  registerToggleRef,
+  rowKey,
+  registerToggle,
   onToggleDetail,
   onStartConfirm,
   onCancelConfirm,
@@ -231,7 +236,8 @@ function RowActions({
   readOnlyReason?: string | null;
   isBusy?: boolean;
   activatingVersion: number | null;
-  registerToggleRef: (node: HTMLButtonElement | null) => void;
+  rowKey: string;
+  registerToggle: (key: string, node: HTMLButtonElement | null) => void;
   onToggleDetail: () => void;
   onStartConfirm: () => void;
   onCancelConfirm: () => void;
@@ -272,18 +278,37 @@ function RowActions({
   // Two rows can share a number, so every accessible name carries the origin
   // too — otherwise a screen reader announces "Xem nội dung v2" twice.
   const rowName = row.label.origin ? `${row.label.number} — ${row.label.origin}` : row.label.number;
-  // Only READ-ONLY earns a sentence. Busy is a spinner, and a permanent-sounding
-  // explanation next to a temporary state is worse than none.
-  const readOnlyTooltip = isReadOnly ? (readOnlyReason ?? undefined) : undefined;
+
+  /**
+   * Why a write control in this row is off. Read-only is the permanent fact and
+   * outranks the rest; the busy sentences are short and temporary on purpose.
+   *
+   * Every disabled state here MUST carry one: Astryx only swaps native
+   * `disabled` for `aria-disabled` when a tooltip is present (Button.js), and a
+   * natively disabled button drops the keyboard on the floor the moment it is
+   * disabled while focused — which is exactly what pressing it does.
+   */
+  const writeBlock = isReadOnly
+    ? (readOnlyReason ?? undefined)
+    : isBusy
+      ? "Đang lưu phiên bản mới — chờ lưu xong đã."
+      : undefined;
+  const activateBlock = writeBlock ?? (isActivating ? "Đang đổi bản đang dùng…" : undefined);
+  const isActivateBlocked = isReadOnly || Boolean(isBusy) || isActivating;
+
+  const setToggleRef = useCallback(
+    (node: HTMLButtonElement | null) => {
+      toggleRef.current = node;
+      registerToggle(rowKey, node);
+    },
+    [registerToggle, rowKey],
+  );
 
   return (
     <Stack direction="vertical" gap={2} align="start">
       <HStack gap={2} wrap="wrap" align="center">
         <Button
-          ref={(node) => {
-            toggleRef.current = node;
-            registerToggleRef(node);
-          }}
+          ref={setToggleRef}
           size="sm"
           variant="secondary"
           label={isOpen ? `Ẩn nội dung ${rowName}` : `Xem nội dung ${rowName}`}
@@ -305,8 +330,8 @@ function RowActions({
             size="sm"
             variant="ghost"
             label={`Dùng làm bản nháp — ${rowName}`}
-            isDisabled={isReadOnly || isBusy}
-            tooltip={readOnlyTooltip}
+            isDisabled={isReadOnly || Boolean(isBusy)}
+            tooltip={writeBlock}
             onClick={onReuse}
           >
             Dùng làm bản nháp
@@ -322,8 +347,11 @@ function RowActions({
             // The spinner lives here rather than on the confirmation, which is
             // gone by the time the request is in flight (see "Xác nhận").
             isLoading={isThisActivating}
-            isDisabled={isReadOnly || isActivating}
-            tooltip={readOnlyTooltip}
+            // `isBusy` too: a save in flight may itself be a save-and-activate,
+            // and two writes racing for "which prompt is running" is the one
+            // outcome this screen must never allow.
+            isDisabled={isActivateBlocked}
+            tooltip={activateBlock}
             onClick={onStartConfirm}
           >
             Kích hoạt
@@ -348,7 +376,10 @@ function RowActions({
               size="sm"
               variant="primary"
               label={`Xác nhận kích hoạt ${rowName}`}
-              isDisabled={isReadOnly || isActivating}
+              // Same lock as the button that opened it — the confirmation must
+              // not be the way around a write already in flight.
+              isDisabled={isActivateBlocked}
+              tooltip={activateBlock}
               onClick={() => {
                 // Confirming unmounts this whole block, so focus is parked on
                 // the row's always-mounted toggle FIRST. Without it the keyboard

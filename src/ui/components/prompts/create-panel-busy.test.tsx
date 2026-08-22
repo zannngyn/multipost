@@ -70,6 +70,25 @@ describe("create panel while a save is in flight", () => {
     expect(html).toContain('aria-label="Lưu phiên bản v3"');
   });
 
+  it("keeps every quietened control focusable instead of dropping the keyboard", () => {
+    const html = renderToStaticMarkup(
+      <PromptVersionForm
+        nextVersion={3}
+        pending
+        defaultValues={TYPED}
+        onSubmit={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+
+    // Astryx only swaps native `disabled` for `aria-disabled` when the control
+    // carries a message to reach (Button.js, TextArea.js). A natively disabled
+    // control that HAD focus — the save button just pressed, or the field it was
+    // submitted from — sends the keyboard to <body> for the whole request.
+    expect(html).toContain('aria-disabled="true"');
+    expect(html).not.toContain(' disabled=""');
+  });
+
   it("leaves the controls usable again once the save settles", () => {
     const html = renderToStaticMarkup(
       <PromptVersionForm

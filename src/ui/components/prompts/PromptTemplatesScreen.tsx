@@ -124,6 +124,9 @@ export function PromptTemplatesScreen() {
    */
   useEffect(() => {
     if (!focusAfterConfirmedReuse.current) return;
+    // Consumed either way. The flag is a one-shot for THIS prefill: if the panel
+    // is not on screen there is nothing to focus, and carrying the intent over
+    // to some later, unrelated open would be worse than dropping it.
     focusAfterConfirmedReuse.current = false;
     firstFieldRef.current?.focus();
   }, [draftKey]);
@@ -217,6 +220,18 @@ export function PromptTemplatesScreen() {
 
   const data = versions.data;
   const tenantVersions = data?.versions.filter((item) => item.source === "tenant") ?? [];
+
+  /**
+   * THE one decision about whether the create panel is on screen, delegated
+   * whole so no hand-rolled boolean can creep back in and make "busy" mean
+   * "unmount" again. `create-panel-mount.test.ts` pins both halves: that this
+   * call is the guard, and that it holds no logic of its own.
+   */
+  const isCreatePanelVisible = showsCreatePanel({
+    formOpen,
+    isReadOnly: access.isReadOnly,
+    isBusy: isSaving,
+  });
 
   return (
     <Layout
@@ -379,13 +394,9 @@ export function PromptTemplatesScreen() {
                     the button and its consequence have to be one glance apart.
                   */}
                   {/* Read-only hides the panel because it is a write surface and
-                      no route may reach one in support mode (M3.3). `isSaving`
-                      is passed only to be ignored — see `showsCreatePanel`. */}
-                  {showsCreatePanel({
-                    formOpen,
-                    isReadOnly: access.isReadOnly,
-                    isBusy: isSaving,
-                  }) ? (
+                      no route may reach one in support mode (M3.3). Decided in
+                      one place above — never inline, never with `isSaving`. */}
+                  {isCreatePanelVisible ? (
                     <Card padding={4} id={formPanelId}>
                       <PromptVersionForm
                         key={draftKey}
