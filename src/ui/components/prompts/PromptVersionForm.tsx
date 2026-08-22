@@ -53,15 +53,26 @@ export function PromptVersionForm({
   defaultValues,
   pending,
   error,
+  firstFieldRef,
   onDirtyChange,
   onSubmit,
   onCancel,
 }: {
   nextVersion: number;
   defaultValues?: Partial<PromptVersionFormValues>;
+  /**
+   * BUSY, not read-only: a save of this panel's own is in flight. It disables
+   * the controls and spins the save button — it never unmounts anything and
+   * never changes a sentence (`prompt-write-access.ts`).
+   */
   pending: boolean;
   /** Server refusal for THIS form (INVALID_INPUT naming the variables). */
   error?: unknown;
+  /**
+   * Handle on the first field so the screen can put focus back after Astryx's
+   * dialog has restored it elsewhere. `hasAutoFocus` covers the normal open.
+   */
+  firstFieldRef?: React.RefObject<HTMLInputElement | null>;
   /**
    * Reports whether anything has been typed since the panel opened. The screen
    * needs it to know when replacing the draft would destroy real work — the
@@ -150,7 +161,10 @@ export function PromptVersionForm({
           name="name"
           render={({ field }) => (
             <TextInput
-              ref={field.ref}
+              ref={(node) => {
+                field.ref(node);
+                if (firstFieldRef) firstFieldRef.current = node;
+              }}
               label="Tên phiên bản"
               value={field.value}
               onChange={field.onChange}

@@ -22,8 +22,12 @@ import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { PromptVersionForm } from "@/ui/components/prompts/PromptVersionForm";
 import { PromptVersionTable } from "@/ui/components/prompts/PromptVersionTable";
+import {
+  firstRunDescription,
+  promptWriteAccess,
+  showsCreatePanel,
+} from "@/ui/components/prompts/prompt-write-access";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
-import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import {
   useActivatePromptVersion,
@@ -71,7 +75,14 @@ export function PromptTemplatesScreen() {
   // Support mode is read-only (M3.3): a prompt version decides what the AI
   // writes for the CUSTOMER's posts, so neither creating nor activating one is
   // something MYSP staff do from inside a support session.
-  const gate = writeGate(useReadOnlyReason(), create.isPending);
+  //
+  // The PURE read-only signal, deliberately not `writeGate(...).isDisabled`:
+  // that one also goes true while a create is in flight, and this screen uses
+  // read-only to decide what is MOUNTED. Gating the panel on the combined flag
+  // unmounted the form mid-submit — see `prompt-write-access.ts`. Busy is a
+  // separate axis and only ever disables a control.
+  const access = promptWriteAccess(useReadOnlyReason());
+  const isSaving = create.isPending;
 
   const formPanelId = useId();
   const [formOpen, setFormOpen] = useState(false);
@@ -93,12 +104,29 @@ export function PromptTemplatesScreen() {
   const triggerRef = useRef<HTMLButtonElement>(null);
   /** Fallback landing spot when there is no trigger (read-only session). */
   const headingRef = useRef<HTMLHeadingElement>(null);
+  /** First field of the open panel, so a confirmed prefill can be typed into. */
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  /** One-shot: set when a prefill was confirmed through the dialog. */
+  const focusAfterConfirmedReuse = useRef(false);
 
   const showSkeleton = useDelayedFlag(versions.isPending && versions.fetchStatus === "fetching");
 
   useEffect(() => {
     if (notice) noticeRef.current?.focus();
   }, [notice]);
+
+  /**
+   * Astryx's `Dialog` restores focus to whatever was focused when it opened —
+   * the row button — in a passive effect, which lands AFTER React has applied
+   * the remounted panel's autofocus. So the panel would be filled and the
+   * keyboard would be back in the table. This effect belongs to the PARENT of
+   * the dialog, so it runs after that restore and gets the last word.
+   */
+  useEffect(() => {
+    if (!focusAfterConfirmedReuse.current) return;
+    focusAfterConfirmedReuse.current = false;
+    firstFieldRef.current?.focus();
+  }, [draftKey]);
 
   function openBlankForm() {
     create.reset();
@@ -304,16 +332,12 @@ export function PromptTemplatesScreen() {
                     headingLevel={2}
                     title="Đơn vị này chưa có phiên bản riêng"
                     // A read-only session has no create button anywhere on the
-                    // screen, so the first-run copy must not point at one.
-                    description={
-                      gate.isDisabled
-                        ? `Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. ${
-                            gate.reason ?? "Phiên này chỉ xem, không tạo phiên bản được."
-                          }`
-                        : "Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Tạo phiên bản riêng khi muốn đổi giọng văn, độ dài hay cách gắn hashtag."
-                    }
+                    // screen, so the first-run copy must not point at one. Keyed
+                    // on read-only ONLY: an operator waiting for a save is still
+                    // allowed to write, and must not be told otherwise.
+                    description={firstRunDescription(access)}
                     actions={
-                      gate.isDisabled || formOpen ? undefined : (
+                      access.isReadOnly || formOpen ? undefined : (
                         <Button
                           variant="primary"
                           label="Tạo phiên bản đầu tiên"
@@ -329,8 +353,8 @@ export function PromptTemplatesScreen() {
                     <Heading level={2} id="prompt-versions-heading">
                       Các phiên bản ({data.versions.length})
                     </Heading>
-                    {gate.isDisabled ? (
-                      <ReadOnlyNotice reason={gate.reason} />
+                    {access.isReadOnly ? (
+                      <ReadOnlyNotice reason={access.reason} />
                     ) : (
                       <Button
                         ref={triggerRef}
@@ -354,17 +378,22 @@ export function PromptTemplatesScreen() {
                     Directly under the trigger, not at the bottom of the page:
                     the button and its consequence have to be one glance apart.
                   */}
-                  {/* `!gate.isDisabled` as well as `formOpen`: the panel is a
-                      write surface, and a read-only session must not be able to
-                      reach one by any route (M3.3). */}
-                  {formOpen && !gate.isDisabled ? (
+                  {/* Read-only hides the panel because it is a write surface and
+                      no route may reach one in support mode (M3.3). `isSaving`
+                      is passed only to be ignored — see `showsCreatePanel`. */}
+                  {showsCreatePanel({
+                    formOpen,
+                    isReadOnly: access.isReadOnly,
+                    isBusy: isSaving,
+                  }) ? (
                     <Card padding={4} id={formPanelId}>
                       <PromptVersionForm
                         key={draftKey}
                         nextVersion={data.nextVersion}
                         defaultValues={draft}
-                        pending={create.isPending}
+                        pending={isSaving}
                         error={create.isError ? create.error : undefined}
+                        firstFieldRef={firstFieldRef}
                         onDirtyChange={setFormDirty}
                         onSubmit={submit}
                         onCancel={closeForm}
@@ -377,8 +406,10 @@ export function PromptTemplatesScreen() {
                     activatingVersion={
                       activate.isPending ? (activate.variables?.version ?? null) : null
                     }
-                    disabled={gate.isDisabled}
-                    readOnlyReason={gate.reason}
+                    readOnlyReason={access.reason}
+                    // Busy, not read-only: swapping the draft while its own save
+                    // is in flight is nonsense, but it says nothing about rights.
+                    isBusy={isSaving}
                     onActivate={handleActivate}
                     onReuse={reuse}
                   />
@@ -400,7 +431,12 @@ export function PromptTemplatesScreen() {
               onAction={() => {
                 const version = pendingReuse;
                 setPendingReuse(null);
-                if (version) applyReuse(version);
+                if (!version) return;
+                // Claim focus back from the dialog's own restore (see the effect
+                // on `draftKey`) — the operator asked for this text, they should
+                // land in it.
+                focusAfterConfirmedReuse.current = true;
+                applyReuse(version);
               }}
             />
           </Stack>

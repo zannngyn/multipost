@@ -51,21 +51,26 @@ type VersionRow = PromptVersionDescriptor & Record<string, unknown>;
 export function PromptVersionTable({
   versions,
   activatingVersion,
-  disabled,
   readOnlyReason,
+  isBusy,
   onActivate,
   onReuse,
 }: {
   versions: readonly PromptVersion[];
   /** Version currently being activated, so only its button shows the pending state. */
   activatingVersion: number | null;
-  disabled?: boolean;
   /**
-   * Why writing is off (support mode, M3.3). Every write control in a row is
-   * blocked by `disabled` and explains itself with this sentence — "Dùng làm
-   * bản nháp" opens the create form, so it is a write control too.
+   * READ-ONLY (support mode, M3.3); null when writes are allowed. Every write
+   * control in a row is blocked by it and shows this sentence — "Dùng làm bản
+   * nháp" opens the create form, so it is a write control too.
+   *
+   * Deliberately NOT merged with `isBusy` (`prompt-write-access.ts`): one is a
+   * permanent fact that has to be explained, the other is a moment of waiting
+   * that must not rewrite any copy.
    */
   readOnlyReason?: string | null;
+  /** BUSY: a create of the screen's own is in flight. Temporary, unexplained. */
+  isBusy?: boolean;
   onActivate: (version: number) => void;
   /** Prefills the "tạo phiên bản mới" form from this row. */
   onReuse: (version: PromptVersion) => void;
@@ -167,8 +172,8 @@ export function PromptVersionTable({
           detailId={detailId}
           isOpen={openKey === row.key}
           isConfirming={confirmKey === row.key}
-          disabled={disabled}
           readOnlyReason={readOnlyReason}
+          isBusy={isBusy}
           activatingVersion={activatingVersion}
           registerToggleRef={(node) => {
             if (node) toggleRefs.current.set(row.key, node);
@@ -209,8 +214,8 @@ function RowActions({
   detailId,
   isOpen,
   isConfirming,
-  disabled,
   readOnlyReason,
+  isBusy,
   activatingVersion,
   registerToggleRef,
   onToggleDetail,
@@ -223,8 +228,8 @@ function RowActions({
   detailId: string;
   isOpen: boolean;
   isConfirming: boolean;
-  disabled?: boolean;
   readOnlyReason?: string | null;
+  isBusy?: boolean;
   activatingVersion: number | null;
   registerToggleRef: (node: HTMLButtonElement | null) => void;
   onToggleDetail: () => void;
@@ -234,10 +239,17 @@ function RowActions({
   onReuse: () => void;
 }) {
   const isBuiltIn = row.item.source === "built_in";
-  const isBusy = activatingVersion !== null;
+  const isReadOnly = typeof readOnlyReason === "string" && readOnlyReason.trim().length > 0;
+  const isActivating = activatingVersion !== null;
+  const isThisActivating = activatingVersion === row.item.version;
 
   const confirmRef = useRef<HTMLButtonElement>(null);
   const activateRef = useRef<HTMLButtonElement>(null);
+  /**
+   * Always mounted, unlike the two buttons that swap around it — which makes it
+   * the anchor focus can be parked on while the row rebuilds itself.
+   */
+  const toggleRef = useRef<HTMLButtonElement>(null);
   /**
    * Set by "Không" so focus can follow "Kích hoạt" back when it remounts. A ref
    * rather than state: this is a one-shot instruction to the DOM, and holding it
@@ -260,13 +272,18 @@ function RowActions({
   // Two rows can share a number, so every accessible name carries the origin
   // too — otherwise a screen reader announces "Xem nội dung v2" twice.
   const rowName = row.label.origin ? `${row.label.number} — ${row.label.origin}` : row.label.number;
-  const writeBlockReason = disabled ? (readOnlyReason ?? undefined) : undefined;
+  // Only READ-ONLY earns a sentence. Busy is a spinner, and a permanent-sounding
+  // explanation next to a temporary state is worse than none.
+  const readOnlyTooltip = isReadOnly ? (readOnlyReason ?? undefined) : undefined;
 
   return (
     <Stack direction="vertical" gap={2} align="start">
       <HStack gap={2} wrap="wrap" align="center">
         <Button
-          ref={registerToggleRef}
+          ref={(node) => {
+            toggleRef.current = node;
+            registerToggleRef(node);
+          }}
           size="sm"
           variant="secondary"
           label={isOpen ? `Ẩn nội dung ${rowName}` : `Xem nội dung ${rowName}`}
@@ -281,13 +298,15 @@ function RowActions({
 
         {row.item.body ? (
           // A write control: it opens the create form, so the read-only gate
-          // (M3.3) has to stop it here as well as at the section trigger.
+          // (M3.3) has to stop it here as well as at the section trigger. `isBusy`
+          // stops it too, but silently — swapping the draft while its own save is
+          // in flight is nonsense, not a lack of rights.
           <Button
             size="sm"
             variant="ghost"
             label={`Dùng làm bản nháp — ${rowName}`}
-            isDisabled={disabled}
-            tooltip={writeBlockReason}
+            isDisabled={isReadOnly || isBusy}
+            tooltip={readOnlyTooltip}
             onClick={onReuse}
           >
             Dùng làm bản nháp
@@ -300,8 +319,11 @@ function RowActions({
             size="sm"
             variant="secondary"
             label={`Kích hoạt ${rowName}`}
-            isDisabled={disabled || isBusy}
-            tooltip={writeBlockReason}
+            // The spinner lives here rather than on the confirmation, which is
+            // gone by the time the request is in flight (see "Xác nhận").
+            isLoading={isThisActivating}
+            isDisabled={isReadOnly || isActivating}
+            tooltip={readOnlyTooltip}
             onClick={onStartConfirm}
           >
             Kích hoạt
@@ -326,9 +348,15 @@ function RowActions({
               size="sm"
               variant="primary"
               label={`Xác nhận kích hoạt ${rowName}`}
-              isLoading={activatingVersion === row.item.version}
-              isDisabled={disabled || activatingVersion !== null}
-              onClick={onActivate}
+              isDisabled={isReadOnly || isActivating}
+              onClick={() => {
+                // Confirming unmounts this whole block, so focus is parked on
+                // the row's always-mounted toggle FIRST. Without it the keyboard
+                // drops to <body> for the length of the request; the screen's
+                // result banner then takes over when the answer lands.
+                toggleRef.current?.focus();
+                onActivate();
+              }}
             >
               Xác nhận
             </Button>
