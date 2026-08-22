@@ -28,9 +28,12 @@ const CSS_PATH = new URL("./mysp.css", import.meta.url);
  * ink and the one indigo. Everything else in `mysp.css` is inherited and moves
  * with the Astryx version, which is not this test's business.
  *
- * Adding an override to `mysp-theme.ts` without adding it here leaves that
- * token unpinned; that is a deliberate cost of listing them, and cheaper than a
- * test that re-implements `defineTheme`'s merge to guess which ones are ours.
+ * The list is explicit rather than derived, because `myspTheme.tokens` is the
+ * MERGED set — ours plus every token the neutral theme ships — and pinning all
+ * ~170 of those would be pinning the Astryx version, not our decisions. What
+ * keeps the list honest is the coverage test at the foot of this file: adding
+ * an override to the source without adding it here fails, so "unpinned" can no
+ * longer happen quietly.
  */
 const PINNED_TOKENS = [
   "--color-text-primary",
@@ -112,6 +115,24 @@ describe("mysp.css is the build of mysp-theme.ts", () => {
    */
   it.each(PINNED_TOKENS)("%s still points at the swatch palette, not a literal", (token) => {
     expect(declarations.get(token) ?? "").toMatch(/^(var\(--|color-mix\()/);
+  });
+
+  /**
+   * COVERAGE. Every assertion above walks `PINNED_TOKENS`, so a token missing
+   * from that list is a token nothing checks — and the way it goes missing is
+   * an override added to the source by somebody who never opened this file.
+   *
+   * Read from the SOURCE text rather than from `myspTheme.tokens` (merged with
+   * the neutral theme's ~170) or `__inputTokens` (marked `@internal`, so an
+   * Astryx bump may take it away): what is being counted is exactly "the
+   * overrides written in mysp-theme.ts".
+   */
+  it("pins every override the source declares — the list cannot fall behind", () => {
+    const source = readFileSync(new URL("./mysp-theme.ts", import.meta.url), "utf8");
+    const declared = [...source.matchAll(/^\s*"(--[a-z0-9-]+)":/gm)].map((match) => match[1]);
+
+    expect(declared.length, "mysp-theme.ts declares no tokens — the file shape changed").toBeGreaterThan(0);
+    expect([...new Set(declared)].sort()).toEqual([...PINNED_TOKENS].sort());
   });
 
   it("declares itself generated, which is why the detector skips it", () => {
