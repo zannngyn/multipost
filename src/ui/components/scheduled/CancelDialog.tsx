@@ -32,6 +32,7 @@ import type { ApiError } from "@/ui/services/api-error";
  */
 export function CancelDialog({
   job,
+  channelName = null,
   open,
   onOpenChange,
   onSubmit,
@@ -39,6 +40,12 @@ export function CancelDialog({
   error,
 }: {
   job: ScheduledJobEntry | null;
+  /**
+   * The Page this post goes to, already named by the screen. A confirmation for
+   * a destructive action has to name what it destroys in words the operator
+   * recognises; `null` falls back to the id rather than to nothing.
+   */
+  channelName?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (params: { postJobId: string; note?: string }) => void;
@@ -74,7 +81,7 @@ export function CancelDialog({
           <DialogTitle>Huỷ bài đã hẹn?</DialogTitle>
           <DialogDescription>
             {job
-              ? `Bài ${job.productCode}${job.color.trim() ? ` · ${job.color}` : ""} trên kênh ${job.channelId}, đang hẹn lúc ${formatScheduledAt(job.scheduledAt)}.`
+              ? `Bài ${job.productCode}${job.color.trim() ? ` · ${job.color}` : ""} trên kênh ${channelName ?? job.channelId}, đang hẹn lúc ${formatScheduledAt(job.scheduledAt)}.`
               : "Không tìm thấy bài này trong danh sách đang xem — có thể bài đã đăng, đã huỷ, hoặc nằm ở trang khác."}
           </DialogDescription>
         </DialogHeader>

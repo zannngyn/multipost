@@ -10,6 +10,11 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useId, useMemo, useState } from "react";
 
+import {
+  channelFilterOptions,
+  channelLabelIndex,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
@@ -25,6 +30,7 @@ import {
 import { Button } from "@/ui/components/ui/button";
 import { Select } from "@/ui/components/ui/select";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { useNowMs } from "@/ui/hooks/useNowMs";
@@ -97,6 +103,10 @@ export function ScheduledScreen() {
 
   const list = useScheduledJobs(filter);
   const groups = useChannelGroups();
+  // Names for the ids the schedule speaks in. A separate query on purpose: it
+  // is cached across the whole app (30s staleTime), and a failure here must
+  // only cost the NAMES — the schedule itself still loads and still works.
+  const channels = useChannels();
   const reschedule = useReschedulePostJob();
   const cancel = useCancelScheduledJob();
   // Support mode is read-only (M3.3): a customer's schedule may be read, never
@@ -124,7 +134,12 @@ export function ScheduledScreen() {
       ? (cancel.variables?.postJobId ?? null)
       : null;
 
-  /** Channel ids the tenant actually uses, from the preset groups (E7.6). */
+  /**
+   * The "Lọc theo kênh" options: ids the tenant actually uses (from the preset
+   * groups, E7.6), each carrying the PAGE NAME the operator knows. The value
+   * stays the id — that is what the URL and the API speak — but nothing on
+   * screen is a bare `fb-1121597217877301` any more (spec §3.1).
+   */
   const channelOptions = useMemo(() => {
     const ids = new Set<string>();
     for (const group of groups.data?.groups ?? []) {
@@ -133,8 +148,18 @@ export function ScheduledScreen() {
     // Keep the active filter selectable even when its group was deleted, or the
     // select would silently jump back to "Tất cả kênh" while the URL says else.
     if (filter.channelId) ids.add(filter.channelId);
-    return [...ids].sort((a, b) => a.localeCompare(b, "vi"));
-  }, [groups.data, filter.channelId]);
+    return channelFilterOptions([...ids], channels.data?.channels);
+  }, [groups.data, filter.channelId, channels.data]);
+
+  /**
+   * One resolve for every row on screen, shared by the table, the calendar and
+   * the two dialogs — the rule rebuilds a Map of all channels per call, so
+   * resolving per row would be O(rows × channels) (wave 1, M-1).
+   */
+  const channelLabels = useMemo(
+    () => channelLabelIndex(items.map((item) => item.channelId), channels.data?.channels),
+    [items, channels.data],
+  );
 
   const rescheduleId = searchParams.get(SCHEDULED_DIALOG_PARAMS.reschedule)?.trim() ?? "";
   const cancelId = searchParams.get(SCHEDULED_DIALOG_PARAMS.cancel)?.trim() ?? "";
@@ -269,9 +294,9 @@ export function ScheduledScreen() {
             }
           >
             <option value="">Tất cả kênh</option>
-            {channelOptions.map((channelId) => (
-              <option key={channelId} value={channelId}>
-                {channelId}
+            {channelOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </Select>
@@ -330,6 +355,15 @@ export function ScheduledScreen() {
       {groups.isError ? (
         <p className="text-muted-foreground text-sm">
           Không tải được danh sách nhóm kênh nên ô lọc kênh đang trống. Bộ lọc ngày vẫn dùng được.
+        </p>
+      ) : null}
+
+      {/* Said out loud rather than left as a silent fallback: without it the
+          rows quietly go back to showing mã kênh and nobody knows why. */}
+      {channels.isError ? (
+        <p className="text-muted-foreground text-sm">
+          Không tải được tên Page nên danh sách đang hiện mã kênh. Lịch và các thao tác vẫn dùng
+          được bình thường.
         </p>
       ) : null}
 
@@ -430,6 +464,7 @@ export function ScheduledScreen() {
               pushUrl(filter, { view: "calendar", month: monthKey, day: dayKey })
             }
             onClearFilters={() => pushUrl({ channelId: null, from: null, to: null }, view)}
+            channelLabels={channelLabels}
             renderDayDetail={(dayKey, jobs) => (
               <ScheduledJobTable
                 items={jobs}
@@ -438,6 +473,7 @@ export function ScheduledScreen() {
                 hrefFor={hrefForDialog}
                 busyJobId={busyJobId}
                 readOnlyReason={readOnlyReason}
+                channelLabels={channelLabels}
               />
             )}
           />
@@ -470,6 +506,7 @@ export function ScheduledScreen() {
                   hrefFor={hrefForDialog}
                   busyJobId={busyJobId}
                   readOnlyReason={readOnlyReason}
+                  channelLabels={channelLabels}
                 />
               </section>
             );
@@ -513,6 +550,11 @@ export function ScheduledScreen() {
           // stale error from the previous row must not survive.
           key={rescheduleId}
           job={rescheduleJob}
+          // The dialog asks "đổi giờ bài này trên kênh nào?" — it must answer
+          // with the Page name, not with an id nobody can place.
+          channelName={
+            rescheduleJob ? channelSentenceName(rescheduleJob.channelId, channelLabels) : null
+          }
           open
           onOpenChange={(open) => {
             if (!open) closeDialogs();
@@ -527,6 +569,7 @@ export function ScheduledScreen() {
         <CancelDialog
           key={cancelId}
           job={cancelJob}
+          channelName={cancelJob ? channelSentenceName(cancelJob.channelId, channelLabels) : null}
           open
           onOpenChange={(open) => {
             if (!open) closeDialogs();

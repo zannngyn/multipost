@@ -1,5 +1,11 @@
 import { ChannelProgress } from "@/ui/components/batch/ChannelProgress";
+import {
+  channelLabelIndex,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
+import { ChannelNameCell } from "@/ui/components/channels/ChannelNameCell";
 import { JobStatusBadge } from "@/ui/components/post/PostStatusBadge";
+import type { Channel } from "@/ui/schemas/channel.schema";
 import {
   facebookPostUrl,
   formatDateTime,
@@ -24,10 +30,23 @@ import {
 export function BatchChannelTable({
   channels,
   progressSteps,
+  tenantChannels,
 }: {
   channels: readonly BatchChannelStatus[];
   progressSteps: readonly string[];
+  /**
+   * The tenant's Pages, for naming the "Kênh" column. `undefined` means the
+   * list is NOT KNOWN yet (loading, or the request failed): the rows then show
+   * the bare id and accuse nothing (see `resolveGroupChannelLabels`).
+   */
+  tenantChannels?: readonly Channel[];
 }) {
+  // ONE resolve for the whole table, not one per row.
+  const labels = channelLabelIndex(
+    channels.map((channel) => channel.channelId),
+    tenantChannels,
+  );
+
   return (
     <section aria-labelledby="batch-channels-heading" className="space-y-3">
       <h2 id="batch-channels-heading" className="text-base font-semibold">
@@ -75,8 +94,14 @@ export function BatchChannelTable({
 
               return (
                 <tr key={channel.postJobId} className="border-t align-top">
-                  <th scope="row" className="px-3 py-2 text-left font-medium break-all">
-                    {channel.channelId}
+                  {/* Name first, id underneath — the same cell the job log and
+                      the schedule use. A batch report an operator cannot read
+                      is a report they cannot check against the Page. */}
+                  <th scope="row" className="px-3 py-2 text-left font-medium">
+                    <ChannelNameCell
+                      channelId={channel.channelId}
+                      label={labels.get(channel.channelId)}
+                    />
                   </th>
                   <td className="px-3 py-2">
                     <JobStatusBadge status={channel.status} />
@@ -116,7 +141,7 @@ export function BatchChannelTable({
                       <ChannelProgress
                         progress={channel.progress}
                         steps={progressSteps}
-                        channelId={channel.channelId}
+                        channelLabel={channelSentenceName(channel.channelId, labels)}
                         statusMessage={channel.userMessage}
                       />
                     ) : null}

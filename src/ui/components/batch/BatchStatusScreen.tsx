@@ -9,6 +9,7 @@ import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { Button } from "@/ui/components/ui/button";
 import { useBatchStatus } from "@/ui/hooks/usePostBatch";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
 
@@ -28,6 +29,9 @@ import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
  */
 export function BatchStatusScreen({ batchId }: { batchId: string }) {
   const batch = useBatchStatus(batchId);
+  // Names for the "Kênh" column. Its own query, its own failure: losing the
+  // names must not cost the batch report itself.
+  const channels = useChannels();
 
   const isFirstLoad = batch.isPending && batch.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
@@ -109,7 +113,11 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
               }
             />
           ) : (
-            <BatchChannelTable channels={data.channels} progressSteps={data.progressSteps} />
+            <BatchChannelTable
+              channels={data.channels}
+              progressSteps={data.progressSteps}
+              tenantChannels={channels.data?.channels}
+            />
           )}
 
           <div className="flex flex-wrap gap-2 border-t pt-4">

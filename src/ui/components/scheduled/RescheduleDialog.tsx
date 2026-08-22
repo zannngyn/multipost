@@ -37,6 +37,7 @@ import type { ApiError } from "@/ui/services/api-error";
  */
 export function RescheduleDialog({
   job,
+  channelName = null,
   open,
   onOpenChange,
   onSubmit,
@@ -44,6 +45,12 @@ export function RescheduleDialog({
   error,
 }: {
   job: ScheduledJobEntry | null;
+  /**
+   * The Page this post goes to, already named by the screen. `null` means the
+   * name is not known — the description then falls back to the id, which is
+   * still better than saying nothing about which Page is affected.
+   */
+  channelName?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (params: { postJobId: string; scheduledAt: string }) => void;
@@ -98,7 +105,7 @@ export function RescheduleDialog({
           <DialogTitle>Đổi giờ đăng</DialogTitle>
           <DialogDescription id={`${fieldId}-dialog-description`}>
             {job
-              ? `Bài ${job.productCode}${job.color.trim() ? ` · ${job.color}` : ""} trên kênh ${job.channelId}. Đang hẹn lúc ${formatScheduledAt(job.scheduledAt)}.`
+              ? `Bài ${job.productCode}${job.color.trim() ? ` · ${job.color}` : ""} trên kênh ${channelName ?? job.channelId}. Đang hẹn lúc ${formatScheduledAt(job.scheduledAt)}.`
               : "Không tìm thấy bài này trong danh sách đang xem — có thể bài đã đăng, đã huỷ, hoặc nằm ở trang khác."}
           </DialogDescription>
         </DialogHeader>

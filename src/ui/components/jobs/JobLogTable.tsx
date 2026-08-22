@@ -2,10 +2,13 @@
 
 import Link from "next/link";
 
-import { resolveGroupChannelLabels } from "@/ui/components/channels/channel-group-labels";
+import {
+  channelLabelIndex,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
+import { ChannelNameCell } from "@/ui/components/channels/ChannelNameCell";
 import { JobStatusBadge } from "@/ui/components/post/PostStatusBadge";
 import { Button } from "@/ui/components/ui/button";
-import { shortenId } from "@/ui/schemas/catalog.schema";
 import type { Channel } from "@/ui/schemas/channel.schema";
 import {
   facebookPostUrl,
@@ -59,10 +62,10 @@ export function JobLogTable({
    */
   readOnlyReason?: string | null;
 }) {
-  // ONE call for the whole list, indexed by row, instead of one call per row:
+  // ONE call for the whole list, indexed by id, instead of one call per row:
   // the rule rebuilds a Map of every channel each time it is asked, so calling
   // it inside the map made naming a 200-row log O(rows × channels).
-  const channelLabels = resolveGroupChannelLabels(
+  const channelLabels = channelLabelIndex(
     items.map((job) => job.channelId),
     channels,
   );
@@ -122,16 +125,14 @@ export function JobLogTable({
           </tr>
         </thead>
         <tbody>
-          {items.map((job, index) => {
+          {items.map((job) => {
             const link =
               job.publishedUrl ??
               (job.publishedPostId ? facebookPostUrl(job.publishedPostId) : null);
             const isRetrying = retryingJobId === job.postJobId;
             // Same rule the channel-group cards use: a Page that left the list
-            // is "đã gỡ" there and must not be something else here. The rule
-            // returns one label per input id, in order, so the row index IS the
-            // label index.
-            const channel = channelLabels[index];
+            // is "đã gỡ" there and must not be something else here.
+            const channelName = channelSentenceName(job.channelId, channelLabels);
 
             return (
               <tr key={job.postJobId} className="border-t align-top">
@@ -150,25 +151,11 @@ export function JobLogTable({
                 <td className="px-3 py-2">
                   {/* The Page NAME is what an operator recognises; the id is
                       what they quote to support. Name on top, id underneath in
-                      the ledger mono — never the id alone when a name exists.
-                      The name may wrap (it is prose); the id may not. */}
-                  {channel.name !== null ? (
-                    <>
-                      <span className="block break-words">{channel.name}</span>
-                      <ChannelId id={job.channelId} />
-                    </>
-                  ) : (
-                    <>
-                      <ChannelId id={job.channelId} />
-                      {/* Only when the list IS known and this id is not in it.
-                          While it is loading, `note` is "none" and this says
-                          nothing — a log that accuses a Page of being removed
-                          because a query is slow sends someone hunting. */}
-                      {channel.note === "removed" ? (
-                        <span className="text-muted-foreground mt-0.5 block text-xs">(đã gỡ)</span>
-                      ) : null}
-                    </>
-                  )}
+                      the ledger mono — never the id alone when a name exists. */}
+                  <ChannelNameCell
+                    channelId={job.channelId}
+                    label={channelLabels.get(job.channelId)}
+                  />
                 </td>
                 <td className="px-3 py-2">
                   <JobStatusBadge status={job.status} />
@@ -215,7 +202,7 @@ export function JobLogTable({
                         Chạy lại
                         <span className="sr-only">
                           {" "}
-                          bài {job.productCode} trên kênh {channel.name ?? job.channelId}
+                          bài {job.productCode} trên kênh {channelName}
                         </span>
                       </Button>
                       <p className="text-muted-foreground text-xs">{readOnlyReason}</p>
@@ -231,7 +218,7 @@ export function JobLogTable({
                       {isRetrying ? "Đang xếp hàng…" : "Chạy lại"}
                       <span className="sr-only">
                         {" "}
-                        bài {job.productCode} trên kênh {channel.name ?? job.channelId}
+                        bài {job.productCode} trên kênh {channelName}
                       </span>
                     </Button>
                   ) : (
@@ -246,26 +233,5 @@ export function JobLogTable({
         </tbody>
       </table>
     </div>
-  );
-}
-
-/**
- * A Page id in a 14%-wide column: middle-truncated, never broken mid-string.
- *
- * The MIDDLE, not the end: two Pages of one shop share a long prefix, so a
- * head-only truncation shows two rows that look identical. `title` carries the
- * full value for a pointer, and the `sr-only` copy carries it for a screen
- * reader — the id is what an operator quotes to support, so it must remain
- * readable in full by someone who cannot hover.
- */
-function ChannelId({ id }: { id: string }) {
-  const short = shortenId(id);
-  return (
-    <span className="text-muted-foreground mt-0.5 block font-mono text-xs whitespace-nowrap">
-      <span aria-hidden="true" title={id}>
-        {short}
-      </span>
-      <span className="sr-only">{id}</span>
-    </span>
   );
 }

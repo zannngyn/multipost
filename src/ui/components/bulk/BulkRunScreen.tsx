@@ -15,6 +15,7 @@ import { Button } from "@/ui/components/ui/button";
 import { Textarea } from "@/ui/components/ui/textarea";
 import { useBulkRun } from "@/ui/hooks/useBulkRun";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useScheduleChoice } from "@/ui/hooks/useScheduleChoice";
 import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
@@ -58,6 +59,9 @@ export function BulkRunScreen() {
   const captionModeId = useId();
 
   const groups = useChannelGroups();
+  // The groups hold ids; this holds the names those ids stand for. Separate
+  // query, separate failure: losing the names must not stop the run.
+  const channels = useChannels();
   const run = useBulkRun();
   const schedule = useScheduleChoice();
   const summaryRef = useRef<HTMLDivElement>(null);
@@ -192,6 +196,7 @@ export function BulkRunScreen() {
           <h2 className="text-sm font-medium">Chọn kênh (áp dụng cho mọi mã)</h2>
           <ChannelGroupPicker
             groups={groupItems}
+            channels={channels.data?.channels}
             selected={selected}
             onToggleChannel={toggleChannel}
             onToggleGroup={toggleGroup}
@@ -206,6 +211,14 @@ export function BulkRunScreen() {
               <Link href="/channels?tab=groups" className="underline underline-offset-4">
                 Quản lý nhóm kênh
               </Link>
+            </p>
+          ) : null}
+          {/* Said out loud: without it the list quietly falls back to mã kênh
+              and nobody knows whether that is normal. */}
+          {channels.isError ? (
+            <p className="text-muted-foreground text-xs">
+              Không tải được tên Page nên danh sách đang hiện mã kênh. Vẫn chọn và chạy được bình
+              thường.
             </p>
           ) : null}
           {channelError ? (

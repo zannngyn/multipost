@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 
+import type { GroupChannelLabel } from "@/ui/components/channels/channel-group-labels";
+import { channelSentenceName } from "@/ui/components/channels/channel-option-labels";
+import { ChannelNameCell } from "@/ui/components/channels/ChannelNameCell";
 import { JobStatusBadge } from "@/ui/components/post/PostStatusBadge";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
-import { shortenId } from "@/ui/schemas/catalog.schema";
 import {
   formatCountdown,
   formatScheduledTime,
@@ -35,12 +37,19 @@ import {
  * price, no note — those never travel with a post job.
  *
  * WRAPPING (wave 1.5): the scanned columns — the hour, the product code, the
- * channel id — never break mid-word. A code split over two lines cannot be
+ * channel id under the Page name — never break mid-word. A code split over two lines cannot be
  * compared down the column, which is the entire job of that column. The table
  * carries a `min-w` and the region scrolls instead; it already has
  * `overflow-x-auto` and `tabIndex={0}`, so that scroll is reachable by keyboard.
  * The caption preview is prose and still wraps.
  */
+
+/**
+ * Shared so the default prop is one object, not a new Map on every render —
+ * a fresh identity here would defeat memoisation in every caller.
+ */
+const EMPTY_LABELS: ReadonlyMap<string, GroupChannelLabel> = new Map();
+
 export function ScheduledJobTable({
   items,
   headingId,
@@ -48,6 +57,7 @@ export function ScheduledJobTable({
   hrefFor,
   busyJobId,
   readOnlyReason = null,
+  channelLabels = EMPTY_LABELS,
 }: {
   items: readonly ScheduledJobEntry[];
   /** The day heading this table belongs to (`aria-labelledby`). */
@@ -63,6 +73,13 @@ export function ScheduledJobTable({
    * second mechanism: one reason line per row, whatever produced it.
    */
   readOnlyReason?: string | null;
+  /**
+   * Page names for the "Kênh" column, resolved ONCE by the screen above
+   * (`channelLabelIndex`) and shared by every day group on it. An id missing
+   * from the map — or an empty map, which is what an unknown channel list looks
+   * like — falls back to the bare id and accuses nothing.
+   */
+  channelLabels?: ReadonlyMap<string, GroupChannelLabel>;
 }) {
   const zone = timeZoneLabel();
 
@@ -119,6 +136,9 @@ export function ScheduledJobTable({
             const canReschedule = job.canReschedule && readOnlyReason === null;
             const canCancel = job.canCancel && readOnlyReason === null;
             const reasonId = `reschedule-blocked-${job.postJobId}`;
+            // What a button SAYS it acts on: the Page name an operator knows,
+            // never the id they would have to decode.
+            const channelName = channelSentenceName(job.channelId, channelLabels);
 
             return (
               <tr key={job.postJobId} className="border-t align-top">
@@ -143,14 +163,15 @@ export function ScheduledJobTable({
                     {job.color.trim().length > 0 ? job.color : "mọi màu"}
                   </span>
                 </td>
-                {/* Middle-truncated: two Pages of one shop share a long prefix,
-                    so cutting the tail shows two rows that look the same. The
-                    full id stays for the pointer AND for a screen reader. */}
-                <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
-                  <span aria-hidden="true" title={job.channelId}>
-                    {shortenId(job.channelId)}
-                  </span>
-                  <span className="sr-only">{job.channelId}</span>
+                {/* Name first, id underneath — the same cell the job log uses.
+                    An operator recognises "Lady Fashion", not
+                    "fb-1121597217877301", and a schedule they cannot read is a
+                    schedule they cannot check before the hour comes. */}
+                <td className="px-3 py-2 text-sm">
+                  <ChannelNameCell
+                    channelId={job.channelId}
+                    label={channelLabels.get(job.channelId)}
+                  />
                 </td>
                 <td className="px-3 py-2">
                   <p className="text-muted-foreground line-clamp-3">
@@ -189,7 +210,7 @@ export function ScheduledJobTable({
                               Đổi giờ
                               <span className="sr-only">
                                 {" "}
-                                bài {job.productCode} trên kênh {job.channelId}
+                                bài {job.productCode} trên kênh {channelName}
                               </span>
                             </Link>
                           </Button>
@@ -208,7 +229,7 @@ export function ScheduledJobTable({
                             Đổi giờ
                             <span className="sr-only">
                               {" "}
-                              bài {job.productCode} trên kênh {job.channelId}
+                              bài {job.productCode} trên kênh {channelName}
                             </span>
                           </Button>
                         ) : null}
@@ -218,7 +239,7 @@ export function ScheduledJobTable({
                               Huỷ
                               <span className="sr-only">
                                 {" "}
-                                bài {job.productCode} trên kênh {job.channelId}
+                                bài {job.productCode} trên kênh {channelName}
                               </span>
                             </Link>
                           </Button>
