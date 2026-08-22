@@ -16,6 +16,13 @@ import type { BulkRunRow } from "@/ui/hooks/useBulkRun";
  * whole thing would hide exactly the information that matters: WHICH code was
  * skipped and WHY (core-bulk-actions §Thất bại một phần).
  *
+ * Status is a dye + its NAME, never the dye alone (The Named Status Rule): the
+ * tone mapping lives in `bulk.schema` beside the labels, so a status can never
+ * gain a colour without gaining a word. `info` for the three in-flight states is
+ * deliberate — Fact Blue does not take part in the tint game (The 10% Tint
+ * Rule), so "đang chạy" stays a plain surface and only the three outcomes
+ * (madder / turmeric / leaf) carry a dyed background.
+ *
  * Business rule 2: this table shows the product code and name, the outcome and
  * a link to the batch. Never stock, never price — the reason sentence comes
  * from the server and is written for operators.
@@ -24,72 +31,116 @@ import type { BulkRunRow } from "@/ui/hooks/useBulkRun";
  */
 export function BulkProgressTable({ rows }: { rows: readonly BulkRunRow[] }) {
   return (
-    <div className="overflow-x-auto rounded-xl border">
-      <table className="w-full min-w-160 border-collapse text-sm">
-        <caption className="sr-only">
-          Tiến độ chạy hàng loạt: trạng thái từng mã sản phẩm và lô đăng đã tạo
-        </caption>
-        <thead className="bg-muted/50">
-          <tr className="text-left">
-            <th scope="col" className="px-3 py-2 font-medium">
-              #
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Mã sản phẩm
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Sản phẩm
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Trạng thái
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Lý do / ghi chú
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Lô đăng
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={`${row.code}-${index}`} className="border-t align-top">
-              <td className="text-muted-foreground px-3 py-2 tabular-nums">{index + 1}</td>
-              <td className="px-3 py-2 font-mono text-xs break-all">{row.code}</td>
-              <td className="px-3 py-2">{row.productName ?? "—"}</td>
-              <td className="px-3 py-2">
-                <Badge tone={BULK_ROW_STATUS_TONES[row.status]}>
-                  {BULK_ROW_STATUS_LABELS[row.status]}
-                </Badge>
-              </td>
-              <td className="px-3 py-2">
-                {row.reason ? (
-                  <span className="max-w-prose break-words">{row.reason}</span>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-                {row.errorCode ? (
-                  <span className="text-muted-foreground block font-mono text-xs">
-                    Mã lỗi: {row.errorCode}
-                  </span>
-                ) : null}
-              </td>
-              <td className="px-3 py-2">
-                {row.batchId ? (
-                  <Link
-                    href={`/batches/${encodeURIComponent(row.batchId)}`}
-                    className="underline underline-offset-4"
-                  >
-                    Xem lô ({row.channelCount} kênh)
-                  </Link>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-              </td>
+    // `@container`, so the cue at the foot can be asked about the BOX this
+    // table stands in rather than about the window. The two disagree by the
+    // width of the side nav plus the page gutters — a 900px window leaves this
+    // box ~600px — so a viewport-keyed `sm:hidden` swallowed the cue across a
+    // whole band where the table was very much scrolling. Reflow by the
+    // container step it actually overflows at (raise 4).
+    <div className="@container">
+      {/* Focusable region with a name: below 40rem this scrolls sideways, and a
+          scroll container that only a mouse can reach is a keyboard trap in
+          reverse (web-data-table §3). */}
+      <div
+        className="border-border overflow-x-auto rounded-md border"
+        tabIndex={0}
+        role="region"
+        aria-label="Bảng tiến độ chạy hàng loạt, cuộn ngang được"
+      >
+        <table className="w-full min-w-160 border-collapse text-sm">
+          <caption className="sr-only">
+            Tiến độ chạy hàng loạt: trạng thái từng mã sản phẩm và lô đăng đã tạo
+          </caption>
+          {/* Declared widths, not content-driven ones: every cell of this table
+              fills in WHILE the run walks the list, and columns that resize on
+              each row would make the whole table twitch (web-data-table §1). */}
+          <colgroup>
+            <col className="w-[6%]" />
+            <col className="w-[16%]" />
+            <col className="w-[20%]" />
+            <col className="w-[14%]" />
+            <col className="w-[30%]" />
+            <col className="w-[14%]" />
+          </colgroup>
+          <thead className="bg-muted/50">
+            <tr className="text-left">
+              <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+                #
+              </th>
+              <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+                Mã sản phẩm
+              </th>
+              <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+                Sản phẩm
+              </th>
+              <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+                Trạng thái
+              </th>
+              <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+                Lý do / ghi chú
+              </th>
+              <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+                Lô đăng
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={`${row.code}-${index}`} className="border-border border-t align-top">
+                <td className="text-foreground-subtle px-3 py-2.5 font-mono text-xs tabular-nums">
+                  {index + 1}
+                </td>
+                {/* The Mono Ledger Rule, and nowrap: a product code broken across
+                    two lines is a different string to the eye reading it back to
+                    the Sheet. */}
+                <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap">{row.code}</td>
+                <td className="px-3 py-2.5">{row.productName ?? "—"}</td>
+                <td className="px-3 py-2.5">
+                  <Badge tone={BULK_ROW_STATUS_TONES[row.status]}>
+                    {BULK_ROW_STATUS_LABELS[row.status]}
+                  </Badge>
+                </td>
+                <td className="px-3 py-2.5">
+                  {row.reason ? (
+                    <span className="max-w-prose break-words">{row.reason}</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                  {row.errorCode ? (
+                    <span className="text-foreground-subtle block font-mono text-xs">
+                      Mã lỗi: {row.errorCode}
+                    </span>
+                  ) : null}
+                </td>
+                <td className="px-3 py-2.5">
+                  {row.batchId ? (
+                    <Link
+                      href={`/batches/${encodeURIComponent(row.batchId)}`}
+                      className="underline underline-offset-4"
+                    >
+                      Xem lô ({row.channelCount} kênh)
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {/* The two columns that fall off the right edge of a phone are the two an
+          operator opened this screen to read. The table itself is unchanged —
+          this only says out loud that there is more to the right, which is the
+          part a horizontal scrollbar on touch never manages to say
+          (core-data-table §Bảng → thẻ).
+
+          40rem is `min-w-160`, the table's own floor, read off the CONTAINER:
+          the cue is on screen exactly while the table overflows, and off the
+          moment it stops. */}
+      <p className="text-muted-foreground mt-2 text-xs @min-[40rem]:hidden">
+        Cuộn bảng sang phải để xem lý do và lô đăng của từng mã.
+      </p>
     </div>
   );
 }
