@@ -9,6 +9,7 @@ import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { JobLogSkeleton } from "@/ui/components/jobs/JobLogSkeleton";
 import { JobLogTable } from "@/ui/components/jobs/JobLogTable";
 import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
+import { RulesDisclosure } from "@/ui/components/posts/RulesDisclosure";
 import { WorkerHealthBanner } from "@/ui/components/jobs/WorkerHealthBanner";
 import { presentWorkerHealth } from "@/ui/components/jobs/present-worker-health";
 import { Button } from "@/ui/components/ui/button";
@@ -27,7 +28,7 @@ import {
 } from "@/ui/schemas/post-batch.schema";
 
 /**
- * "Nhật ký đăng bài" (E11.1): component -> hook -> service -> internal API.
+ * "Nhật ký đăng" (E11.1): component -> hook -> service -> internal API.
  *
  * The filter lives in the URL, not in `useState` (core-data-list-query rule 1):
  * `/jobs?status=blocked` is shareable, survives F5 and makes Back behave. One
@@ -124,15 +125,31 @@ export function JobLogScreen() {
       <header className="space-y-1">
         {/* h2: since the wave-1 IA this screen is a TAB inside /posts, and the
             hub above it owns the page's h1 (core-accessibility §1). */}
+        {/* One name for one thing (spec §3.5): the tab above says "Nhật ký
+            đăng", so this heading does too. */}
         <h2 id="jobs-heading" className="text-2xl font-semibold tracking-tight">
-          Nhật ký đăng bài
+          Nhật ký đăng
         </h2>
+        {/* Two sentences (spec §3.4); the rules are one click below. */}
         <p className="text-muted-foreground max-w-prose text-sm">
-          Mỗi dòng là một bài trên một kênh. Bài lỗi hoặc bị chặn có thể chạy lại — tồn kho vẫn được
-          kiểm tra lại ngay trước khi đăng. Bài ở trạng thái “Facebook giữ lịch” đã nằm trên Facebook
-          và Facebook sẽ tự đăng vào giờ đã hẹn, hệ thống chỉ theo dõi và cập nhật lại kết quả.
+          Mỗi dòng là một bài trên một kênh. Bài lỗi hoặc bị chặn có thể chạy lại.
         </p>
       </header>
+
+      <RulesDisclosure>
+        <p>
+          Tồn kho được kiểm tra lại ngay trước khi đăng, kể cả khi chạy lại — một mã vừa hết hàng sẽ
+          bị chặn thay vì lên bài.
+        </p>
+        <p>
+          Bài ở trạng thái “Facebook giữ lịch” đã nằm trên Facebook và Facebook sẽ tự đăng vào giờ
+          đã hẹn; hệ thống chỉ theo dõi và cập nhật lại kết quả.
+        </p>
+        <p>
+          Một bài đăng lên nhiều kênh với cùng kết quả gộp thành một dòng “× N kênh”. Mở dòng đó để
+          xem từng kênh, mở bài trên Facebook và chạy lại riêng từng kênh.
+        </p>
+      </RulesDisclosure>
 
       <WorkerHealthBanner
         notice={healthNotice}

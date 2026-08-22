@@ -18,6 +18,7 @@ import {
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
+import { RulesDisclosure } from "@/ui/components/posts/RulesDisclosure";
 import { resolveMonthKey } from "@/ui/components/scheduled/calendar-grid";
 import { CancelDialog } from "@/ui/components/scheduled/CancelDialog";
 import { RescheduleDialog } from "@/ui/components/scheduled/RescheduleDialog";
@@ -213,7 +214,7 @@ export function ScheduledScreen() {
         // only guards on status, so an early post is possible. Say it.
         if (!result.previousQueueEntryRemoved) {
           setWarning(
-            "Đã lưu giờ mới, nhưng không xoá được lịch cũ trong hàng đợi — bài vẫn có thể lên vào giờ cũ. Hãy theo dõi ở Nhật ký đăng bài.",
+            "Đã lưu giờ mới, nhưng không xoá được lịch cũ trong hàng đợi — bài vẫn có thể lên vào giờ cũ. Hãy theo dõi ở Nhật ký đăng.",
           );
         }
         closeDialogs();
@@ -249,15 +250,33 @@ export function ScheduledScreen() {
         <h2 id="scheduled-heading" className="text-2xl font-semibold tracking-tight">
           Bài đã hẹn
         </h2>
+        {/* Two sentences (spec §3.4): what this screen is, and the one thing an
+            operator has to know before reading a single hour on it. Everything
+            else is a rule, and rules live one click away. */}
         <p className="text-muted-foreground max-w-prose text-sm">
-          Những bài đang chờ tới giờ đăng. Chế độ Danh sách xếp bài sớm nhất lên trên; chế độ Lịch
-          tháng cho thấy công việc rải ra trong tháng — bấm vào một ngày để mở chi tiết. Giờ hiển
-          thị theo múi giờ máy bạn ({timeZoneLabel()}). Đổi giờ hoặc huỷ chỉ được trước khi tới giờ
-          — tồn kho vẫn được kiểm tra lại ngay trước khi đăng. Bài mang nhãn “Facebook giữ lịch” đã
-          nằm sẵn trên Facebook và Facebook sẽ tự đăng: bài đó không đổi giờ được nữa, muốn đổi thì
-          bấm Huỷ rồi soạn lại.
+          Những bài đang chờ tới giờ đăng, sớm nhất lên trên. Giờ hiển thị theo múi giờ máy bạn (
+          {timeZoneLabel()}).
         </p>
       </header>
+
+      <RulesDisclosure>
+        <p>
+          Chế độ <strong>Lịch tháng</strong> cho thấy công việc rải ra trong tháng — bấm vào một
+          ngày để mở chi tiết ngày đó.
+        </p>
+        <p>
+          Đổi giờ hoặc huỷ chỉ được trước khi tới giờ. Tồn kho vẫn được kiểm tra lại ngay trước khi
+          đăng, nên một bài đã hẹn vẫn có thể bị chặn nếu mã hết hàng.
+        </p>
+        <p>
+          Bài mang nhãn “Facebook giữ lịch” đã nằm sẵn trên Facebook và Facebook sẽ tự đăng: bài đó
+          không đổi giờ được nữa — muốn đổi thì bấm Huỷ rồi soạn lại.
+        </p>
+        <p>
+          Một bài hẹn lên nhiều kênh gộp thành một dòng “× N kênh”. Mở dòng đó để xem giờ của từng
+          kênh và đổi giờ hoặc huỷ riêng từng kênh.
+        </p>
+      </RulesDisclosure>
 
       <div className="flex flex-wrap items-end gap-3">
         <SegmentedControl
@@ -383,7 +402,7 @@ export function ScheduledScreen() {
         >
           {warning}{" "}
           <Link href="/posts?tab=log" className="underline underline-offset-4">
-            Mở nhật ký đăng bài
+            Mở nhật ký đăng
           </Link>
           .
         </p>
