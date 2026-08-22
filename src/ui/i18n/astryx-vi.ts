@@ -111,20 +111,6 @@ export const ASTRYX_VI: Catalog = {
   "@astryx.table.sort.sortedBy": {
     defaultMessage: "Sắp xếp theo {label}, đang {direction}",
   },
-
-  // --- Code block -----------------------------------------------------------
-  // The one deliberate exception to the SCOPE rule above: nothing renders
-  // `CodeBlock` yet. `/prompts` wanted it for prompt bodies (a copy button is
-  // exactly what an operator comparing two versions needs) and did NOT adopt it
-  // precisely because these three keys were missing, which would have put
-  // "Copy code" on a Vietnamese screen. Translating first removes that blocker;
-  // the swap itself is a separate change.
-  //
-  // "code" here is source code — the prompt template text — not a PIN or a
-  // discount code (per the `description` fields in Astryx's own en.json).
-  "@astryx.codeBlock.code": { defaultMessage: "Đoạn mã" },
-  "@astryx.codeBlock.copyCode": { defaultMessage: "Chép đoạn mã" },
-  "@astryx.codeBlock.copied": { defaultMessage: "Đã chép" },
 };
 
 /** The locale tag this app runs Astryx in. One constant, two call sites. */

@@ -223,8 +223,8 @@ export function useComposeWizard() {
    * a per-channel spinner needs exactly that and nothing more.
    *
    * The REQUEST is the same either way: `POST /api/posts/captions` takes the
-   * platform channel catalogue (`facebook`), not a Page id — the prompt is
-   * built from the product alone, so there is nothing Page-specific to send.
+   * platform channel catalogue (`facebook`), not a Fanpage id — the prompt is
+   * built from the product alone, so there is nothing Fanpage-specific to send.
    * Asking again simply produces another variation, which is precisely what a
    * per-channel "Viết lại" is for. Where the text LANDS is the caller's call:
    * only a shared target is written here, and a channel target is handed back

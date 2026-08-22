@@ -47,7 +47,7 @@ export function usePublishForm(wizard: ComposeWizard) {
 
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set<string>());
   /**
-   * Per-channel is the DEFAULT (brief §7.2 + validator D1): several Pages
+   * Per-channel is the DEFAULT (brief §7.2 + validator D1): several Fanpages
    * carrying the identical caption is what a platform reads as spam, and the
    * server measures it. Sharing one caption is the shortcut an operator opts
    * into, not the shape the screen starts in.
