@@ -346,10 +346,26 @@ export function CatalogSourceCard({
       {/* OUTSIDE the fold, on purpose: a disconnect that failed left the token
           stored, and that fact must not disappear with the panel that started
           it. `canCollapse` also refuses to fold while it is on screen, so this
-          renders inside an open card — never orphaned under a summary row. */}
+          renders inside an open card — never orphaned under a summary row.
+
+          …which is why it needs a way OUT (B-4). A mutation keeps its error
+          until it is reset or fired again, so without this button one failed
+          disconnect pinned the whole card open for the rest of the session,
+          long after the operator had read it — and the fold exists precisely so
+          settled configuration stops covering the run's numbers. Dismissing is
+          local UI state, not a write, so it is not gated in support mode; the
+          RETRY is the panel's own "Ngắt kết nối" above, which still asks for
+          confirmation and is still gated. */}
       {disconnect.isError ? (
         <div className="border-border border-t p-4">
-          <ApiErrorNotice error={disconnect.error} />
+          <ApiErrorNotice
+            error={disconnect.error}
+            extraAction={
+              <Button type="button" variant="outline" size="sm" onClick={() => disconnect.reset()}>
+                Đã đọc, ẩn cảnh báo
+              </Button>
+            }
+          />
         </div>
       ) : null}
     </section>
