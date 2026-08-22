@@ -12,6 +12,7 @@ import { SyncIssuesTable } from "@/ui/components/sync/SyncIssuesTable";
 import { SyncRunRail } from "@/ui/components/sync/SyncRunRail";
 import { SyncRunningCard } from "@/ui/components/sync/SyncRunningCard";
 import { SyncRailSkeleton, SyncStatusSkeleton } from "@/ui/components/sync/SyncStatusSkeleton";
+import { lastRunHealth } from "@/ui/components/sync/sync-source-collapse";
 import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useActiveTenant } from "@/ui/hooks/useMe";
@@ -85,6 +86,13 @@ export function SyncScreen() {
   const showSkeleton = useDelayedFlag(isFirstLoad);
   const latestRun = status.data?.state === "has_run" ? status.data.run : null;
   /**
+   * "Did the last sync actually work" — the only evidence that lets the source
+   * card fold itself away. Read from the status query already on screen, so a
+   * Service Account tenant (permanently `not_connected`, permanently fine) is
+   * not confused with a setup that is quietly broken.
+   */
+  const runHealth = lastRunHealth(status.data, status.isError);
+  /**
    * The server's own answer to "is a sync happening right now". Everything the
    * screen says about a run in flight hangs off THIS, never off the mutation:
    * the request that started the run gives up at 120s while the handler keeps
@@ -117,23 +125,25 @@ export function SyncScreen() {
           and an absolutely positioned `sr-only` node inside an unpositioned one
           anchors OUTSIDE it — see the note in AppFrame for what that does to the
           document height. */}
-      {/* `scroll-pt-14` on both scrollers: the header below is `sticky top-0`,
-          so anything scrolled to — a focused control, a hash target — lands
-          UNDER the band and gets cut in half. The padding is the band's own
-          height, which is why the band may not grow: the page description used
-          to live in it and pushed it to ~108px, swallowing the heading of every
-          block an operator scrolled to (stage "03" at a 900px viewport). It now
-          scrolls with the content it introduces. */}
+      {/* The header below is `sticky top-0`, so anything scrolled to — a focused
+          control, a hash target — otherwise lands UNDER the band and is cut in
+          half. `scroll-pt-14` on both scrollers pays for exactly the band's
+          height, which is why that height is LOCKED at `h-14` (border-box: the
+          1px border is inside the 56px) and the row may not wrap: a band that
+          grows silently makes the padding wrong again. The page description used
+          to live in here and pushed it to ~108px, swallowing the heading of
+          every block an operator scrolled to (funnel stage "03" at a 900px
+          viewport); it now scrolls with the content it introduces. */}
       <div className="relative flex h-full min-h-0 scroll-pt-14 flex-col overflow-y-auto @5xl:flex-row @5xl:overflow-hidden">
         <div className="relative flex min-w-0 flex-1 scroll-pt-14 flex-col @5xl:min-h-0 @5xl:overflow-y-auto @5xl:[scrollbar-gutter:stable]">
-          <header className="bg-background border-border sticky top-0 z-10 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-6 py-3">
-            <h1 className="min-w-0 text-2xl leading-tight font-semibold tracking-tight">
+          <header className="bg-background border-border sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between gap-4 border-b px-6">
+            <h1 className="min-w-0 truncate text-2xl leading-tight font-semibold tracking-tight">
               Đồng bộ dữ liệu
             </h1>
 
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex shrink-0 items-center gap-3">
               {status.isFetching && !isFirstLoad ? (
-                <p className="text-muted-foreground text-sm">Đang làm mới…</p>
+                <p className="text-muted-foreground text-sm whitespace-nowrap">Đang làm mới…</p>
               ) : null}
               <RunSyncButton
                 onConfirm={() => {
@@ -234,7 +244,13 @@ export function SyncScreen() {
 
             {/* Which folder / which tab — first, because every number below only
                 means something once the operator knows where it came from. */}
-            <CatalogSourceCard onSourceChanged={() => setSourceChanged(true)} />
+            {/* The source card folds itself away once the pipeline proves the
+                setup works — the verdict comes from the status query this
+                screen already runs, so no second request is made for it. */}
+            <CatalogSourceCard
+              lastRunHealth={runHealth}
+              onSourceChanged={() => setSourceChanged(true)}
+            />
 
             {sourceChanged ? (
               <p

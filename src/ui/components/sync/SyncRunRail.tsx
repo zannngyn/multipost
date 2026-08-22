@@ -6,6 +6,7 @@ import { cn } from "@/shared/utils";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import { formatCount, formatDateTime, formatDuration } from "@/ui/components/sync/sync-format";
+import { NO_TALLY, runTally } from "@/ui/components/sync/sync-run-tally";
 import { shortenId } from "@/ui/schemas/catalog.schema";
 import {
   SYNC_STATUS_HINTS,
@@ -38,39 +39,6 @@ const STATUS_DOT: Record<SyncRunStatus, string> = {
   partial: "bg-warning",
   failed: "bg-destructive",
 };
-
-/** The number column when there is no number to put in it. */
-const NO_TALLY = "—";
-
-/**
- * What each history row is scanned BY. Five runs that all ended "Xong nhưng có
- * vấn đề" are one repeated sentence; their issue counts are not, so the count
- * is the only thing in the row at reading size and it keeps its own
- * right-aligned mono column (The Mono Ledger Rule). No new colour is spent on
- * the hierarchy — status keeps carrying the colour, alone.
- */
-type RunTally = {
-  value: string;
-  label: string;
-  /** Nothing worth scanning here — a placeholder, or a genuinely clean run. */
-  isQuiet: boolean;
-};
-
-function runTally(run: RecentSyncRun): RunTally {
-  // In flight: there is no result yet, and "0 vấn đề" would read as a clean run.
-  if (run.status === "running" || run.finishedAt === null) {
-    return { value: NO_TALLY, label: "chưa xong", isQuiet: true };
-  }
-  // Finished, but the count was never written. Absent is not zero.
-  if (run.issuesTotal === null) {
-    return { value: NO_TALLY, label: "không rõ", isQuiet: true };
-  }
-  return {
-    value: formatCount(run.issuesTotal),
-    label: "vấn đề",
-    isQuiet: run.issuesTotal === 0,
-  };
-}
 
 export function SyncRunRail({ run }: { run: SyncRun }) {
   const duration = formatDuration(run.startedAt, run.finishedAt);
@@ -214,6 +182,12 @@ function RecentRunRow({ run }: { run: RecentSyncRun }) {
           {formatDateTime(run.startedAt)}
           {duration ? ` · ${duration}` : ""}
         </p>
+
+        {/* Why there is no number. "Chưa kết thúc" and "không ghi được số vấn
+            đề" are two different facts — one is a run still going, the other is
+            the system failing to record — and a 10px unit label cannot carry
+            that difference on its own. */}
+        {tally.note ? <p className="text-muted-foreground text-[11px]">{tally.note}</p> : null}
 
         {/* A run that died mid-way is BOTH unfinished and failed, and the reason
             is the only useful thing left on it — so it is never folded into the

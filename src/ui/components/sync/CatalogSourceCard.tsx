@@ -15,7 +15,11 @@ import { useCatalogSource } from "@/ui/hooks/useCatalogProducts";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
-import { useGoogleConnection } from "@/ui/hooks/useGoogleDrive";
+import { useDisconnectGoogle, useGoogleConnection } from "@/ui/hooks/useGoogleDrive";
+import {
+  canCollapseSourceCard,
+  type LastRunHealth,
+} from "@/ui/components/sync/sync-source-collapse";
 import { shortenId, type CatalogSource } from "@/ui/schemas/catalog.schema";
 import {
   parseGoogleConnectOutcome,
@@ -41,15 +45,23 @@ import {
  * error. The connection and the source are separate queries on purpose — one
  * failing must not blank the other.
  *
- * On top of those, the card has a SIZE: once a source is stored and nothing on
- * it needs attention, the whole thing folds into one summary row so the run's
- * numbers are not pushed under the fold by settled configuration. See
- * `canCollapse` for the list of things that keep it open — the full card is the
- * default, and the row is the exception it has to earn.
+ * On top of those, the card has a SIZE: once a source is stored and the last
+ * sync proves it works, the whole thing folds into one summary row so the run's
+ * numbers are not pushed under the fold by settled configuration. The rule for
+ * that — and every condition that keeps the card open — lives in
+ * `sync-source-collapse.ts`, tested per branch.
  */
 export function CatalogSourceCard({
+  lastRunHealth,
   onSourceChanged,
 }: {
+  /**
+   * The pipeline's verdict on this setup, from the sync-status query the screen
+   * already runs. It is the evidence the fold is allowed on: connection state
+   * alone calls a healthy Service Account tenant "chưa kết nối" forever, and
+   * cannot tell that apart from a setup that is quietly broken.
+   */
+  lastRunHealth: LastRunHealth;
   /** Lets the screen point at "Chạy đồng bộ" right after a source change. */
   onSourceChanged?: () => void;
 }) {
@@ -66,6 +78,13 @@ export function CatalogSourceCard({
 
   const source = useCatalogSource();
   const connection = useGoogleConnection();
+  /**
+   * Hoisted out of `GoogleConnectionPanel` (I-2): that panel is unmounted the
+   * moment the card folds, and a disconnect that failed left a live token
+   * stored. Both the mutation state and its notice belong to the card, which
+   * survives the fold.
+   */
+  const disconnect = useDisconnectGoogle();
 
   /**
    * Support mode is read-only (M3.3). Changing the source is the heaviest write
@@ -163,40 +182,27 @@ export function CatalogSourceCard({
     onSourceChanged?.();
   }
 
-  /**
-   * The source is set-once configuration; on a normal morning it is 400px of
-   * settled facts standing between the operator and the run they came to read.
-   * It collapses to a single row — but ONLY when there is genuinely nothing to
-   * act on, and every condition below is a thing that must never be hidden:
-   *
-   *  - no stored source, or either query still loading / failed — the card is
-   *    the only place that says so;
-   *  - `expired` — a running failure the tenant does not know about (rule 5);
-   *  - a source-access warning — the sentence that stops somebody pressing
-   *    "Chạy đồng bộ" and wiping the catalogue;
-   *  - an OAuth outcome still on screen, the picker open, or the manual form
-   *    open — the operator is mid-flow.
-   *
-   * Anything unexpected therefore renders the FULL card: the collapsed row is
-   * the exception, not the default path.
-   */
+  // The decision itself is pure and lives in `sync-source-collapse.ts`; this is
+  // only the translation from query state into its inputs.
   const connectionData = connection.data ?? null;
   const sourceWarning =
     connectionData?.state === "connected" && connectionData.sourceAccess
       ? sourceAccessWarning(connectionData.sourceAccess)
       : null;
-  const canCollapse =
-    configured !== null &&
-    !isFirstLoad &&
-    !source.isError &&
-    !isConnectionFirstLoad &&
-    !connection.isError &&
-    connectionData !== null &&
-    connectionData.state !== "expired" &&
-    sourceWarning === null &&
-    outcome === null &&
-    !isPicking &&
-    !isManualOpen;
+  const canCollapse = canCollapseSourceCard({
+    hasConfiguredSource: configured !== null,
+    isSourceLoading: isFirstLoad,
+    isSourceError: source.isError,
+    isConnectionLoading: isConnectionFirstLoad,
+    isConnectionError: connection.isError,
+    connectionState: connectionData?.state ?? null,
+    hasSourceAccessWarning: sourceWarning !== null,
+    hasDisconnectError: disconnect.isError,
+    hasConnectOutcome: outcome !== null,
+    isPicking,
+    isManualOpen,
+    lastRunHealth,
+  });
   const isCollapsed = canCollapse && !isExpanded;
 
   return (
@@ -242,18 +248,22 @@ export function CatalogSourceCard({
             <Badge tone="neutral">Đang làm mới…</Badge>
           ) : null}
 
-          {/* One control for the whole card, and it names what it does. It is
-              offered in read-only mode too: opening the facts is reading. */}
+          {/* One control for the whole card, and it names what it does. In
+              read-only support mode it promises READING, because that is all it
+              can deliver — the editors behind it are gated off (M3.3).
+              `aria-controls` is dropped while folded: the panel it names is
+              unmounted, and pointing at an absent id is worse than pointing at
+              nothing. `aria-expanded` is valid on its own. */}
           {canCollapse ? (
             <Button
               type="button"
               variant="outline"
               size="sm"
               aria-expanded={isExpanded}
-              aria-controls={detailsId}
+              aria-controls={isCollapsed ? undefined : detailsId}
               onClick={() => setIsExpanded((open) => !open)}
             >
-              {isExpanded ? "Thu gọn" : "Đổi nguồn"}
+              {isExpanded ? "Thu gọn" : gate.isDisabled ? "Xem chi tiết nguồn" : "Đổi nguồn"}
             </Button>
           ) : null}
           {/* Only for the tenants the picker cannot serve, and only once the
@@ -285,6 +295,7 @@ export function CatalogSourceCard({
         <div id={detailsId}>
           <GoogleConnectionPanel
             connection={connection}
+            disconnect={disconnect}
             outcome={outcome}
             onDismissOutcome={() => setOutcome(null)}
             onPickSource={() => setIsPicking(true)}
@@ -331,6 +342,16 @@ export function CatalogSourceCard({
           )}
         </div>
       )}
+
+      {/* OUTSIDE the fold, on purpose: a disconnect that failed left the token
+          stored, and that fact must not disappear with the panel that started
+          it. `canCollapse` also refuses to fold while it is on screen, so this
+          renders inside an open card — never orphaned under a summary row. */}
+      {disconnect.isError ? (
+        <div className="border-border border-t p-4">
+          <ApiErrorNotice error={disconnect.error} />
+        </div>
+      ) : null}
     </section>
   );
 }
