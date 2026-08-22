@@ -46,7 +46,7 @@ Hiện thực hoá: toàn bộ qua token semantic trong `src/app/globals.css` + 
 
 | Nhóm | Mục | Thay đổi so với hiện tại |
 |---|---|---|
-| — | Tổng quan `/` | Nội dung làm lại (mục 3.2) |
+| Bàn làm việc | Tổng quan `/` | Nội dung làm lại (mục 3.2); tên nhóm "Bàn làm việc" (PM chốt 22/08 — mọi nhóm đều có tiêu đề) |
 | Đăng bài | Soạn bài `/compose` · Chạy hàng loạt `/bulk` | Giữ 2 route; thống nhất UI chọn kênh + hẹn giờ |
 | Theo dõi | Bài đăng `/posts` (tab **Đã hẹn** / **Nhật ký**) | Gộp `/scheduled` + `/jobs`; redirect `/scheduled → /posts?tab=scheduled`, `/jobs → /posts?tab=log` (giữ nguyên query còn lại); `/batches/[id]` giữ route, thêm breadcrumb về `/posts` |
 | Dữ liệu | Sản phẩm `/products` · Đồng bộ `/sync` | Giữ |
@@ -57,7 +57,7 @@ Redirect làm ở tầng route (Next.js redirect trong page/`next.config.ts`), k
 
 ### 3.2 Tổng quan `/` — bấm vào thì chuyện gì xảy ra
 
-- Hàng số liệu (nhãn dệt, số tabular): **Bài lên hôm nay** → `/posts?tab=log` lọc hôm nay · **Đang chờ giờ** → `/posts?tab=scheduled` · **Lỗi cần xử lý** → `/posts?tab=log&status=failed` · **Mã bị chặn/tồn thấp** → `/products?loc=blocked`. Số đổi là sự kiện nhìn thấy được (raise 2).
+- Hàng số liệu (nhãn dệt, số tabular): **Bài lên hôm nay** → `/posts?tab=log` lọc hôm nay · **Đang chờ giờ** → `/posts?tab=scheduled` · **Lỗi cần xử lý** → `/posts?tab=log&status=failed` · **Mã bị chặn/tồn thấp** → `/products?status=blocked`. Số đổi là sự kiện nhìn thấy được (raise 2).
 - Khối "Việc cần chú ý": các bài lỗi gần nhất (bấm → đúng dòng trong Nhật ký, nút Chạy lại tại chỗ) + các bài sắp tới giờ.
 - Hành động chính duy nhất: **"Soạn bài mới"** → `/compose`.
 - Health-check hiện tại thu thành một dòng trạng thái cuối trang; bấm mở chi tiết (giữ nguyên `TenantHealthPanel` phía sau disclosure). Dữ liệu số liệu lấy từ các hook/endpoint sẵn có (`useScheduledJobs`, jobs, products); **không tạo endpoint mới trong đợt 1** — ô nào chưa có nguồn dữ liệu sẵn thì để dạng liên kết không kèm số, không bịa số.
