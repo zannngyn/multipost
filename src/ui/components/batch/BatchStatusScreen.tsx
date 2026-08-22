@@ -38,6 +38,14 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
   return (
     <section className="space-y-6" aria-labelledby="batch-heading">
       <header className="space-y-1">
+        {/* Way back up: a batch is opened from the hub (or from a link in a
+            support thread) and had no exit but the browser's Back button. */}
+        <Link
+          href="/posts?tab=log"
+          className="text-muted-foreground hover:text-foreground inline-block text-sm"
+        >
+          <span aria-hidden="true">← </span>Bài đăng
+        </Link>
         <h1 id="batch-heading" className="text-2xl font-semibold tracking-tight">
           Theo dõi lô đăng
         </h1>
@@ -68,7 +76,7 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
           onRetry={() => void batch.refetch()}
           extraAction={
             <Button asChild variant="outline">
-              <Link href="/jobs">Mở nhật ký đăng bài</Link>
+              <Link href="/posts?tab=log">Mở nhật ký đăng bài</Link>
             </Button>
           }
         />
@@ -109,7 +117,7 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
               Tải lại
             </Button>
             <Button asChild variant="ghost">
-              <Link href={`/jobs?batchId=${encodeURIComponent(data.batchId)}`}>
+              <Link href={`/posts?tab=log&batchId=${encodeURIComponent(data.batchId)}`}>
                 Xem nhật ký của lô này
               </Link>
             </Button>

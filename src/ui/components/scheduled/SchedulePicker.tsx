@@ -25,6 +25,7 @@ export function SchedulePicker({
   disabled,
   disabledReason,
   scopeNote,
+  hideModeChoice = false,
 }: {
   choice: ScheduleChoice;
   disabled?: boolean;
@@ -36,6 +37,16 @@ export function SchedulePicker({
   disabledReason?: string;
   /** What "mọi kênh" means on this screen (one post vs a whole run). */
   scopeNote: string;
+  /**
+   * Drops the two radios and keeps the time fields.
+   *
+   * For a screen that already carries the now/scheduled choice as its own
+   * control — the compose tray's "Hẹn lịch" toggle, which is what makes these
+   * fields appear at all. Two controls for one value is how a screen ends up
+   * disagreeing with itself; the caller keeps ONE and this renders the rest.
+   * Default `false`, so the bulk screen is untouched.
+   */
+  hideModeChoice?: boolean;
 }) {
   const groupId = useId();
   const fieldId = `${groupId}-at`;
@@ -49,20 +60,7 @@ export function SchedulePicker({
         {scopeNote}
       </p>
 
-      {(
-        [
-          {
-            mode: "now" as const,
-            label: "Đăng ngay",
-            hint: "Bài vào hàng đợi ngay khi tạo lô; các kênh vẫn được đăng giãn cách theo cấu hình.",
-          },
-          {
-            mode: "scheduled" as const,
-            label: "Hẹn giờ đăng",
-            hint: "Bài chờ tới giờ đã hẹn. Trước khi tới giờ vẫn đổi giờ hoặc huỷ được ở màn “Bài đã hẹn”.",
-          },
-        ] as const
-      ).map((option) => (
+      {(hideModeChoice ? [] : MODE_OPTIONS).map((option) => (
         <label
           key={option.mode}
           className={cn(
@@ -129,6 +127,20 @@ export function SchedulePicker({
     </fieldset>
   );
 }
+
+/** The two branches, named. Radios, not a switch: the default stays visible. */
+const MODE_OPTIONS = [
+  {
+    mode: "now" as const,
+    label: "Đăng ngay",
+    hint: "Bài vào hàng đợi ngay khi tạo lô; các kênh vẫn được đăng giãn cách theo cấu hình.",
+  },
+  {
+    mode: "scheduled" as const,
+    label: "Hẹn giờ đăng",
+    hint: "Bài chờ tới giờ đã hẹn. Trước khi tới giờ vẫn đổi giờ hoặc huỷ được ở màn “Bài đã hẹn”.",
+  },
+] as const;
 
 /**
  * The hours operators actually pick, as one-click chips.

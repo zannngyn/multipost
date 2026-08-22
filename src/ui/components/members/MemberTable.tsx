@@ -14,6 +14,7 @@ import {
 import type { TableColumn } from "@astryxdesign/core";
 import { useState } from "react";
 
+import { MEMBERSHIP_ROLE_BADGE_TONES } from "@/ui/components/members/role-badge";
 import { MEMBERSHIP_ROLE_LABELS, type MembershipRole } from "@/ui/schemas/me.schema";
 import {
   ACCESS_ROLE_DESCRIPTIONS,
@@ -113,7 +114,7 @@ export function MemberTable({
       width: pixel(150),
       renderCell: (member) => (
         <Badge
-          variant={member.role === "owner" ? "purple" : "blue"}
+          variant={MEMBERSHIP_ROLE_BADGE_TONES[member.role]}
           label={MEMBERSHIP_ROLE_LABELS[member.role]}
         />
       ),

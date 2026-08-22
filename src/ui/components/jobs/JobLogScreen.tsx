@@ -8,10 +8,12 @@ import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { JobLogSkeleton } from "@/ui/components/jobs/JobLogSkeleton";
 import { JobLogTable } from "@/ui/components/jobs/JobLogTable";
+import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
 import { WorkerHealthBanner } from "@/ui/components/jobs/WorkerHealthBanner";
 import { presentWorkerHealth } from "@/ui/components/jobs/present-worker-health";
 import { Button } from "@/ui/components/ui/button";
 import { Select } from "@/ui/components/ui/select";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { usePostJobLog, useRetryPostJob } from "@/ui/hooks/usePostJobs";
@@ -59,6 +61,12 @@ export function JobLogScreen() {
 
   const log = usePostJobLog(filter);
   const retry = useRetryPostJob();
+  /**
+   * Names for the "Kênh" column. A THIRD independent query: if it fails, the
+   * log still renders — the column falls back to the raw ids, which is exactly
+   * what it showed before this query existed (core-feedback-states §Partial).
+   */
+  const channels = useChannels();
   // Support mode is read-only (M3.3): re-queueing a job posts to the customer's
   // Page. The table shows the button disabled with this sentence beside it.
   const readOnlyReason = useReadOnlyReason();
@@ -84,13 +92,18 @@ export function JobLogScreen() {
       ? (next as PostJobStatus)
       : null;
     const params = jobLogSearchParams({ ...filter, status });
-    const query = params.toString();
+    // This screen rewrites the WHOLE query, so it has to carry the hub's
+    // `?tab=` across — without it, changing a filter drops the tab and the next
+    // server render sends the operator back to "Bài đã hẹn" mid-filter.
+    const query = withTabParam(params.toString(), searchParams.get(POSTS_TAB_PARAM));
     // `replace`: changing a filter is not a navigation step to walk back to.
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   function clearFilters() {
-    router.replace(pathname, { scroll: false });
+    // Clearing drops the filter, not the tab.
+    const query = withTabParam("", searchParams.get(POSTS_TAB_PARAM));
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   function handleRetry(postJobId: string) {
@@ -109,9 +122,11 @@ export function JobLogScreen() {
   return (
     <section className="space-y-6" aria-labelledby="jobs-heading">
       <header className="space-y-1">
-        <h1 id="jobs-heading" className="text-2xl font-semibold tracking-tight">
+        {/* h2: since the wave-1 IA this screen is a TAB inside /posts, and the
+            hub above it owns the page's h1 (core-accessibility §1). */}
+        <h2 id="jobs-heading" className="text-2xl font-semibold tracking-tight">
           Nhật ký đăng bài
-        </h1>
+        </h2>
         <p className="text-muted-foreground max-w-prose text-sm">
           Mỗi dòng là một bài trên một kênh. Bài lỗi hoặc bị chặn có thể chạy lại — tồn kho vẫn được
           kiểm tra lại ngay trước khi đăng. Bài ở trạng thái “Facebook giữ lịch” đã nằm trên Facebook
@@ -230,10 +245,19 @@ export function JobLogScreen() {
             {log.hasNextPage ? " (còn nữa)" : ""}.
           </p>
 
+          {/* Said once, above the table, instead of eight identical ids
+              explaining themselves row by row. */}
+          {channels.isError ? (
+            <p className="text-muted-foreground text-sm">
+              Không tải được danh sách Page nên cột “Kênh” đang hiện mã kênh thay vì tên Page.
+            </p>
+          ) : null}
+
           <JobLogTable
             items={items}
             onRetry={handleRetry}
             retryingJobId={retry.isPending ? (retry.variables?.postJobId ?? null) : null}
+            channels={channels.data?.channels}
             readOnlyReason={readOnlyReason}
           />
 

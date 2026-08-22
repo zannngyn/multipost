@@ -1,78 +1,102 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-21T14:30:00+07:00",
+  "generatedAt": "2026-08-22T10:00:00+07:00",
   "title": "Design System: MYSP",
   "extensions": {
     "colorMeta": {
-      "iris-violet": {
+      "indigo-dye": {
         "role": "primary",
-        "displayName": "Iris Violet",
-        "canonical": "oklch(0.5435 0.1643 288.03)",
-        "tonalRamp": ["oklch(0.15 0.1643 288.03)", "oklch(0.26 0.1643 288.03)", "oklch(0.37 0.1643 288.03)", "oklch(0.48 0.1643 288.03)", "oklch(0.59 0.1643 288.03)", "oklch(0.7 0.1643 288.03)", "oklch(0.81 0.1 288.03)", "oklch(0.92 0.05 288.03)"]
+        "displayName": "Indigo Dye — Chàm",
+        "canonical": "oklch(0.45 0.105 262)",
+        "dark": "oklch(0.68 0.09 262)",
+        "tonalRamp": ["oklch(0.15 0.105 262)", "oklch(0.26 0.105 262)", "oklch(0.37 0.105 262)", "oklch(0.45 0.105 262)", "oklch(0.57 0.10 262)", "oklch(0.68 0.09 262)", "oklch(0.80 0.06 262)", "oklch(0.89 0.045 262)"]
       },
-      "plum-ink": {
-        "role": "neutral",
-        "displayName": "Plum Ink",
-        "canonical": "oklch(0.2747 0.0212 305.64)",
-        "tonalRamp": ["oklch(0.15 0.0212 305.64)", "oklch(0.26 0.0212 305.64)", "oklch(0.37 0.0212 305.64)", "oklch(0.48 0.0212 305.64)", "oklch(0.59 0.0212 305.64)", "oklch(0.7 0.0212 305.64)", "oklch(0.81 0.0212 305.64)", "oklch(0.92 0.0212 305.64)"]
-      },
-      "warm-paper": {
-        "role": "neutral",
-        "displayName": "Warm Paper",
-        "canonical": "oklch(0.9661 0.0069 67.74)",
-        "tonalRamp": ["oklch(0.15 0.0069 67.74)", "oklch(0.26 0.0069 67.74)", "oklch(0.37 0.0069 67.74)", "oklch(0.48 0.0069 67.74)", "oklch(0.59 0.0069 67.74)", "oklch(0.7 0.0069 67.74)", "oklch(0.81 0.0069 67.74)", "oklch(0.95 0.0069 67.74)"]
-      },
-      "jade-mint": {
-        "role": "tertiary",
-        "displayName": "Jade Mint",
-        "canonical": "oklch(0.7038 0.1152 163.84)",
-        "tonalRamp": ["oklch(0.15 0.1152 163.84)", "oklch(0.26 0.1152 163.84)", "oklch(0.37 0.1152 163.84)", "oklch(0.48 0.1152 163.84)", "oklch(0.59 0.1152 163.84)", "oklch(0.7 0.1152 163.84)", "oklch(0.81 0.09 163.84)", "oklch(0.92 0.05 163.84)"]
-      },
-      "amber-honey": {
-        "role": "tertiary",
-        "displayName": "Amber Honey",
-        "canonical": "oklch(0.7741 0.1176 70.59)",
-        "tonalRamp": ["oklch(0.15 0.1176 70.59)", "oklch(0.26 0.1176 70.59)", "oklch(0.37 0.1176 70.59)", "oklch(0.48 0.1176 70.59)", "oklch(0.59 0.1176 70.59)", "oklch(0.7 0.1176 70.59)", "oklch(0.81 0.1 70.59)", "oklch(0.92 0.06 70.59)"]
-      },
-      "clay-red": {
-        "role": "tertiary",
-        "displayName": "Clay Red",
-        "canonical": "oklch(0.5855 0.1423 24.55)",
-        "tonalRamp": ["oklch(0.15 0.1423 24.55)", "oklch(0.26 0.1423 24.55)", "oklch(0.37 0.1423 24.55)", "oklch(0.48 0.1423 24.55)", "oklch(0.59 0.1423 24.55)", "oklch(0.7 0.12 24.55)", "oklch(0.81 0.09 24.55)", "oklch(0.92 0.05 24.55)"]
-      },
-      "cornflower": {
-        "role": "tertiary",
-        "displayName": "Cornflower",
-        "canonical": "oklch(0.6432 0.1249 257.31)",
-        "tonalRamp": ["oklch(0.15 0.1249 257.31)", "oklch(0.26 0.1249 257.31)", "oklch(0.37 0.1249 257.31)", "oklch(0.48 0.1249 257.31)", "oklch(0.59 0.1249 257.31)", "oklch(0.7 0.1249 257.31)", "oklch(0.81 0.1 257.31)", "oklch(0.92 0.05 257.31)"]
-      },
-      "lavender-chip": {
+      "indigo-wash": {
         "role": "secondary",
-        "displayName": "Lavender Chip",
-        "canonical": "oklch(0.8844 0.0554 296.7)",
-        "tonalRamp": ["oklch(0.15 0.0554 296.7)", "oklch(0.26 0.0554 296.7)", "oklch(0.37 0.0554 296.7)", "oklch(0.48 0.0554 296.7)", "oklch(0.59 0.0554 296.7)", "oklch(0.7 0.0554 296.7)", "oklch(0.81 0.0554 296.7)", "oklch(0.92 0.0554 296.7)"]
+        "displayName": "Indigo Wash — Chàm nhạt",
+        "canonical": "oklch(0.89 0.045 262)",
+        "dark": "oklch(0.36 0.075 262)",
+        "tonalRamp": ["oklch(0.15 0.045 262)", "oklch(0.26 0.045 262)", "oklch(0.37 0.045 262)", "oklch(0.48 0.045 262)", "oklch(0.59 0.045 262)", "oklch(0.70 0.045 262)", "oklch(0.81 0.045 262)", "oklch(0.92 0.045 262)"]
+      },
+      "muslin": {
+        "role": "neutral",
+        "displayName": "Muslin — Vải mộc",
+        "canonical": "oklch(0.955 0.013 84)",
+        "dark": "oklch(0.24 0.012 60)",
+        "tonalRamp": ["oklch(0.15 0.013 84)", "oklch(0.26 0.013 84)", "oklch(0.37 0.013 84)", "oklch(0.48 0.013 84)", "oklch(0.59 0.013 84)", "oklch(0.70 0.013 84)", "oklch(0.84 0.013 84)", "oklch(0.955 0.013 84)"]
+      },
+      "swatch-card": {
+        "role": "neutral",
+        "displayName": "Swatch Card — Thẻ mẫu",
+        "canonical": "oklch(0.984 0.007 84)",
+        "dark": "oklch(0.28 0.014 60)",
+        "tonalRamp": ["oklch(0.15 0.007 84)", "oklch(0.26 0.007 84)", "oklch(0.37 0.007 84)", "oklch(0.48 0.007 84)", "oklch(0.59 0.007 84)", "oklch(0.72 0.007 84)", "oklch(0.86 0.007 84)", "oklch(0.984 0.007 84)"]
+      },
+      "warm-ink": {
+        "role": "neutral",
+        "displayName": "Warm Ink — Mực nâu đen ấm",
+        "canonical": "oklch(0.28 0.018 55)",
+        "dark": "oklch(0.94 0.01 84)",
+        "tonalRamp": ["oklch(0.15 0.018 55)", "oklch(0.28 0.018 55)", "oklch(0.40 0.018 55)", "oklch(0.47 0.02 58)", "oklch(0.53 0.02 60)", "oklch(0.66 0.018 60)", "oklch(0.80 0.014 65)", "oklch(0.94 0.01 84)"]
+      },
+      "madder": {
+        "role": "tertiary",
+        "displayName": "Madder — Đỏ thiến thảo",
+        "canonical": "oklch(0.54 0.15 30)",
+        "dark": "oklch(0.68 0.145 30)",
+        "tonalRamp": ["oklch(0.15 0.15 30)", "oklch(0.26 0.15 30)", "oklch(0.37 0.15 30)", "oklch(0.48 0.15 30)", "oklch(0.54 0.15 30)", "oklch(0.68 0.145 30)", "oklch(0.81 0.09 30)", "oklch(0.92 0.05 30)"]
+      },
+      "turmeric": {
+        "role": "tertiary",
+        "displayName": "Turmeric — Nghệ",
+        "canonical": "oklch(0.76 0.12 75)",
+        "dark": "oklch(0.80 0.11 75)",
+        "tonalRamp": ["oklch(0.15 0.12 75)", "oklch(0.26 0.12 75)", "oklch(0.37 0.12 75)", "oklch(0.49 0.10 68)", "oklch(0.59 0.12 75)", "oklch(0.70 0.12 75)", "oklch(0.76 0.12 75)", "oklch(0.92 0.06 75)"]
+      },
+      "leaf": {
+        "role": "tertiary",
+        "displayName": "Leaf — Lá",
+        "canonical": "oklch(0.68 0.11 160)",
+        "dark": "oklch(0.74 0.10 160)",
+        "tonalRamp": ["oklch(0.15 0.11 160)", "oklch(0.26 0.11 160)", "oklch(0.37 0.11 160)", "oklch(0.50 0.09 163)", "oklch(0.59 0.11 160)", "oklch(0.68 0.11 160)", "oklch(0.81 0.09 160)", "oklch(0.92 0.05 160)"]
+      },
+      "fact-blue": {
+        "role": "tertiary",
+        "displayName": "Fact Blue",
+        "canonical": "oklch(0.60 0.10 255)",
+        "dark": "oklch(0.75 0.09 235)",
+        "tonalRamp": ["oklch(0.15 0.10 255)", "oklch(0.26 0.10 255)", "oklch(0.37 0.10 255)", "oklch(0.47 0.11 257)", "oklch(0.60 0.10 255)", "oklch(0.70 0.10 250)", "oklch(0.81 0.09 240)", "oklch(0.92 0.05 235)"]
       }
     },
     "typographyMeta": {
-      "display": { "displayName": "Display", "purpose": "Tiêu đề trang — mỗi màn một lần (text-2xl semibold)." },
-      "headline": { "displayName": "Headline", "purpose": "Tiêu đề khối/section trong trang." },
-      "title": { "displayName": "Title", "purpose": "Tiêu đề card, hàng nổi bật." },
+      "numeral": { "displayName": "Numeral", "purpose": "Con số dải tape — mono 36px tabular-nums, to nhất trang." },
+      "display": { "displayName": "Display", "purpose": "Tiêu đề trang hub — mỗi màn một lần (text-2xl semibold tracking-tight)." },
+      "headline": { "displayName": "Headline", "purpose": "Tiêu đề section trong trang, h1 màn compose (text-xl semibold)." },
+      "title": { "displayName": "Title", "purpose": "Nhấn trong card — hành động doorway, giá trị nổi (text-base medium)." },
       "body": { "displayName": "Body", "purpose": "Giọng nền toàn UI — công cụ mật độ cao chạy trên text-sm." },
-      "label": { "displayName": "Label / Eyebrow", "purpose": "Nhãn mono uppercase trên heading và metadata; mã/số luôn mono." }
+      "body-quiet": { "displayName": "Body Quiet (13px)", "purpose": "Bậc body phụ đã hợp thức (PM ruling) — phụ đề, hint, note giải thích, control phụ compose." },
+      "label": { "displayName": "Label / Nhãn dệt", "purpose": "Eyebrow mono uppercase tracking-widest — nhãn khối và ô tape, không bao giờ là heading." },
+      "meta": { "displayName": "Meta (11px)", "purpose": "Chip đếm, đánh dấu inline nhỏ." },
+      "micro-label": { "displayName": "Micro-label (10px)", "purpose": "Nhãn dệt mono cỡ nhỏ nhất — nhãn khối preview, ordinal chip." }
     },
     "shadows": [
-      { "name": "shadow-xs", "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)", "purpose": "Input — gợi lõm nhẹ, mức bóng duy nhất trên bề mặt đứng yên." },
-      { "name": "shadow-lg", "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)", "purpose": "Lớp nổi thật: popover, dialog, dropdown (The Flat-By-Default Rule)." }
+      { "name": "shadow-xs", "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)", "purpose": "Input chuẩn — gợi lõm nhẹ." },
+      { "name": "shadow-sm", "value": "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)", "purpose": "Thẻ mẫu đang cầm được: thẻ soạn bài, thẻ làm việc compose. Hover nhích lên shadow-md — thẻ đang được rút ra." },
+      { "name": "shadow-lg", "value": "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)", "purpose": "Lớp nổi thật: popover, dialog, toast (The Flat-By-Default Rule)." },
+      { "name": "inset-stitch", "value": "inset 0 0 0 1px var(--input)", "purpose": "Vòng khâu inset của control compose cỡ lớn — thay border; 1.5px khi active." }
     ],
     "motion": [
-      { "name": "ease-standard", "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Easing mặc định (Tailwind transition), 150ms cho đổi trạng thái màu/viền." },
-      { "name": "press-nudge", "value": "translateY(1px)", "purpose": "Active state của nút — phản hồi vật lý nhỏ, dứt khoát." }
+      { "name": "settle-in", "value": "slide-in-from-bottom-1 500ms ease-out, keyed by value", "purpose": "Con số ĐỔI lún vào chỗ — settle chứ không fade, mực đậm đủ từng frame; giá trị không đổi thì không động." },
+      { "name": "card-lift", "value": "translateY(-0.375rem) 300ms ease-out + shadow-md", "purpose": "Thẻ mẫu nhấc lên dưới con trỏ/focus — chuyển động hover duy nhất của trang." },
+      { "name": "press-nudge", "value": "translateY(1px)", "purpose": "Active state của nút — phản hồi vật lý nhỏ, dứt khoát." },
+      { "name": "skeleton-pulse", "value": "animate-pulse (loop)", "purpose": "Ngoại lệ lặp duy nhất — aria-hidden, chỉ sống khi query đang chạy, delay 300ms. Mọi motion đều motion-safe:." }
     ],
     "breakpoints": [
-      { "name": "sm", "value": "640px" },
-      { "name": "md", "value": "768px" },
-      { "name": "lg", "value": "1024px" },
-      { "name": "xl", "value": "1280px" },
+      { "name": "@sm (container)", "value": "24rem" },
+      { "name": "@2xl (container)", "value": "42rem" },
+      { "name": "@4xl (container)", "value": "56rem" },
+      { "name": "@5xl (container)", "value": "64rem" },
+      { "name": "content-max", "value": "64rem" },
       { "name": "shell-max", "value": "1440px" }
     ]
   },
@@ -81,91 +105,113 @@
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "Hành động chính — màu hành động duy nhất của hệ (The One Violet Rule).",
+      "description": "Hành động chính — màu chàm duy nhất của hệ (The One Indigo Rule).",
       "html": "<button class=\"ds-btn-primary\">Đăng bài</button>",
-      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 2rem; padding: 0 0.625rem; gap: 0.375rem; background: var(--primary, oklch(0.5435 0.1643 288.03)); color: var(--primary-foreground, oklch(0.995 0.0034 67.78)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; border: 1px solid transparent; border-radius: 0.625rem; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1), transform 150ms; } .ds-btn-primary:hover { background: oklch(0.5435 0.1643 288.03 / 80%); } .ds-btn-primary:focus-visible { outline: none; border-color: var(--ring, oklch(0.5435 0.1643 288.03 / 45%)); box-shadow: 0 0 0 3px oklch(0.5435 0.1643 288.03 / 50%); } .ds-btn-primary:active { transform: translateY(1px); }"
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 2rem; padding: 0 0.625rem; gap: 0.375rem; background: var(--primary, oklch(0.45 0.105 262)); color: var(--primary-foreground, oklch(0.984 0.007 84)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; border: 1px solid transparent; border-radius: 0.5rem; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1), transform 150ms; } .ds-btn-primary:hover { background: oklch(0.45 0.105 262 / 80%); } .ds-btn-primary:focus-visible { outline: none; border-color: var(--ring, oklch(0.45 0.105 262 / 45%)); box-shadow: 0 0 0 3px oklch(0.45 0.105 262 / 50%); } .ds-btn-primary:active { transform: translateY(1px); }"
     },
     {
       "name": "Outline Button",
       "kind": "button",
       "refersTo": "button-outline",
-      "description": "Hành động phụ — viền hairline trên nền giấy.",
-      "html": "<button class=\"ds-btn-outline\">Huỷ</button>",
-      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; height: 2rem; padding: 0 0.625rem; background: var(--background, oklch(0.9661 0.0069 67.74)); color: var(--foreground, oklch(0.2747 0.0212 305.64)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; border: 1px solid var(--border, oklch(0.2747 0.0212 305.64 / 10%)); border-radius: 0.625rem; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-outline:hover { background: var(--muted, oklch(0.9511 0.0069 67.74)); } .ds-btn-outline:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.5435 0.1643 288.03 / 50%); } .ds-btn-outline:active { transform: translateY(1px); }"
+      "description": "Hành động phụ — viền chỉ mực trên vải mộc.",
+      "html": "<button class=\"ds-btn-outline\">Tải lại</button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; height: 2rem; padding: 0 0.625rem; background: var(--background, oklch(0.955 0.013 84)); color: var(--foreground, oklch(0.28 0.018 55)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; border: 1px solid var(--border, oklch(0.28 0.018 55 / 12%)); border-radius: 0.5rem; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-outline:hover { background: var(--muted, oklch(0.933 0.014 84)); } .ds-btn-outline:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.45 0.105 262 / 50%); } .ds-btn-outline:active { transform: translateY(1px); }"
     },
     {
       "name": "Destructive Button",
       "kind": "button",
       "refersTo": "button-destructive",
-      "description": "Hành động phá huỷ — tint đỏ 10%, không bao giờ khối đỏ đặc.",
+      "description": "Hành động phá huỷ — tint madder 10%, không bao giờ khối đỏ đặc.",
       "html": "<button class=\"ds-btn-destructive\">Xoá kênh</button>",
-      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; height: 2rem; padding: 0 0.625rem; background: oklch(0.5855 0.1423 24.55 / 10%); color: var(--destructive, oklch(0.5855 0.1423 24.55)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; border: 1px solid transparent; border-radius: 0.625rem; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-destructive:hover { background: oklch(0.5855 0.1423 24.55 / 20%); } .ds-btn-destructive:focus-visible { outline: none; border-color: oklch(0.5855 0.1423 24.55 / 40%); box-shadow: 0 0 0 3px oklch(0.5855 0.1423 24.55 / 20%); } .ds-btn-destructive:active { transform: translateY(1px); }"
+      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; height: 2rem; padding: 0 0.625rem; background: oklch(0.54 0.15 30 / 10%); color: var(--destructive, oklch(0.54 0.15 30)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; border: 1px solid transparent; border-radius: 0.5rem; cursor: pointer; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-btn-destructive:hover { background: oklch(0.54 0.15 30 / 20%); } .ds-btn-destructive:focus-visible { outline: none; border-color: oklch(0.54 0.15 30 / 40%); box-shadow: 0 0 0 3px oklch(0.54 0.15 30 / 20%); } .ds-btn-destructive:active { transform: translateY(1px); }"
     },
     {
       "name": "Text Input",
       "kind": "input",
       "refersTo": "input",
-      "description": "Ô nhập chuẩn — focus ring 3px cùng ngôn ngữ với nút.",
-      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Nhập mã sản phẩm, ví dụ MRKVX6371\" />",
-      "css": ".ds-input { display: flex; width: 100%; height: 2.25rem; padding: 0.25rem 0.75rem; background: var(--background, oklch(0.9661 0.0069 67.74)); color: var(--foreground, oklch(0.2747 0.0212 305.64)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.875rem; border: 1px solid var(--input, oklch(0.2747 0.0212 305.64 / 14%)); border-radius: 0.625rem; box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); transition: border-color 150ms, box-shadow 150ms; } .ds-input::placeholder { color: var(--muted-foreground, oklch(0.5196 0.0292 303.05)); } .ds-input:focus-visible { outline: none; border-color: var(--ring, oklch(0.5435 0.1643 288.03 / 45%)); box-shadow: 0 0 0 3px oklch(0.5435 0.1643 288.03 / 50%); }"
+      "description": "Ô nhập chuẩn — viền chỉ mực 16%, focus ring 3px chàm cùng ngôn ngữ với nút.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Nhập mã hoặc tên sản phẩm…\" />",
+      "css": ".ds-input { display: flex; width: 100%; height: 2.25rem; padding: 0.25rem 0.75rem; background: var(--background, oklch(0.955 0.013 84)); color: var(--foreground, oklch(0.28 0.018 55)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.875rem; border: 1px solid var(--input, oklch(0.28 0.018 55 / 16%)); border-radius: 0.5rem; box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); transition: border-color 150ms, box-shadow 150ms; } .ds-input::placeholder { color: var(--muted-foreground, oklch(0.47 0.02 58)); } .ds-input:focus-visible { outline: none; border-color: var(--ring, oklch(0.45 0.105 262 / 45%)); box-shadow: 0 0 0 3px oklch(0.45 0.105 262 / 50%); }"
     },
     {
       "name": "Status Badge (success)",
       "kind": "chip",
       "refersTo": "badge-neutral",
-      "description": "Pill trạng thái theo The 10% Tint Rule — tone do màn hình chọn từ trạng thái nghiệp vụ.",
+      "description": "Pill trạng thái theo The 10% Tint Rule — leaf 10% + viền 30% + chữ Leaf Deep; tone do màn hình chọn; info không tint.",
       "html": "<span class=\"ds-badge-success\">Đã đăng</span>",
-      "css": ".ds-badge-success { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.125rem 0.625rem; background: oklch(0.7038 0.1152 163.84 / 10%); color: oklch(0.5192 0.0964 166.23); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.75rem; font-weight: 500; border: 1px solid oklch(0.7038 0.1152 163.84 / 30%); border-radius: 9999px; white-space: nowrap; }"
+      "css": ".ds-badge-success { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.125rem 0.625rem; background: oklch(0.68 0.11 160 / 10%); color: oklch(0.50 0.09 163); font-family: 'Be Vietnam Pro', system-ui, sans-serif; font-size: 0.75rem; font-weight: 500; border: 1px solid oklch(0.68 0.11 160 / 30%); border-radius: 9999px; white-space: nowrap; }"
     },
     {
-      "name": "Card",
-      "kind": "card",
+      "name": "Stat Tape Cell",
+      "kind": "custom",
       "refersTo": "card",
-      "description": "Bề mặt Porcelain phẳng trên Warm Paper — tách nền bằng chênh tonal + hairline, không bóng.",
-      "html": "<div class=\"ds-card\"><p class=\"ds-card-eyebrow\">TIẾN TRÌNH</p><h3 class=\"ds-card-title\">Lô sáng 21/08</h3><p class=\"ds-card-body\">12 bài đã lên · 2 mã bị chặn vì hết hàng</p></div>",
-      "css": ".ds-card { background: var(--card, oklch(0.995 0.0034 67.78)); color: var(--card-foreground, oklch(0.2747 0.0212 305.64)); border: 1px solid var(--border, oklch(0.2747 0.0212 305.64 / 10%)); border-radius: 0.875rem; padding: 1rem; font-family: 'Be Vietnam Pro', system-ui, sans-serif; } .ds-card-eyebrow { margin: 0 0 0.5rem; color: var(--foreground-subtle, oklch(0.6751 0.0273 303.28)); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; } .ds-card-title { margin: 0 0 0.25rem; font-size: 1rem; font-weight: 600; } .ds-card-body { margin: 0; font-size: 0.875rem; color: var(--muted-foreground, oklch(0.5196 0.0292 303.05)); }"
+      "description": "Một ô của dải nhãn dệt: Eyebrow mono + numeral 36px tabular-nums, khâu vào dải bằng gap-px trên nền border.",
+      "html": "<a class=\"ds-tape-cell\" href=\"#\"><p class=\"ds-tape-eyebrow\">ĐANG CHỜ GIỜ</p><span class=\"ds-tape-row\"><span class=\"ds-tape-numeral\">25+</span><span class=\"ds-tape-unit\">bài đã hẹn</span></span><span class=\"ds-tape-dest\">Mở danh sách bài đã hẹn</span></a>",
+      "css": ".ds-tape-cell { display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem 1.25rem; background: var(--card, oklch(0.984 0.007 84)); border: 1px solid var(--border, oklch(0.28 0.018 55 / 12%)); border-radius: 0.4rem; text-decoration: none; color: var(--foreground, oklch(0.28 0.018 55)); font-family: 'Be Vietnam Pro', system-ui, sans-serif; transition: background 150ms; } .ds-tape-cell:hover { background: color-mix(in oklch, var(--accent, oklch(0.89 0.045 262)) 40%, var(--card, oklch(0.984 0.007 84))); } .ds-tape-cell:focus-visible { outline: none; box-shadow: inset 0 0 0 3px oklch(0.45 0.105 262 / 50%); } .ds-tape-eyebrow { margin: 0; color: var(--foreground-subtle, oklch(0.53 0.02 60)); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; } .ds-tape-row { display: flex; align-items: baseline; gap: 0.5rem; min-height: 2.25rem; } .ds-tape-numeral { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 2.25rem; line-height: 1; font-weight: 600; font-variant-numeric: tabular-nums; } .ds-tape-unit { color: var(--muted-foreground, oklch(0.47 0.02 58)); font-size: 0.875rem; } .ds-tape-dest { color: var(--muted-foreground, oklch(0.47 0.02 58)); font-size: 0.75rem; }"
+    },
+    {
+      "name": "Swatch Card (primary action)",
+      "kind": "custom",
+      "refersTo": "button-primary",
+      "description": "Thẻ mẫu vải rút nửa chừng khỏi tay áo — mấu tab bậc thang, hover nhấc lên 6px; hình dạng chữ ký của thế giới.",
+      "html": "<div class=\"ds-swatch-wrap\"><span class=\"ds-swatch-sleeve\"></span><a class=\"ds-swatch-card\" href=\"#\"><span class=\"ds-swatch-tab ds-swatch-tab--back\"></span><span class=\"ds-swatch-tab ds-swatch-tab--front\"></span><span><span class=\"ds-swatch-title\">Soạn bài mới</span><span class=\"ds-swatch-sub\">Chọn mã và màu, duyệt caption từng kênh, rồi đăng.</span></span></a></div>",
+      "css": ".ds-swatch-wrap { position: relative; padding-bottom: 1rem; font-family: 'Be Vietnam Pro', system-ui, sans-serif; } .ds-swatch-sleeve { position: absolute; left: 1.5rem; right: 1.5rem; bottom: 0; height: 3.5rem; background: var(--secondary, oklch(0.933 0.014 84)); border: 1px solid var(--border, oklch(0.28 0.018 55 / 12%)); border-radius: 0.4rem; } .ds-swatch-card { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; padding: 1.5rem; background: var(--primary, oklch(0.45 0.105 262)); color: var(--primary-foreground, oklch(0.984 0.007 84)); border: 1px solid var(--primary, oklch(0.45 0.105 262)); border-radius: 0.4rem; text-decoration: none; box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1); transition: transform 300ms ease-out, box-shadow 300ms ease-out; } .ds-swatch-card:hover, .ds-swatch-card:focus-visible { transform: translateY(-0.375rem); box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); } .ds-swatch-card:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.45 0.105 262 / 50%); } .ds-swatch-tab { position: absolute; border-radius: 0.3rem 0.3rem 0 0; } .ds-swatch-tab--back { top: -0.875rem; left: 6.5rem; height: 0.875rem; width: 3.5rem; background: var(--accent, oklch(0.89 0.045 262)); } .ds-swatch-tab--front { top: -0.625rem; left: 2rem; height: 0.625rem; width: 5rem; background: var(--primary, oklch(0.45 0.105 262)); } .ds-swatch-title { display: block; font-size: 1.25rem; font-weight: 600; letter-spacing: -0.025em; } .ds-swatch-sub { display: block; margin-top: 0.25rem; font-size: 0.875rem; opacity: 0.85; }"
+    },
+    {
+      "name": "Step Rail Stop",
+      "kind": "custom",
+      "refersTo": "card-work",
+      "description": "Một bước của rail compose: số mono trong vòng tròn hairline + nhãn dệt — gọi tên thứ tự nghiệp vụ, không phải stepper.",
+      "html": "<section class=\"ds-step\"><span class=\"ds-step-num\">1</span><p class=\"ds-step-label\">Bước 1 — Sản phẩm</p><div class=\"ds-step-body\">Nội dung bước…</div></section>",
+      "css": ".ds-step { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); column-gap: 0.5rem; font-family: 'Be Vietnam Pro', system-ui, sans-serif; } .ds-step-num { display: flex; align-items: center; justify-content: center; width: 1.75rem; height: 1.75rem; border: 1px solid var(--border, oklch(0.28 0.018 55 / 12%)); border-radius: 9999px; color: var(--foreground-subtle, oklch(0.53 0.02 60)); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; } .ds-step-label { margin: 0; align-self: center; color: var(--foreground-subtle, oklch(0.53 0.02 60)); font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; } .ds-step-body { grid-column: 2; padding-top: 0.75rem; font-size: 0.875rem; color: var(--foreground, oklch(0.28 0.018 55)); }"
     },
     {
       "name": "Side Nav Item",
       "kind": "nav",
       "refersTo": "button-outline",
-      "description": "Item điều hướng — active là Lavender nhạt + chữ Iris Deep, hover Sunken Paper.",
-      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-item--active\" href=\"#\">Soạn bài</a><a class=\"ds-nav-item\" href=\"#\">Kênh đăng</a></nav>",
-      "css": ".ds-nav { display: flex; flex-direction: column; gap: 0.125rem; width: 13rem; font-family: 'Be Vietnam Pro', system-ui, sans-serif; } .ds-nav-item { display: flex; align-items: center; padding: 0.375rem 0.625rem; color: var(--foreground, oklch(0.2747 0.0212 305.64)); font-size: 0.875rem; font-weight: 500; text-decoration: none; border-radius: 0.625rem; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-nav-item:hover { background: var(--muted, oklch(0.9511 0.0069 67.74)); } .ds-nav-item--active { background: var(--sidebar-accent, oklch(0.9639 0.0162 297.53)); color: var(--sidebar-accent-foreground, oklch(0.4266 0.1511 285.6)); } .ds-nav-item:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.5435 0.1643 288.03 / 50%); }"
+      "description": "Item điều hướng — active là Indigo Wash + chữ Indigo Deep, hover Sunken Cloth.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-item--active\" href=\"#\">Soạn bài</a><a class=\"ds-nav-item\" href=\"#\">Bài đăng</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 0.125rem; width: 13rem; font-family: 'Be Vietnam Pro', system-ui, sans-serif; } .ds-nav-item { display: flex; align-items: center; padding: 0.375rem 0.625rem; color: var(--foreground, oklch(0.28 0.018 55)); font-size: 0.875rem; font-weight: 500; text-decoration: none; border-radius: 0.5rem; transition: background 150ms cubic-bezier(0.4,0,0.2,1); } .ds-nav-item:hover { background: var(--muted, oklch(0.933 0.014 84)); } .ds-nav-item--active { background: var(--sidebar-accent, oklch(0.89 0.045 262)); color: var(--sidebar-accent-foreground, oklch(0.38 0.11 263)); } .ds-nav-item:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(0.45 0.105 262 / 50%); }"
     }
   ],
   "narrative": {
-    "northStar": "The Pastel Atelier",
-    "overview": "MYSP là bàn làm việc số của một xưởng thời trang: mặt giấy ấm, ánh tím diên vĩ, và những chip vải oải hương — nhưng trước hết nó là công cụ vận hành mà nhân viên nhìn suốt cả buổi sáng. Giọng điệu là ấm · tĩnh · đáng tin: pastel làm dịu mắt trong phiên soạn lô dài, còn cấu trúc bên dưới thì chính xác như sổ vận hành — mã sản phẩm chạy chữ mono, trạng thái phân biệt được trong một liếc mắt, lỗi hiện ra bằng lời giải thích chứ không bằng tiếng còi. Hệ được hiện thực trên nền Astryx v0.4.0 với một lớp semantic riêng (ComposePastel) ghi trong src/app/globals.css bằng oklch.",
+    "northStar": "Sổ mẫu vải (The Swatch Book)",
+    "overview": "MYSP là cuốn sổ mẫu vải của xưởng: mỗi màu là một thẻ vải, mỗi mã sản phẩm một trang mẫu. Nền là vải mộc (unbleached muslin) chứ không phải trắng văn phòng; chữ là mực nâu đen ấm chứ không phải đen lạnh; hành động duy nhất nhuộm chàm (indigo). Thế giới này từ chối admin-SaaS \"card trắng + accent tím rải đều\" — thay vào đó là bề mặt dệt: dải số liệu khâu bằng chỉ hairline, thẻ mẫu có mấu bậc thang thò ra khỏi tay áo, nhãn dệt mono cho mọi mã và số. Câu chuyện vận hành không đổi: người vận hành mở sổ, thấy việc hôm nay, rút thẻ soạn bài, duyệt caption, và luôn trả lời được \"vì sao bài này không lên\". Toàn bộ palette là oklch semantic; light/dark cùng ngữ nghĩa, chỉ đổi giá trị.",
     "keyCharacteristics": [
-      "Nền wash ấm nhiều lớp tonal thay vì trắng tinh + đổ bóng",
-      "Một màu hành động duy nhất (Iris Violet); ba màu trạng thái tách bạch ngay ở tint 10%",
+      "Nền vải mộc ba lớp tonal (muslin → sunken cloth → swatch card) + viền chỉ mực, không bóng trang trí",
+      "Một màu hành động duy nhất (chàm); trạng thái là ba màu nhuộm có tên chữ: madder / turmeric / leaf",
       "Chữ Việt là công dân hạng nhất: Be Vietnam Pro (subset vietnamese) + JetBrains Mono cho mã/số",
-      "Mềm nhưng dứt khoát: bo tròn lớn, màu dịu, nhưng hover/focus/lỗi luôn tức thì và rõ",
-      "Light + dark đầy đủ, cùng ngữ nghĩa token, chỉ đổi giá trị"
+      "Hình dạng chữ ký: thẻ mẫu vải mấu bậc thang, dải tape khâu chỉ, rail bước đánh số mono",
+      "Đang chạy thì động, đã chốt thì đứng im — mỗi thời điểm chỉ một chuyển động có chủ đích",
+      "Mật độ reflow theo bậc container khai báo (@2xl/@4xl/@5xl), không co giãn tự do"
     ],
     "rules": [
-      { "name": "The Ink Hairline Rule", "body": "Viền không bao giờ là xám trung tính — luôn là Plum Ink ở 10–14% alpha (dark: trắng 12–16%). Xám nguội tách card khỏi nền ấm.", "section": "colors" },
-      { "name": "The One Violet Rule", "body": "Iris Violet là màu hành động duy nhất. Màu trạng thái (jade/amber/clay/cornflower) mô tả sự thật, không bao giờ đánh dấu hành động.", "section": "colors" },
-      { "name": "The 10% Tint Rule", "body": "Nền trạng thái là màu gốc ở 10% opacity + viền 30–40% + chữ bản -deep; ba trạng thái phải phân biệt được ngay ở mức pha loãng này.", "section": "colors" },
-      { "name": "The Mono Ledger Rule", "body": "Mã sản phẩm, số đuôi ảnh, số lượng, ID — luôn JetBrains Mono để thẳng cột trong bảng và badge.", "section": "typography" },
+      { "name": "The Ink Hairline Rule", "body": "Viền không bao giờ là xám trung tính — luôn là Warm Ink ở 12–16% alpha (dark: trắng 12–16%). Xám nguội tách card khỏi vải ấm.", "section": "colors" },
+      { "name": "The One Indigo Rule", "body": "Chàm là màu hành động duy nhất. Màu trạng thái (madder/turmeric/leaf/fact) mô tả sự thật, không bao giờ đánh dấu hành động.", "section": "colors" },
+      { "name": "The 10% Tint Rule", "body": "Nền trạng thái là màu gốc ở 10–15% opacity + viền 30–40% + chữ bản -deep; ba màu nhuộm trạng thái (madder/turmeric/leaf) phải phân biệt được ngay ở mức pha loãng này (đã đo: cách nhau 0.043–0.064 sRGB trên vải mộc). Fact Blue không tham gia trò tint — pill info là nền trơn + hairline.", "section": "colors" },
+      { "name": "The Named Status Rule", "body": "Trạng thái luôn có tên chữ đi kèm — badge mang chữ, hàng lỗi mang lý do, nút mờ mang câu giải thích ngay cạnh. Màu không bao giờ là kênh thông tin duy nhất.", "section": "colors" },
+      { "name": "The Mono Ledger Rule", "body": "Mã sản phẩm, số đuôi ảnh, số lượng, ID, số bước — luôn JetBrains Mono (tabular-nums khi là số đếm) để thẳng cột trong bảng, badge và tape.", "section": "typography" },
+      { "name": "The Woven Label Rule", "body": "Nhãn dệt (Eyebrow) là mono uppercase tracking-widest màu Ink Subtle, luôn là <p> gắn nhãn cho khối theo sau — không bao giờ là heading.", "section": "typography" },
+      { "name": "The Legitimized Ramp Rule", "body": "Ramp gồm cả các bậc 13/11/10px đã duyệt. Không thêm cỡ lẻ mới ngoài ramp; cần nhỏ hơn body thì chọn đúng bậc theo vai trò, không theo chỗ trống.", "section": "typography" },
       { "name": "The Diacritics Rule", "body": "Mọi font mới bắt buộc ship subset vietnamese; một mặt chữ không có dấu thanh cùng họ là bị loại ngay.", "section": "typography" },
-      { "name": "The Flat-By-Default Rule", "body": "Bề mặt đứng yên thì phẳng. Bóng là phản ứng của lớp nổi (overlay), không phải trang trí của card.", "section": "elevation" }
+      { "name": "The Flat-By-Default Rule", "body": "Bề mặt đứng yên thì phẳng, tách nền bằng chênh tonal + hairline. Bóng là dấu hiệu \"đang được nhấc lên\" (thẻ mẫu, overlay), không phải trang trí của card.", "section": "elevation" }
     ],
     "dos": [
-      "Do lấy mọi màu/radius/spacing từ token semantic (bg-primary, text-muted-foreground, rounded-lg) — lớp giá trị nằm duy nhất ở globals.css.",
-      "Do viết màu mới bằng oklch và định nghĩa đủ cặp light/dark cùng ngữ nghĩa.",
-      "Do cho mọi trạng thái nghiệp vụ một lối ra thị giác: tint + viền + chữ deep, kèm lời giải thích \"vì sao\" bằng tiếng Việt.",
-      "Do dùng mono cho mã/số/đếm và eyebrow mono cho nhãn khối (The Mono Ledger Rule).",
-      "Do giữ active state vật lý nhỏ (translate-y-px) và focus ring 3px thống nhất toàn hệ."
+      "Do lấy mọi màu/radius từ token semantic (bg-primary, text-muted-foreground, rounded-lg) — lớp giá trị nằm duy nhất ở globals.css; Astryx token đổi mực qua defineTheme trong mysp-theme.ts, không bao giờ override --color-* trong :root trần.",
+      "Do viết màu mới bằng oklch và định nghĩa đủ cặp light/dark cùng ngữ nghĩa; kiểm khoảng cách với chàm và các màu nhuộm hiện có ở cả mức đặc lẫn tint.",
+      "Do cho mọi trạng thái nghiệp vụ một lối ra chữ: tint + viền + chữ deep, kèm câu \"vì sao\" tiếng Việt ngay tại chỗ hỏng (lỗi cục bộ theo nguồn, nguồn khác vẫn hiển thị).",
+      "Do dùng mono tabular-nums cho mã/số/đếm, nhãn dệt mono cho nhãn khối, và chỉ nói số đã đọc được (\"3+ lô\", không tổng bịa).",
+      "Do reflow theo bậc @container đã khai báo và giữ thứ tự DOM cố định qua mọi bậc.",
+      "Do giữ mỗi thời điểm một chuyển động: cái gì đã chốt thì đứng im; mọi animation motion-safe:."
     ],
     "donts": [
-      "Don't dùng hex/px trần hay xám trung tính cho viền — viền là Plum Ink loang (The Ink Hairline Rule).",
-      "Don't đổ bóng lên card đứng yên; bóng chỉ dành cho overlay (The Flat-By-Default Rule).",
-      "Don't dùng màu trạng thái cho hành động, hay khối đỏ đặc cho nút phá huỷ.",
-      "Don't import @astryxdesign/core/tailwind-theme.css trước mốc B9 — bridge này remap --color-primary/card/muted và phá các utility shadcn còn dùng.",
-      "Don't hiển thị ảnh giả cho media chưa tải được — ô trống Lilac Veil có nhãn, người vận hành không được \"duyệt\" thứ chưa nhìn thấy.",
-      "Don't thêm font không có subset vietnamese (The Diacritics Rule)."
+      "Don't dùng hex/px trần hay xám trung tính cho viền — viền là Warm Ink loang (The Ink Hairline Rule).",
+      "Don't đổ bóng trang trí lên bề mặt đứng yên — bóng nghĩa là \"đang được nhấc lên\" (thẻ mẫu, overlay).",
+      "Don't dùng màu trạng thái cho hành động, pha tint cho pill info, hay khối đỏ đặc cho nút phá huỷ.",
+      "Don't thêm cỡ chữ ngoài ramp (kể cả arbitrary text-[…px] mới) — 13/11/10px là các bậc đã duyệt, không phải giấy phép tự do.",
+      "Don't hiển thị ảnh giả cho media chưa tải được — ô Media Empty có nhãn; người vận hành không \"duyệt\" thứ chưa nhìn thấy.",
+      "Don't thêm font không có subset vietnamese (The Diacritics Rule).",
+      "Don't import @astryxdesign/core/tailwind-theme.css trước mốc B9 — bridge remap --color-primary/card/muted và phá các utility shadcn còn dùng."
     ]
   }
 }

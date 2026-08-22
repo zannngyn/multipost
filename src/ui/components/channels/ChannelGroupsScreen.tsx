@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { resolveGroupChannelLabels } from "@/ui/components/channels/channel-group-labels";
 import { ChannelGroupForm } from "@/ui/components/channels/ChannelGroupForm";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
@@ -19,10 +20,15 @@ import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
+import type { Channel } from "@/ui/schemas/channel.schema";
 import { formatDateTime } from "@/ui/schemas/post-batch.schema";
 
 /**
  * "Nhóm kênh" (E7.6 / E10.3): component -> hook -> service -> internal API.
+ *
+ * Since the wave-1 IA this is a TAB of the "Kênh" hub (`/channels?tab=groups`),
+ * not a page of its own: the hub owns the frame and the page's h1, so this
+ * screen starts at h2 and its own sections at h3.
  *
  * A group is a SHORTCUT for the wizard's channel picker, never an authority:
  * fan-out still creates one post_job per channel and the publish rules (kiểm
@@ -53,6 +59,15 @@ export function ChannelGroupsScreen() {
   const items = groups.data?.groups ?? [];
 
   /**
+   * The FULL channel list, used to print names on the cards: a group may hold a
+   * Page that has since been switched off, and "đang tắt" is a different fact
+   * from "đã gỡ". `undefined` while the list is unknown — see
+   * `resolveGroupChannelLabels`, which refuses to accuse anything of being
+   * removed until it has an answer.
+   */
+  const knownChannels = channels.data?.channels;
+
+  /**
    * A group may only hold channels that are actually publishable: a disabled
    * Page is skipped at publish time, so offering it here would promise a post
    * that never goes out. The picker therefore sees ACTIVE channels only.
@@ -71,11 +86,11 @@ export function ChannelGroupsScreen() {
   const gate = writeGate(readOnlyReason);
 
   return (
-    <section className="space-y-6" aria-labelledby="channels-heading">
+    <section className="space-y-6" aria-labelledby="channel-groups-heading">
       <header className="space-y-1">
-        <h1 id="channels-heading" className="text-2xl font-semibold tracking-tight">
+        <h2 id="channel-groups-heading" className="text-2xl font-semibold tracking-tight">
           Nhóm kênh
-        </h1>
+        </h2>
         <p className="text-muted-foreground max-w-prose text-sm">
           Gom sẵn các kênh hay đăng cùng nhau để ở màn soạn bài chỉ cần tick một lần. Nhóm chỉ là
           lối tắt chọn kênh — mọi quy tắc đăng (kiểm tồn, giãn cách, chống trùng) vẫn giữ nguyên.
@@ -86,9 +101,9 @@ export function ChannelGroupsScreen() {
         aria-labelledby="channels-create-heading"
         className="bg-card space-y-4 rounded-xl border p-5"
       >
-        <h2 id="channels-create-heading" className="text-base font-semibold">
+        <h3 id="channels-create-heading" className="text-base font-semibold">
           Tạo nhóm mới
-        </h2>
+        </h3>
         {gate.isDisabled ? (
           // The whole form goes, not just its button: a form nobody can submit
           // invites typing that gets thrown away.
@@ -117,9 +132,9 @@ export function ChannelGroupsScreen() {
 
       <section aria-labelledby="channels-list-heading" className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 id="channels-list-heading" className="text-base font-semibold">
+          <h3 id="channels-list-heading" className="text-base font-semibold">
             Nhóm đã lưu
-          </h2>
+          </h3>
           {/* Only once the list is real: "0 nhóm" while loading reads as an
               answer, and the operator would act on it. */}
           {groups.data ? (
@@ -134,6 +149,26 @@ export function ChannelGroupsScreen() {
         ) : null}
 
         {remove.isError ? <ApiErrorNotice error={remove.error} /> : null}
+
+        {/* Partial failure (core-feedback-states §6): the groups loaded, the
+            channel list did not. The cards below then have no names to print —
+            say why instead of leaving the operator staring at raw ids. */}
+        {channels.isError && items.length > 0 ? (
+          <div className="border-warning/40 bg-warning/10 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+            <p className="text-warning-foreground">
+              Chưa tải được danh sách kênh — các nhóm bên dưới đang hiện mã kênh thay cho tên Page.
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={channels.isFetching}
+              onClick={() => void channels.refetch()}
+            >
+              {channels.isFetching ? "Đang tải…" : "Thử lại"}
+            </Button>
+          </div>
+        ) : null}
 
         {!isFirstLoad && !groups.isError && items.length === 0 ? (
           <EmptyState
@@ -152,20 +187,11 @@ export function ChannelGroupsScreen() {
           {items.map((group) => (
             <li key={group.id} className="bg-card space-y-3 rounded-xl border p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold">{group.name}</h3>
+                <h4 className="text-sm font-semibold">{group.name}</h4>
                 <Badge tone="info">{group.channelCount} kênh</Badge>
               </div>
 
-              <ul className="flex flex-wrap gap-1.5">
-                {group.channelIds.map((channelId) => (
-                  <li
-                    key={channelId}
-                    className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 font-mono text-xs break-all"
-                  >
-                    {channelId}
-                  </li>
-                ))}
-              </ul>
+              <GroupChannelList channelIds={group.channelIds} channels={knownChannels} />
 
               <p className="text-muted-foreground text-xs tabular-nums">
                 Cập nhật: {formatDateTime(group.updatedAt)}
@@ -269,6 +295,61 @@ export function ChannelGroupsScreen() {
         </ul>
       </section>
     </section>
+  );
+}
+
+/**
+ * What is inside a group, in the operator's words.
+ *
+ * Names, not `channelId`s: the id is a MYSP internal key that appears nowhere
+ * else the operator works, so a card full of them could not answer "nhóm này
+ * đăng lên những Page nào". The id only comes back when there is no name to
+ * show — and then it comes with the reason.
+ */
+function GroupChannelList({
+  channelIds,
+  channels,
+}: {
+  channelIds: readonly string[];
+  /** `undefined` while the channel list is unknown (loading or failed). */
+  channels: readonly Channel[] | undefined;
+}) {
+  const labels = resolveGroupChannelLabels(channelIds, channels);
+
+  // A saved group with no channel is a data problem, not an empty list to hide:
+  // it can never post anything, and the operator has to see that.
+  if (labels.length === 0) {
+    return (
+      <p className="text-warning-foreground text-xs">
+        Nhóm này chưa có kênh nào — sửa nhóm và tick ít nhất một kênh, nếu không nó không dùng được
+        ở màn soạn bài.
+      </p>
+    );
+  }
+
+  return (
+    <ul className="flex flex-wrap gap-1.5">
+      {labels.map((label, index) => (
+        // Index in the key as well as the id: a duplicated id must still render
+        // as two chips rather than collapse into one.
+        <li
+          key={`${label.channelId}-${index}`}
+          className="bg-muted rounded-md px-2 py-0.5 text-xs break-all"
+        >
+          {label.name === null ? (
+            <span className="text-muted-foreground font-mono">{label.channelId}</span>
+          ) : (
+            <span className="text-foreground">{label.name}</span>
+          )}
+          {label.note === "removed" ? (
+            <span className="text-warning-foreground"> — đã gỡ khỏi màn Kênh</span>
+          ) : null}
+          {label.note === "disabled" ? (
+            <span className="text-muted-foreground"> — đang tắt, sẽ bị bỏ qua khi đăng</span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 

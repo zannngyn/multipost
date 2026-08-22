@@ -12,6 +12,7 @@ import { useId, useMemo, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
 import { resolveMonthKey } from "@/ui/components/scheduled/calendar-grid";
 import { CancelDialog } from "@/ui/components/scheduled/CancelDialog";
 import { RescheduleDialog } from "@/ui/components/scheduled/RescheduleDialog";
@@ -150,21 +151,30 @@ export function ScheduledScreen() {
   function pushUrl(nextFilter: ScheduledFilter, nextView: ScheduledViewState) {
     setNotice(null);
     setWarning(null);
-    const query = scheduledSearchParams(nextFilter, nextView).toString();
+    // The hub's `?tab=` rides along on every rewrite: this screen replaces the
+    // WHOLE query, and dropping the tab would bounce the operator to the other
+    // tab on the next server render.
+    const query = withTabParam(
+      scheduledSearchParams(nextFilter, nextView).toString(),
+      searchParams.get(POSTS_TAB_PARAM),
+    );
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   function hrefForDialog(action: "reschedule" | "cancel", postJobId: string): string {
     const params = scheduledSearchParams(filter, view);
     params.set(SCHEDULED_DIALOG_PARAMS[action], postJobId);
-    return `${pathname}?${params.toString()}`;
+    return `${pathname}?${withTabParam(params.toString(), searchParams.get(POSTS_TAB_PARAM))}`;
   }
 
-  /** Closing a dialog only drops its parameter — filter and month must survive. */
+  /** Closing a dialog only drops its parameter — filter, month and tab survive. */
   function closeDialogs() {
     reschedule.reset();
     cancel.reset();
-    const query = scheduledSearchParams(filter, view).toString();
+    const query = withTabParam(
+      scheduledSearchParams(filter, view).toString(),
+      searchParams.get(POSTS_TAB_PARAM),
+    );
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
@@ -209,9 +219,11 @@ export function ScheduledScreen() {
   return (
     <section className="space-y-6" aria-labelledby="scheduled-heading">
       <header className="space-y-1">
-        <h1 id="scheduled-heading" className="text-2xl font-semibold tracking-tight">
+        {/* h2: since the wave-1 IA this screen is a TAB inside /posts, and the
+            hub above it owns the page's h1 (core-accessibility §1). */}
+        <h2 id="scheduled-heading" className="text-2xl font-semibold tracking-tight">
           Bài đã hẹn
-        </h1>
+        </h2>
         <p className="text-muted-foreground max-w-prose text-sm">
           Những bài đang chờ tới giờ đăng. Chế độ Danh sách xếp bài sớm nhất lên trên; chế độ Lịch
           tháng cho thấy công việc rải ra trong tháng — bấm vào một ngày để mở chi tiết. Giờ hiển
@@ -336,7 +348,7 @@ export function ScheduledScreen() {
           className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
         >
           {warning}{" "}
-          <Link href="/jobs" className="underline underline-offset-4">
+          <Link href="/posts?tab=log" className="underline underline-offset-4">
             Mở nhật ký đăng bài
           </Link>
           .
@@ -439,14 +451,18 @@ export function ScheduledScreen() {
             const headingId = `scheduled-day-${group.dayKey}`;
             return (
               <section key={group.dayKey} className="space-y-2">
-                <h2 id={headingId} className="text-base font-semibold">
+                {/* h3, not h2: this screen is a TAB inside /posts, so the hub
+                    owns the h1, the screen title above owns the h2, and a day
+                    group sits one level under it. Two h2s would have read as
+                    two sibling screens (core-accessibility §1). */}
+                <h3 id={headingId} className="text-base font-semibold">
                   {/* nowMs is 0 only on the server: the heading then shows the
                       full date, never a wrong "Hôm nay". */}
                   {formatDayHeading(group.dayKey, nowMs)}
                   <span className="text-muted-foreground ml-2 text-sm font-normal">
                     {group.items.length} bài
                   </span>
-                </h2>
+                </h3>
                 <ScheduledJobTable
                   items={group.items}
                   headingId={headingId}

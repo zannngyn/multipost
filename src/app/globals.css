@@ -11,7 +11,13 @@
 
 @import "@astryxdesign/core/reset.css";
 @import "@astryxdesign/core/astryx.css";
-@import "@astryxdesign/theme-neutral/theme.css";
+/* The neutral theme, re-inked (src/ui/theme/mysp-theme.ts). NOT
+   @astryxdesign/theme-neutral/theme.css any more: that file is scoped to
+   `[data-astryx-theme="neutral"]`, and <Theme> writes the name of whatever
+   theme it was given — so the moment AppFrame stopped passing `neutralTheme`,
+   the neutral stylesheet stopped matching anything. Regenerate with
+   `pnpm exec astryx theme build src/ui/theme/mysp-theme.ts`. */
+@import "../ui/theme/mysp.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -79,108 +85,130 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Pastel palette, semantic layer only — the values come from the approved
-   ComposePastel design. Written in oklch so a tint (`bg-warning/10`) and a hover
-   shade interpolate sanely; hex could not do either.
-   Warm neutral wash + one violet accent, with three status hues that stay
-   distinguishable at 10% opacity on the near-white surface. */
+/* Swatch-book palette, semantic layer only — the values come from the approved
+   "Sổ mẫu vải" direction (seed e06531fb). Written in oklch so a tint
+   (`bg-warning/10`) and a hover shade interpolate sanely; hex could not do
+   either. Unbleached-muslin ground, warm ink, indigo dye for action, and
+   madder / turmeric / leaf status hues that stay distinguishable at 10% opacity
+   on that ground. Wave-1 starting points: the bounded inspect round may tune
+   lightness only, never the semantics of a role. */
 :root {
   color-scheme: light;
 
-  --background: oklch(0.9661 0.0069 67.74); /* warm wash */
-  --foreground: oklch(0.2747 0.0212 305.64); /* plum ink */
-  --foreground-subtle: oklch(0.6751 0.0273 303.28);
-  --card: oklch(0.995 0.0034 67.78); /* surface, a shade above the wash */
-  --card-foreground: oklch(0.2747 0.0212 305.64);
-  --popover: oklch(0.995 0.0034 67.78);
-  --popover-foreground: oklch(0.2747 0.0212 305.64);
-  --primary: oklch(0.5435 0.1643 288.03);
-  --primary-foreground: oklch(0.995 0.0034 67.78);
-  --secondary: oklch(0.9511 0.0069 67.74); /* sunken surface */
-  --secondary-foreground: oklch(0.2747 0.0212 305.64);
-  --muted: oklch(0.9511 0.0069 67.74);
-  --muted-foreground: oklch(0.5196 0.0292 303.05);
-  --accent: oklch(0.8844 0.0554 296.7); /* lavender chip */
-  --accent-foreground: oklch(0.4266 0.1511 285.6);
-  --destructive: oklch(0.5855 0.1423 24.55);
-  --warning: oklch(0.7741 0.1176 70.59);
-  --warning-foreground: oklch(0.4967 0.1041 65.17);
-  --success: oklch(0.7038 0.1152 163.84);
-  --success-foreground: oklch(0.5192 0.0964 166.23);
-  --info: oklch(0.6432 0.1249 257.31);
-  --info-foreground: oklch(0.4906 0.1283 258.66);
-  --media-empty: oklch(0.9168 0.0321 301.57);
-  --media-empty-cover: oklch(0.9222 0.0211 79.09);
-  /* Hairlines are the ink at low alpha, not a grey: on a warm wash a neutral
-     grey border reads cold and detaches the card from its background. */
-  --border: oklch(0.2747 0.0212 305.64 / 10%);
-  --input: oklch(0.2747 0.0212 305.64 / 14%);
-  --ring: oklch(0.5435 0.1643 288.03 / 45%);
-  --chart-1: oklch(0.5435 0.1643 288.03);
-  --chart-2: oklch(0.6432 0.1249 257.31);
-  --chart-3: oklch(0.7038 0.1152 163.84);
-  --chart-4: oklch(0.7741 0.1176 70.59);
-  --chart-5: oklch(0.8844 0.0554 296.7);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.995 0.0034 67.78);
-  --sidebar-foreground: oklch(0.2747 0.0212 305.64);
-  --sidebar-primary: oklch(0.5435 0.1643 288.03);
-  --sidebar-primary-foreground: oklch(0.995 0.0034 67.78);
-  --sidebar-accent: oklch(0.9639 0.0162 297.53);
-  --sidebar-accent-foreground: oklch(0.4266 0.1511 285.6);
-  --sidebar-border: oklch(0.2747 0.0212 305.64 / 10%);
-  --sidebar-ring: oklch(0.5435 0.1643 288.03 / 45%);
+  --background: oklch(0.955 0.013 84); /* vải mộc — unbleached muslin */
+  --foreground: oklch(0.28 0.018 55); /* mực nâu đen ấm — warm brown-black ink */
+  /* 4.65:1 on the cloth ground and 5.07:1 on a card — this tone labels the
+     stat tape and every mono eyebrow at 12px, so it has to clear 4.5:1 as
+     SMALL text, not as large (core-accessibility §5). The old 0.62 read 3.21:1
+     and every screen that cared was quietly overriding it. */
+  --foreground-subtle: oklch(0.53 0.02 60);
+  --card: oklch(0.984 0.007 84); /* swatch card, a shade above the cloth */
+  --card-foreground: oklch(0.28 0.018 55);
+  --popover: oklch(0.984 0.007 84);
+  --popover-foreground: oklch(0.28 0.018 55);
+  --primary: oklch(0.45 0.105 262); /* chàm — indigo dye */
+  --primary-foreground: oklch(0.984 0.007 84);
+  --secondary: oklch(0.933 0.014 84); /* sunken surface */
+  --secondary-foreground: oklch(0.28 0.018 55);
+  --muted: oklch(0.933 0.014 84);
+  --muted-foreground: oklch(0.47 0.02 58);
+  --accent: oklch(0.89 0.045 262); /* thẻ đang chọn — chàm nhạt */
+  --accent-foreground: oklch(0.38 0.11 263);
+  --destructive: oklch(0.54 0.15 30); /* madder red */
+  --warning: oklch(0.76 0.12 75); /* turmeric */
+  --warning-foreground: oklch(0.49 0.10 68);
+  --success: oklch(0.68 0.11 160); /* leaf */
+  --success-foreground: oklch(0.50 0.09 163);
+  --info: oklch(0.60 0.10 255);
+  --info-foreground: oklch(0.47 0.11 257);
+  --media-empty: oklch(0.92 0.02 84);
+  --media-empty-cover: oklch(0.90 0.025 80);
+  /* Hairlines are the ink at low alpha, not a grey: on an unbleached ground a
+     neutral grey border reads cold and detaches the card from its background. */
+  --border: oklch(0.28 0.018 55 / 12%);
+  --input: oklch(0.28 0.018 55 / 16%);
+  --ring: oklch(0.45 0.105 262 / 45%);
+  /* Charts reuse the semantic hues in reading order: action, fact, good,
+     attention, failure — no sixth colour invented for a chart. */
+  --chart-1: oklch(0.45 0.105 262);
+  --chart-2: oklch(0.60 0.10 255);
+  --chart-3: oklch(0.68 0.11 160);
+  --chart-4: oklch(0.76 0.12 75);
+  --chart-5: oklch(0.54 0.15 30);
+  --radius: 0.5rem; /* cạnh cắt vải — squarer than the old pastel world */
+  --sidebar: oklch(0.984 0.007 84);
+  --sidebar-foreground: oklch(0.28 0.018 55);
+  --sidebar-primary: oklch(0.45 0.105 262);
+  --sidebar-primary-foreground: oklch(0.984 0.007 84);
+  --sidebar-accent: oklch(0.89 0.045 262);
+  --sidebar-accent-foreground: oklch(0.38 0.11 263);
+  --sidebar-border: oklch(0.28 0.018 55 / 12%);
+  --sidebar-ring: oklch(0.45 0.105 262 / 45%);
 }
 
 /* Same roles, re-valued for the dark scheme (core-design-tokens: dark mode
-   changes the semantic layer, never the meaning). The ground is a very dark
-   plum rather than pure black, and the violet is lightened — the light-mode
-   primary has nowhere near enough contrast on a dark surface. */
+   changes the semantic layer, never the meaning). Same formula throughout: keep
+   the hue, invert the lightness. The ground is dyed-dark cloth — a warm very
+   dark brown, not pure black — and the indigo is lightened, because the
+   light-mode primary has nowhere near enough contrast on a dark surface.
+
+   `--info` is NOT the same hue-shift of the light value as the rest: lightening
+   both roles pulled indigo and info to 7° apart (0.084 sRGB distance, ~0.007
+   between their 10% tints — two pills a metre from the screen looked like one
+   colour). Dark info is therefore pushed to a colder 235° and a clearly higher
+   lightness; the other status hues keep their light-mode hue. */
 .dark {
   color-scheme: dark;
 
-  --background: oklch(0.2 0.014 305.64);
-  --foreground: oklch(0.95 0.006 300);
-  --foreground-subtle: oklch(0.58 0.022 303);
-  --card: oklch(0.245 0.018 305.64);
-  --card-foreground: oklch(0.95 0.006 300);
-  --popover: oklch(0.245 0.018 305.64);
-  --popover-foreground: oklch(0.95 0.006 300);
-  --primary: oklch(0.72 0.135 288.03);
-  --primary-foreground: oklch(0.22 0.03 288.03);
-  --secondary: oklch(0.29 0.016 305.64);
-  --secondary-foreground: oklch(0.95 0.006 300);
-  --muted: oklch(0.29 0.016 305.64);
-  --muted-foreground: oklch(0.72 0.024 303);
-  --accent: oklch(0.38 0.09 291);
-  --accent-foreground: oklch(0.88 0.055 296.7);
-  --destructive: oklch(0.68 0.15 24.55);
-  --warning: oklch(0.8 0.11 70.59);
-  --warning-foreground: oklch(0.88 0.09 72);
-  --success: oklch(0.74 0.11 163.84);
-  --success-foreground: oklch(0.84 0.09 164);
-  --info: oklch(0.7 0.11 257.31);
-  --info-foreground: oklch(0.84 0.08 259);
-  --media-empty: oklch(0.32 0.035 301.57);
-  --media-empty-cover: oklch(0.32 0.02 79.09);
+  --background: oklch(0.24 0.012 60); /* vải nhuộm sẫm — dark-dyed cloth */
+  --foreground: oklch(0.94 0.01 84); /* muslin ink on dark cloth */
+  /* 5.28:1 on the ground and 4.68:1 on a card. The old 0.62 cleared the ground
+     by 0.01 (4.51:1) and FAILED on every card at 4.00:1 — in the dark scheme a
+     card is lighter than the page, so the ground is the easy surface, not the
+     hard one. Held 0.06 below `--muted-foreground`, the same step the light
+     scheme uses, so the three text tones stay three. */
+  --foreground-subtle: oklch(0.66 0.018 60);
+  --card: oklch(0.28 0.014 60);
+  --card-foreground: oklch(0.94 0.01 84);
+  --popover: oklch(0.28 0.014 60);
+  --popover-foreground: oklch(0.94 0.01 84);
+  --primary: oklch(0.68 0.09 262); /* chàm sáng — lightened indigo dye */
+  --primary-foreground: oklch(0.22 0.03 262);
+  --secondary: oklch(0.32 0.014 60); /* raised surface */
+  --secondary-foreground: oklch(0.94 0.01 84);
+  --muted: oklch(0.32 0.014 60);
+  --muted-foreground: oklch(0.72 0.016 65);
+  --accent: oklch(0.36 0.075 262);
+  --accent-foreground: oklch(0.86 0.06 262);
+  --destructive: oklch(0.68 0.145 30);
+  --warning: oklch(0.80 0.11 75);
+  --warning-foreground: oklch(0.87 0.09 72);
+  --success: oklch(0.74 0.10 160);
+  --success-foreground: oklch(0.84 0.08 162);
+  /* Colder and lighter than the dark indigo above, on purpose — see the block
+     comment: 0.137 sRGB distance from `--primary`, up from 0.084. */
+  --info: oklch(0.75 0.09 235);
+  --info-foreground: oklch(0.85 0.075 235);
+  --media-empty: oklch(0.33 0.018 60);
+  --media-empty-cover: oklch(0.36 0.022 75);
   /* Shadows are near-invisible on a dark ground — elevation comes from a
      lighter hairline instead (core-design-tokens §dark mode). */
   --border: oklch(1 0 0 / 12%);
   --input: oklch(1 0 0 / 16%);
-  --ring: oklch(0.72 0.135 288.03 / 50%);
-  --chart-1: oklch(0.72 0.135 288.03);
-  --chart-2: oklch(0.7 0.11 257.31);
-  --chart-3: oklch(0.74 0.11 163.84);
-  --chart-4: oklch(0.8 0.11 70.59);
-  --chart-5: oklch(0.38 0.09 291);
-  --sidebar: oklch(0.245 0.018 305.64);
-  --sidebar-foreground: oklch(0.95 0.006 300);
-  --sidebar-primary: oklch(0.72 0.135 288.03);
-  --sidebar-primary-foreground: oklch(0.22 0.03 288.03);
-  --sidebar-accent: oklch(0.38 0.09 291);
-  --sidebar-accent-foreground: oklch(0.88 0.055 296.7);
+  --ring: oklch(0.68 0.09 262 / 50%);
+  --chart-1: oklch(0.68 0.09 262);
+  --chart-2: oklch(0.75 0.09 235); /* stays the twin of --info, as in light */
+  --chart-3: oklch(0.74 0.10 160);
+  --chart-4: oklch(0.80 0.11 75);
+  --chart-5: oklch(0.68 0.145 30);
+  --sidebar: oklch(0.28 0.014 60);
+  --sidebar-foreground: oklch(0.94 0.01 84);
+  --sidebar-primary: oklch(0.68 0.09 262);
+  --sidebar-primary-foreground: oklch(0.22 0.03 262);
+  --sidebar-accent: oklch(0.36 0.075 262);
+  --sidebar-accent-foreground: oklch(0.86 0.06 262);
   --sidebar-border: oklch(1 0 0 / 12%);
-  --sidebar-ring: oklch(0.72 0.135 288.03 / 50%);
+  --sidebar-ring: oklch(0.68 0.09 262 / 50%);
 }
 
 @layer base {
@@ -190,8 +218,19 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Craft floor: the browser's default selection is a system blue that belongs
+     to no theme, and the caret is a hairline of the OS accent. Both are places
+     the operator's own hand touches the page, so both wear the dye.
+     `--accent` is the "đang chọn" surface everywhere else in this world, and it
+     keeps `--foreground` legible on top (light 10.5:1, dark 9.2:1) — which is
+     why the pair is set explicitly rather than left to the browser to guess. */
+  ::selection {
+    background-color: var(--accent);
+    color: var(--foreground);
+  }
   html {
     @apply font-sans;
+    caret-color: var(--primary);
     /* A short page and a long page must not sit at different x offsets
        (web-layout-shell §scrollbar gutter). */
     scrollbar-gutter: stable;

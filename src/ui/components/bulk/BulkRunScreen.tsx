@@ -185,7 +185,7 @@ export function BulkRunScreen() {
           {groupItems.length > 0 ? (
             <p className="text-muted-foreground text-xs">
               Đã chọn {selectedIds.length} kênh · mỗi mã sẽ tạo {selectedIds.length} bài.{" "}
-              <Link href="/channels/groups" className="underline underline-offset-4">
+              <Link href="/channels?tab=groups" className="underline underline-offset-4">
                 Quản lý nhóm kênh
               </Link>
             </p>
@@ -342,11 +342,11 @@ export function BulkRunScreen() {
                   ? "Các lô đã tạo đang chờ tới giờ hẹn — đổi giờ hoặc huỷ ở "
                   : "Các lô đã tạo chạy tiếp trên máy chủ kể cả khi bạn rời trang — xem ở "}
                 {ranScheduled ? (
-                  <Link href="/scheduled" className="underline underline-offset-4">
+                  <Link href="/posts?tab=scheduled" className="underline underline-offset-4">
                     Bài đã hẹn
                   </Link>
                 ) : (
-                  <Link href="/jobs" className="underline underline-offset-4">
+                  <Link href="/posts?tab=log" className="underline underline-offset-4">
                     Nhật ký đăng bài
                   </Link>
                 )}

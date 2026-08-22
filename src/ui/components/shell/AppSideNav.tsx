@@ -13,7 +13,6 @@ import {
 } from "@astryxdesign/core";
 import {
   Building2,
-  CalendarClock,
   FolderSync,
   Layers,
   LayoutDashboard,
@@ -24,7 +23,6 @@ import {
   PenLine,
   Radio,
   ScrollText,
-  Share2,
   Sparkles,
   Users,
 } from "lucide-react";
@@ -47,20 +45,23 @@ import { useMe } from "@/ui/hooks/useMe";
  * Astryx ships no domain icons — its semantic registry is 28 utility names — but
  * `SideNavItem.icon` accepts `ComponentType<SVGProps<SVGSVGElement>>`, so these
  * come from lucide-react, already in the project's dependencies.
+ *
+ * Exported for `nav-icons.test.ts`, which pins one entry per destination: a nav
+ * row whose icon is missing renders a hole where every neighbour has a glyph,
+ * and in the collapsed rail — where the icon IS the row — it renders nothing at
+ * all. A new entry in NAV_SECTIONS with no icon here fails that test instead of
+ * shipping.
  */
-const ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
+export const NAV_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   "/": LayoutDashboard,
   "/compose": PenLine,
   "/bulk": Layers,
-  "/scheduled": CalendarClock,
-  "/jobs": ScrollText,
+  "/posts": ScrollText,
   "/products": ListChecks,
   "/sync": FolderSync,
   "/channels": Radio,
-  "/channels/groups": Share2,
   "/prompts": Sparkles,
   "/members": Users,
-  "/access": ScrollText,
   "/platform": Building2,
 };
 
@@ -151,13 +152,13 @@ export function AppSideNav({
               key={item.href}
               href={item.href}
               label={item.label}
-              icon={ICONS[item.href]}
-              // A batch detail page has no nav entry of its own; keep the log
-              // section lit while one is open, so the operator does not lose
-              // track of where they came from.
+              icon={NAV_ICONS[item.href]}
+              // A batch detail page has no nav entry of its own; keep "Bài đăng"
+              // lit while one is open, so the operator does not lose track of
+              // where they came from.
               isSelected={
                 isNavItemActive(pathname, item.href, { exact: item.isExact }) ||
-                (item.href === "/jobs" && isNavItemActive(pathname, "/batches"))
+                (item.href === "/posts" && isNavItemActive(pathname, "/batches"))
               }
             />
           ))}

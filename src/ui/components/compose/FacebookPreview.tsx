@@ -57,46 +57,50 @@ export function FacebookPreview({
       aria-labelledby={`${groupId}-heading`}
       className={cn("flex w-full min-w-0 flex-col gap-3", className)}
     >
-      <div className="flex flex-wrap items-center gap-3">
-        <h2
-          id={`${groupId}-heading`}
-          className="flex-1 font-mono text-[10px] tracking-[0.12em] text-[var(--foreground-subtle)] uppercase"
-        >
-          Xem trước · Facebook
-        </h2>
-
-        <div
-          role="group"
-          aria-label="Khổ màn hình xem trước"
-          className="flex gap-[3px] rounded-[10px] bg-[var(--compose-track)] p-[3px]"
-        >
-          {(["desktop", "mobile"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              aria-pressed={device === option}
-              onClick={() => setDevice(option)}
-              className={cn(
-                "focus-visible:ring-ring h-7 cursor-pointer rounded-lg px-3 text-xs font-medium text-[var(--compose-text-2)] transition-colors outline-none focus-visible:ring-3",
-                device === option &&
-                  "bg-[var(--compose-raised)] font-semibold text-[var(--primary)] shadow-[0_1px_3px_rgba(34,31,28,0.14)]",
-              )}
-            >
-              {option === "desktop" ? "Desktop" : "Mobile"}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div
         className={cn(
-          "flex flex-col overflow-hidden bg-[var(--card)] transition-[max-width]",
-          "shadow-[inset_0_0_0_1px_var(--compose-hairline)]",
-          isMobile
-            ? "max-w-90 self-center rounded-[22px] shadow-[inset_0_0_0_1px_var(--compose-hairline),0_12px_30px_rgba(34,31,28,0.12)]"
-            : "w-full rounded-[var(--compose-radius-block)]",
+          "border-border flex flex-col overflow-hidden border bg-[var(--card)] transition-[max-width]",
+          isMobile ? "max-w-90 self-center rounded-2xl shadow-md" : "w-full rounded-lg",
         )}
       >
+        {/* OUR chrome, on the frame — not part of the post below it.
+            It lives inside the frame so the top edge of this column lines up
+            with the top edge of the compose card beside it; with the label
+            floating above, the preview started 46px lower than the card it is
+            meant to sit next to and left a hole in the corner of the screen.
+            The hairline under it is what keeps it readable as a viewport bar
+            rather than something Facebook draws. */}
+        <div className="border-border flex flex-wrap items-center gap-3 border-b px-4 py-2.5">
+          <h2
+            id={`${groupId}-heading`}
+            className="flex-1 font-mono text-[10px] tracking-[0.12em] text-[var(--foreground-subtle)] uppercase"
+          >
+            Xem trước · Facebook
+          </h2>
+
+          <div
+            role="group"
+            aria-label="Khổ màn hình xem trước"
+            className="flex gap-[3px] rounded-lg bg-[var(--muted)] p-[3px]"
+          >
+            {(["desktop", "mobile"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={device === option}
+                onClick={() => setDevice(option)}
+                className={cn(
+                  "focus-visible:ring-ring h-7 cursor-pointer rounded-lg px-3 text-xs font-medium text-[var(--muted-foreground)] transition-colors outline-none focus-visible:ring-3",
+                  device === option &&
+                    "bg-[var(--card)] font-semibold text-[var(--primary)] shadow-sm",
+                )}
+              >
+                {option === "desktop" ? "Desktop" : "Mobile"}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="flex items-center gap-3 px-4 py-3.5">
           <span
             aria-hidden="true"
@@ -132,16 +136,16 @@ export function FacebookPreview({
         </div>
 
         {tags.length > 0 ? (
-          <div className="px-4 pb-3 text-sm break-words text-[var(--compose-link)]">{tags}</div>
+          <div className="px-4 pb-3 text-sm break-words text-[var(--primary)]">{tags}</div>
         ) : null}
 
         <PreviewCollage media={media} isVideo={isVideo} compact={isMobile} />
 
-        <div className="flex h-12 items-center shadow-[inset_0_1px_0_var(--compose-hairline)]">
+        <div className="flex h-12 items-center shadow-[inset_0_1px_0_var(--border)]">
           {["Thích", "Bình luận", "Chia sẻ"].map((action) => (
             <span
               key={action}
-              className="flex-1 text-center text-[13px] text-[var(--compose-text-2)]"
+              className="flex-1 text-center text-[13px] text-[var(--muted-foreground)]"
             >
               {action}
             </span>
@@ -224,7 +228,7 @@ function PreviewCollage({
                 {overflow > 0 && index === right.length - 1 ? (
                   <span
                     aria-hidden="true"
-                    className="absolute inset-0 z-1 flex items-center justify-center bg-[var(--compose-veil)] text-[22px] font-semibold text-white"
+                    className="absolute inset-0 z-1 flex items-center justify-center bg-foreground/50 text-[22px] font-semibold text-white"
                   >
                     +{overflow}
                   </span>
