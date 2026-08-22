@@ -38,55 +38,64 @@ export default async function PostsPage(props: PageProps<"/posts">) {
   const tab = parsePostsTab((await props.searchParams).tab);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <Suspense fallback={<PostsFallback tab={tab} />}>
-        <PostsHub tab={tab} />
-      </Suspense>
-    </div>
+    // No container here: the hub owns its own frame (Layout + full-width header
+    // band), same split as `/channels`, `/members` and `/bulk`. A wrapper would
+    // sit INSIDE that frame and bound the header band as well.
+    <Suspense fallback={<PostsFallback tab={tab} />}>
+      <PostsHub tab={tab} />
+    </Suspense>
   );
 }
 
 /**
  * Hub header + tab strip + the opening tab's own header, filter bar and list —
- * the same heights as the real thing, so nothing moves when data lands
- * (web-feedback-states rule 1). `aria-hidden`: grey boxes are not content.
+ * the same column and the same heights as the real thing, so nothing moves when
+ * data lands (web-feedback-states rule 1). `aria-hidden`: grey boxes are not
+ * content.
  */
 function PostsFallback({ tab }: { tab: PostsTab }) {
   return (
-    <div aria-hidden="true" className="space-y-6 motion-safe:animate-pulse">
-      <div className="space-y-2">
-        <div className="bg-muted h-8 w-40 rounded" />
-        <div className="bg-muted h-4 w-full max-w-md rounded" />
-      </div>
-
-      <div className="flex gap-2 border-b pb-2">
-        <div className="bg-muted h-8 w-28 rounded-lg" />
-        <div className="bg-muted h-8 w-32 rounded-lg" />
-      </div>
-
-      <div className="space-y-2">
-        <div className="bg-muted h-8 w-48 rounded" />
-        <div className="bg-muted h-4 w-full max-w-xl rounded" />
-      </div>
-
-      {tab === "scheduled" ? (
-        <>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="bg-muted h-9 w-64 rounded-lg" />
-            <div className="bg-muted h-9 w-44 rounded-lg" />
-            <div className="bg-muted h-9 w-44 rounded-lg" />
+    <div aria-hidden="true" className="motion-safe:animate-pulse">
+      {/* The header band: full-width divider, bounded column inside — the two
+          boxes `PostsHub`'s LayoutHeader draws. */}
+      <div className="border-border border-b">
+        <div className="mx-auto w-full max-w-5xl space-y-4 px-6 py-4">
+          <div className="space-y-2">
+            <div className="bg-muted h-8 w-40 rounded" />
+            <div className="bg-muted h-4 w-full max-w-md rounded" />
           </div>
-          <ScheduledSkeleton />
-        </>
-      ) : (
-        <>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="bg-muted h-9 w-64 rounded-lg" />
-            <div className="bg-muted h-8 w-24 rounded-lg" />
+          <div className="flex gap-2">
+            <div className="bg-muted h-8 w-28 rounded-lg" />
+            <div className="bg-muted h-8 w-32 rounded-lg" />
           </div>
-          <JobLogSkeleton />
-        </>
-      )}
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-5xl space-y-6 px-6 py-8">
+        <div className="space-y-2">
+          <div className="bg-muted h-8 w-48 rounded" />
+          <div className="bg-muted h-4 w-full max-w-xl rounded" />
+        </div>
+
+        {tab === "scheduled" ? (
+          <>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="bg-muted h-9 w-64 rounded-lg" />
+              <div className="bg-muted h-9 w-44 rounded-lg" />
+              <div className="bg-muted h-9 w-44 rounded-lg" />
+            </div>
+            <ScheduledSkeleton />
+          </>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="bg-muted h-9 w-64 rounded-lg" />
+              <div className="bg-muted h-8 w-24 rounded-lg" />
+            </div>
+            <JobLogSkeleton />
+          </>
+        )}
+      </div>
     </div>
   );
 }
