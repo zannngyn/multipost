@@ -101,6 +101,20 @@ describe("canCollapseSourceCard — the pipeline is the evidence (I-1)", () => {
     ).toBe(false);
   });
 
+  it("keeps the card open when the last run FAILED and nothing else is wrong (B-3)", () => {
+    // The gap this closes: `unhealthy` was only ever asserted next to an
+    // `expired` connection, and that guard returns first — so the final
+    // `=== "healthy"` was never the line under test. A tenant whose sync just
+    // failed, on a connection that still looks fine, is exactly whose
+    // configuration must stay on screen.
+    expect(canCollapseSourceCard(baseInput({ lastRunHealth: "unhealthy" }))).toBe(false);
+    expect(
+      canCollapseSourceCard(
+        baseInput({ connectionState: "not_connected", lastRunHealth: "unhealthy" }),
+      ),
+    ).toBe(false);
+  });
+
   it("keeps the card open while a sync is still in flight", () => {
     expect(canCollapseSourceCard(baseInput({ lastRunHealth: "in_flight" }))).toBe(false);
   });

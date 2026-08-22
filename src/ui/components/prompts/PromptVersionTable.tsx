@@ -16,6 +16,10 @@ import type { TableColumn } from "@astryxdesign/core";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
+  ACTIVATING_VERSION,
+  SAVING_ELSEWHERE,
+} from "@/ui/components/prompts/prompt-busy";
+import {
   PROMPT_STATUS_BADGE_VARIANTS,
   describePromptVersions,
   type PromptVersionDescriptor,
@@ -288,12 +292,8 @@ function RowActions({
    * natively disabled button drops the keyboard on the floor the moment it is
    * disabled while focused — which is exactly what pressing it does.
    */
-  const writeBlock = isReadOnly
-    ? (readOnlyReason ?? undefined)
-    : isBusy
-      ? "Đang lưu phiên bản mới — chờ lưu xong đã."
-      : undefined;
-  const activateBlock = writeBlock ?? (isActivating ? "Đang đổi bản đang dùng…" : undefined);
+  const writeBlock = isReadOnly ? (readOnlyReason ?? undefined) : isBusy ? SAVING_ELSEWHERE : undefined;
+  const activateBlock = writeBlock ?? (isActivating ? ACTIVATING_VERSION : undefined);
   const isActivateBlocked = isReadOnly || Boolean(isBusy) || isActivating;
 
   const setToggleRef = useCallback(

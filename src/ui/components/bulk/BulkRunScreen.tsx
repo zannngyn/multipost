@@ -213,13 +213,36 @@ export function BulkRunScreen() {
     <Layout
       height="fill"
       header={
-        <LayoutHeader hasDivider>
-          {/* The SAME column as the content below — `max-w-5xl` centred, `px-6`
-              — so the h1 sits on the left edge of the card it titles. The
+        /* `padding={0}` because the box inside brings its own — LayoutHeader's
+           own docblock asks for exactly that ("use padding={0} if your content
+           manages its own padding"). Without it the two stacked silently: the
+           header pads `--spacing-4` (16px) on every side and the box below
+           added its own inside that, so a header written as 16px of vertical
+           padding rendered at 32px.
+
+           The numbers below are therefore TOTALS, not additions, and they are
+           the totals that were already rendering:
+             block  32px = `py-8`   (was 16 + 16)
+             inline 40px = `px-10`  (was 16 + 24)
+           `px-10` looks odd next to the content column's `px-6` and is
+           deliberate: this band is measured against the OTHER header bands in
+           the app — /posts and /prompts build the same centred `max-w-5xl`
+           column and start 40px in — not against the column under it. Dropping
+           to 24px here made /bulk the one screen whose title started somewhere
+           else. Locked by `bulk-header-inset.test.ts`.
+
+           LayoutHeader has no per-axis padding prop (`astryx component
+           LayoutHeader`: padding is one SpacingStep), which is why the split
+           lives in the class rather than in a prop. */
+        <LayoutHeader hasDivider padding={0}>
+          {/* The same COLUMN as the content below — `max-w-5xl`, centred — so
+              the h1 sits over the card it titles at every width above the
+              column. The inline padding differs on purpose (see the note on
+              the header above: this band matches the other header bands). The
               divider stays full width because it belongs to LayoutHeader, not
               to this box. Measured before the fix: 88px of disagreement at
               1440, which reads as two layouts that were never introduced. */}
-          <div className="mx-auto flex w-full max-w-5xl flex-wrap items-start justify-between gap-4 px-6 py-4">
+          <div className="mx-auto flex w-full max-w-5xl flex-wrap items-start justify-between gap-4 px-10 py-8">
             <div className="max-w-prose space-y-1">
               <Heading level={1}>Chạy hàng loạt</Heading>
               {/* Two sentences: what the screen does, and what it does when a
@@ -440,9 +463,13 @@ export function BulkRunScreen() {
                     <ReadOnlyNotice reason={runBlockedReason} className="basis-full" />
                   </div>
 
-                  {/* Beside the trigger, where the decision is made — but on a
-                      line of its own. Sharing the button row made a sentence
-                      read as the label of a third button. */}
+                  {/* Beside the trigger, where the decision is made — but a
+                      SIBLING of the button row, not an item inside it. The
+                      earlier attempt kept it in the row with `basis-full`; that
+                      cannot work here, because `max-w-prose` clamps the flex
+                      base size straight back down to 65ch, so the sentence
+                      never claimed a line of its own and went on reading as the
+                      label of a third button. */}
                   <p className="text-muted-foreground max-w-prose text-[13px]">
                     {TAB_BOUNDARY_NOTICE}
                   </p>

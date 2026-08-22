@@ -239,7 +239,22 @@ export function channelNameOf(
   return channelSentenceName(channelId, channelLabelIndex([channelId], channels));
 }
 
+/**
+ * Marks a `groupId` this module invented because the payload had none.
+ *
+ * English, like every other identifier in the codebase: this string is a REACT
+ * KEY and never reaches the screen (the row prints `name`), so the rule that
+ * user-facing text is Vietnamese does not apply — the rule that code is English
+ * does. The colon keeps it outside the shape any stored id can take.
+ */
+const GROUP_WITHOUT_ID_PREFIX = "group-without-id:#";
+
 export interface GroupToggleView {
+  /**
+   * The group's stored id, trimmed — or a positional stand-in when the payload
+   * arrived without one. It identifies a ROW ON SCREEN (the React key); a write
+   * still reads `group.id` from the group itself.
+   */
   readonly groupId: string;
   readonly name: string;
   /** Distinct, non-blank ids of this group that HAVE a row in the flat list. */
@@ -266,6 +281,12 @@ export interface GroupToggleView {
  * A group with no row at all keeps its entry (it exists, and hiding it would
  * hide the problem) but has nothing to count and nothing to tick — the caller
  * renders it as "chưa có Page", never as "0/1".
+ *
+ * A group with no usable ID keeps its entry too, on a stand-in key. The schema
+ * promises `id` is non-blank, but this function is already defensive about
+ * every other field of the same payload, and here the failure is silent: the
+ * caller keys its rows on `groupId`, so two id-less groups would share a React
+ * key and start swapping tick state with each other.
  */
 export function groupToggleViews(
   groups: readonly ChannelGroup[],
@@ -275,7 +296,7 @@ export function groupToggleViews(
 
   const byId = new Map(rows.map((row) => [row.channelId, row]));
 
-  return groups.map((group) => {
+  return groups.map((group, index) => {
     const rowIds: string[] = [];
     const selectableIds: string[] = [];
     const seen = new Set<string>();
@@ -296,8 +317,12 @@ export function groupToggleViews(
       if (row.selectable) selectableIds.push(id);
     }
 
+    const storedId = typeof group?.id === "string" ? group.id.trim() : "";
+
     return {
-      groupId: group.id,
+      // Positional, so two id-less groups never collide; prefixed so it cannot
+      // be mistaken for — or collide with — a real stored id.
+      groupId: storedId.length > 0 ? storedId : `${GROUP_WITHOUT_ID_PREFIX}${index}`,
       name: group.name,
       rowIds,
       selectableIds,

@@ -519,6 +519,10 @@
     --astryx-section-padding: var(--spacing-3);
   }
 
+  .astryx-layout-content {
+    position: relative;
+  }
+
   .astryx-text.primary { color: var(--color-text-primary); }
 
   .astryx-heading.primary { color: var(--color-text-primary); }

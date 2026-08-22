@@ -2,8 +2,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { BulkProgressTable } from "./BulkProgressTable";
+import { Badge } from "@/ui/components/ui/badge";
 import type { BulkRunRow } from "@/ui/hooks/useBulkRun";
-import { BULK_ROW_STATUSES, BULK_ROW_STATUS_LABELS } from "@/ui/schemas/bulk.schema";
+import {
+  BULK_ROW_STATUSES,
+  BULK_ROW_STATUS_LABELS,
+  BULK_ROW_STATUS_TONES,
+  type BulkRowStatus,
+} from "@/ui/schemas/bulk.schema";
 
 /**
  * The per-code result table, asserted on real markup.
@@ -40,29 +46,40 @@ describe("BulkProgressTable", () => {
     }
   });
 
-  it("dyes each outcome with the tint its status owns", () => {
-    // The mapping lives in `bulk.schema`; this pins what it RENDERS to, so a
-    // status cannot quietly change dye — "Đã tạo lô" painted madder is a lie an
-    // operator would act on. The three in-flight states are `info`, a plain
-    // surface (The 10% Tint Rule), so they are pinned by the absence of an
-    // outcome tint rather than by a colour of their own.
-    const tintOf = (label: string, html: string): string | undefined =>
+  it("dyes ALL EIGHT statuses with the tone their schema assigns them", () => {
+    // What this table owes: every row wears the tone `BULK_ROW_STATUS_TONES`
+    // says it wears — "Đã tạo lô" painted madder is a lie an operator acts on.
+    //
+    // The oracle is Badge itself, not a list of utility classes. Naming
+    // `bg-success/10` here made this test fail on a purely internal Badge
+    // change, and covered 4 of 8 statuses while looking like it covered the
+    // dye system. `badge.test.tsx` owns which tone paints which tint; this
+    // owns which tone each status gets.
+    const classOf = (label: string, html: string): string | undefined =>
       html.match(new RegExp(`<span[^>]*class="([^"]*)"[^>]*>${label}</span>`))?.[1];
 
-    const html = render([
-      row({ status: "done" }),
-      row({ status: "skipped" }),
-      row({ status: "error" }),
-      row({ status: "composing" }),
-    ]);
+    const asBadge = (status: BulkRowStatus): string | undefined => {
+      const label = BULK_ROW_STATUS_LABELS[status];
+      return classOf(
+        label,
+        renderToStaticMarkup(<Badge tone={BULK_ROW_STATUS_TONES[status]}>{label}</Badge>),
+      );
+    };
 
-    expect(tintOf(BULK_ROW_STATUS_LABELS.done, html)).toContain("bg-success/10");
-    expect(tintOf(BULK_ROW_STATUS_LABELS.skipped, html)).toContain("bg-warning/10");
-    expect(tintOf(BULK_ROW_STATUS_LABELS.error, html)).toContain("bg-destructive/10");
+    const html = render(BULK_ROW_STATUSES.map((status) => row({ status })));
 
-    const inFlight = tintOf(BULK_ROW_STATUS_LABELS.composing, html);
-    expect(inFlight).toBeDefined();
-    expect(inFlight).not.toMatch(/bg-(success|warning|destructive)\/10/);
+    for (const status of BULK_ROW_STATUSES) {
+      const expected = asBadge(status);
+      expect(expected).toBeDefined();
+      expect(classOf(BULK_ROW_STATUS_LABELS[status], html)).toBe(expected);
+    }
+
+    // …and the assertion above is only worth anything if the tones are actually
+    // told apart on screen. Five distinct tones in the map must be five
+    // distinct appearances, or every row could wear the same dye and still pass.
+    expect(new Set(BULK_ROW_STATUSES.map(asBadge)).size).toBe(
+      new Set(Object.values(BULK_ROW_STATUS_TONES)).size,
+    );
   });
 
   it("keeps the product code on one line in the ledger mono", () => {
@@ -83,6 +100,18 @@ describe("BulkProgressTable", () => {
     expect(html).toContain('role="region"');
     expect(html).toContain('tabindex="0"');
     expect(html).toContain("cuộn ngang được");
+  });
+
+  it("uses the app's ONE scroll-cue frame, not a sentence of its own", () => {
+    // Ruling T3: `TableScrollRegion` + `scroll-cue-x` is the single pattern for
+    // a table wider than its box. This table used to print its own hint under
+    // itself, keyed to a container breakpoint guessed from `min-w-160` — a
+    // second dialect for the same fact, and one that could not tell whether the
+    // table was really overflowing.
+    const html = render([row()]);
+
+    expect(html).toContain("scroll-cue-x");
+    expect(html).not.toContain("Cuộn bảng sang phải");
   });
 
   it("shows the refusal sentence and its error code on the row that was refused", () => {

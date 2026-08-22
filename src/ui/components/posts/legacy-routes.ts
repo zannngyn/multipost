@@ -21,6 +21,42 @@ export const LEGACY_ROUTES: Record<string, { base: string; tab: string }> = {
   "/access": { base: "/members", tab: "history" },
 };
 
+/**
+ * A page's `searchParams` as a query string, read the way the EDGE layer reads
+ * it.
+ *
+ * Next hands a repeated parameter over as an array (`?status=failed&
+ * status=blocked` → `{ status: ["failed", "blocked"] }`). Each redirect page
+ * used to test `typeof value === "string"` and drop everything else on the
+ * floor, so the two layers disagreed about the same address: the `redirects()`
+ * rule in `next.config.ts` carries every value through, while the page silently
+ * deleted all but nothing — a filter that loses half its values without saying
+ * so (business rule 5). The repeat is real traffic: a multi-select filter and a
+ * link pasted into a support thread both produce one.
+ *
+ * `undefined` is skipped — that is Next saying the key was absent, not a value.
+ */
+export function legacyRedirectQuery(
+  searchParams: Record<string, string | string[] | undefined>,
+): string {
+  const params = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(searchParams)) {
+    if (typeof value === "string") {
+      params.append(key, value);
+      continue;
+    }
+    if (!Array.isArray(value)) continue;
+    // Order preserved: `?ch=a&ch=b` is not the same list as `?ch=b&ch=a` to a
+    // screen that reads the first one.
+    for (const item of value) {
+      if (typeof item === "string") params.append(key, item);
+    }
+  }
+
+  return params.toString();
+}
+
 /** Old bookmarks keep working: same query, new home. Null = not a legacy path. */
 export function legacyRedirectTarget(pathname: string, search: string): string | null {
   // `Object.hasOwn`, not plain indexing: the pathname is untrusted input and a

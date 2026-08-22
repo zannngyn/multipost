@@ -143,4 +143,29 @@ export const myspTheme = defineTheme({
     "--color-skeleton": "var(--muted)",
     "--color-track": "var(--muted)",
   },
+  components: {
+    /**
+     * THE SR-ONLY TRAP, closed once instead of screen by screen.
+     *
+     * `sr-only` is `position: absolute`, so every visually hidden node anchors
+     * to the nearest POSITIONED ancestor. `LayoutContent` is the box that
+     * scrolls on nearly every screen here and it ships `position: static` — so
+     * a hidden line deep inside a long table escaped its own scroll container
+     * and landed at its UN-SCROLLED static position further up, stretching
+     * `documentElement.scrollHeight` past the viewport (measured: 3625px
+     * against a 900px viewport on the job log, 1382px on /sync). The page could
+     * then be dragged down onto a band of empty background with nothing visible
+     * to explain it — which is why it survived a design pass, and why three
+     * screens ended up patching it one at a time.
+     *
+     * It belongs here rather than in `globals.css` for the same reason the
+     * tokens above do: the shell's own rules are scoped to
+     * `[data-astryx-theme]`, and a bare selector outside that scope wins or
+     * loses by cascade accident. Nothing on screen moves — this only decides
+     * WHICH box an absolutely positioned child measures itself against.
+     */
+    "layout-content": {
+      base: { position: "relative" },
+    },
+  },
 });

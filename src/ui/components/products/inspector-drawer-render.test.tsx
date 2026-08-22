@@ -105,7 +105,7 @@ describe("ProductInspectorDrawer", () => {
   it("gives the missing state a button inside the modal, not an instruction about the page behind", () => {
     const markup = render(
       { kind: "missing", code: "MGKVX9999" },
-      { kind: "clear-filter", label: "Bỏ bộ lọc và tìm lại", onPress: () => {} },
+      { kind: "clear-filter", label: "Bỏ bộ lọc và tìm lại", onPress: () => {}, isBusy: false },
     );
 
     expect(markup).toContain("Không thấy mã MGKVX9999");
@@ -118,11 +118,30 @@ describe("ProductInspectorDrawer", () => {
   it("blames the unfetched pages, not a filter, when there is no filter", () => {
     const markup = render(
       { kind: "missing", code: "MGKVX9999" },
-      { kind: "load-more", label: "Tải thêm sản phẩm", onPress: () => {} },
+      { kind: "load-more", label: "Tải thêm sản phẩm", onPress: () => {}, isBusy: false },
     );
 
     expect(markup).toContain("Tải thêm sản phẩm");
     expect(markup).not.toContain("Bộ lọc đang bật");
+    // Idle: pressable, and nothing claiming to be in progress.
+    expect(markup).not.toContain("disabled");
+    expect(markup).not.toContain('aria-busy="true"');
+  });
+
+  it("shows the fetch running instead of a button that looks dead (N-2)", () => {
+    // Pressing "Tải thêm sản phẩm" changes NOTHING else in this box — the title
+    // still says "Không thấy mã MGKVX9999" until the page lands — so the button
+    // is the only surface that can report the press.
+    const markup = render(
+      { kind: "missing", code: "MGKVX9999" },
+      { kind: "load-more", label: "Tải thêm sản phẩm", onPress: () => {}, isBusy: true },
+    );
+
+    expect(markup).toContain("Tải thêm sản phẩm");
+    // Astryx's `isLoading`: aria-busy + disabled, so a second press cannot
+    // queue a second page.
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain("disabled");
   });
 
   it("says the code is simply not there when no action would help", () => {

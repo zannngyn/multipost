@@ -215,6 +215,10 @@ export function ProductListScreen() {
             recoveryPlan.kind === "clear-filter"
               ? clearFilters
               : () => void products.fetchNextPage(),
+          // Only the fetch has a wait to report. Clearing the filter rewrites
+          // the URL on the same tick and the drawer redraws with it, so there
+          // is no in-between state to show for that one.
+          isBusy: recoveryPlan.kind === "load-more" && products.isFetchingNextPage,
         };
 
   /**

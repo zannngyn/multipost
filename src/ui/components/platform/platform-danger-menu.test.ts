@@ -78,6 +78,23 @@ describe("platform: the dangerous action lives in the row's overflow menu", () =
     // so without this the keyboard lands on <body>.
     expect(table).toMatch(/useEffect\([\s\S]*?triggerRefs\.current\.get\(/);
     expect(table).toMatch(/<MoreMenu[\s\S]*?ref=\{/);
+    // LOOKING the trigger up is not focusing it: both lines above pass on a
+    // version that finds the button and does nothing with it — the same <body>
+    // this exists to avoid. The call itself, inside the same effect.
+    expect(table).toMatch(/useEffect\([\s\S]*?trigger\.focus\(\)[\s\S]*?\}, \[confirmingId\]\)/);
+  });
+
+  it("says out loud when the DATA cancelled the confirmation, not the operator", () => {
+    // A dialog disappearing on its own reads as the app losing the click. Rule
+    // 5 covers an action the app cancels as much as one it refuses — and focus
+    // has just been moved to the list, so there is somewhere to read it from.
+    expect(table).toMatch(/setDroppedNotice\(CONFIRMATION_DROPPED\)/);
+    expect(table).toMatch(/role="status"[\s\S]*?aria-live="polite"/);
+    // Mounted empty rather than conditionally: a live region that appears
+    // together with its text is announced by nothing.
+    expect(table).toMatch(/\{droppedNotice \?\? ""\}/);
+    // …and a new confirmation clears yesterday's news.
+    expect(table).toMatch(/function ask\([\s\S]*?setDroppedNotice\(null\)/);
   });
 
   it("drops the pending confirmation when its row leaves the answer", () => {
@@ -89,9 +106,13 @@ describe("platform: the dangerous action lives in the row's overflow menu", () =
     // DURING render, not in an effect — an effect would paint one frame still
     // carrying the stale id, and `react-hooks` rejects setState in an effect
     // body anyway. Four spaces would mean it slid inside one.
-    expect(table).toMatch(
-      /^ {2}if \(confirmingId !== null && confirmingTenant === null\) \{\n {4}setConfirmingId\(null\);\n {2}\}/m,
+    // The block itself, anchored at two spaces and closed at two spaces, so a
+    // slide into an effect (four) fails whatever it grew inside.
+    const reset = table.match(
+      /^ {2}if \(confirmingId !== null && confirmingTenant === null\) \{\n(?: {4}.*\n|\n)* {2}\}/m,
     );
+    expect(reset, "the drop is no longer a plain `if` in the component body").not.toBeNull();
+    expect(reset![0]).toContain("setConfirmingId(null);");
   });
 
   it("still has somewhere to put the keyboard when the trigger is gone too", () => {

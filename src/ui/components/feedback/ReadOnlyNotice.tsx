@@ -14,18 +14,27 @@ import { cn } from "@/shared/utils";
  *
  * Renders nothing at all when there is no reason, so a normal session is not
  * changed by one pixel.
+ *
+ * NO WIDTH OF ITS OWN, on purpose. It used to hardcode `max-w-prose`, which
+ * looks harmless and is not: `max-width` clamps the USED flex base size, so a
+ * caller putting it in a flex row with `basis-full` — asking it to take a line
+ * of its own under the buttons it explains — got a 65ch item that still fitted
+ * beside them and read as a third button's label. A component cannot know the
+ * box it is dropped into; the call site can, and now says so. Callers that want
+ * a reading measure pass `max-w-prose` themselves.
  */
 export function ReadOnlyNotice({
   reason,
   className,
 }: {
   reason: string | null;
+  /** Width and type scale belong to the caller — see the note above. */
   className?: string;
 }) {
   if (!reason) return null;
 
   return (
-    <p role="status" className={cn("text-muted-foreground max-w-prose text-sm", className)}>
+    <p role="status" className={cn("text-muted-foreground text-sm", className)}>
       {reason}
     </p>
   );

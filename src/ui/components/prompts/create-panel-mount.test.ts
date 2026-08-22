@@ -90,3 +90,51 @@ describe("the create panel is mounted on read-only alone", () => {
     expect(declaration).toContain("formOpen");
   });
 });
+
+/**
+ * THE OTHER HALF OF THE LOCK (F1/F2).
+ *
+ * `PromptVersionForm` refuses to submit while `blockedReason` is set, and
+ * `create-panel-busy.test.tsx` proves what that looks like. Neither can see
+ * whether the SCREEN ever sets it — and if it does not, an operator can start a
+ * save while an activation is in flight and the last response decides which
+ * prompt version every future caption is written from.
+ *
+ * Structural for the same reason as everything above: no jsdom, no click, and
+ * `activate.isPending` only becomes true inside a request this environment
+ * cannot make.
+ */
+describe("the save button is locked while an activation is in flight", () => {
+  /** The `blockedReason={…}` the screen hands to the form. */
+  function blockedReasonProp(source: string): string {
+    const match = source.match(/blockedReason=\{([^}]*)\}/);
+    expect(match, "the screen must hand PromptVersionForm a blockedReason").not.toBeNull();
+    return match![1].trim();
+  }
+
+  it("passes the form a reason keyed on the activation, not on a constant", () => {
+    const prop = blockedReasonProp(read(SCREEN));
+
+    // Named mutation, not a literal: `blockedReason={null}` would satisfy a
+    // "prop is present" check while locking nothing at all.
+    expect(prop).toContain("activate.isPending");
+    expect(prop).not.toBe("null");
+  });
+
+  it("says which request is holding the button, from the shared sentence", () => {
+    const prop = blockedReasonProp(read(SCREEN));
+
+    // A bare `true`/`""` would disable the button with nothing to reach, and
+    // Astryx would fall back to NATIVE disabled — dropping the keyboard on
+    // <body> exactly when the operator pressed the thing.
+    expect(prop).toContain("ACTIVATING_VERSION");
+    expect(read(SCREEN)).toContain('from "@/ui/components/prompts/prompt-busy"');
+  });
+
+  it("keeps that sentence in one place, so the two screens cannot drift", () => {
+    // The table says the same thing about the same request; two copies of one
+    // sentence is how they stop being the same sentence.
+    expect(read("./PromptVersionTable.tsx")).toContain("ACTIVATING_VERSION");
+    expect(read("./prompt-busy.ts")).toContain("export const ACTIVATING_VERSION");
+  });
+});

@@ -23,9 +23,17 @@ import { ProductInspector } from "@/ui/components/products/ProductInspector";
  * would have to re-implement focus trapping, Escape and page inertness; Dialog
  * is the sanctioned overlay and gets all three from the native <dialog>.
  *
- * `purpose="info"`: this is a place to READ, so both Escape and a tap outside
- * close it. Nothing here is a draft that a stray tap could lose — the selection
- * lives in the URL, and the one action navigates.
+ * `purpose="info"`: this is a place to READ, so Escape closes it and nothing
+ * here is a draft a stray dismissal could lose — the selection lives in the URL,
+ * and the one action navigates.
+ *
+ * What `purpose="info"` does NOT buy here is closing by tapping outside. That
+ * dismissal fires only for a click whose target is the <dialog> itself, i.e.
+ * its ::backdrop — and `variant="fullscreen"` sizes the dialog to 100dvw ×
+ * 100dvh, so nothing of the backdrop is left to reach. Escape and the header's
+ * close button are the only two ways out, which is why passing `onOpenChange`
+ * to DialogHeader below is mandatory and not decorative: without it a touch
+ * user, who has no Escape key, would be shut in.
  */
 export function ProductInspectorDrawer({
   state,

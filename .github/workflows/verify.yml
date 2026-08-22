@@ -50,5 +50,13 @@ jobs:
       - name: Dependency rules
         run: pnpm depcruise
 
+      # `src/ui/theme/mysp.css` is generated from `mysp-theme.ts` and committed.
+      # A theme edited without re-running the build ships a stylesheet that is
+      # not the theme anybody wrote — the app runs on the STALE file, and no
+      # typecheck, lint or test can see it. `--check` builds and compares
+      # without writing, so it fails the PR instead of the palette.
+      - name: Theme artifacts up to date
+        run: pnpm theme:check
+
       - name: Unit tests
         run: pnpm test

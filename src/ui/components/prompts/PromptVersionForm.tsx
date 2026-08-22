@@ -17,6 +17,11 @@ import { useEffect, useId, useMemo } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+/**
+ * Said by every control that goes quiet during a save. Load-bearing mechanically
+ * as well as in words — see `prompt-busy.ts`.
+ */
+import { SAVING_THIS_VERSION as SAVING_MESSAGE } from "@/ui/components/prompts/prompt-busy";
 import { PromptVariablesHelp } from "@/ui/components/prompts/PromptVariablesHelp";
 import { ApiError } from "@/ui/services/api-error";
 import {
@@ -49,17 +54,11 @@ import {
  * schema and the messages stay exactly where they were.
  */
 
-/**
- * Said by every control that goes quiet during a save. It is also load-bearing
- * mechanically: Astryx keeps a control focusable (`aria-disabled`) only when it
- * has a message to reach, so without this the keyboard would land on <body> the
- * moment the operator pressed save.
- */
-const SAVING_MESSAGE = "Đang lưu phiên bản…";
 export function PromptVersionForm({
   nextVersion,
   defaultValues,
   pending,
+  blockedReason = null,
   error,
   firstFieldRef,
   onDirtyChange,
@@ -77,6 +76,18 @@ export function PromptVersionForm({
    * changes a sentence (`prompt-write-access.ts`).
    */
   pending: boolean;
+  /**
+   * Why this form may not be SUBMITTED right now, although nothing of its own
+   * is in flight — currently: an activation is running elsewhere on the screen.
+   *
+   * The reverse of `pending`, and deliberately narrower. "Lưu" can carry
+   * `activate: true`, so a save landing during an activation makes two answers
+   * to "bản nào đang chạy" and the last response wins — the exact race the
+   * table already refuses in the other direction. The fields stay live: typing
+   * is not a write, and taking the panel away from someone mid-sentence to
+   * report a request they did not start is a worse trade than a locked button.
+   */
+  blockedReason?: string | null;
   /** Server refusal for THIS form (INVALID_INPUT naming the variables). */
   error?: unknown;
   /**
@@ -314,12 +325,16 @@ export function PromptVersionForm({
             type="submit"
             variant="primary"
             label={`Lưu phiên bản v${nextVersion}`}
+            // Spinner for THIS form's own request only: a save blocked by an
+            // activation is not loading, it is waiting, and a spinner on it
+            // would claim a request nobody made here.
             isLoading={pending}
-            isDisabled={pending}
+            isDisabled={pending || blockedReason !== null}
             // Without a tooltip Astryx uses NATIVE disabled, and a natively
             // disabled button that had focus drops the keyboard on <body> —
-            // which is precisely what pressing this button does.
-            tooltip={pending ? SAVING_MESSAGE : undefined}
+            // which is precisely what pressing this button does. Own save
+            // first: it is the more specific answer when both are true.
+            tooltip={pending ? SAVING_MESSAGE : (blockedReason ?? undefined)}
           />
           {onCancel ? (
             <Button

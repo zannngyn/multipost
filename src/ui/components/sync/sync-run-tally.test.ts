@@ -25,16 +25,33 @@ describe("runTally — no number available", () => {
     expect(tally.note).toBe("Chưa kết thúc — chưa có số liệu.");
   });
 
-  it("treats a crashed run with no finishedAt as unfinished, whatever its status", () => {
-    // A run that died mid-way is `failed` AND has no end. Reading the status
-    // column alone would print "0 vấn đề" for it.
+  it("says a crashed run STOPPED, never that it is still going (B-2)", () => {
+    // A run that died mid-way is `failed` AND has no end. It must not print
+    // "0 vấn đề" — and it must not print "chưa xong" either, two lines under a
+    // status reading "Thất bại" and a line reading "Dừng vì DRIVE_TIMEOUT".
     const tally = runTally(
       makeRun({ status: "failed", finishedAt: null, issuesTotal: 0, errorCode: "DRIVE_TIMEOUT" }),
     );
 
     expect(tally.value).toBe(NO_TALLY);
-    expect(tally.label).toBe("chưa xong");
-    expect(tally.note).toBe("Chưa kết thúc — chưa có số liệu.");
+    expect(tally.isQuiet).toBe(true);
+    // Pinned like the `partial` branch below, not asserted by inequality: a
+    // "not chưa xong" passes on any third word, including a worse one.
+    expect(tally.label).toBe("không rõ");
+    expect(tally.note).toBe("Dừng giữa chừng — không có số liệu.");
+    expect(tally.note).not.toBe(
+      runTally(makeRun({ status: "running", finishedAt: null, issuesTotal: null })).note,
+    );
+  });
+
+  it("does not call a finished run unfinished just because the end time is missing", () => {
+    // `succeeded`/`partial` with no `finishedAt` is a recording fault, not a
+    // crash — so it gets neither the running sentence nor the crashed one.
+    const tally = runTally(makeRun({ status: "partial", finishedAt: null, issuesTotal: 12 }));
+
+    expect(tally.value).toBe(NO_TALLY);
+    expect(tally.label).toBe("không rõ");
+    expect(tally.note).toBe("Không ghi được lúc kết thúc — không có số liệu.");
   });
 
   it("distinguishes 'the count was never recorded' from 'not finished'", () => {
@@ -78,10 +95,25 @@ describe("runTally — a real number", () => {
     });
   });
 
-  it("does not invent a number from a non-finite count", () => {
-    // Comes through the schema as a number; `formatCount` is the guard.
-    const tally = runTally(makeRun({ issuesTotal: Number.POSITIVE_INFINITY }));
+  it("does not invent a number from a non-finite count, and says so out loud (B-1)", () => {
+    // Comes through the schema typed as a number. The dash it prints is
+    // `aria-hidden` (there is no number behind it), so without a note the row
+    // read "vấn đề" to a screen reader — indistinguishable from a clean run.
+    for (const broken of [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]) {
+      const tally = runTally(makeRun({ issuesTotal: broken }));
 
-    expect(tally.value).toBe(NO_TALLY);
+      expect(tally.value).toBe(NO_TALLY);
+      expect(tally.label).toBe("không rõ");
+      expect(tally.isQuiet).toBe(true);
+      expect(tally.note).toBe("Không đọc được số vấn đề của lần chạy này.");
+    }
+  });
+
+  it("keeps 'không đọc được' apart from 'không ghi được'", () => {
+    // Two different faults: one count was recorded and is unreadable, the other
+    // was never recorded at all. Same label, and that is why the note exists.
+    expect(runTally(makeRun({ issuesTotal: Number.NaN })).note).not.toBe(
+      runTally(makeRun({ issuesTotal: null })).note,
+    );
   });
 });

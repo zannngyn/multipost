@@ -275,6 +275,35 @@ describe("groupToggleViews", () => {
     expect(groupToggleViews([], [])).toEqual([]);
   });
 
+  it("gives a group that arrived without an id a key of its own", () => {
+    // The schema promises a non-blank id, but this helper already defends
+    // against every other shape the payload may be wrong in — and a blank
+    // `groupId` is the one that bites silently: it is the React key of the row,
+    // so two id-less groups would collide and swap tick state with each other.
+    const groups = [
+      group({ id: "", name: "Nhóm sáng" }),
+      group({ id: "   ", name: "Nhóm chiều" }),
+      group({ id: undefined as unknown as string, name: "Nhóm tối" }),
+    ];
+    const views = groupToggleViews(groups, dedupeChannelsAcrossGroups(groups, []));
+
+    // Still three rows — a broken id never makes a group disappear (rule 5).
+    expect(views).toHaveLength(3);
+    expect(views.map((view) => view.name)).toEqual(["Nhóm sáng", "Nhóm chiều", "Nhóm tối"]);
+    expect(new Set(views.map((view) => view.groupId)).size).toBe(3);
+    for (const view of views) {
+      expect(view.groupId.trim().length).toBeGreaterThan(0);
+      // Positional and ENGLISH: this value is a React key, never a label — the
+      // row prints `name`. Shaped so nothing can mistake it for a stored id,
+      // and written in the language the rest of the code is written in.
+      expect(view.groupId).toMatch(/^group-without-id:#\d+$/);
+    }
+  });
+
+  it("keeps the stored id, trimmed, when there is one", () => {
+    expect(groupToggleViews([group({ id: " grp-7 " })], [])[0].groupId).toBe("grp-7");
+  });
+
   it("keeps a group whose ids are all blank, with nothing to count or tick", () => {
     const groups = [group({ channelIds: ["  ", ""] })];
     const view = groupToggleViews(groups, dedupeChannelsAcrossGroups(groups, []))[0];

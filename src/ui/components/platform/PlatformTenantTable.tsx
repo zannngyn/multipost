@@ -55,6 +55,13 @@ import { formatDateTime } from "@/ui/schemas/post-batch.schema";
 /** Table's generic needs an index signature; the fields stay PlatformTenant's. */
 type PlatformTenantRow = PlatformTenant & Record<string, unknown>;
 
+/** Said when the data, not the operator, closed an open confirmation. */
+const CONFIRMATION_DROPPED =
+  "Công ty đang chờ xác nhận không còn trong danh sách — thao tác đã huỷ, chưa có gì thay đổi.";
+
+/** Long enough to be read after focus lands, short enough not to become decor. */
+const NOTICE_LIFETIME_MS = 10_000;
+
 export function PlatformTenantTable({
   tenants,
   canAdminister,
@@ -82,6 +89,13 @@ export function PlatformTenantTable({
    */
   const confirmingTenant =
     confirmingId === null ? null : (tenants.find((tenant) => tenant.id === confirmingId) ?? null);
+  /**
+   * What is said when the confirmation below was taken away by the data rather
+   * than by the operator. It names no company on purpose: the row is gone, so
+   * there is no current name to quote and a remembered one could already be
+   * wrong (the whole reason `confirmingTenant` is resolved from the live list).
+   */
+  const [droppedNotice, setDroppedNotice] = useState<string | null>(null);
 
   /**
    * The row left the answer WHILE its confirmation was open — a refetch dropped
@@ -99,6 +113,10 @@ export function PlatformTenantTable({
    */
   if (confirmingId !== null && confirmingTenant === null) {
     setConfirmingId(null);
+    // …and SAY so. Dropping the intent silently means a dialog vanishing on its
+    // own, which reads as the app losing the click — business rule 5 applies to
+    // an action the app cancels just as much as to one it refuses.
+    setDroppedNotice(CONFIRMATION_DROPPED);
   }
 
   /**
@@ -144,8 +162,22 @@ export function PlatformTenantTable({
     listRef.current?.focus();
   }, [confirmingId]);
 
+  /**
+   * The notice is about ONE cancelled intent, so it goes when that intent is
+   * over — either because a new one started, or because enough time has passed
+   * that reading it would be reading yesterday's news. Left standing it would
+   * sit under the table for the rest of the session describing something that
+   * happened once.
+   */
+  useEffect(() => {
+    if (droppedNotice === null) return;
+    const timer = setTimeout(() => setDroppedNotice(null), NOTICE_LIFETIME_MS);
+    return () => clearTimeout(timer);
+  }, [droppedNotice]);
+
   function ask(tenantId: string) {
     returnFocusTo.current = tenantId;
+    setDroppedNotice(null);
     setConfirmingId(tenantId);
   }
 
@@ -309,6 +341,14 @@ export function PlatformTenantTable({
         textOverflow="truncate"
         rowCount={tenants.length}
       />
+
+      {/* ALWAYS mounted, empty or not: a live region has to exist before the
+          text lands in it, or screen readers announce nothing. Visible as well
+          as announced — the operator watching the dialog disappear needs the
+          same sentence, and focus has just been moved down here to the list. */}
+      <p role="status" aria-live="polite" className="text-muted-foreground px-4 py-2 text-sm">
+        {droppedNotice ?? ""}
+      </p>
 
       {/* Keyed on the row so every open starts on an empty reason box — a
           reason typed for one company can never ride over to another. */}

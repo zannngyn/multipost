@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -136,7 +139,8 @@ describe("ChannelGroupPicker data", () => {
  * value is what this component passes straight to `onToggleGroup`, and firing a
  * real click would need a DOM the repo does not have. What the markup CAN prove
  * is the rest of the contract: the counter, and a shortcut that has nothing to
- * offer being off rather than lying.
+ * offer being off rather than lying. The join between the two — that the
+ * component hands over THAT value and not a wider one — is locked below.
  */
 describe("ChannelGroupPicker group shortcut", () => {
   it("counts the ROWS of the list, not the raw stored ids", () => {
@@ -194,5 +198,50 @@ describe("ChannelGroupPicker group shortcut", () => {
     });
     expect(html).toContain("1 không đăng được");
     expect(html.match(/disabled=""/g)?.length).toBe(2);
+  });
+});
+
+/**
+ * THE JOIN between the pure rule and the component that obeys it.
+ *
+ * The helper decides which ids a group press may add, and its own tests lock
+ * that decision. The markup tests lock what the row says. Neither can see the
+ * one line in between: `onChange` could hand `toggle.rowIds` — blocked Pages
+ * included — over to the parent and every other test in this file would still
+ * be green, because the value only exists inside a click this environment
+ * cannot fire (`vitest.config.ts` runs `environment: "node"`, no jsdom; see
+ * `read-only-sweep.test.ts` for the same structural answer to the same limit).
+ *
+ * So the call site is asserted as source. Coarse enough to survive an honest
+ * rename of the callback, exact about the one thing that must not drift.
+ */
+describe("ChannelGroupPicker ↔ groupToggleViews wiring", () => {
+  const SOURCE = readFileSync(
+    fileURLToPath(new URL("./ChannelGroupPicker.tsx", import.meta.url)),
+    "utf8",
+  );
+
+  /** First argument of every `onToggleGroup(…)` call in the component. */
+  function groupToggleArguments(): string[] {
+    return [...SOURCE.matchAll(/onToggleGroup\(\s*([^,)]+)/g)].map((match) => match[1].trim());
+  }
+
+  it("hands the parent ONLY the ids a press may legally tick", () => {
+    // `rowIds` is the denominator of the counter and includes rows that can
+    // never be ticked; handing it over is the exact bug T1 closed — those ids
+    // reached `run.start` and came back blocked, one code at a time.
+    expect(groupToggleArguments()).toEqual(["toggle.selectableIds"]);
+  });
+
+  it("keys each shortcut on the guarded group id", () => {
+    // `groupToggleViews` invents a positional id when the payload has none;
+    // keying on `group.id` again here would put the collision straight back.
+    expect(SOURCE).toContain("key={toggle.groupId}");
+  });
+
+  it("switches a shortcut off from the same set it would hand over", () => {
+    // Enabled by one set and acting on another is how a press comes to add
+    // nothing while still looking pressable.
+    expect(SOURCE).toContain("toggle.selectableIds.length === 0");
   });
 });
