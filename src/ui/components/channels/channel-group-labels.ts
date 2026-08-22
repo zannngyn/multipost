@@ -19,8 +19,13 @@ export interface GroupChannelLabel {
   readonly note: GroupChannelNote;
 }
 
-/** Same placeholder the channel table and the group form use for a blank name. */
-const NO_NAME = "(Page chưa có tên)";
+/**
+ * Same placeholder the channel table and the group form use for a blank name.
+ *
+ * Exported so callers can TELL IT APART from a real name: a sentence built on
+ * the placeholder alone identifies nothing, and has to carry the id too.
+ */
+export const CHANNEL_NO_NAME = "(Page chưa có tên)";
 
 /**
  * Group ids → what to print on the card.
@@ -54,7 +59,7 @@ export function resolveGroupChannelLabels(
     const name = found.name.trim();
     return {
       channelId,
-      name: name.length > 0 ? name : NO_NAME,
+      name: name.length > 0 ? name : CHANNEL_NO_NAME,
       note: found.status === "active" ? ("none" as const) : ("disabled" as const),
     };
   });

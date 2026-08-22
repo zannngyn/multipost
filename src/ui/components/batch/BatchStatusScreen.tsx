@@ -113,11 +113,21 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
               }
             />
           ) : (
-            <BatchChannelTable
-              channels={data.channels}
-              progressSteps={data.progressSteps}
-              tenantChannels={channels.data?.channels}
-            />
+            <>
+              {/* Said out loud, like /posts and /bulk: without it the "Kênh"
+                  column quietly falls back to mã kênh and nobody knows why. */}
+              {channels.isError ? (
+                <p className="text-muted-foreground text-sm">
+                  Không tải được tên Page nên cột Kênh đang hiện mã kênh. Kết quả của từng kênh
+                  vẫn đúng.
+                </p>
+              ) : null}
+              <BatchChannelTable
+                channels={data.channels}
+                progressSteps={data.progressSteps}
+                tenantChannels={channels.data?.channels}
+              />
+            </>
           )}
 
           <div className="flex flex-wrap gap-2 border-t pt-4">

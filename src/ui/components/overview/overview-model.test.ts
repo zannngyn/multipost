@@ -382,17 +382,24 @@ describe("channelLabel", () => {
   ];
 
   it("renders the raw id while the channel list is not known", () => {
-    // Loading or failed: naming nothing beats inventing a name.
+    // Loading or failed: naming nothing beats inventing a name, and nothing is
+    // accused of being removed until there is an answer.
     expect(channelLabel("fbpage-a", undefined)).toBe("fbpage-a");
-    expect(channelLabel("fbpage-zzz", channels)).toBe("fbpage-zzz");
     expect(channelLabel("", channels)).toBe("—");
+  });
+
+  it("says a Page is gone rather than printing a bare id (spec §3.1)", () => {
+    // It used to render "fbpage-zzz" flat, which reads like a Page that exists
+    // and sends the operator looking for it.
+    expect(channelLabel("fbpage-zzz", channels)).toBe("fbpage-zzz (đã gỡ)");
   });
 
   it("uses the Page name once the list has arrived", () => {
     expect(channelLabel("fbpage-a", channels)).toBe("Shop Hoa");
     expect(channelLabel(" fbpage-a ", channels)).toBe("Shop Hoa");
-    // A Page can genuinely carry a blank name — the id stays readable then.
-    expect(channelLabel("fbpage-b", channels)).toBe("fbpage-b");
+    // A Page can genuinely carry a blank name: the placeholder names nothing on
+    // its own, so the id rides along — and the Page is also switched off.
+    expect(channelLabel("fbpage-b", channels)).toBe("(Page chưa có tên) · fbpage-b (đang tắt)");
   });
 });
 

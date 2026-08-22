@@ -314,6 +314,16 @@ function GroupChannelList({
   /** `undefined` while the channel list is unknown (loading or failed). */
   channels: readonly Channel[] | undefined;
 }) {
+  /**
+   * ONE CHIP PER STORED ENTRY — duplicates included, deliberately.
+   *
+   * /bulk merges an id that appears twice (`dedupeChannelsAcrossGroups`): there
+   * the list answers "bài này lên những Page nào", and two boxes for one Page
+   * would misstate where the post goes. HERE the list answers "nhóm này đang
+   * lưu những gì", and this is the screen where a corrupt group gets repaired —
+   * merging would hide the very duplicate the operator has to delete
+   * (business rule 5, wave 1).
+   */
   const labels = resolveGroupChannelLabels(channelIds, channels);
 
   // A saved group with no channel is a data problem, not an empty list to hide:

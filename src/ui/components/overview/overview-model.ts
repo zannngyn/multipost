@@ -1,3 +1,4 @@
+import { channelNameOf } from "@/ui/components/channels/channel-option-labels";
 import type { Channel } from "@/ui/schemas/channel.schema";
 
 /**
@@ -405,12 +406,15 @@ export function failureReason(job: {
 }
 
 /**
- * The Page name for a channel id, or the id itself.
+ * The Page name for a channel id, the way every other screen says it.
  *
- * `channels === undefined` means the list is not known yet (loading, or the
- * request failed): the row then shows the raw id, which is ugly but true. Same
- * rule as `resolveGroupChannelLabels` — this screen only needs the name, never
- * the "đã gỡ" verdict, so it does not repeat that logic.
+ * Delegates to `channelNameOf` (spec §3.1) instead of keeping a second, softer
+ * rule: this screen used to print a bare id for a Page that had been removed,
+ * so the attention list quietly named something an operator could not look up.
+ * Now it says "…(đã gỡ)" / "…(đang tắt)" like the log, the schedule and /bulk.
+ *
+ * The one thing it keeps for itself: an EMPTY id becomes "—", because a
+ * dashboard row still has to render a cell.
  */
 export function channelLabel(
   channelId: string,
@@ -418,9 +422,5 @@ export function channelLabel(
 ): string {
   const id = typeof channelId === "string" ? channelId.trim() : "";
   if (id.length === 0) return "—";
-  if (channels === undefined) return id;
-
-  const found = channels.find((channel) => channel.channelId === id);
-  const name = found?.name.trim() ?? "";
-  return name.length > 0 ? name : id;
+  return channelNameOf(id, channels);
 }

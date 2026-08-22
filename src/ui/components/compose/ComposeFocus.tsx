@@ -3,6 +3,7 @@
 import { useCallback, useId, useState, type ReactNode } from "react";
 import { useWatch } from "react-hook-form";
 
+import { channelNameOf } from "@/ui/components/channels/channel-option-labels";
 import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
 import { activeCaptionChannel } from "@/ui/components/compose/caption-targets";
 import { ChannelChoice } from "@/ui/components/compose/ChannelChoice";
@@ -575,11 +576,16 @@ function Step({ n, label, children }: { n: number; label: string; children: Reac
 /** The form field holding the shared caption. Phase 1 publishes to Facebook. */
 const PREVIEW_CHANNEL = "facebook";
 
-/** A Page's name, or its id when the list has not arrived (or it is gone). */
+/**
+ * A Page's name, said the way the whole app says it (spec §3.1).
+ *
+ * Delegates rather than re-deriving: the id alone is printed only when there is
+ * genuinely no name to print — the channel list has not arrived — and a Page
+ * that is off or gone is labelled as such instead of appearing as a bare id in
+ * "Camilla chưa có caption".
+ */
 function channelName(channels: readonly Channel[] | undefined, channelId: string): string {
-  const found = channels?.find((item) => item.channelId === channelId);
-  const name = found?.name?.trim();
-  return name && name.length > 0 ? name : channelId;
+  return channelNameOf(channelId, channels);
 }
 
 /** Stand-in until a channel is ticked — naming a Page nobody chose would lie. */

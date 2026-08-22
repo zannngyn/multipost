@@ -7,6 +7,7 @@ import { useForm, useWatch } from "react-hook-form";
 
 import { BulkCodesField } from "@/ui/components/bulk/BulkCodesField";
 import { BulkProgressTable } from "@/ui/components/bulk/BulkProgressTable";
+import { pruneSelection } from "@/ui/components/channels/channel-option-labels";
 import { ChannelGroupPicker } from "@/ui/components/compose/ChannelGroupPicker";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
@@ -91,7 +92,28 @@ export function BulkRunScreen() {
     [captionTemplate],
   );
 
-  const selectedIds = useMemo(() => [...selected], [selected]);
+  /**
+   * THE RACE this closes: the Page list renders from the GROUPS, which arrive
+   * before `useChannels` answers. Until that answer lands every row is tickable
+   * (an unknown channel list may accuse nothing), so a Page that turns out to
+   * be switched off or removed can already be ticked — and those ids would
+   * travel into `run.start`, one blocked job per code.
+   *
+   * DERIVED, not reconciled in an effect: what the box holds is what the
+   * operator asked for, and what runs is that intersected with what the server
+   * says can run. So a Page switched back on returns to the selection by
+   * itself, and there is no second copy of the truth to keep in sync.
+   */
+  const prune = useMemo(
+    () => pruneSelection(selected, channels.data?.channels),
+    [selected, channels.data],
+  );
+  const runnableSelection = useMemo(
+    () => (prune.changed ? new Set(prune.next) : selected),
+    [prune, selected],
+  );
+
+  const selectedIds = useMemo(() => [...runnableSelection], [runnableSelection]);
   const groupItems = groups.data?.groups ?? [];
   const { phase, summary, rows, isRunning } = run;
 
@@ -197,7 +219,9 @@ export function BulkRunScreen() {
           <ChannelGroupPicker
             groups={groupItems}
             channels={channels.data?.channels}
-            selected={selected}
+            // The RUNNABLE set, not the raw one: a row the server has since
+            // switched off must not keep showing a tick that means nothing.
+            selected={runnableSelection}
             onToggleChannel={toggleChannel}
             onToggleGroup={toggleGroup}
             loading={groups.isPending && groups.fetchStatus === "fetching"}
@@ -219,6 +243,19 @@ export function BulkRunScreen() {
             <p className="text-muted-foreground text-xs">
               Không tải được tên Page nên danh sách đang hiện mã kênh. Vẫn chọn và chạy được bình
               thường.
+            </p>
+          ) : null}
+          {/* `role="status"`, not alert: nothing the operator did went wrong,
+              but a Page they ticked is not going to receive the post, and that
+              has to be said here rather than discovered in the result table one
+              blocked code at a time (business rule 5). */}
+          {prune.changed ? (
+            <p
+              role="status"
+              className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
+            >
+              {prune.removedLabels.length} Page đã tick sẽ KHÔNG được đăng vì kênh đang tắt hoặc
+              đã bị gỡ: {prune.removedLabels.join(", ")}. Bật lại ở màn Kênh nếu vẫn muốn đăng.
             </p>
           ) : null}
           {channelError ? (

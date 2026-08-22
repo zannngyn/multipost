@@ -126,3 +126,73 @@ describe("ChannelGroupPicker data", () => {
     expect(html).not.toContain("đã gỡ");
   });
 });
+
+/**
+ * The group shortcut.
+ *
+ * WHAT IS TESTED WHERE: the ids a press hands over are decided by
+ * `groupToggleViews` and asserted directly in `channel-option-labels.test.ts`
+ * ("NEVER offers a switched-off or removed Page to the group toggle") — that
+ * value is what this component passes straight to `onToggleGroup`, and firing a
+ * real click would need a DOM the repo does not have. What the markup CAN prove
+ * is the rest of the contract: the counter, and a shortcut that has nothing to
+ * offer being off rather than lying.
+ */
+describe("ChannelGroupPicker group shortcut", () => {
+  it("counts the ROWS of the list, not the raw stored ids", () => {
+    const html = render({
+      // Stored: 3 entries — one duplicate and one blank. The list shows 2 rows.
+      groups: [group({ channelIds: ["fb-a", "fb-a", "  ", "fb-b"] })],
+      channels: [
+        channel({ channelId: "fb-a", name: "Lady Fashion" }),
+        channel({ channelId: "fb-b", name: "My Shop" }),
+      ],
+      selected: new Set(["fb-a"]),
+    });
+    expect(html).toContain("1/2");
+    expect(html).not.toContain("1/4");
+  });
+
+  it("says how many rows of a group can never be ticked", () => {
+    const html = render({
+      groups: [group({ channelIds: ["fb-a", "fb-off"] })],
+      channels: [
+        channel({ channelId: "fb-a", name: "Lady Fashion" }),
+        channel({ channelId: "fb-off", name: "My Shop", status: "disabled" }),
+      ],
+    });
+    expect(html).toContain("0/2");
+    expect(html).toContain("1 không đăng được");
+  });
+
+  it("switches the shortcut off — never '0/1' — when a group holds no row", () => {
+    // A second, healthy group is needed for the shortcut row to exist at all:
+    // with only the broken one the whole picker is in its empty state.
+    const html = render({
+      groups: [
+        group({ id: "g1", name: "Nhóm rỗng", channelIds: ["  "] }),
+        group({ id: "g2", name: "Nhóm sáng", channelIds: ["fb-a"] }),
+      ],
+      channels: [channel({ channelId: "fb-a", name: "Lady Fashion" })],
+    });
+
+    // The broken group's OWN label: a fraction there would be counting an id
+    // that is not on screen and can never be ticked.
+    const brokenLabel = html.slice(html.indexOf("Nhóm rỗng"));
+    const ownLabel = brokenLabel.slice(0, brokenLabel.indexOf("</label>"));
+    expect(ownLabel).toContain("(chưa có Page)");
+    expect(ownLabel).not.toMatch(/\d+\/\d+/);
+    // The healthy group next to it still counts normally.
+    expect(html).toContain("0/1");
+  });
+
+  it("switches the shortcut off when every row of the group is blocked", () => {
+    // A shortcut that can only ever add nothing must not look pressable.
+    const html = render({
+      groups: [group({ name: "Nhóm sáng", channelIds: ["fb-off"] })],
+      channels: [channel({ channelId: "fb-off", name: "My Shop", status: "disabled" })],
+    });
+    expect(html).toContain("1 không đăng được");
+    expect(html.match(/disabled=""/g)?.length).toBe(2);
+  });
+});

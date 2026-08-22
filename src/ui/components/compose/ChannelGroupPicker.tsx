@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { useMemo } from "react";
 
-import { dedupeChannelsAcrossGroups } from "@/ui/components/channels/channel-option-labels";
+import {
+  dedupeChannelsAcrossGroups,
+  groupToggleViews,
+} from "@/ui/components/channels/channel-option-labels";
 import { ChannelIdText } from "@/ui/components/channels/ChannelNameCell";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
@@ -59,6 +62,9 @@ export function ChannelGroupPicker({
   // Hooks run before any early return — the rule is cheap and pure, and the
   // rendered branches below still return first.
   const rows = useMemo(() => dedupeChannelsAcrossGroups(groups, channels), [groups, channels]);
+  // What each shortcut may tick, and what its counter may claim — both derived
+  // from the rows below, so the two can never disagree.
+  const toggles = useMemo(() => groupToggleViews(groups, rows), [groups, rows]);
 
   if (loading) {
     return (
@@ -117,14 +123,28 @@ export function ChannelGroupPicker({
       <fieldset className="flex flex-col gap-2">
         <legend className="text-muted-foreground pb-1 text-xs">Chọn nhanh theo nhóm</legend>
         <div className="flex flex-wrap gap-x-4 gap-y-2">
-          {groups.map((group) => {
-            const checkedCount = group.channelIds.filter((id) => selected.has(id)).length;
-            const allChecked = checkedCount === group.channelIds.length && checkedCount > 0;
+          {toggles.map((toggle) => {
+            // Denominator = the rows this group owns in the list below, blocked
+            // ones included: an operator counting rows must reach the same
+            // number. `group.channelIds.length` counted blanks and duplicates
+            // the list had already merged away.
+            const total = toggle.rowIds.length;
+            const checkedCount = toggle.rowIds.filter((id) => selected.has(id)).length;
+            // "Everything that CAN be on is on". A blocked row can never be
+            // ticked, so requiring it here would leave the box permanently
+            // half-lit and the shortcut permanently useless; the counter next
+            // to it is what tells the operator the group is not all green.
+            const allChecked =
+              toggle.selectableIds.length > 0 &&
+              toggle.selectableIds.every((id) => selected.has(id));
+            const empty = total === 0;
 
             return (
               <label
-                key={group.id}
-                className="flex cursor-pointer items-center gap-2.5 text-xs font-medium"
+                key={toggle.groupId}
+                className={`flex items-center gap-2.5 text-xs font-medium ${
+                  empty ? "opacity-70" : "cursor-pointer"
+                }`}
               >
                 <input
                   type="checkbox"
@@ -134,14 +154,27 @@ export function ChannelGroupPicker({
                   ref={(node) => {
                     if (node) node.indeterminate = checkedCount > 0 && !allChecked;
                   }}
-                  disabled={disabled}
-                  onChange={(event) => onToggleGroup(group.channelIds, event.target.checked)}
+                  // A group with nothing tickable has no action to offer.
+                  disabled={disabled || toggle.selectableIds.length === 0}
+                  // ONLY the ids a click may legally add: handing the raw group
+                  // over used to push switched-off and removed Pages into the
+                  // run, where they could only come back blocked.
+                  onChange={(event) => onToggleGroup(toggle.selectableIds, event.target.checked)}
                 />
                 <CheckBox />
-                {group.name}
-                <span className="text-muted-foreground font-normal">
-                  {checkedCount}/{group.channelIds.length}
-                </span>
+                {toggle.name}
+                {empty ? (
+                  // Never "0/1": the fraction would be counting an id that is
+                  // not on screen and cannot be ticked.
+                  <span className="text-muted-foreground font-normal">(chưa có Page)</span>
+                ) : (
+                  <span className="text-muted-foreground font-normal">
+                    {checkedCount}/{total}
+                    {toggle.blockedCount > 0
+                      ? ` · ${toggle.blockedCount} không đăng được`
+                      : ""}
+                  </span>
+                )}
               </label>
             );
           })}
@@ -150,7 +183,7 @@ export function ChannelGroupPicker({
 
       <fieldset className="flex flex-col gap-2">
         <legend className="text-muted-foreground pb-1 text-xs">
-          Page sẽ đăng · {rows.length} Page
+          Danh sách Page · {rows.length} Page
         </legend>
         <ul className="flex flex-col gap-2">
           {rows.map((row) => {

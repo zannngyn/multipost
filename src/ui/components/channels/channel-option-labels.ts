@@ -1,4 +1,5 @@
 import {
+  CHANNEL_NO_NAME,
   resolveGroupChannelLabels,
   type GroupChannelLabel,
 } from "@/ui/components/channels/channel-group-labels";
@@ -135,6 +136,14 @@ export interface BulkChannelRow {
  * the row says why. Dropping it would leave an operator staring at a group that
  * claims three Pages while the list offers two, with no way to find out why.
  *
+ * WHY THIS MERGES AND THE "Nhóm kênh" SCREEN DOES NOT: a group that lists the
+ * same id twice is corrupt data. Here it must be merged — this screen is where
+ * an operator decides where a post goes, and two checkboxes bound to one id
+ * make the post look like it goes to two Pages. `ChannelGroupsScreen` renders
+ * one chip PER STORED ENTRY on purpose (wave 1): that screen is where the
+ * corrupt group is repaired, and merging there would hide the very duplicate
+ * the operator has to delete.
+ *
  * `channels === undefined` (loading, or the request failed) means the list is
  * NOT KNOWN: every row stays selectable and nothing is called removed, so a slow
  * query cannot turn this screen into one where nothing may be run.
@@ -155,12 +164,18 @@ export function dedupeChannelsAcrossGroups(
     for (const rawId of group?.channelIds ?? []) {
       // A blank id is corrupt data, not a Page: it can be neither named nor
       // ticked, and a nameless empty row would only look like a bug.
-      if (typeof rawId !== "string" || rawId.trim().length === 0) continue;
+      if (typeof rawId !== "string") continue;
+      // TRIMMED, and the trimmed form is what the row carries: the name lookup
+      // trims (`resolveGroupChannelLabels`), so keying the row on the raw string
+      // would make " fb-a " and "fb-a" two rows that resolve to one Page — and
+      // the ticked value handed to the API would keep the stray space.
+      const id = rawId.trim();
+      if (id.length === 0) continue;
 
-      const existing = groupNames.get(rawId);
+      const existing = groupNames.get(id);
       if (!existing) {
-        order.push(rawId);
-        groupNames.set(rawId, name.length > 0 ? [name] : []);
+        order.push(id);
+        groupNames.set(id, name.length > 0 ? [name] : []);
         continue;
       }
       if (name.length > 0 && !existing.includes(name)) existing.push(name);
@@ -201,5 +216,140 @@ export function channelSentenceName(
       ? `${shortenId(channelId, CHANNEL_ID_KEEP)} (đã gỡ)`
       : channelId;
   }
-  return label.note === "disabled" ? `${label.name} (đang tắt)` : label.name;
+  // The placeholder names nothing, so the id rides along: "(Page chưa có tên)"
+  // on its own cannot tell two nameless Pages apart, and this string is the
+  // only thing a screen reader or a dialog gets.
+  const base =
+    label.name === CHANNEL_NO_NAME
+      ? `${CHANNEL_NO_NAME} · ${shortenId(channelId, CHANNEL_ID_KEEP)}`
+      : label.name;
+  return label.note === "disabled" ? `${base} (đang tắt)` : base;
+}
+
+/**
+ * `channelSentenceName` for a caller holding ONE id and no index.
+ *
+ * Convenience only — a list must still resolve once with `channelLabelIndex`
+ * rather than calling this per row.
+ */
+export function channelNameOf(
+  channelId: string,
+  channels: readonly Channel[] | undefined,
+): string {
+  return channelSentenceName(channelId, channelLabelIndex([channelId], channels));
+}
+
+export interface GroupToggleView {
+  readonly groupId: string;
+  readonly name: string;
+  /** Distinct, non-blank ids of this group that HAVE a row in the flat list. */
+  readonly rowIds: readonly string[];
+  /** The subset of `rowIds` a click may actually tick. */
+  readonly selectableIds: readonly string[];
+  /** Rows this group owns that can never be ticked (switched off / removed). */
+  readonly blockedCount: number;
+}
+
+/**
+ * What a "chọn cả nhóm" shortcut may do, and what its counter may claim.
+ *
+ * TWO BUGS THIS CLOSES:
+ *   1. the shortcut used to hand `group.channelIds` straight to the parent, so
+ *      pressing it ticked Pages that are switched off or no longer exist — ids
+ *      that then travelled into `run.start` and could only come back blocked.
+ *      Only `selectableIds` leaves this function.
+ *   2. the counter's denominator used to be `group.channelIds.length`, which
+ *      counts blanks and duplicates the flat list below has already merged
+ *      away: "1/3" under a list showing two rows. `rowIds` is exactly the set
+ *      of rows this group owns down there.
+ *
+ * A group with no row at all keeps its entry (it exists, and hiding it would
+ * hide the problem) but has nothing to count and nothing to tick — the caller
+ * renders it as "chưa có Page", never as "0/1".
+ */
+export function groupToggleViews(
+  groups: readonly ChannelGroup[],
+  rows: readonly BulkChannelRow[],
+): readonly GroupToggleView[] {
+  if (!Array.isArray(groups) || groups.length === 0) return [];
+
+  const byId = new Map(rows.map((row) => [row.channelId, row]));
+
+  return groups.map((group) => {
+    const rowIds: string[] = [];
+    const selectableIds: string[] = [];
+    const seen = new Set<string>();
+
+    for (const rawId of group?.channelIds ?? []) {
+      if (typeof rawId !== "string") continue;
+      const id = rawId.trim();
+      if (id.length === 0 || seen.has(id)) continue;
+      seen.add(id);
+
+      const row = byId.get(id);
+      // No row means the flat list is not showing this id (it was dropped as
+      // blank, or the caller passed rows built from other groups). Counting it
+      // would put the shortcut and the list back out of step.
+      if (!row) continue;
+
+      rowIds.push(id);
+      if (row.selectable) selectableIds.push(id);
+    }
+
+    return {
+      groupId: group.id,
+      name: group.name,
+      rowIds,
+      selectableIds,
+      blockedCount: rowIds.length - selectableIds.length,
+    };
+  });
+}
+
+export interface SelectionPrune {
+  /** What may stay ticked, in the order it was given. */
+  readonly next: readonly string[];
+  /** What was dropped, already named for a sentence. */
+  readonly removedLabels: readonly string[];
+  readonly changed: boolean;
+}
+
+/**
+ * The selection, re-checked against the channel list that has just arrived.
+ *
+ * THE RACE: /bulk renders its Pages before `useChannels` answers, so during
+ * that window every row is tickable (an unknown list may accuse nothing). If
+ * the answer then says a ticked Page is switched off or gone, the selection is
+ * carrying an id that can only produce a blocked job — and the operator would
+ * find out from the result table, one code at a time.
+ *
+ * `channels === undefined` prunes NOTHING: no answer is not an answer.
+ *
+ * The caller must say what was dropped (business rule 5) — hence `removedLabels`
+ * rather than a bare count.
+ */
+export function pruneSelection(
+  selected: Iterable<string>,
+  channels: readonly Channel[] | undefined,
+): SelectionPrune {
+  const ids = [...(selected ?? [])];
+  // --- Edge cases first ------------------------------------------------------
+  if (ids.length === 0 || channels === undefined) {
+    return { next: ids, removedLabels: [], changed: false };
+  }
+
+  const index = channelLabelIndex(ids, channels);
+  const next: string[] = [];
+  const removedLabels: string[] = [];
+
+  for (const id of ids) {
+    const note = index.get(id)?.note ?? "none";
+    if (note === "none") {
+      next.push(id);
+      continue;
+    }
+    removedLabels.push(channelSentenceName(id, index));
+  }
+
+  return { next, removedLabels, changed: removedLabels.length > 0 };
 }

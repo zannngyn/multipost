@@ -5,6 +5,10 @@ import { useId, useMemo, useRef, useState } from "react";
 import { CAPTION_TONES, CAPTION_TONE_LABELS, type CaptionTone } from "@/shared/caption-tone";
 import { cn } from "@/shared/utils";
 import {
+  channelLabelIndex,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
+import {
   addHashtag,
   countHashtags,
   joinCaptionTags,
@@ -166,11 +170,12 @@ export function CaptionBlock({
     ? { kind: "channel", channelId: activeId }
     : SHARED_TARGET;
 
-  const nameOf = (channelId: string): string => {
-    const found = channels.data?.channels.find((item) => item.channelId === channelId);
-    const name = found?.name?.trim();
-    return name && name.length > 0 ? name : channelId;
-  };
+  // ONE resolve for every ticked channel, then a lookup per label: the tab
+  // strip, the duplicate warning and the error lines all name the same Pages,
+  // and the shared rule is what keeps "(đã gỡ)" consistent with the log and the
+  // schedule (spec §3.1). A bare id survives only while the list is unknown.
+  const channelNames = channelLabelIndex(selectedIds, channels.data?.channels);
+  const nameOf = (channelId: string): string => channelSentenceName(channelId, channelNames);
 
   // The AI answers for the PLATFORM channel ("facebook"), never for a Fanpage
   // id — the request carries the product, not the Page. Its result therefore
