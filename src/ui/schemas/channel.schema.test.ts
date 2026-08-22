@@ -5,9 +5,11 @@ import {
   ChannelImportResponseSchema,
   ChannelListResponseSchema,
   RemoveChannelResponseSchema,
+  UNREADABLE_COUNT,
   connectSuccessView,
   formatImportSummary,
   parseConnectOutcome,
+  type SkippedCount,
 } from "./channel.schema";
 
 /**
@@ -242,6 +244,24 @@ describe("parseConnectOutcome", () => {
     });
   });
 
+  it("tells an absent `skipped` apart from one it could not read", () => {
+    // Two different silences: nobody sent a number, vs somebody sent rubbish.
+    // Rounding the second down to "không có Page nào bị bỏ qua" would hide the
+    // exact fact business rule 5 exists to surface.
+    const skippedOf = (search: string): SkippedCount => {
+      const outcome = parseConnectOutcome(new URLSearchParams(search));
+      // A failed narrowing here would mean the whole outcome changed shape.
+      if (outcome?.kind !== "connected") throw new Error(`not a connected outcome: ${search}`);
+      return outcome.skipped;
+    };
+
+    expect(skippedOf("connected=2&skipped=x")).toBe(UNREADABLE_COUNT);
+    expect(skippedOf("connected=2&skipped=-1")).toBe(UNREADABLE_COUNT);
+    expect(skippedOf("connected=2&skipped=")).toBe(UNREADABLE_COUNT);
+    expect(skippedOf("connected=2")).toBeNull();
+    expect(skippedOf("connected=2&skipped=0")).toBe(0);
+  });
+
   it("ignores counters without a `connected` of their own", () => {
     // Counts alone are not an outcome — nothing came back from Facebook here.
     expect(parseConnectOutcome(new URLSearchParams("new=1&skipped=3"))).toBeNull();
@@ -263,9 +283,13 @@ describe("parseConnectOutcome", () => {
     });
     // Digits-only: "3.7" and "3 quả" are not counts, and parseInt would have
     // happily read both as 3.
-    expect(
-      parseConnectOutcome(new URLSearchParams("connected=3.7&new=3abc&skipped=%20")),
-    ).toEqual({ kind: "connected", count: null, newCount: null, skipped: null });
+    expect(parseConnectOutcome(new URLSearchParams("connected=3.7&new=3abc&skipped=%20"))).toEqual({
+      kind: "connected",
+      count: null,
+      newCount: null,
+      // `skipped=` WAS sent here, just not as a number — not the same silence.
+      skipped: UNREADABLE_COUNT,
+    });
     // Beyond Number.MAX_SAFE_INTEGER the value is no longer the number sent.
     expect(
       parseConnectOutcome(new URLSearchParams("connected=99999999999999999999&skipped=2")),
@@ -310,7 +334,7 @@ describe("parseConnectOutcome", () => {
 });
 
 describe("connectSuccessView", () => {
-  function view(count: number | null, newCount: number | null, skipped: number | null) {
+  function view(count: number | null, newCount: number | null, skipped: SkippedCount) {
     return connectSuccessView({ kind: "connected", count, newCount, skipped });
   }
 
@@ -320,18 +344,33 @@ describe("connectSuccessView", () => {
     const result = view(2, 1, 3);
     expect(result.tone).toBe("warning");
     // Business rule 5: the answer to "vì sao Page X không có trong danh sách"
-    // has to be on screen, with a number and somewhere to go looking.
+    // has to be on screen, with a number and somewhere to go looking — and in
+    // the TITLE, which is the part read first and sometimes the only part read.
+    expect(result.title).toBe("Đã nhập 2 Page (1 mới) · 3 Page bị bỏ qua");
     expect(result.description).toContain("3 Page bị bỏ qua");
     expect(result.description).toContain("thiếu quyền");
     expect(result.description).toContain("tài khoản Facebook");
   });
 
   it("stays a success and says nothing about skipping when nothing was skipped", () => {
-    for (const skipped of [0, null]) {
+    for (const skipped of [0, null] as const) {
       const result = view(2, 1, skipped);
       expect(result.tone).toBe("success");
+      expect(result.title).toBe("Đã nhập 2 Page (1 mới)");
       expect(result.description).not.toContain("bỏ qua");
     }
+  });
+
+  it("says so out loud when the skipped counter itself was unreadable", () => {
+    // NOT the same as "không có Page nào bị bỏ qua": a Page may well have been
+    // dropped, and silence here is exactly the hole rule 5 closes.
+    const result = view(2, 1, UNREADABLE_COUNT);
+    expect(result.tone).toBe("warning");
+    expect(result.description).toContain("Không đọc được số Page bị bỏ qua");
+    expect(result.description).toContain("tài khoản Facebook");
+    // No invented number, in either half of the banner.
+    expect(result.description).not.toContain("0 Page bị bỏ qua");
+    expect(result.title).toBe("Đã nhập 2 Page (1 mới)");
   });
 
   it("warns in words, not only in colour", () => {
@@ -339,6 +378,7 @@ describe("connectSuccessView", () => {
     // signal (core-accessibility: named status).
     expect(view(2, 1, 3).description).toContain("bỏ qua");
     expect(view(0, 0, 4).description).toContain("bỏ qua");
+    expect(view(2, 1, UNREADABLE_COUNT).description).toContain("bỏ qua");
   });
 
   it("counts both the total and the genuinely new Pages", () => {
@@ -355,6 +395,17 @@ describe("connectSuccessView", () => {
     const result = view(null, null, 2);
     expect(result.tone).toBe("warning");
     expect(result.description).toContain("2 Page bị bỏ qua");
+    expect(result.title).toBe("Đã kết nối xong với Facebook · 2 Page bị bỏ qua");
+  });
+
+  it("keeps a counter it CAN read when the one beside it is broken", () => {
+    // `?connected=abc&new=3`: dropping "3 Page mới" because the total was
+    // unreadable would throw away the only number that survived.
+    expect(view(null, 3, 0).title).toBe("Đã kết nối xong với Facebook (3 Page mới)");
+    expect(view(null, 0, null).title).toBe("Đã kết nối xong với Facebook, không có Page mới");
+    expect(view(null, 3, 2).title).toBe(
+      "Đã kết nối xong với Facebook (3 Page mới) · 2 Page bị bỏ qua",
+    );
   });
 
   it("says nothing changed instead of announcing zero Pages", () => {
