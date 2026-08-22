@@ -236,3 +236,41 @@
     scrollbar-gutter: stable;
   }
 }
+
+/* "There is more table over there", with background layers only — no scroll
+   listener, no ResizeObserver, nothing that can fall out of sync.
+
+   Four layers, painted front to back: two COVERS the colour of the surface,
+   attached `local` so they travel WITH the content, and two SHADOWS attached
+   `scroll` so they stay pinned to the box. At the left end the cover sits on
+   top of the left shadow and hides it; scroll right and the cover slides away
+   and the shadow appears. A table that fits shows neither, so this costs
+   nothing on desktop — where the scrollbar says it anyway. On a phone it is
+   the ONLY thing that says the row continues past the edge.
+
+   `--scroll-cue-surface` lets a caller on a card re-declare the surface; the
+   default is the page. The shadow is mixed from --foreground rather than a
+   black so it keeps the ink of the theme in dark mode too. */
+@utility scroll-cue-x {
+  background-image:
+    linear-gradient(to right, var(--scroll-cue-surface, var(--card)) 40%, transparent),
+    linear-gradient(to left, var(--scroll-cue-surface, var(--card)) 40%, transparent),
+    linear-gradient(
+      to right,
+      color-mix(in oklab, var(--foreground) 16%, transparent),
+      transparent
+    ),
+    linear-gradient(to left, color-mix(in oklab, var(--foreground) 16%, transparent), transparent);
+  background-position:
+    left center,
+    right center,
+    left center,
+    right center;
+  background-size:
+    2.5rem 100%,
+    2.5rem 100%,
+    0.875rem 100%,
+    0.875rem 100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}

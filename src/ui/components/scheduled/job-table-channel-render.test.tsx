@@ -91,3 +91,77 @@ describe("ScheduledJobTable channel column", () => {
     expect(html).toContain("bài MGKVX6310 trên kênh Lady Fashion");
   });
 });
+
+/**
+ * The fold (wave 2, spec §3.2). The RULE is tested in
+ * `posts/job-row-grouping.test.ts`; this checks it reaches the markup and that
+ * a folded row never keeps a per-job action it cannot honour.
+ */
+describe("ScheduledJobTable folding", () => {
+  const OTHER: Channel = channel({ channelId: "fb-2", name: "Lady Outlet", externalId: "2" });
+
+  function countRows(html: string): number {
+    return (html.match(/<tr class="border-t align-top">/g) ?? []).length;
+  }
+
+  it("leaves a single row alone — no disclosure, actions still on the row", () => {
+    const html = render([entry()], [channel()]);
+    expect(countRows(html)).toBe(1);
+    expect(html).not.toContain('aria-expanded="');
+    expect(html).toContain("Đổi giờ");
+  });
+
+  it("does NOT fold two posts of one code that carry different captions", () => {
+    const html = render(
+      [entry(), entry({ postJobId: "job-2", channelId: "fb-2", captionPreview: "Khác…" })],
+      [channel(), OTHER],
+    );
+    expect(countRows(html)).toBe(2);
+  });
+
+  it('folds one post fanned out to three Pages into "× 3 kênh"', () => {
+    const html = render(
+      [
+        entry(),
+        entry({ postJobId: "job-2", channelId: "fb-2" }),
+        entry({ postJobId: "job-3", channelId: "fb-3" }),
+      ],
+      [channel(), OTHER],
+    );
+    expect(countRows(html)).toBe(1);
+    expect(html).toContain("× 3 kênh");
+    expect(html).toContain('aria-controls="scheduled-fold-job-1"');
+  });
+
+  it("moves Đổi giờ / Huỷ into the panel and says so on the folded row", () => {
+    const html = render(
+      [entry(), entry({ postJobId: "job-2", channelId: "fb-2" })],
+      [channel(), OTHER],
+    );
+    expect(html).toContain("Mở danh sách kênh để đổi giờ hoặc huỷ từng kênh");
+    // Both channels keep their own action inside the (hidden) panel.
+    expect(html).toContain("bài MGKVX6310 trên kênh Lady Fashion");
+    expect(html).toContain("bài MGKVX6310 trên kênh Lady Outlet");
+  });
+
+  it("calls the folded hour the soonest one when publish spacing staggered them", () => {
+    const html = render(
+      [
+        entry(),
+        entry({
+          postJobId: "job-2",
+          channelId: "fb-2",
+          scheduledAt: new Date(2026, 7, 13, 20, 5).toISOString(),
+        }),
+      ],
+      [channel(), OTHER],
+    );
+    expect(html).toContain("sớm nhất");
+  });
+
+  it("shows the colour as a dyed chip, name included", () => {
+    const html = render([entry({ color: "Tím" })], [channel()]);
+    expect(html).toContain("background:#9B7BC4");
+    expect(html).toContain("Tím");
+  });
+});
