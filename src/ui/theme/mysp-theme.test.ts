@@ -61,6 +61,11 @@ const PINNED_TOKENS = [
   "--color-track",
 ] as const;
 
+/** Block and line comments out, so prose about the code is not read as code. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+}
+
 function readBuiltCss(): string {
   const css = readFileSync(CSS_PATH, "utf8");
   // Edge case first: an empty or truncated build would make every `.get()`
@@ -128,10 +133,18 @@ describe("mysp.css is the build of mysp-theme.ts", () => {
    * overrides written in mysp-theme.ts".
    */
   it("pins every override the source declares — the list cannot fall behind", () => {
-    const source = readFileSync(new URL("./mysp-theme.ts", import.meta.url), "utf8");
+    // Comments stripped first, the same way the other structural tests in this
+    // repo read a source file: `mysp-theme.ts` is heavily documented and quotes
+    // token names in its prose. An example written as `"--color-x": "var(--y)"`
+    // inside a docblock would be counted as a declaration and fail this test
+    // for a token that does not exist.
+    const source = stripComments(readFileSync(new URL("./mysp-theme.ts", import.meta.url), "utf8"));
     const declared = [...source.matchAll(/^\s*"(--[a-z0-9-]+)":/gm)].map((match) => match[1]);
 
-    expect(declared.length, "mysp-theme.ts declares no tokens — the file shape changed").toBeGreaterThan(0);
+    expect(
+      declared.length,
+      "mysp-theme.ts declares no tokens — the file shape changed",
+    ).toBeGreaterThan(0);
     expect([...new Set(declared)].sort()).toEqual([...PINNED_TOKENS].sort());
   });
 

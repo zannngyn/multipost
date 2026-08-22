@@ -240,10 +240,14 @@ export function channelNameOf(
 }
 
 /**
- * Marks a `groupId` this module invented because the payload had none. The
- * space and the colon keep it outside the shape any stored id can take.
+ * Marks a `groupId` this module invented because the payload had none.
+ *
+ * English, like every other identifier in the codebase: this string is a REACT
+ * KEY and never reaches the screen (the row prints `name`), so the rule that
+ * user-facing text is Vietnamese does not apply — the rule that code is English
+ * does. The colon keeps it outside the shape any stored id can take.
  */
-const GROUP_WITHOUT_ID_PREFIX = "nhóm không có id: #";
+const GROUP_WITHOUT_ID_PREFIX = "group-without-id:#";
 
 export interface GroupToggleView {
   /**

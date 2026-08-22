@@ -35,7 +35,9 @@ describe("runTally — no number available", () => {
 
     expect(tally.value).toBe(NO_TALLY);
     expect(tally.isQuiet).toBe(true);
-    expect(tally.label).not.toBe("chưa xong");
+    // Pinned like the `partial` branch below, not asserted by inequality: a
+    // "not chưa xong" passes on any third word, including a worse one.
+    expect(tally.label).toBe("không rõ");
     expect(tally.note).toBe("Dừng giữa chừng — không có số liệu.");
     expect(tally.note).not.toBe(
       runTally(makeRun({ status: "running", finishedAt: null, issuesTotal: null })).note,
