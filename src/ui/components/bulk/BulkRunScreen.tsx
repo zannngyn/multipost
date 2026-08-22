@@ -215,22 +215,34 @@ export function BulkRunScreen() {
       header={
         /* `padding={0}` because the box inside brings its own — LayoutHeader's
            own docblock asks for exactly that ("use padding={0} if your content
-           manages its own padding"). Without it the two stacked: the header
-           pads `--spacing-4` (16px) on every side and the box below added
-           `px-6 py-4` inside that, so a header written as 16px of vertical
-           padding rendered at 32px, and its inline start sat 40px in against
-           the content column's 24px — visible below 1056px, where the two
-           centred columns stop being the same width. The vertical value moves
-           onto the box that declares it, at the size that was really
-           rendering: the band does not move a pixel, it just says what it
-           does now. */
+           manages its own padding"). Without it the two stacked silently: the
+           header pads `--spacing-4` (16px) on every side and the box below
+           added its own inside that, so a header written as 16px of vertical
+           padding rendered at 32px.
+
+           The numbers below are therefore TOTALS, not additions, and they are
+           the totals that were already rendering:
+             block  32px = `py-8`   (was 16 + 16)
+             inline 40px = `px-10`  (was 16 + 24)
+           `px-10` looks odd next to the content column's `px-6` and is
+           deliberate: this band is measured against the OTHER header bands in
+           the app — /posts and /prompts build the same centred `max-w-5xl`
+           column and start 40px in — not against the column under it. Dropping
+           to 24px here made /bulk the one screen whose title started somewhere
+           else. Locked by `bulk-header-inset.test.ts`.
+
+           LayoutHeader has no per-axis padding prop (`astryx component
+           LayoutHeader`: padding is one SpacingStep), which is why the split
+           lives in the class rather than in a prop. */
         <LayoutHeader hasDivider padding={0}>
-          {/* The SAME column as the content below — `max-w-5xl` centred, `px-6`
-              — so the h1 sits on the left edge of the card it titles. The
+          {/* The same COLUMN as the content below — `max-w-5xl`, centred — so
+              the h1 sits over the card it titles at every width above the
+              column. The inline padding differs on purpose (see the note on
+              the header above: this band matches the other header bands). The
               divider stays full width because it belongs to LayoutHeader, not
               to this box. Measured before the fix: 88px of disagreement at
               1440, which reads as two layouts that were never introduced. */}
-          <div className="mx-auto flex w-full max-w-5xl flex-wrap items-start justify-between gap-4 px-6 py-8">
+          <div className="mx-auto flex w-full max-w-5xl flex-wrap items-start justify-between gap-4 px-10 py-8">
             <div className="max-w-prose space-y-1">
               <Heading level={1}>Chạy hàng loạt</Heading>
               {/* Two sentences: what the screen does, and what it does when a
