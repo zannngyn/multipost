@@ -31,7 +31,13 @@ import type { BulkRunRow } from "@/ui/hooks/useBulkRun";
  */
 export function BulkProgressTable({ rows }: { rows: readonly BulkRunRow[] }) {
   return (
-    <>
+    // `@container`, so the cue at the foot can be asked about the BOX this
+    // table stands in rather than about the window. The two disagree by the
+    // width of the side nav plus the page gutters — a 900px window leaves this
+    // box ~600px — so a viewport-keyed `sm:hidden` swallowed the cue across a
+    // whole band where the table was very much scrolling. Reflow by the
+    // container step it actually overflows at (raise 4).
+    <div className="@container">
       {/* Focusable region with a name: below 40rem this scrolls sideways, and a
           scroll container that only a mouse can reach is a keyboard trap in
           reverse (web-data-table §3). */}
@@ -127,10 +133,14 @@ export function BulkProgressTable({ rows }: { rows: readonly BulkRunRow[] }) {
           operator opened this screen to read. The table itself is unchanged —
           this only says out loud that there is more to the right, which is the
           part a horizontal scrollbar on touch never manages to say
-          (core-data-table §Bảng → thẻ). `sm` is 40rem, the table's own floor. */}
-      <p className="text-muted-foreground mt-2 text-xs sm:hidden">
+          (core-data-table §Bảng → thẻ).
+
+          40rem is `min-w-160`, the table's own floor, read off the CONTAINER:
+          the cue is on screen exactly while the table overflows, and off the
+          moment it stops. */}
+      <p className="text-muted-foreground mt-2 text-xs @min-[40rem]:hidden">
         Cuộn bảng sang phải để xem lý do và lô đăng của từng mã.
       </p>
-    </>
+    </div>
   );
 }

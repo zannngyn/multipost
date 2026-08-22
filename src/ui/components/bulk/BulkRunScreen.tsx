@@ -214,7 +214,12 @@ export function BulkRunScreen() {
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <div className="flex flex-wrap items-start justify-between gap-4 p-4">
+          {/* The SAME column as the content below — `max-w-5xl` centred, `px-6`
+              — so the h1 sits on the left edge of the card it titles. The
+              divider stays full width because it belongs to LayoutHeader, not
+              to this box. Measured before the fix: 88px of disagreement at
+              1440, which reads as two layouts that were never introduced. */}
+          <div className="mx-auto flex w-full max-w-5xl flex-wrap items-start justify-between gap-4 px-6 py-4">
             <div className="max-w-prose space-y-1">
               <Heading level={1}>Chạy hàng loạt</Heading>
               {/* Two sentences: what the screen does, and what it does when a
@@ -291,7 +296,7 @@ export function BulkRunScreen() {
                 {prune.changed ? (
                   <p
                     role="status"
-                    className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
+                    className="border-warning/40 bg-warning/10 text-warning-foreground rounded-md border px-3 py-2 text-sm"
                   >
                     {prune.removedLabels.length} Page đã tick sẽ KHÔNG được đăng vì kênh đang tắt
                     hoặc đã bị gỡ: {prune.removedLabels.join(", ")}. Bật lại ở màn Kênh nếu vẫn muốn
@@ -401,39 +406,44 @@ export function BulkRunScreen() {
                 {/* A bulk run creates real posts on the customer's Pages; support
                     mode may not (M3.3). The rest of the form stays readable so staff
                     can still see what a customer had set up. */}
-                <div className="border-border flex flex-wrap items-center gap-2 border-t pt-4">
-                  <Button type="submit" disabled={isRunning || gate.isDisabled || hasNoCodes}>
-                    {isRunning
-                      ? "Đang chạy…"
-                      : hasNoCodes
-                        ? // Not "Chạy 0 mã": a button names the action it would
-                          // take, and there is no such action while the box is
-                          // empty.
-                          schedule.mode === "scheduled"
-                          ? "Hẹn giờ"
-                          : "Chạy"
-                        : schedule.mode === "scheduled"
-                          ? `Hẹn giờ ${parsed.codes.length} mã`
-                          : `Chạy ${parsed.codes.length} mã`}
-                  </Button>
-                  {isRunning ? (
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      onClick={run.stop}
-                      disabled={phase === "stopping"}
-                    >
-                      {phase === "stopping" ? "Đang dừng…" : "Dừng"}
+                <div className="border-border space-y-3 border-t pt-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button type="submit" disabled={isRunning || gate.isDisabled || hasNoCodes}>
+                      {isRunning
+                        ? "Đang chạy…"
+                        : hasNoCodes
+                          ? // Not "Chạy 0 mã": a button names the action it would
+                            // take, and there is no such action while the box is
+                            // empty.
+                            schedule.mode === "scheduled"
+                            ? "Hẹn giờ"
+                            : "Chạy"
+                          : schedule.mode === "scheduled"
+                            ? `Hẹn giờ ${parsed.codes.length} mã`
+                            : `Chạy ${parsed.codes.length} mã`}
                     </Button>
-                  ) : null}
-                  {phase === "finished" ? (
-                    <Button type="button" variant="ghost" onClick={run.reset}>
-                      Xoá kết quả để chạy lượt mới
-                    </Button>
-                  ) : null}
-                  <ReadOnlyNotice reason={runBlockedReason} className="basis-full" />
-                  {/* Beside the trigger, where the decision is made. */}
-                  <p className="text-muted-foreground max-w-prose basis-full text-[13px]">
+                    {isRunning ? (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        onClick={run.stop}
+                        disabled={phase === "stopping"}
+                      >
+                        {phase === "stopping" ? "Đang dừng…" : "Dừng"}
+                      </Button>
+                    ) : null}
+                    {phase === "finished" ? (
+                      <Button type="button" variant="ghost" onClick={run.reset}>
+                        Xoá kết quả để chạy lượt mới
+                      </Button>
+                    ) : null}
+                    <ReadOnlyNotice reason={runBlockedReason} className="basis-full" />
+                  </div>
+
+                  {/* Beside the trigger, where the decision is made — but on a
+                      line of its own. Sharing the button row made a sentence
+                      read as the label of a third button. */}
+                  <p className="text-muted-foreground max-w-prose text-[13px]">
                     {TAB_BOUNDARY_NOTICE}
                   </p>
                 </div>

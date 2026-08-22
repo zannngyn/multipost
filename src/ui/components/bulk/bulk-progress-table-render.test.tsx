@@ -40,6 +40,31 @@ describe("BulkProgressTable", () => {
     }
   });
 
+  it("dyes each outcome with the tint its status owns", () => {
+    // The mapping lives in `bulk.schema`; this pins what it RENDERS to, so a
+    // status cannot quietly change dye — "Đã tạo lô" painted madder is a lie an
+    // operator would act on. The three in-flight states are `info`, a plain
+    // surface (The 10% Tint Rule), so they are pinned by the absence of an
+    // outcome tint rather than by a colour of their own.
+    const tintOf = (label: string, html: string): string | undefined =>
+      html.match(new RegExp(`<span[^>]*class="([^"]*)"[^>]*>${label}</span>`))?.[1];
+
+    const html = render([
+      row({ status: "done" }),
+      row({ status: "skipped" }),
+      row({ status: "error" }),
+      row({ status: "composing" }),
+    ]);
+
+    expect(tintOf(BULK_ROW_STATUS_LABELS.done, html)).toContain("bg-success/10");
+    expect(tintOf(BULK_ROW_STATUS_LABELS.skipped, html)).toContain("bg-warning/10");
+    expect(tintOf(BULK_ROW_STATUS_LABELS.error, html)).toContain("bg-destructive/10");
+
+    const inFlight = tintOf(BULK_ROW_STATUS_LABELS.composing, html);
+    expect(inFlight).toBeDefined();
+    expect(inFlight).not.toMatch(/bg-(success|warning|destructive)\/10/);
+  });
+
   it("keeps the product code on one line in the ledger mono", () => {
     const html = render([row({ code: "MGKVX6310" })]);
     const cell = html.match(/<td[^>]*>MGKVX6310<\/td>/)?.[0];
