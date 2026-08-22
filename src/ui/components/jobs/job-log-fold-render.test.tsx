@@ -152,6 +152,18 @@ describe("JobLogTable folding", () => {
     expect(html).toContain("mới nhất");
   });
 
+  it("does NOT say 'mới nhất' when the gap is milliseconds — the cell prints one stamp", () => {
+    const html = render([
+      entry(),
+      entry({
+        postJobId: "job-2",
+        channelId: "fb-2",
+        updatedAt: new Date(2026, 7, 13, 10, 0, 0, 41).toISOString(),
+      }),
+    ]);
+    expect(html).not.toContain("mới nhất");
+  });
+
   it("draws the colour dot next to the colour NAME, never instead of it", () => {
     const html = render([entry({ color: "Đen" })]);
     expect(html).toContain("Đen");

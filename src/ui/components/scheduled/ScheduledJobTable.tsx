@@ -198,7 +198,12 @@ function ScheduledRows({
   // The soonest hour of the group — the list arrives soonest-first. Publish
   // spacing means the others are minutes behind, so the row says "sớm nhất"
   // instead of passing one channel's minute off as all five.
-  const sameHour = isFoldUniform(group, (member) => member.scheduledAt);
+  //
+  // Compared on the FORMATTED hour, not the raw ISO instant: the cell shows
+  // "20:00", so five jobs stamped 20:00:00.000 / 20:00:00.041 are the same hour
+  // as far as this screen is concerned, and "sớm nhất" on a group that reads
+  // identically down to the minute is a caveat with nothing behind it.
+  const sameHour = isFoldUniform(group, (member) => formatScheduledTime(member.scheduledAt));
 
   return (
     <>
@@ -275,12 +280,7 @@ function ScheduledRows({
         </td>
         <td className="px-3 py-2">
           {isFolded ? (
-            // Đổi giờ and Huỷ act on ONE post_job each — a single button here
-            // would have to pick one of five silently. The sentence says where
-            // the buttons are instead (The Named Status Rule).
-            <span className="text-muted-foreground text-xs">
-              Mở danh sách kênh để đổi giờ hoặc huỷ từng kênh
-            </span>
+            <FoldedActionsNote group={group} readOnlyReason={readOnlyReason} />
           ) : (
             <RowActions
               job={job}
@@ -325,6 +325,47 @@ function ScheduledRows({
         </tr>
       ) : null}
     </>
+  );
+}
+
+/**
+ * The "Thao tác" cell of a FOLDED row.
+ *
+ * Đổi giờ and Huỷ act on ONE post_job each — a single button here would have to
+ * pick one of five silently — so the folded row carries no button and says where
+ * the buttons are instead. It may only promise what the panel actually holds:
+ * pointing a group that is entirely past its hour at "Mở danh sách kênh để đổi
+ * giờ" sends the operator hunting for a control that is not there, which is the
+ * same lie `RowActions` refuses to tell one row at a time (The Named Status
+ * Rule — a summary that cannot be checked is decoration).
+ *
+ * Read-only wins over the per-row rule, exactly as in `RowActions`: while
+ * nothing may be written at all, "bài đã tới giờ" is not the answer to give.
+ */
+function FoldedActionsNote({
+  group,
+  readOnlyReason,
+}: {
+  group: JobRowGroup<ScheduledJobEntry>;
+  readOnlyReason: string | null;
+}) {
+  if (readOnlyReason !== null) {
+    return <span className="text-muted-foreground text-xs">{readOnlyReason}</span>;
+  }
+
+  // `scheduledFoldKey` already keeps both permissions in the fold key, so the
+  // members agree — asked over the group anyway, because the cell must follow
+  // the panel, not a rule stated somewhere else.
+  const anyReschedule = group.members.some((member) => member.canReschedule);
+  const anyCancel = group.members.some((member) => member.canCancel);
+
+  if (!anyReschedule && !anyCancel) {
+    return <span className="text-muted-foreground text-xs">Đã tới giờ — không sửa được nữa</span>;
+  }
+
+  const what = anyReschedule && anyCancel ? "đổi giờ hoặc huỷ" : anyReschedule ? "đổi giờ" : "huỷ";
+  return (
+    <span className="text-muted-foreground text-xs">Mở danh sách kênh để {what} từng kênh</span>
   );
 }
 

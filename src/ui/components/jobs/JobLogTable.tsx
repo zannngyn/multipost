@@ -210,7 +210,11 @@ function JobLogRows({
   // The fold keeps the head's hour, which is the most recent of the group (the
   // log arrives newest first). Said out loud when the members disagree, rather
   // than passing one channel's minute off as all five.
-  const sameHour = isFoldUniform(group, (member) => member.updatedAt);
+  //
+  // Compared on the FORMATTED stamp, not the raw ISO instant: the cell prints
+  // to the second, so five rows written 41 ms apart show the identical string,
+  // and "mới nhất" next to it would flag a disagreement the operator cannot see.
+  const sameHour = isFoldUniform(group, (member) => formatDateTime(member.updatedAt));
 
   return (
     <>

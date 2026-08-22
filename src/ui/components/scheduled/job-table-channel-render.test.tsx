@@ -51,7 +51,11 @@ function channel(overrides: Partial<Channel> = {}): Channel {
   };
 }
 
-function render(items: ScheduledJobEntry[], channels: Channel[] | undefined): string {
+function render(
+  items: ScheduledJobEntry[],
+  channels: Channel[] | undefined,
+  readOnlyReason: string | null = null,
+): string {
   return renderToStaticMarkup(
     <ScheduledJobTable
       items={items}
@@ -59,6 +63,7 @@ function render(items: ScheduledJobEntry[], channels: Channel[] | undefined): st
       nowMs={NOW}
       hrefFor={(action, postJobId) => `/posts?${action}=${postJobId}`}
       busyJobId={null}
+      readOnlyReason={readOnlyReason}
       channelLabels={channelLabelIndex(
         items.map((item) => item.channelId),
         channels,
@@ -66,6 +71,8 @@ function render(items: ScheduledJobEntry[], channels: Channel[] | undefined): st
     />,
   );
 }
+
+const OTHER: Channel = channel({ channelId: "fb-2", name: "Lady Outlet", externalId: "2" });
 
 describe("ScheduledJobTable channel column", () => {
   // --- Edge cases first ------------------------------------------------------
@@ -98,8 +105,6 @@ describe("ScheduledJobTable channel column", () => {
  * a folded row never keeps a per-job action it cannot honour.
  */
 describe("ScheduledJobTable folding", () => {
-  const OTHER: Channel = channel({ channelId: "fb-2", name: "Lady Outlet", externalId: "2" });
-
   function countRows(html: string): number {
     return (html.match(/<tr class="border-t align-top">/g) ?? []).length;
   }
@@ -159,6 +164,68 @@ describe("ScheduledJobTable folding", () => {
     expect(html).toContain("sớm nhất");
   });
 
+  it("does NOT say 'sớm nhất' when the gap is milliseconds — the cell shows 20:00 twice", () => {
+    const html = render(
+      [
+        entry(),
+        entry({
+          postJobId: "job-2",
+          channelId: "fb-2",
+          scheduledAt: new Date(2026, 7, 13, 20, 0, 0, 41).toISOString(),
+        }),
+      ],
+      [channel(), OTHER],
+    );
+    expect(html).not.toContain("sớm nhất");
+  });
+
+  it("does not promise buttons the panel has none of once the whole group is past its hour", () => {
+    const past = { overdue: true, canReschedule: false, canCancel: false } as const;
+    const html = render(
+      [entry(past), entry({ postJobId: "job-2", channelId: "fb-2", ...past })],
+      [channel(), OTHER],
+    );
+    expect(html).not.toContain("Mở danh sách kênh để");
+    expect(html).toContain("Đã tới giờ — không sửa được nữa");
+  });
+
+  it("offers only Huỷ when Facebook is holding every channel of the group", () => {
+    const held = { status: "scheduled_on_facebook", canReschedule: false } as const;
+    const html = render(
+      [entry(held), entry({ postJobId: "job-2", channelId: "fb-2", ...held })],
+      [channel(), OTHER],
+    );
+    expect(html).toContain("Mở danh sách kênh để huỷ từng kênh");
+  });
+});
+
+/**
+ * Support mode (M3.3). The read-only reason replaces the row's OWN reason
+ * slot — it must never be paraphrased as "Đã tới giờ", which blames the clock
+ * for something the session did.
+ */
+describe("ScheduledJobTable in a read-only support session", () => {
+  const READ_ONLY = "Phiên hỗ trợ chỉ đọc";
+
+  it("gives the read-only reason on a row that has NOT passed its hour", () => {
+    const html = render([entry()], [channel()], READ_ONLY);
+    expect(html).not.toContain("Đã tới giờ — không sửa được nữa");
+    expect(html).toContain(READ_ONLY);
+  });
+
+  it("gives the same reason on a FOLDED row, not a list of buttons it disabled", () => {
+    const html = render(
+      [entry(), entry({ postJobId: "job-2", channelId: "fb-2" })],
+      [channel(), OTHER],
+      READ_ONLY,
+    );
+    expect(html).not.toContain("Đã tới giờ — không sửa được nữa");
+    expect(html).not.toContain("Mở danh sách kênh để");
+    expect(html).toContain(READ_ONLY);
+  });
+});
+
+describe("ScheduledJobTable colour column", () => {
   it("shows the colour as a dyed chip, name included", () => {
     const html = render([entry({ color: "Tím" })], [channel()]);
     expect(html).toContain("background:#9B7BC4");

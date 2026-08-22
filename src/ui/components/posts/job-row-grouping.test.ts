@@ -41,13 +41,6 @@ describe("groupJobRows", () => {
     expect(groupJobRows(undefined as unknown as Row[], prefixKey)).toEqual([]);
   });
 
-  it("skips holes instead of folding on a missing row", () => {
-    const items = [null as unknown as Row, ...rows(["a-1", "ch-1"])];
-    const groups = groupJobRows(items, prefixKey);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]!.count).toBe(1);
-  });
-
   it("never folds a row whose key is null — one row in, one row out", () => {
     const groups = groupJobRows(rows(["a-1", "ch-1"], ["a-2", "ch-2"]), () => null);
     expect(groups.map((group) => group.count)).toEqual([1, 1]);
@@ -143,6 +136,7 @@ function logJob(overrides: Partial<Parameters<typeof jobLogFoldKey>[0]> = {}) {
     batchId: "batch-1",
     productCode: "MGKVX6310",
     color: "Tím",
+    format: "image_post",
     status: "failed",
     attemptCount: 2,
     lastErrorCode: "FB_RATE_LIMIT",
@@ -188,6 +182,10 @@ describe("jobLogFoldKey", () => {
 
   it("does NOT fold rows whose action differs", () => {
     expect(jobLogFoldKey(logJob())).not.toBe(jobLogFoldKey(logJob({ canRetry: false })));
+  });
+
+  it("keeps an ảnh and a video of one code on the same channel apart", () => {
+    expect(jobLogFoldKey(logJob())).not.toBe(jobLogFoldKey(logJob({ format: "video_post" })));
   });
 
   it("keeps two colours of one code apart", () => {

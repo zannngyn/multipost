@@ -57,8 +57,12 @@ const UNIT = "\u0000";
  * cannot even be named (no product code), where a fold would produce a summary
  * line nobody could read.
  *
- * Defensive on the way in: a failed query hands `undefined` around often enough
- * that crashing here would blank a table that has a perfectly good error state.
+ * `items` is guarded against a non-array because a failed query hands
+ * `undefined` around often enough that crashing here would blank a table with a
+ * perfectly good error state. The ELEMENTS are NOT guarded: they come through
+ * `PostJobLogEntrySchema` / `ScheduledJobEntrySchema`, so a hole in the list is
+ * a validation bug, and skipping it here would drop a job from the log without a
+ * word (business rule 5 — nothing is silently passed over).
  */
 export function groupJobRows<T extends FoldableJob>(
   items: readonly T[],
@@ -70,8 +74,6 @@ export function groupJobRows<T extends FoldableJob>(
   const byKey = new Map<string, { head: T; members: T[]; channels: Set<string> }>();
 
   for (const [index, item] of items.entries()) {
-    if (!item) continue;
-
     const folded = foldKey(item);
     // `null` = never fold. The index makes the key unique without making it
     // collide with a real fold key (which never contains the "#" prefix).
@@ -137,11 +139,17 @@ export function isFoldUniform<T, V>(group: JobRowGroup<T>, pick: (item: T) => V)
  * `attemptCount` is IN on purpose: a channel that took three tries and one that
  * took one did not have the same day, and the "Lần thử" column would have to
  * lie about one of them.
+ *
+ * `format` is IN even though no column shows it (Phase 2 puts video next to
+ * image): an ảnh and a video of one code are two different publications, and
+ * folding them would put one "Chạy lại" over two jobs whose failure means
+ * different things. Adding a field can only ever make the fold stricter.
  */
 export function jobLogFoldKey(job: {
   batchId: string;
   productCode: string;
   color: string;
+  format: string;
   status: string;
   attemptCount: number;
   lastErrorCode: string | null;
@@ -156,6 +164,7 @@ export function jobLogFoldKey(job: {
     job.batchId,
     code,
     job.color.trim(),
+    job.format,
     job.status,
     String(job.attemptCount),
     job.lastErrorCode ?? "",
