@@ -5,6 +5,7 @@ import Link from "next/link";
 import { resolveGroupChannelLabels } from "@/ui/components/channels/channel-group-labels";
 import { JobStatusBadge } from "@/ui/components/post/PostStatusBadge";
 import { Button } from "@/ui/components/ui/button";
+import { shortenId } from "@/ui/schemas/catalog.schema";
 import type { Channel } from "@/ui/schemas/channel.schema";
 import {
   facebookPostUrl,
@@ -21,6 +22,16 @@ import {
  * client-side guess would offer a button that always 409s.
  *
  * Presentational: the retry call itself is handed up through `onRetry`.
+ *
+ * WRAPPING (wave 1.5): the columns an operator SCANS never break mid-word any
+ * more. `break-all` on a product code turned "MGKVX6310" into two lines at the
+ * width the eight columns actually get, and a broken code is a code that can no
+ * longer be compared down the column. The table now carries a `min-w` and lets
+ * the region scroll instead — the row it protects is the one being read, and
+ * `overflow-x-auto` with `tabIndex={0}` already makes that reachable by
+ * keyboard. Channel ids truncate in the MIDDLE (`shortenId`), because the tail
+ * of a Page id is what distinguishes two ids that share a prefix; the full
+ * value stays in `title` and in the accessible name.
  */
 export function JobLogTable({
   items,
@@ -63,7 +74,12 @@ export function JobLogTable({
       role="region"
       aria-label="Bảng nhật ký đăng bài, cuộn ngang được"
     >
-      <table className="w-full border-collapse text-sm">
+      {/* `min-w-4xl` (56rem), measured rather than guessed: the content column
+          of this screen is ~975px at 1440, so a 64rem floor put the "Thao tác"
+          column past the edge on the everyday desktop — a horizontal scrollbar
+          that never had to exist. 56rem still holds a code, a Page name and a
+          wrapped failure sentence, and below it the region scrolls. */}
+      <table className="w-full min-w-4xl border-collapse text-sm">
         <caption className="sr-only">
           Nhật ký đăng bài: thời gian, mã sản phẩm, màu, kênh, trạng thái, số lần thử và lý do lỗi
         </caption>
@@ -79,28 +95,28 @@ export function JobLogTable({
         </colgroup>
         <thead className="bg-muted/50">
           <tr className="text-left">
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Cập nhật lúc
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Mã SP
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Màu
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Kênh
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Trạng thái
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Lần thử
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Lý do / kết quả
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Thao tác
             </th>
           </tr>
@@ -120,26 +136,30 @@ export function JobLogTable({
             return (
               <tr key={job.postJobId} className="border-t align-top">
                 <td className="px-3 py-2 tabular-nums">{formatDateTime(job.updatedAt)}</td>
-                <th scope="row" className="px-3 py-2 text-left font-medium break-all">
+                {/* The Mono Ledger Rule + no break: a product code is compared
+                    down the column, and a code split over two lines cannot be. */}
+                <th
+                  scope="row"
+                  className="px-3 py-2 text-left font-medium whitespace-nowrap"
+                >
                   {job.productCode}
                 </th>
-                <td className="px-3 py-2 break-all">
+                <td className="px-3 py-2 whitespace-nowrap">
                   {job.color.trim().length > 0 ? job.color : "—"}
                 </td>
                 <td className="px-3 py-2">
                   {/* The Page NAME is what an operator recognises; the id is
                       what they quote to support. Name on top, id underneath in
-                      the ledger mono — never the id alone when a name exists. */}
+                      the ledger mono — never the id alone when a name exists.
+                      The name may wrap (it is prose); the id may not. */}
                   {channel.name !== null ? (
                     <>
                       <span className="block break-words">{channel.name}</span>
-                      <span className="text-muted-foreground mt-0.5 block font-mono text-xs break-all">
-                        {job.channelId}
-                      </span>
+                      <ChannelId id={job.channelId} />
                     </>
                   ) : (
                     <>
-                      <span className="block font-mono text-xs break-all">{job.channelId}</span>
+                      <ChannelId id={job.channelId} />
                       {/* Only when the list IS known and this id is not in it.
                           While it is loading, `note` is "none" and this says
                           nothing — a log that accuses a Page of being removed
@@ -226,5 +246,26 @@ export function JobLogTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * A Page id in a 14%-wide column: middle-truncated, never broken mid-string.
+ *
+ * The MIDDLE, not the end: two Pages of one shop share a long prefix, so a
+ * head-only truncation shows two rows that look identical. `title` carries the
+ * full value for a pointer, and the `sr-only` copy carries it for a screen
+ * reader — the id is what an operator quotes to support, so it must remain
+ * readable in full by someone who cannot hover.
+ */
+function ChannelId({ id }: { id: string }) {
+  const short = shortenId(id);
+  return (
+    <span className="text-muted-foreground mt-0.5 block font-mono text-xs whitespace-nowrap">
+      <span aria-hidden="true" title={id}>
+        {short}
+      </span>
+      <span className="sr-only">{id}</span>
+    </span>
   );
 }

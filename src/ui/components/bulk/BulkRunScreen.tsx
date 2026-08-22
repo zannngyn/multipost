@@ -47,6 +47,11 @@ import {
  * template only knows {code} and {name}; the AI path sends the whitelisted
  * `content` object returned by compose.
  */
+
+/** Why the run trigger is off before a single code has been typed. */
+const EMPTY_CODES_REASON =
+  "Chưa có mã nào để chạy — nhập ít nhất một mã sản phẩm vào ô phía trên.";
+
 export function BulkRunScreen() {
   const codesId = useId();
   const templateId = useId();
@@ -89,6 +94,19 @@ export function BulkRunScreen() {
   // Support mode is read-only (M3.3): a bulk run publishes to the customer's
   // Pages, so the trigger goes off with its reason attached.
   const gate = writeGate(useReadOnlyReason(), isRunning);
+
+  /**
+   * "Chạy 0 mã" was a live button. It could only ever fail — the zod schema
+   * rejects an empty list — and it read as an offer to run something. Off, with
+   * the sentence beside it saying what is missing (The Named Status Rule):
+   * a dimmed control that explains nothing is what core-auth-session forbids,
+   * and the same shape the read-only gate already uses on this screen.
+   *
+   * Read-only wins the sentence: it is the harder stop, and typing codes would
+   * not clear it.
+   */
+  const hasNoCodes = parsed.codes.length === 0;
+  const runBlockedReason = gate.reason ?? (hasNoCodes ? EMPTY_CODES_REASON : null);
 
   // Focus the result summary when the run ends, instead of letting focus sit on
   // a now-disabled button (web-bulk-actions rule 5).
@@ -282,12 +300,18 @@ export function BulkRunScreen() {
           {/* A bulk run creates real posts on the customer's Pages; support
               mode may not (M3.3). The rest of the form stays readable so staff
               can still see what a customer had set up. */}
-          <Button type="submit" disabled={isRunning || gate.isDisabled}>
+          <Button type="submit" disabled={isRunning || gate.isDisabled || hasNoCodes}>
             {isRunning
               ? "Đang chạy…"
-              : schedule.mode === "scheduled"
-                ? `Hẹn giờ ${parsed.codes.length} mã`
-                : `Chạy ${parsed.codes.length} mã`}
+              : hasNoCodes
+                ? // Not "Chạy 0 mã": a button names the action it would take,
+                  // and there is no such action while the box is empty.
+                  schedule.mode === "scheduled"
+                  ? "Hẹn giờ"
+                  : "Chạy"
+                : schedule.mode === "scheduled"
+                  ? `Hẹn giờ ${parsed.codes.length} mã`
+                  : `Chạy ${parsed.codes.length} mã`}
           </Button>
           {isRunning ? (
             <Button type="button" variant="destructive" onClick={run.stop} disabled={phase === "stopping"}>
@@ -299,7 +323,7 @@ export function BulkRunScreen() {
               Xoá kết quả để chạy lượt mới
             </Button>
           ) : null}
-          <ReadOnlyNotice reason={gate.reason} className="basis-full" />
+          <ReadOnlyNotice reason={runBlockedReason} className="basis-full" />
         </div>
       </form>
 
