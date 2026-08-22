@@ -8,13 +8,15 @@ import {
   Heading,
   MetadataList,
   MetadataListItem,
+  Spinner,
   Stack,
   StatusDot,
   Text,
 } from "@astryxdesign/core";
 import { useRouter } from "next/navigation";
 
-import { productStatus } from "@/ui/components/products/ProductTable";
+import type { ProductInspectorState } from "@/ui/components/products/product-inspector-state";
+import { productStatus } from "@/ui/components/products/product-status";
 import {
   INVENTORY_STATUS_LABELS,
   formatCount,
@@ -25,6 +27,10 @@ import {
 /**
  * Detail panel for the selected product. Everything the old table repeated in
  * two prose columns lives here once, plus the single action a row can lead to.
+ *
+ * The same body renders in two frames: the LayoutPanel above 1024px, and the
+ * modal drawer below it (ProductInspectorDrawer) — one component, so "Soạn bài"
+ * cannot exist on one viewport and be missing on the other.
  *
  * Business rule 2: stock and the block reason are INTERNAL — this panel is where
  * an operator reads them, and they never travel into a caption.
@@ -37,20 +43,46 @@ function blockedBannerText(product: CatalogProduct): string {
   );
 }
 
-export function ProductInspector({ product }: { product: CatalogProduct | null }) {
+export function ProductInspector({ state }: { state: ProductInspectorState }) {
   const router = useRouter();
 
-  if (!product) {
+  // --- Nothing asked for ---------------------------------------------------
+  if (state.kind === "none") {
     return (
       <EmptyState
         isCompact
         headingLevel={2}
         title="Chưa chọn sản phẩm nào"
-        description="Bấm vào mã sản phẩm ở bảng bên trái để xem tồn kho, ảnh và lý do bị chặn."
+        description="Bấm vào mã sản phẩm trong bảng để xem tồn kho, ảnh và lý do bị chặn."
       />
     );
   }
 
+  // --- Asked for, answer not back yet --------------------------------------
+  if (state.kind === "loading") {
+    return (
+      <Stack direction="vertical" gap={2} padding={4} align="start" role="status">
+        <Spinner size="sm" label={`Đang mở mã ${state.code}…`} />
+      </Stack>
+    );
+  }
+
+  // --- Asked for, but not on screen ----------------------------------------
+  // A link to `?chon=MGKVX9999` while the filter hides that code used to land on
+  // "Chưa chọn sản phẩm nào", which reads as "you clicked nothing". Naming the
+  // code and both ways back is the honest answer (business rule 5).
+  if (state.kind === "missing") {
+    return (
+      <EmptyState
+        isCompact
+        headingLevel={2}
+        title={`Không thấy mã ${state.code} trong danh sách`}
+        description="Mã này không nằm trong phần danh sách đã tải: có thể bộ lọc đang loại nó ra, hoặc chưa cuộn tới trang chứa nó. Bỏ bộ lọc rồi bấm “Tải thêm” để tìm."
+      />
+    );
+  }
+
+  const { product } = state;
   const status = productStatus(product);
   const { inventory } = product;
 
