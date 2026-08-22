@@ -5,6 +5,7 @@ import Link from "next/link";
 import { JobStatusBadge } from "@/ui/components/post/PostStatusBadge";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
+import { shortenId } from "@/ui/schemas/catalog.schema";
 import {
   formatCountdown,
   formatScheduledTime,
@@ -32,6 +33,13 @@ import {
  *
  * Business rule 2: the caption preview is the only content shown. No stock, no
  * price, no note — those never travel with a post job.
+ *
+ * WRAPPING (wave 1.5): the scanned columns — the hour, the product code, the
+ * channel id — never break mid-word. A code split over two lines cannot be
+ * compared down the column, which is the entire job of that column. The table
+ * carries a `min-w` and the region scrolls instead; it already has
+ * `overflow-x-auto` and `tabIndex={0}`, so that scroll is reachable by keyboard.
+ * The caption preview is prose and still wraps.
  */
 export function ScheduledJobTable({
   items,
@@ -65,7 +73,9 @@ export function ScheduledJobTable({
       role="region"
       aria-labelledby={headingId}
     >
-      <table className="w-full border-collapse text-sm">
+      {/* `min-w-4xl` (56rem): under that the five columns start breaking the
+          product code and the countdown mid-word. */}
+      <table className="w-full min-w-4xl border-collapse text-sm">
         <caption className="sr-only">
           Bài đã hẹn trong ngày: giờ đăng, mã sản phẩm, màu, kênh, caption, số ảnh và thao tác
         </caption>
@@ -78,19 +88,19 @@ export function ScheduledJobTable({
         </colgroup>
         <thead className="bg-muted/50">
           <tr className="text-left">
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Giờ đăng ({zone})
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Mã SP / màu
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Kênh
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Caption · ảnh
             </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
               Thao tác
             </th>
           </tr>
@@ -112,7 +122,10 @@ export function ScheduledJobTable({
 
             return (
               <tr key={job.postJobId} className="border-t align-top">
-                <th scope="row" className="px-3 py-2 text-left font-medium tabular-nums">
+                <th
+                  scope="row"
+                  className="px-3 py-2 text-left font-medium whitespace-nowrap tabular-nums"
+                >
                   {formatScheduledTime(job.scheduledAt)}
                   <span className="text-muted-foreground block text-xs font-normal">
                     {formatCountdown(deltaMs)}
@@ -122,13 +135,23 @@ export function ScheduledJobTable({
                     {job.overdue ? <Badge tone="warning">Quá giờ</Badge> : null}
                   </span>
                 </th>
-                <td className="px-3 py-2 break-all">
+                {/* The Mono Ledger Rule: a code an operator compares down the
+                    column cannot be allowed to break in half. */}
+                <td className="px-3 py-2 whitespace-nowrap">
                   {job.productCode}
                   <span className="text-muted-foreground block text-xs">
                     {job.color.trim().length > 0 ? job.color : "mọi màu"}
                   </span>
                 </td>
-                <td className="px-3 py-2 break-all">{job.channelId}</td>
+                {/* Middle-truncated: two Pages of one shop share a long prefix,
+                    so cutting the tail shows two rows that look the same. The
+                    full id stays for the pointer AND for a screen reader. */}
+                <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                  <span aria-hidden="true" title={job.channelId}>
+                    {shortenId(job.channelId)}
+                  </span>
+                  <span className="sr-only">{job.channelId}</span>
+                </td>
                 <td className="px-3 py-2">
                   <p className="text-muted-foreground line-clamp-3">
                     {job.captionPreview.trim().length > 0

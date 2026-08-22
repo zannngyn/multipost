@@ -19,6 +19,8 @@ export interface FailedJobInput {
   readonly color?: string;
   readonly channelName: string;
   readonly reason: string;
+  /** The lot this job belongs to; lets a folded row link to its own filter. */
+  readonly batchId?: string;
 }
 
 /** One job still waiting for its hour. */
@@ -29,15 +31,41 @@ export interface UpcomingJobInput {
   readonly channelName: string;
   /** ISO instant. Anything unparseable is kept, never guessed at. */
   readonly scheduledAt: string;
+  readonly batchId?: string;
+}
+
+/**
+ * What ONE row of the block stands for once identical jobs have been folded
+ * together (see `pickAttentionItems`).
+ *
+ * A post goes out as one `post_job` PER CHANNEL, so one expired token produces
+ * one row per Page: the block filled all six of its slots with the same code
+ * and the same sentence, and every other broken code fell off the screen. The
+ * row now names the fan-out instead of repeating it.
+ */
+export interface AttentionFold {
+  /** Jobs behind this row. `1` means nothing was folded. */
+  readonly jobCount: number;
+  /** Their channels, source order, de-duplicated. Always ≥ 1 entry. */
+  readonly channelNames: readonly string[];
+  /**
+   * Every folded job says the same thing — the same failure sentence, or the
+   * same hour. False means the row may only show the count, never one member's
+   * sentence as if it spoke for the others.
+   */
+  readonly isUniform: boolean;
+  /** The lot they all belong to, or `null` when they do not agree on one. */
+  readonly batchId: string | null;
 }
 
 export type AttentionItem =
-  | ({ readonly kind: "failed" } & FailedJobInput)
-  | ({ readonly kind: "upcoming" } & UpcomingJobInput);
+  | ({ readonly kind: "failed" } & FailedJobInput & AttentionFold)
+  | ({ readonly kind: "upcoming" } & UpcomingJobInput & AttentionFold);
 
 /**
- * Six rows. The block is a to-do list an operator reads standing up, not a
- * second job log — the log itself is one click away from every row.
+ * Six ROWS — folded rows, since the fold happens before the cut. The block is a
+ * to-do list an operator reads standing up, not a second job log; the log
+ * itself is one click away from every row.
  */
 export const ATTENTION_LIMIT = 6;
 
@@ -57,6 +85,67 @@ function instantOrder(iso: string): number {
 }
 
 /**
+ * The fold key: the same PRODUCT, in the same colour, on the same side of the
+ * block. Deliberately NOT the reason — a code whose channels failed for two
+ * different reasons is still one thing to go and look at, and the row says so
+ * (`isUniform: false`) instead of splitting into two half-truths.
+ */
+function foldKey(kind: "failed" | "upcoming", job: { code: string; color?: string }): string {
+  return `${kind}\u0000${job.code.trim()}\u0000${(job.color ?? "").trim()}`;
+}
+
+/** Accumulator for one folded row: the head job plus what the rest add to it. */
+interface Fold<T> {
+  head: T;
+  jobCount: number;
+  channelNames: string[];
+  isUniform: boolean;
+  /** `undefined` = no member named a lot yet; `null` = they disagree. */
+  batchId: string | null | undefined;
+}
+
+function startFold<T extends { channelName?: string; batchId?: string }>(head: T): Fold<T> {
+  const name = trimmed(head.channelName);
+  const batchId = trimmed(head.batchId);
+  return {
+    head,
+    jobCount: 1,
+    channelNames: name.length > 0 ? [name] : [],
+    isUniform: true,
+    batchId: batchId.length > 0 ? batchId : null,
+  };
+}
+
+/** Adds one more job to a row that already exists. `sameStory` is the caller's. */
+function extendFold<T extends { channelName?: string; batchId?: string }>(
+  fold: Fold<T>,
+  job: T,
+  sameStory: boolean,
+): void {
+  fold.jobCount += 1;
+  if (!sameStory) fold.isUniform = false;
+
+  const name = trimmed(job.channelName);
+  if (name.length > 0 && !fold.channelNames.includes(name)) fold.channelNames.push(name);
+
+  const batchId = trimmed(job.batchId);
+  if (fold.batchId !== null && fold.batchId !== (batchId.length > 0 ? batchId : null)) {
+    fold.batchId = null;
+  }
+}
+
+function sealFold<T>(fold: Fold<T>): AttentionFold {
+  return {
+    jobCount: fold.jobCount,
+    // Never empty: a row that named no channel still has to say something, and
+    // "—" is what `channelLabel` already produces for an unnameable id.
+    channelNames: fold.channelNames.length > 0 ? fold.channelNames : ["—"],
+    isUniform: fold.isUniform,
+    batchId: fold.batchId ?? null,
+  };
+}
+
+/**
  * What the operator has to look at, in the order they have to look at it.
  *
  * Failed first, always: a post that did not go out is a problem that is already
@@ -64,6 +153,12 @@ function instantOrder(iso: string): number {
  * the source order is kept — the job log arrives newest-first, and the schedule
  * is re-sorted here so the soonest hour is on top even if a caller hands the
  * rows over unsorted.
+ *
+ * Jobs of the same code and colour FOLD into one row before the six-row cut is
+ * applied, so one broken token cannot push every other broken code off the
+ * screen (see `AttentionFold`). The head of each row is its first job, which is
+ * also the one whose hour is shown — the upcoming side is sorted first, so that
+ * is the soonest of the group.
  */
 export function pickAttentionItems(input: {
   failedJobs: readonly FailedJobInput[];
@@ -73,13 +168,39 @@ export function pickAttentionItems(input: {
   const upcoming = Array.isArray(input?.upcoming) ? input.upcoming : [];
 
   const seen = new Set<string>();
-  const items: AttentionItem[] = [];
+  const order: string[] = [];
+  const folds = new Map<string, Fold<FailedJobInput | UpcomingJobInput>>();
+  const kinds = new Map<string, "failed" | "upcoming">();
+
+  /**
+   * The row cut counts ROWS, so it is checked only when a NEW row would open.
+   * A job that belongs to a row already on the list keeps being folded into it
+   * even after the sixth row exists — otherwise "× 5 kênh" would quietly become
+   * "× 2 kênh" as soon as the block filled up, which is the same lie the fold
+   * was written to remove.
+   */
+  function take(
+    kind: "failed" | "upcoming",
+    job: FailedJobInput | UpcomingJobInput,
+    sameStory: (head: FailedJobInput | UpcomingJobInput) => boolean,
+  ): void {
+    const key = foldKey(kind, job);
+    const existing = folds.get(key);
+    if (existing) {
+      seen.add(job.id);
+      extendFold(existing, job, sameStory(existing.head));
+      return;
+    }
+    if (order.length >= ATTENTION_LIMIT) return;
+    seen.add(job.id);
+    order.push(key);
+    kinds.set(key, kind);
+    folds.set(key, startFold(job));
+  }
 
   for (const job of failedJobs) {
-    if (items.length >= ATTENTION_LIMIT) return items;
     if (!job || !isUsable(job) || seen.has(job.id)) continue;
-    seen.add(job.id);
-    items.push({ kind: "failed", ...job });
+    take("failed", job, (head) => (head as FailedJobInput).reason === job.reason);
   }
 
   const sorted = [...upcoming]
@@ -87,13 +208,16 @@ export function pickAttentionItems(input: {
     .sort((a, b) => instantOrder(a.scheduledAt) - instantOrder(b.scheduledAt));
 
   for (const job of sorted) {
-    if (items.length >= ATTENTION_LIMIT) break;
     if (seen.has(job.id)) continue;
-    seen.add(job.id);
-    items.push({ kind: "upcoming", ...job });
+    take("upcoming", job, (head) => (head as UpcomingJobInput).scheduledAt === job.scheduledAt);
   }
 
-  return items;
+  return order.map((key) => {
+    const fold = folds.get(key)!;
+    // `...head` before the fold fields, and never a bare `color: undefined`:
+    // an upcoming row without a colour must not grow the key.
+    return { kind: kinds.get(key)!, ...fold.head, ...sealFold(fold) } as AttentionItem;
+  });
 }
 
 // --- "Lô đang chạy" ---------------------------------------------------------
@@ -239,6 +363,31 @@ export function statValue(input: {
     kind: "count",
     text: formatLoadedCount({ loaded: input.loaded, hasNextPage: input.hasNextPage === true }),
   };
+}
+
+/**
+ * The number on a stat tile that has a REAL total behind it.
+ *
+ * The catalog endpoint aggregates its totals in SQL over the whole tenant
+ * (`aggregateCatalog`), not over the page it happens to return, so the blocked
+ * count is exact and printing "12+" would understate a number we actually know.
+ * The loading/unavailable arms are the same as `statValue` for the same reason:
+ * an absent page must never be read as a confident zero.
+ */
+export function statTotal(input: {
+  /** At least one page of the query has arrived. */
+  hasData: boolean;
+  isError: boolean;
+  /** `undefined` = the page arrived without the field (never, if zod held). */
+  total: number | undefined;
+}): StatValue {
+  if (input?.hasData !== true) {
+    return input?.isError === true ? { kind: "unavailable" } : { kind: "loading" };
+  }
+  if (typeof input.total !== "number" || !Number.isFinite(input.total) || input.total < 0) {
+    return { kind: "unavailable" };
+  }
+  return { kind: "count", text: formatLoadedCount({ loaded: input.total, hasNextPage: false }) };
 }
 
 /** Why a job failed, in one line, without ever printing an empty cell. */

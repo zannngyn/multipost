@@ -192,7 +192,7 @@ function ChannelListBody({
         <EmptyState
           headingLevel={3}
           title="Chưa kết nối Fanpage nào"
-          description="Chưa có Page nào để đăng bài, nên màn soạn bài sẽ không có kênh để chọn. Sang tab “Kết nối thêm”, dán User Access Token rồi bấm “Lấy danh sách Page” — hệ thống sẽ tự lấy về mọi Page bạn quản lý."
+          description="Chưa có Page nào để đăng bài, nên màn soạn bài sẽ không có kênh để chọn. Sang tab “Kết nối thêm” rồi bấm “Đăng nhập bằng Facebook” — hệ thống sẽ tự lấy về mọi Page bạn quản lý. Nếu công ty chưa cấu hình App Secret thì mở mục “Cách nâng cao” để dán User Access Token."
           actions={<Button variant="primary" label="Kết nối Fanpage" onClick={onGoToConnect} />}
         />
       </Stack>

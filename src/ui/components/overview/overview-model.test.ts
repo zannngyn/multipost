@@ -7,6 +7,7 @@ import {
   formatLoadedCount,
   pickAttentionItems,
   pickRunningBatches,
+  statTotal,
   statValue,
   type FailedJobInput,
   type RunningJobInput,
@@ -114,6 +115,131 @@ describe("pickAttentionItems", () => {
     });
     expect(items.map((item) => item.id)).toEqual(["a", "b", "c", "d", "e", "f"]);
     expect(items.every((item) => item.kind === "failed")).toBe(true);
+  });
+
+  // --- The fan-out fold ------------------------------------------------------
+  it("counts a single job as a row of one", () => {
+    const [item] = pickAttentionItems({ failedJobs: [failed("f1")], upcoming: [] });
+    expect(item).toMatchObject({
+      jobCount: 1,
+      channelNames: ["Page A"],
+      isUniform: true,
+    });
+  });
+
+  it("folds one code's per-channel jobs into a single row", () => {
+    // The regression: one expired token fans out to five `post_job` rows, and
+    // the block used to spend all six of its slots on the same sentence.
+    const items = pickAttentionItems({
+      failedJobs: ["c1", "c2", "c3", "c4", "c5"].map((id, index) =>
+        failed(id, { code: "MGKVX6310", channelName: `Page ${index}`, batchId: "lot-1" }),
+      ),
+      upcoming: [],
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: "c1",
+      code: "MGKVX6310",
+      jobCount: 5,
+      isUniform: true,
+      batchId: "lot-1",
+      channelNames: ["Page 0", "Page 1", "Page 2", "Page 3", "Page 4"],
+    });
+  });
+
+  it("keeps two colours of one code apart", () => {
+    const items = pickAttentionItems({
+      failedJobs: [
+        failed("w1", { code: "MGKVX6310", color: "Trắng" }),
+        failed("d1", { code: "MGKVX6310", color: "Đen" }),
+        failed("w2", { code: "MGKVX6310", color: "Trắng" }),
+      ],
+      upcoming: [],
+    });
+    expect(items.map((item) => [item.color, item.jobCount])).toEqual([
+      ["Trắng", 2],
+      ["Đen", 1],
+    ]);
+  });
+
+  it("marks a row NOT uniform when its channels failed differently", () => {
+    const items = pickAttentionItems({
+      failedJobs: [
+        failed("a", { code: "MGKVX6310", reason: "Token hết hạn" }),
+        failed("b", { code: "MGKVX6310", reason: "Ảnh quá lớn" }),
+      ],
+      upcoming: [],
+    });
+    expect(items[0]).toMatchObject({ jobCount: 2, isUniform: false });
+  });
+
+  it("drops the lot link when the folded jobs sit in different lots", () => {
+    const items = pickAttentionItems({
+      failedJobs: [
+        failed("a", { code: "MGKVX6310", batchId: "lot-1" }),
+        failed("b", { code: "MGKVX6310", batchId: "lot-2" }),
+      ],
+      upcoming: [],
+    });
+    expect(items[0]?.batchId).toBeNull();
+  });
+
+  it("has no lot link when no job named one", () => {
+    const items = pickAttentionItems({ failedJobs: [failed("a")], upcoming: [] });
+    expect(items[0]?.batchId).toBeNull();
+  });
+
+  it("de-duplicates the channel list", () => {
+    // Two formats of the same post on the same Page are two jobs, one channel.
+    const items = pickAttentionItems({
+      failedJobs: [
+        failed("a", { code: "MGKVX6310", channelName: "Page A" }),
+        failed("b", { code: "MGKVX6310", channelName: "Page A" }),
+      ],
+      upcoming: [],
+    });
+    expect(items[0]).toMatchObject({ jobCount: 2, channelNames: ["Page A"] });
+  });
+
+  it("folds the upcoming side too, and flags a group whose hours differ", () => {
+    const items = pickAttentionItems({
+      failedJobs: [],
+      upcoming: [
+        upcoming("u1", { code: "MGKVX6310", scheduledAt: "2026-08-21T10:00:00.000Z" }),
+        upcoming("u2", { code: "MGKVX6310", scheduledAt: "2026-08-21T11:00:00.000Z" }),
+      ],
+    });
+    // The head is the SOONEST hour — the upcoming side is sorted before folding.
+    expect(items[0]).toMatchObject({
+      jobCount: 2,
+      isUniform: false,
+      scheduledAt: "2026-08-21T10:00:00.000Z",
+    });
+  });
+
+  it("still folds after the sixth row exists, so the count stays true", () => {
+    const items = pickAttentionItems({
+      failedJobs: [
+        ...["a", "b", "c", "d", "e", "f"].map((id) => failed(id)),
+        // Seventh code: no room, so it opens no row at all…
+        failed("g"),
+        // …but this one belongs to a row that IS on the list.
+        failed("a2", { code: "MGKa", channelName: "Page B" }),
+      ],
+      upcoming: [],
+    });
+    expect(items).toHaveLength(ATTENTION_LIMIT);
+    expect(items[0]).toMatchObject({ id: "a", jobCount: 2, channelNames: ["Page A", "Page B"] });
+    expect(items.map((item) => item.code)).not.toContain("MGKg");
+  });
+
+  it("names a row that could not name a single channel", () => {
+    const items = pickAttentionItems({
+      failedJobs: [failed("a", { channelName: "   " })],
+      upcoming: [],
+    });
+    expect(items[0]?.channelNames).toEqual(["—"]);
   });
 });
 
@@ -313,6 +439,48 @@ describe("statValue", () => {
     expect(statValue({ hasData: true, isError: true, loaded: 7, hasNextPage: false })).toEqual({
       kind: "count",
       text: "7",
+    });
+  });
+});
+
+describe("statTotal", () => {
+  // --- Edge cases first ------------------------------------------------------
+  it("is loading — NOT zero — before the first page arrives", () => {
+    expect(statTotal({ hasData: false, isError: false, total: undefined })).toEqual({
+      kind: "loading",
+    });
+  });
+
+  it("is unavailable — NOT zero — when the query failed with no page", () => {
+    expect(statTotal({ hasData: false, isError: true, total: undefined })).toEqual({
+      kind: "unavailable",
+    });
+  });
+
+  it("refuses a total that is missing or nonsense on a page that did arrive", () => {
+    for (const total of [undefined, Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      expect(statTotal({ hasData: true, isError: false, total })).toEqual({
+        kind: "unavailable",
+      });
+    }
+  });
+
+  // --- Happy path ------------------------------------------------------------
+  it("prints the exact total with NO plus — the server counted all of it", () => {
+    expect(statTotal({ hasData: true, isError: false, total: 12 })).toEqual({
+      kind: "count",
+      text: "12",
+    });
+    expect(statTotal({ hasData: true, isError: false, total: 0 })).toEqual({
+      kind: "count",
+      text: "0",
+    });
+  });
+
+  it("keeps the last real number when a REFRESH fails", () => {
+    expect(statTotal({ hasData: true, isError: true, total: 4 })).toEqual({
+      kind: "count",
+      text: "4",
     });
   });
 });

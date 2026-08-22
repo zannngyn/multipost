@@ -54,5 +54,45 @@ export const myspTheme = defineTheme({
      * from body copy. This is what gives a link its colour back.
      */
     "--color-text-accent": "var(--primary)",
+
+    /**
+     * THE ACTION COLOUR — The One Indigo Rule (DESIGN.md §Colors).
+     *
+     * The neutral theme's `--color-accent` is `light-dark(#262626, #ebebeb)`,
+     * so every Astryx `variant="primary"` button painted itself near-BLACK
+     * while every button built on the local `ui/button` primitive painted
+     * itself indigo. Two "most important action" colours on one screen
+     * ("Lấy danh sách Page" black next to "Tạo nhóm" indigo, /channels), a
+     * difference nobody can name and everybody sees.
+     *
+     * Knock-on effects, all of them wanted and all of them checked:
+     *  - the caret in every Astryx TextInput becomes indigo, matching the
+     *    `caret-color: var(--primary)` globals.css already sets on the
+     *    Tailwind side (craft floor — browser surfaces belong to the design);
+     *  - focus outlines/rings on Astryx controls become indigo, matching the
+     *    `--ring` used by the local primitives;
+     *  - contrast on the primary button is 7.19:1 light (primary-foreground on
+     *    indigo dye) and 5.99:1 dark — both past 4.5:1.
+     *
+     * NOT affected, verified in the built CSS: `StatusDot`/`ProgressBar` with
+     * `accent`, and `Banner` with `info`, each re-declare `--color-accent`
+     * on their own element, so they keep the values the neutral theme gave
+     * them and no status colour turns into an action colour.
+     */
+    "--color-accent": "var(--primary)",
+    /** The ink that stands on that indigo — one source, class-switched. */
+    "--color-on-accent": "var(--primary-foreground)",
+    /**
+     * The icon half of the same decision. Left at the neutral near-black it
+     * would draw an indigo label with a black glyph beside it.
+     */
+    "--color-icon-accent": "var(--primary)",
+    /**
+     * The "đang chọn" surface (selected nav row, checked control): Indigo
+     * Wash, the same tint `bg-accent` paints on the Tailwind side. The neutral
+     * value is a cold `#f1f1f1`, which is the grey The Ink Hairline Rule
+     * exists to keep off this cloth.
+     */
+    "--color-accent-muted": "var(--accent)",
   },
 });
