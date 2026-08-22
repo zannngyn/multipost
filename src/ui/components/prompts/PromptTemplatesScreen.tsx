@@ -1,14 +1,26 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Skeleton,
+  Stack,
+  Text,
+} from "@astryxdesign/core";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { PromptVersionForm } from "@/ui/components/prompts/PromptVersionForm";
 import { PromptVersionTable } from "@/ui/components/prompts/PromptVersionTable";
-import { Badge } from "@/ui/components/ui/badge";
-import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
-import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
@@ -32,16 +44,26 @@ import {
  * older one. Prompt rows are immutable, so there is no edit button anywhere —
  * "sửa" means "dùng làm bản nháp" then save a new version.
  *
+ * WAVE 2 — where the form lives: "Tạo phiên bản mới" now opens as an inline
+ * panel DIRECTLY under the button that asked for it, with focus in the first
+ * field. It used to render at the very bottom of the page, so clicking a button
+ * in the middle of the screen appeared to do nothing at all.
+ *
  * The four mandatory states:
- *   loading — skeleton with the real columns, delayed 300ms
+ *   loading — skeleton with the real blocks, delayed 300ms
  *   data    — active banner + version table + create form
  *   empty   — cannot happen for the table (the built-in row is always there),
  *             so the empty state belongs to the tenant's OWN versions: it says
  *             "đang chạy mẫu mặc định", which is a different fact from "trống"
  *   error   — 4xx vs 5xx via <ApiErrorNotice>
  */
-export function PromptTemplatesScreen() {
+/** Result of the last write, plus the non-blocking remarks the API sent with it. */
+interface ScreenNotice {
+  message: string;
+  warnings: readonly string[];
+}
 
+export function PromptTemplatesScreen() {
   const versions = usePromptVersions(PROMPT_TASK, PROMPT_PLATFORM);
   const create = useCreatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
   const activate = useActivatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
@@ -50,16 +72,23 @@ export function PromptTemplatesScreen() {
   // something MYSP staff do from inside a support session.
   const gate = writeGate(useReadOnlyReason(), create.isPending);
 
+  const formPanelId = useId();
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState<Partial<PromptVersionFormValues> | undefined>(undefined);
   /** Remount key: a new prefill must reset the uncontrolled RHF fields. */
   const [draftKey, setDraftKey] = useState(0);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ScreenNotice | null>(null);
+  /**
+   * Every write unmounts the control that was clicked — the form panel closes,
+   * and an activated row loses its "Kích hoạt" button. So the result banner is
+   * the landing spot: focus goes to the answer instead of falling to <body>.
+   */
   const noticeRef = useRef<HTMLDivElement>(null);
+  /** Cancelling produces no banner, so focus goes back to what opened the panel. */
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const showSkeleton = useDelayedFlag(versions.isPending && versions.fetchStatus === "fetching");
 
-  // Focus the result so a keyboard user lands on it instead of the old form.
   useEffect(() => {
     if (notice) noticeRef.current?.focus();
   }, [notice]);
@@ -69,6 +98,12 @@ export function PromptTemplatesScreen() {
     setDraft(undefined);
     setDraftKey((key) => key + 1);
     setFormOpen(true);
+  }
+
+  function closeForm() {
+    create.reset();
+    setFormOpen(false);
+    triggerRef.current?.focus();
   }
 
   function reuse(version: PromptVersion) {
@@ -97,11 +132,13 @@ export function PromptTemplatesScreen() {
       {
         onSuccess: (result) => {
           setFormOpen(false);
-          setNotice(
-            result.template.status === "active"
-              ? `Đã lưu và kích hoạt phiên bản v${result.template.version}. Caption sinh từ giờ dùng bản này.`
-              : `Đã lưu phiên bản v${result.template.version} ở dạng nháp. Bấm “Kích hoạt” khi muốn dùng.`,
-          );
+          setNotice({
+            message:
+              result.template.status === "active"
+                ? `Đã lưu và kích hoạt phiên bản v${result.template.version}. Caption sinh từ giờ dùng bản này.`
+                : `Đã lưu phiên bản v${result.template.version} ở dạng nháp. Bấm “Kích hoạt” khi muốn dùng.`,
+            warnings: result.warnings,
+          });
         },
         // The refusal is rendered inside the form, next to the body field.
         onError: () => setNotice(null),
@@ -115,7 +152,10 @@ export function PromptTemplatesScreen() {
       { version },
       {
         onSuccess: (template) =>
-          setNotice(`Đã chuyển sang phiên bản v${template.version} (${template.name}).`),
+          setNotice({
+            message: `Đã chuyển sang phiên bản v${template.version} (${template.name}).`,
+            warnings: [],
+          }),
         onError: () => setNotice(null),
       },
     );
@@ -125,142 +165,191 @@ export function PromptTemplatesScreen() {
   const tenantVersions = data?.versions.filter((item) => item.source === "tenant") ?? [];
 
   return (
-    <section className="space-y-6" aria-labelledby="prompts-heading">
-      <header className="space-y-1">
-        <h1 id="prompts-heading" className="text-2xl font-semibold tracking-tight">
-          Mẫu prompt AI
-        </h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Prompt dùng để AI viết caption Facebook. Mỗi lần sửa là một phiên bản mới — bản cũ giữ
-          nguyên để truy lại caption đã sinh. Chỉ một phiên bản được dùng tại một thời điểm.
-        </p>
-      </header>
+    <Layout
+      height="auto"
+      header={
+        <LayoutHeader hasDivider>
+          {/* Inline padding comes from the page column; only the block axis is
+              ours, so the divider spans the full width of that column. */}
+          <Stack direction="vertical" gap={1} paddingBlock={3} paddingInline={0}>
+            <HStack gap={3} justify="between" align="start" wrap="wrap">
+              <Heading level={1}>Mẫu prompt AI</Heading>
+              <Button
+                size="sm"
+                variant="secondary"
+                label="Tải lại danh sách phiên bản"
+                isLoading={versions.isFetching}
+                isDisabled={versions.isFetching}
+                onClick={() => void versions.refetch()}
+              >
+                Tải lại
+              </Button>
+            </HStack>
+            <Text type="supporting">
+              Prompt để AI viết caption Facebook. Mỗi lần sửa là một phiên bản mới — bản cũ giữ
+              nguyên, và chỉ một bản được dùng tại một thời điểm.
+            </Text>
+          </Stack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={0}>
+          <Stack direction="vertical" gap={4} paddingBlock={4} paddingInline={0}>
+            {notice ? (
+              // Warnings ride along with the result instead of living inside the
+              // form: the form is closed by the time the server answers, so a
+              // banner in there would never be read.
+              <Banner
+                ref={noticeRef}
+                tabIndex={-1}
+                status={notice.warnings.length > 0 ? "warning" : "success"}
+                role="status"
+                title={notice.message}
+                description={
+                  notice.warnings.length > 0 ? "Có lưu ý cần đọc trước khi dùng:" : undefined
+                }
+                isDismissable
+                onDismiss={() => setNotice(null)}
+                defaultIsExpanded={notice.warnings.length > 0}
+              >
+                {notice.warnings.length > 0 ? (
+                  <Stack direction="vertical" gap={1}>
+                    {notice.warnings.map((warning) => (
+                      <Text key={warning} type="supporting">
+                        {warning}
+                      </Text>
+                    ))}
+                  </Stack>
+                ) : null}
+              </Banner>
+            ) : null}
 
-      {notice ? (
-        <div
-          ref={noticeRef}
-          tabIndex={-1}
-          role="alert"
-          className="border-success/30 bg-success/10 text-success-foreground rounded-lg border px-3 py-2 text-sm outline-none"
-        >
-          {notice}
-        </div>
-      ) : null}
+            {/*
+              No retry button: the list was already re-read (onSettled), so the
+              truth on screen is fresh and the operator decides what to do next.
+              A "Thử lại" that only hides the message would be a lie
+              (core-feedback-states).
+            */}
+            {activate.isError ? <ApiErrorNotice error={activate.error} /> : null}
 
-      {/*
-        No retry button: the list was already re-read (onSettled), so the truth
-        on screen is fresh and the operator decides what to do next. A "Thử lại"
-        that only hides the message would be a lie (core-feedback-states).
-      */}
-      {activate.isError ? <ApiErrorNotice error={activate.error} /> : null}
+            {showSkeleton ? <PromptVersionsSkeleton /> : null}
 
-      {showSkeleton ? <PromptVersionsSkeleton /> : null}
+            {!showSkeleton && versions.isError ? (
+              <ApiErrorNotice error={versions.error} onRetry={() => void versions.refetch()} />
+            ) : null}
 
-      {!showSkeleton && versions.isError ? (
-        <ApiErrorNotice error={versions.error} onRetry={() => void versions.refetch()} />
-      ) : null}
+            {!versions.isError && data ? (
+              <>
+                <Card padding={4} aria-labelledby="prompt-active-heading">
+                  <Stack direction="vertical" gap={3}>
+                    <HStack gap={2} justify="between" align="center" wrap="wrap">
+                      <Heading level={2} id="prompt-active-heading">
+                        Đang dùng
+                      </Heading>
+                      <Badge
+                        variant={data.effective.source === "built_in" ? "neutral" : "success"}
+                        label={
+                          data.effective.source === "built_in"
+                            ? "Mẫu mặc định của hệ thống"
+                            : `Phiên bản v${data.effective.version}`
+                        }
+                      />
+                    </HStack>
+                    <HStack gap={2} align="center" wrap="wrap">
+                      <Text type="supporting" color="secondary">
+                        Tên
+                      </Text>
+                      <Text weight="medium">{data.effective.name}</Text>
+                    </HStack>
+                    <pre className="bg-muted/40 max-h-64 overflow-auto rounded-md border p-3 font-mono text-xs break-words whitespace-pre-wrap">
+                      {data.effective.body}
+                    </pre>
+                  </Stack>
+                </Card>
 
-      {!versions.isError && data ? (
-        <>
-          <section
-            aria-labelledby="prompt-active-heading"
-            className="bg-card space-y-3 rounded-xl border p-5"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 id="prompt-active-heading" className="text-base font-semibold">
-                Đang dùng
-              </h2>
-              <Badge tone={data.effective.source === "built_in" ? "neutral" : "success"}>
-                {data.effective.source === "built_in"
-                  ? "Mẫu mặc định của hệ thống"
-                  : `Phiên bản v${data.effective.version}`}
-              </Badge>
-            </div>
-            <p className="text-sm">
-              <span className="text-muted-foreground">Tên:</span>{" "}
-              <span className="font-medium break-words">{data.effective.name}</span>
-            </p>
-            <pre className="bg-muted/40 max-h-64 overflow-auto rounded-lg border p-3 text-xs break-words whitespace-pre-wrap">
-              {data.effective.body}
-            </pre>
-          </section>
+                {tenantVersions.length === 0 ? (
+                  <EmptyState
+                    headingLevel={2}
+                    title="Đơn vị này chưa có phiên bản riêng"
+                    description="Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Muốn đổi giọng văn, độ dài hay cách gắn hashtag thì bấm “Tạo phiên bản mới” ngay bên dưới."
+                  />
+                ) : null}
 
-          {tenantVersions.length === 0 ? (
-            <EmptyState
-              kind="first-run"
-              title="Đơn vị này chưa có phiên bản riêng"
-              description="Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Tạo phiên bản riêng khi muốn đổi giọng văn, độ dài hay cách gắn hashtag."
-              action={
-                gate.isDisabled ? (
-                  <ReadOnlyNotice reason={gate.reason} />
-                ) : !formOpen ? (
-                  <Button type="button" onClick={openBlankForm}>
-                    Tạo phiên bản đầu tiên
-                  </Button>
-                ) : null
-              }
-            />
-          ) : null}
+                <Stack direction="vertical" gap={3}>
+                  <HStack gap={3} justify="between" align="center" wrap="wrap">
+                    <Heading level={2} id="prompt-versions-heading">
+                      Các phiên bản ({data.versions.length})
+                    </Heading>
+                    {gate.isDisabled ? (
+                      <ReadOnlyNotice reason={gate.reason} />
+                    ) : (
+                      <Button
+                        ref={triggerRef}
+                        variant="primary"
+                        size="sm"
+                        label="Tạo phiên bản mới"
+                        aria-expanded={formOpen}
+                        aria-controls={formPanelId}
+                        isDisabled={formOpen}
+                        // Only while the panel is open — and `tooltip` is what
+                        // keeps the button aria-disabled rather than natively
+                        // disabled, so it can take focus back when it closes.
+                        tooltip={formOpen ? "Biểu mẫu đang mở ngay bên dưới." : undefined}
+                        onClick={openBlankForm}
+                      />
+                    )}
+                  </HStack>
 
-          <section aria-labelledby="prompt-versions-heading" className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 id="prompt-versions-heading" className="text-lg font-semibold">
-                Các phiên bản ({data.versions.length})
-              </h2>
-              {gate.isDisabled ? (
-                <ReadOnlyNotice reason={gate.reason} />
-              ) : !formOpen ? (
-                <Button type="button" variant="outline" onClick={openBlankForm}>
-                  Tạo phiên bản mới
-                </Button>
-              ) : null}
-            </div>
+                  {/*
+                    Directly under the trigger, not at the bottom of the page:
+                    the button and its consequence have to be one glance apart.
+                  */}
+                  {formOpen ? (
+                    <Card padding={4} id={formPanelId}>
+                      <PromptVersionForm
+                        key={draftKey}
+                        nextVersion={data.nextVersion}
+                        defaultValues={draft}
+                        pending={create.isPending}
+                        error={create.isError ? create.error : undefined}
+                        onSubmit={submit}
+                        onCancel={closeForm}
+                      />
+                    </Card>
+                  ) : null}
 
-            <PromptVersionTable
-              versions={data.versions}
-              activatingVersion={activate.isPending ? (activate.variables?.version ?? null) : null}
-              disabled={gate.isDisabled}
-              onActivate={handleActivate}
-              onReuse={reuse}
-            />
-          </section>
-
-          {formOpen ? (
-            <section className="bg-card rounded-xl border p-5">
-              <PromptVersionForm
-                key={draftKey}
-                nextVersion={data.nextVersion}
-                defaultValues={draft}
-                pending={create.isPending}
-                error={create.isError ? create.error : undefined}
-                warnings={create.data?.warnings}
-                onSubmit={submit}
-                onCancel={() => {
-                  create.reset();
-                  setFormOpen(false);
-                }}
-              />
-            </section>
-          ) : null}
-        </>
-      ) : null}
-    </section>
+                  <PromptVersionTable
+                    versions={data.versions}
+                    activatingVersion={
+                      activate.isPending ? (activate.variables?.version ?? null) : null
+                    }
+                    disabled={gate.isDisabled}
+                    onActivate={handleActivate}
+                    onReuse={reuse}
+                  />
+                </Stack>
+              </>
+            ) : null}
+          </Stack>
+        </LayoutContent>
+      }
+    />
   );
 }
 
 /** Same shape as the loaded screen so nothing jumps when data arrives. */
 function PromptVersionsSkeleton() {
   return (
-    <div aria-hidden="true" className="space-y-4 motion-safe:animate-pulse">
-      <div className="space-y-2 rounded-xl border p-5">
-        <div className="bg-muted h-5 w-32 rounded" />
-        <div className="bg-muted h-24 w-full rounded" />
-      </div>
-      <div className="space-y-2 rounded-xl border p-3">
+    <Stack direction="vertical" gap={4} aria-hidden="true">
+      <Stack direction="vertical" gap={2}>
+        <Skeleton width={160} height={20} />
+        <Skeleton width="100%" height={96} />
+      </Stack>
+      <Stack direction="vertical" gap={2}>
         {[0, 1, 2].map((row) => (
-          <div key={row} className="bg-muted h-8 w-full rounded" />
+          <Skeleton key={row} width="100%" height={32} index={row} />
         ))}
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }
