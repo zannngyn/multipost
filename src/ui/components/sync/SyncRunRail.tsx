@@ -6,6 +6,7 @@ import { cn } from "@/shared/utils";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import { formatCount, formatDateTime, formatDuration } from "@/ui/components/sync/sync-format";
+import { NO_TALLY, runTally } from "@/ui/components/sync/sync-run-tally";
 import { shortenId } from "@/ui/schemas/catalog.schema";
 import {
   SYNC_STATUS_HINTS,
@@ -147,7 +148,9 @@ function RecentRunsList({
           Chưa có lần chạy nào khác để so sánh — đây là lần đồng bộ đầu tiên của đơn vị này.
         </p>
       ) : (
-        <ul className="space-y-1.5">
+        // Rows in one bordered surface, not five bordered boxes: scanned data is
+        // a list, and five identical cards read as five separate alerts.
+        <ul className="border-border divide-border divide-y rounded-md border">
           {previous.map((item) => (
             <RecentRunRow key={item.syncRunId} run={item} />
           ))}
@@ -158,46 +161,60 @@ function RecentRunsList({
 }
 
 function RecentRunRow({ run }: { run: RecentSyncRun }) {
-  // `running` and "no finishedAt" are the same fact seen from two columns; a
-  // crashed run can carry either, and both mean "there is no result here".
-  const isUnfinished = run.status === "running" || run.finishedAt === null;
+  const tally = runTally(run);
   const duration = formatDuration(run.startedAt, run.finishedAt);
 
   return (
-    <li className="border-border flex flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded-lg border px-2.5 py-2 text-xs">
-      <span className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span
-          aria-hidden="true"
-          className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOT[run.status])}
-        />
-        {/* Colour is never the only carrier — the status is written out too. */}
-        <span className="truncate font-medium">{SYNC_STATUS_LABELS[run.status]}</span>
-      </span>
+    <li className="flex items-start gap-3 px-3 py-2.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <p className="flex items-center gap-2 text-xs">
+          <span
+            aria-hidden="true"
+            className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOT[run.status])}
+          />
+          {/* Colour is never the only carrier — the status is written out too. */}
+          <span className="truncate font-medium">{SYNC_STATUS_LABELS[run.status]}</span>
+        </p>
 
-      <span className="text-muted-foreground shrink-0 font-mono tabular-nums">
-        {formatDateTime(run.startedAt)}
-      </span>
+        {/* When it ran, and for how long. Demoted on purpose: five dates in a
+            column are five near-identical strings and tell nobody anything. */}
+        <p className="text-muted-foreground font-mono text-[11px] tabular-nums">
+          {formatDateTime(run.startedAt)}
+          {duration ? ` · ${duration}` : ""}
+        </p>
 
-      <span className="text-muted-foreground basis-full">
-        {isUnfinished ? (
-          "Chưa kết thúc — chưa có số liệu."
-        ) : (
-          <>
-            <span className="font-mono tabular-nums">{duration ?? "—"}</span>
-            {run.issuesTotal === null
-              ? " · không ghi được số vấn đề"
-              : ` · ${formatCount(run.issuesTotal)} vấn đề`}
-          </>
-        )}
-        {/* Outside the branch above: a run that died mid-way is BOTH unfinished
-            and failed, and the reason is the only useful thing left on it. */}
+        {/* Why there is no number. "Chưa kết thúc" and "không ghi được số vấn
+            đề" are two different facts — one is a run still going, the other is
+            the system failing to record — and a 10px unit label cannot carry
+            that difference on its own. */}
+        {tally.note ? <p className="text-muted-foreground text-[11px]">{tally.note}</p> : null}
+
+        {/* A run that died mid-way is BOTH unfinished and failed, and the reason
+            is the only useful thing left on it — so it is never folded into the
+            tally branch above. */}
         {run.errorCode ? (
-          <>
-            {" · dừng vì "}
-            <span className="font-mono">{run.errorCode}</span>
-          </>
+          <p className="text-muted-foreground text-[11px]">
+            Dừng vì <span className="font-mono">{run.errorCode}</span>
+          </p>
         ) : null}
-      </span>
+      </div>
+
+      <p className="w-18 shrink-0 text-right">
+        <span
+          // The placeholder has no number behind it; the label below says what
+          // is missing, so the dash is decoration for a screen reader.
+          aria-hidden={tally.value === NO_TALLY}
+          className={cn(
+            "block font-mono text-base leading-5 font-semibold tabular-nums",
+            tally.isQuiet && "text-muted-foreground",
+          )}
+        >
+          {tally.value}
+        </span>
+        <span className="text-foreground-subtle block font-mono text-[10px] tracking-widest uppercase">
+          {tally.label}
+        </span>
+      </p>
     </li>
   );
 }
