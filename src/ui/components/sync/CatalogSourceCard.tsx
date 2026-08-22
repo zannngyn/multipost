@@ -433,7 +433,7 @@ function SourceRegion({
         </p>
         {/* In read-only mode the "làm gì tiếp theo" belongs to whoever owns the
             company, not to the person reading over their shoulder. */}
-        <ReadOnlyNotice reason={readOnlyReason} />
+        <ReadOnlyNotice reason={readOnlyReason} className="max-w-prose" />
         {canPick ? (
           <Button type="button" onClick={onPick}>
             Chọn thư mục và bảng

@@ -107,7 +107,7 @@ export function ChannelGroupsScreen() {
         {gate.isDisabled ? (
           // The whole form goes, not just its button: a form nobody can submit
           // invites typing that gets thrown away.
-          <ReadOnlyNotice reason={gate.reason} />
+          <ReadOnlyNotice reason={gate.reason} className="max-w-prose" />
         ) : (
           <ChannelGroupForm
             mode="create"

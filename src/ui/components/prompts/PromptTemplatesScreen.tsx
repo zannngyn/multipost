@@ -381,7 +381,7 @@ export function PromptTemplatesScreen() {
                         Các phiên bản ({data.versions.length})
                       </Heading>
                       {access.isReadOnly ? (
-                        <ReadOnlyNotice reason={access.reason} />
+                        <ReadOnlyNotice reason={access.reason} className="max-w-prose" />
                       ) : (
                         <Button
                           ref={triggerRef}
