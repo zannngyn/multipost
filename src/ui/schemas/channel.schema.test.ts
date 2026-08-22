@@ -370,7 +370,11 @@ describe("connectSuccessView", () => {
     expect(result.description).toContain("tài khoản Facebook");
     // No invented number, in either half of the banner.
     expect(result.description).not.toContain("0 Page bị bỏ qua");
-    expect(result.title).toBe("Đã nhập 2 Page (1 mới)");
+    // Same M-4 principle as a readable skipped count: the heading is the part
+    // read first and sometimes the only part read, so it carries the doubt too
+    // — without inventing a number it does not have.
+    expect(result.title).toBe("Đã nhập 2 Page (1 mới) · không đọc được số Page bị bỏ qua");
+    expect(result.title).not.toMatch(/\d+ Page bị bỏ qua/);
   });
 
   it("warns in words, not only in colour", () => {

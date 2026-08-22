@@ -123,6 +123,15 @@ export const REQUIRED_TOKEN_SCOPES = [
 ] as const;
 
 /**
+ * A counter that WAS sent but is not a count. Distinct from `null` ("không ai
+ * gửi con số đó") — see `ConnectOutcome` below for why only `skipped` needs it.
+ */
+export const UNREADABLE_COUNT = "unreadable";
+
+/** Y from the callback: a real number, "không gửi" (null), or "không đọc được". */
+export type SkippedCount = number | typeof UNREADABLE_COUNT | null;
+
+/**
  * What Facebook sent us back to `/channels`. Three outcomes, three different
  * sentences — "người dùng bấm Huỷ" is NOT an error (web-auth-methods §4).
  *
@@ -140,16 +149,11 @@ export const REQUIRED_TOKEN_SCOPES = [
  *
  * `skipped` alone also tells the two silences apart, because only there do they
  * mean different things (rule 5): `null` = the callback sent no `skipped` at
- * all, `"unreadable"` = it sent one that is not a count. The first is nothing to
- * report; the second is a Page that MAY have been dropped and must be said out
- * loud. For `count` and `newCount` both silences produce the same sentence, so
- * they stay plain `number | null`.
+ * all, `UNREADABLE_COUNT` = it sent one that is not a count. The first is
+ * nothing to report; the second is a Page that MAY have been dropped and must
+ * be said out loud. For `count` and `newCount` both silences produce the same
+ * sentence, so they stay plain `number | null`.
  */
-export const UNREADABLE_COUNT = "unreadable";
-
-/** Y from the callback: a real number, "không gửi" (null), or "không đọc được". */
-export type SkippedCount = number | typeof UNREADABLE_COUNT | null;
-
 export type ConnectOutcome =
   | { kind: "connected"; count: number | null; newCount: number | null; skipped: SkippedCount }
   | { kind: "cancelled" }
@@ -260,7 +264,8 @@ function connectTitle(count: number | null, newCount: number | null): string {
  * status). The long "why, and where to look" sentence rides in the description.
  *
  * A `skipped=` that arrived unreadable gets its own sentence rather than being
- * rounded down to "nothing was skipped" — the two silences are not the same.
+ * rounded down to "nothing was skipped" — the two silences are not the same —
+ * and rides in the title on the same footing, minus the number it never had.
  */
 export function connectSuccessView(
   outcome: Extract<ConnectOutcome, { kind: "connected" }>,
@@ -279,9 +284,16 @@ export function connectSuccessView(
         ? "Không đọc được số Page bị bỏ qua — kiểm tra danh sách Page trong tài khoản Facebook. "
         : "";
 
+  const titleNote =
+    skippedCount !== null
+      ? `${skippedCount} Page bị bỏ qua`
+      : isSkippedUnreadable
+        ? "không đọc được số Page bị bỏ qua"
+        : null;
+
   return {
-    tone: skippedCount !== null || isSkippedUnreadable ? "warning" : "success",
-    title: skippedCount !== null ? `${title} · ${skippedCount} Page bị bỏ qua` : title,
+    tone: titleNote !== null ? "warning" : "success",
+    title: titleNote !== null ? `${title} · ${titleNote}` : title,
     description: `${skippedNote}${CHECK_PAGES_HINT}`,
   };
 }
