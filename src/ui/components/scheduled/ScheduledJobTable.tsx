@@ -203,6 +203,12 @@ function ScheduledRows({
   // "20:00", so five jobs stamped 20:00:00.000 / 20:00:00.041 are the same hour
   // as far as this screen is concerned, and "sớm nhất" on a group that reads
   // identically down to the minute is a caveat with nothing behind it.
+  //
+  // It is only sound because THIS TABLE IS ONE DAY: `formatScheduledTime` drops
+  // the date, so 20:00 today and 20:00 tomorrow compare equal and the caveat
+  // would go missing (the fold key deliberately ignores `scheduledAt`). Every
+  // caller renders per day — the list maps `groupScheduledByDay`, the calendar
+  // opens one day's detail — and that is the constraint keeping this honest.
   const sameHour = isFoldUniform(group, (member) => formatScheduledTime(member.scheduledAt));
 
   return (
@@ -355,7 +361,11 @@ function FoldedActionsNote({
 
   // `scheduledFoldKey` already keeps both permissions in the fold key, so the
   // members agree — asked over the group anyway, because the cell must follow
-  // the panel, not a rule stated somewhere else.
+  // the panel, not a rule stated in another file. That the rule HOLDS is now
+  // locked where the key lives ("lets the folded actions cell ask `.some()` and
+  // get the head's answer", job-row-grouping.test.ts): if either permission
+  // left the key, `.some()` here would quietly become a claim about one member
+  // of a group that no longer agrees with itself.
   const anyReschedule = group.members.some((member) => member.canReschedule);
   const anyCancel = group.members.some((member) => member.canCancel);
 

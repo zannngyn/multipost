@@ -204,6 +204,7 @@ function scheduledJob(overrides: Partial<Parameters<typeof scheduledFoldKey>[0]>
     batchId: "batch-1",
     productCode: "MGKVX6310",
     color: "Tím",
+    format: "image_post",
     status: "queued",
     overdue: false,
     captionPreview: "Váy hoa mùa hè…",
@@ -252,5 +253,54 @@ describe("scheduledFoldKey", () => {
     expect(scheduledFoldKey(scheduledJob())).not.toBe(
       scheduledFoldKey(scheduledJob({ canCancel: false })),
     );
+  });
+
+  it("keeps an ảnh and a video of one code apart, like the log does", () => {
+    // The one field the two keys disagreed about. A photo post and a video of
+    // the same code are two publications with two sets of rules; one "Đổi giờ"
+    // across both would move an hour the operator never looked at.
+    expect(scheduledFoldKey(scheduledJob())).not.toBe(
+      scheduledFoldKey(scheduledJob({ format: "video_post" })),
+    );
+  });
+
+  it("cannot be fooled by a field that ends where the next one begins", () => {
+    // The NUL separator, same check the log key carries.
+    expect(scheduledFoldKey(scheduledJob({ productCode: "AB", color: "CD" }))).not.toBe(
+      scheduledFoldKey(scheduledJob({ productCode: "ABCD", color: "" })),
+    );
+  });
+});
+
+/**
+ * The claims OTHER files make about these keys — asserted here, where the key
+ * is, so they cannot rot silently in a comment somewhere else.
+ */
+describe("what the tables are allowed to assume about a fold", () => {
+  it("lets the folded actions cell ask `.some()` and get the head's answer", () => {
+    // `ScheduledJobTable`'s FoldedActionsNote asks
+    // `group.members.some((m) => m.canReschedule)`. That only equals "what the
+    // head says" because BOTH permissions are part of the key: rows that differ
+    // never end up in one group, so "some" and "every" cannot disagree.
+    for (const field of ["canReschedule", "canCancel"] as const) {
+      const yes = scheduledJob({ [field]: true });
+      const no = scheduledJob({ [field]: false });
+      expect(scheduledFoldKey(yes)).not.toBe(scheduledFoldKey(no));
+    }
+  });
+
+  it("throws on a hole instead of dropping a job from the table", () => {
+    // The contract M-4 chose ON PURPOSE: elements come through
+    // `PostJobLogEntrySchema` / `ScheduledJobEntrySchema`, so a hole is a
+    // validation bug. `continue`-ing past it would take a real job out of the
+    // log with nobody told (business rule 5) — a loud crash beats a silent
+    // deletion. The `undefined` LIST is the case that IS survivable, and stays
+    // survivable (see the guard test above).
+    const holed = [scheduledJob(), undefined, scheduledJob()] as unknown as {
+      channelId: string;
+    }[];
+
+    expect(() => groupJobRows(holed, (job) => scheduledFoldKey(job as never))).toThrow();
+    expect(groupJobRows(undefined as never, () => null)).toEqual([]);
   });
 });

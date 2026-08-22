@@ -178,11 +178,22 @@ export function jobLogFoldKey(job: {
  * hour is excluded (publish spacing staggers it) but `overdue`, the caption
  * preview, the photo count and both actions are in, because the folded row
  * still displays all four.
+ *
+ * `format` is in for the same reason it is in `jobLogFoldKey`, and it was the
+ * one field the two keys disagreed about: a photo post and a video of one code
+ * are two publications with two sets of rules, and a folded row offering one
+ * "Đổi giờ" over both would move an hour the operator never looked at.
+ *
+ * `canReschedule` and `canCancel` are load-bearing beyond the cell they paint:
+ * `ScheduledJobTable`'s folded actions cell asks `members.some(...)`, which only
+ * agrees with the head BECAUSE both permissions are here. Dropping either would
+ * silently turn that cell into a claim about one member.
  */
 export function scheduledFoldKey(job: {
   batchId: string;
   productCode: string;
   color: string;
+  format: string;
   status: string;
   overdue: boolean;
   captionPreview: string;
@@ -199,6 +210,7 @@ export function scheduledFoldKey(job: {
     job.batchId,
     code,
     job.color.trim(),
+    job.format,
     job.status,
     job.overdue ? "overdue" : "on-time",
     job.captionPreview.trim(),
