@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertDialog,
   Badge,
   Banner,
   Button,
@@ -78,6 +79,10 @@ export function PromptTemplatesScreen() {
   /** Remount key: a new prefill must reset the uncontrolled RHF fields. */
   const [draftKey, setDraftKey] = useState(0);
   const [notice, setNotice] = useState<ScreenNotice | null>(null);
+  /** Whether the open panel holds typed work that a prefill would destroy. */
+  const [formDirty, setFormDirty] = useState(false);
+  /** Row whose text is waiting to overwrite that work, pending confirmation. */
+  const [pendingReuse, setPendingReuse] = useState<PromptVersion | null>(null);
   /**
    * Every write unmounts the control that was clicked — the form panel closes,
    * and an activated row loses its "Kích hoạt" button. So the result banner is
@@ -86,6 +91,8 @@ export function PromptTemplatesScreen() {
   const noticeRef = useRef<HTMLDivElement>(null);
   /** Cancelling produces no banner, so focus goes back to what opened the panel. */
   const triggerRef = useRef<HTMLButtonElement>(null);
+  /** Fallback landing spot when there is no trigger (read-only session). */
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   const showSkeleton = useDelayedFlag(versions.isPending && versions.fetchStatus === "fetching");
 
@@ -106,7 +113,26 @@ export function PromptTemplatesScreen() {
     triggerRef.current?.focus();
   }
 
+  /** Dismissing the result must not drop focus on the floor. */
+  function dismissNotice() {
+    setNotice(null);
+    (triggerRef.current ?? headingRef.current)?.focus();
+  }
+
+  /**
+   * Prefilling REPLACES whatever is in the open panel. Doing that silently
+   * throws away typed work, so the confirmation comes first and the prefill
+   * only happens on the far side of it.
+   */
   function reuse(version: PromptVersion) {
+    if (formOpen && formDirty) {
+      setPendingReuse(version);
+      return;
+    }
+    applyReuse(version);
+  }
+
+  function applyReuse(version: PromptVersion) {
     create.reset();
     setDraft({
       name: `${version.name} (bản sửa)`,
@@ -169,11 +195,15 @@ export function PromptTemplatesScreen() {
       height="auto"
       header={
         <LayoutHeader hasDivider>
-          {/* Inline padding comes from the page column; only the block axis is
-              ours, so the divider spans the full width of that column. */}
+          {/* `AppShell contentPadding={0}` (AppFrame) means the shell adds no
+              inline padding of its own, so the page column's `px-6` is the only
+              one — claiming the block axis here and none of the inline axis is
+              what lets the divider run the full width of that column. */}
           <Stack direction="vertical" gap={1} paddingBlock={3} paddingInline={0}>
             <HStack gap={3} justify="between" align="start" wrap="wrap">
-              <Heading level={1}>Mẫu prompt AI</Heading>
+              <Heading level={1} ref={headingRef} tabIndex={-1}>
+                Mẫu prompt AI
+              </Heading>
               <Button
                 size="sm"
                 variant="secondary"
@@ -202,14 +232,16 @@ export function PromptTemplatesScreen() {
               <Banner
                 ref={noticeRef}
                 tabIndex={-1}
+                // Astryx picks the role from `status` (success -> status,
+                // warning -> alert); an override here would only weaken the
+                // announcement of the warning case.
                 status={notice.warnings.length > 0 ? "warning" : "success"}
-                role="status"
                 title={notice.message}
                 description={
                   notice.warnings.length > 0 ? "Có lưu ý cần đọc trước khi dùng:" : undefined
                 }
                 isDismissable
-                onDismiss={() => setNotice(null)}
+                onDismiss={dismissNotice}
                 defaultIsExpanded={notice.warnings.length > 0}
               >
                 {notice.warnings.length > 0 ? (
@@ -271,7 +303,24 @@ export function PromptTemplatesScreen() {
                   <EmptyState
                     headingLevel={2}
                     title="Đơn vị này chưa có phiên bản riêng"
-                    description="Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Muốn đổi giọng văn, độ dài hay cách gắn hashtag thì bấm “Tạo phiên bản mới” ngay bên dưới."
+                    // A read-only session has no create button anywhere on the
+                    // screen, so the first-run copy must not point at one.
+                    description={
+                      gate.isDisabled
+                        ? `Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. ${
+                            gate.reason ?? "Phiên này chỉ xem, không tạo phiên bản được."
+                          }`
+                        : "Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Tạo phiên bản riêng khi muốn đổi giọng văn, độ dài hay cách gắn hashtag."
+                    }
+                    actions={
+                      gate.isDisabled || formOpen ? undefined : (
+                        <Button
+                          variant="primary"
+                          label="Tạo phiên bản đầu tiên"
+                          onClick={openBlankForm}
+                        />
+                      )
+                    }
                   />
                 ) : null}
 
@@ -289,7 +338,8 @@ export function PromptTemplatesScreen() {
                         size="sm"
                         label="Tạo phiên bản mới"
                         aria-expanded={formOpen}
-                        aria-controls={formPanelId}
+                        // Only while the panel is mounted — see the row toggles.
+                        aria-controls={formOpen ? formPanelId : undefined}
                         isDisabled={formOpen}
                         // Only while the panel is open — and `tooltip` is what
                         // keeps the button aria-disabled rather than natively
@@ -304,7 +354,10 @@ export function PromptTemplatesScreen() {
                     Directly under the trigger, not at the bottom of the page:
                     the button and its consequence have to be one glance apart.
                   */}
-                  {formOpen ? (
+                  {/* `!gate.isDisabled` as well as `formOpen`: the panel is a
+                      write surface, and a read-only session must not be able to
+                      reach one by any route (M3.3). */}
+                  {formOpen && !gate.isDisabled ? (
                     <Card padding={4} id={formPanelId}>
                       <PromptVersionForm
                         key={draftKey}
@@ -312,6 +365,7 @@ export function PromptTemplatesScreen() {
                         defaultValues={draft}
                         pending={create.isPending}
                         error={create.isError ? create.error : undefined}
+                        onDirtyChange={setFormDirty}
                         onSubmit={submit}
                         onCancel={closeForm}
                       />
@@ -324,12 +378,31 @@ export function PromptTemplatesScreen() {
                       activate.isPending ? (activate.variables?.version ?? null) : null
                     }
                     disabled={gate.isDisabled}
+                    readOnlyReason={gate.reason}
                     onActivate={handleActivate}
                     onReuse={reuse}
                   />
                 </Stack>
               </>
             ) : null}
+
+            {/* Overwriting typed work is not undoable, so it is confirmed —
+                same contract as "Xoá nháp" on the compose screen. */}
+            <AlertDialog
+              isOpen={pendingReuse !== null}
+              onOpenChange={(isOpen) => {
+                if (!isOpen) setPendingReuse(null);
+              }}
+              title="Bỏ nội dung đang soạn?"
+              description="Biểu mẫu đang mở có nội dung chưa lưu. Nạp phiên bản này vào sẽ ghi đè toàn bộ những gì bạn vừa gõ, và không lấy lại được."
+              actionLabel="Nạp bản này"
+              cancelLabel="Giữ nội dung đang soạn"
+              onAction={() => {
+                const version = pendingReuse;
+                setPendingReuse(null);
+                if (version) applyReuse(version);
+              }}
+            />
           </Stack>
         </LayoutContent>
       }

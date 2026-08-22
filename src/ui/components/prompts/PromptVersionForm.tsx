@@ -13,7 +13,7 @@ import {
   TextInput,
 } from "@astryxdesign/core";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useId, useMemo } from "react";
+import { useEffect, useId, useMemo } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
@@ -53,6 +53,7 @@ export function PromptVersionForm({
   defaultValues,
   pending,
   error,
+  onDirtyChange,
   onSubmit,
   onCancel,
 }: {
@@ -61,6 +62,12 @@ export function PromptVersionForm({
   pending: boolean;
   /** Server refusal for THIS form (INVALID_INPUT naming the variables). */
   error?: unknown;
+  /**
+   * Reports whether anything has been typed since the panel opened. The screen
+   * needs it to know when replacing the draft would destroy real work — the
+   * form owns the field state, so only it can answer.
+   */
+  onDirtyChange?: (isDirty: boolean) => void;
   onSubmit: (values: PromptVersionFormValues) => void;
   onCancel?: () => void;
 }) {
@@ -82,6 +89,15 @@ export function PromptVersionForm({
 
   const body = useWatch({ control: form.control, name: "body" }) ?? "";
   const report = useMemo(() => inspectPromptBody(body), [body]);
+
+  // `isDirty` is measured against `defaultValues`, so a panel prefilled from an
+  // existing version starts clean — exactly the meaning the screen wants.
+  const { isDirty } = form.formState;
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+  // Unmounting takes the draft with it; the screen must not keep guarding one.
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   /** Server-side variable complaints, one line per variable. */
   const serverIssues = ApiError.is(error)
@@ -186,8 +202,10 @@ export function PromptVersionForm({
               ref={field.ref}
               label="Nội dung prompt"
               // One `description` rather than a paragraph underneath: Astryx
-              // builds `aria-describedby` from this prop alone, so text put
-              // beside the field would never reach a screen reader.
+              // composes `aria-describedby` from its OWN slots (description,
+              // status message, counter, disabled tooltip) and does not merge an
+              // incoming one, so text put beside the field would never be
+              // announced. Folding it into `description` is the only way in.
               description={`Dùng cú pháp {{tên_biến}}; danh sách biến hợp lệ ở khung “Biến được phép dùng” bên dưới. Biến đang dùng: ${
                 report.variables.length > 0 ? report.variables.join(", ") : "(chưa có)"
               }.`}

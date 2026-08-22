@@ -13,7 +13,7 @@ import {
   proportional,
 } from "@astryxdesign/core";
 import type { TableColumn } from "@astryxdesign/core";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import {
   PROMPT_STATUS_BADGE_VARIANTS,
@@ -52,6 +52,7 @@ export function PromptVersionTable({
   versions,
   activatingVersion,
   disabled,
+  readOnlyReason,
   onActivate,
   onReuse,
 }: {
@@ -59,6 +60,12 @@ export function PromptVersionTable({
   /** Version currently being activated, so only its button shows the pending state. */
   activatingVersion: number | null;
   disabled?: boolean;
+  /**
+   * Why writing is off (support mode, M3.3). Every write control in a row is
+   * blocked by `disabled` and explains itself with this sentence — "Dùng làm
+   * bản nháp" opens the create form, so it is a write control too.
+   */
+  readOnlyReason?: string | null;
   onActivate: (version: number) => void;
   /** Prefills the "tạo phiên bản mới" form from this row. */
   onReuse: (version: PromptVersion) => void;
@@ -66,9 +73,18 @@ export function PromptVersionTable({
   const detailId = useId();
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  /** Row toggles, so closing the detail panel can hand focus back to its opener. */
+  const toggleRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const rows = describePromptVersions(versions) as readonly VersionRow[];
   const open = rows.find((row) => row.key === openKey) ?? null;
+
+  /** The opener stays mounted, so focus can move back in the same tick. */
+  function closeDetail() {
+    const previous = openKey;
+    setOpenKey(null);
+    if (previous) toggleRefs.current.get(previous)?.focus();
+  }
 
   const columns: TableColumn<VersionRow>[] = [
     {
@@ -152,8 +168,13 @@ export function PromptVersionTable({
           isOpen={openKey === row.key}
           isConfirming={confirmKey === row.key}
           disabled={disabled}
+          readOnlyReason={readOnlyReason}
           activatingVersion={activatingVersion}
-          onToggleDetail={() => setOpenKey(openKey === row.key ? null : row.key)}
+          registerToggleRef={(node) => {
+            if (node) toggleRefs.current.set(row.key, node);
+            else toggleRefs.current.delete(row.key);
+          }}
+          onToggleDetail={() => (openKey === row.key ? closeDetail() : setOpenKey(row.key))}
           onStartConfirm={() => setConfirmKey(row.key)}
           onCancelConfirm={() => setConfirmKey(null)}
           onActivate={() => {
@@ -178,9 +199,7 @@ export function PromptVersionTable({
         rowCount={rows.length}
       />
 
-      {open ? (
-        <PromptBodyPanel id={detailId} descriptor={open} onClose={() => setOpenKey(null)} />
-      ) : null}
+      {open ? <PromptBodyPanel id={detailId} descriptor={open} onClose={closeDetail} /> : null}
     </Stack>
   );
 }
@@ -191,7 +210,9 @@ function RowActions({
   isOpen,
   isConfirming,
   disabled,
+  readOnlyReason,
   activatingVersion,
+  registerToggleRef,
   onToggleDetail,
   onStartConfirm,
   onCancelConfirm,
@@ -203,7 +224,9 @@ function RowActions({
   isOpen: boolean;
   isConfirming: boolean;
   disabled?: boolean;
+  readOnlyReason?: string | null;
   activatingVersion: number | null;
+  registerToggleRef: (node: HTMLButtonElement | null) => void;
   onToggleDetail: () => void;
   onStartConfirm: () => void;
   onCancelConfirm: () => void;
@@ -213,29 +236,58 @@ function RowActions({
   const isBuiltIn = row.item.source === "built_in";
   const isBusy = activatingVersion !== null;
 
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const activateRef = useRef<HTMLButtonElement>(null);
+  /**
+   * Set by "Không" so focus can follow "Kích hoạt" back when it remounts. A ref
+   * rather than state: this is a one-shot instruction to the DOM, and holding it
+   * in state would schedule a render just to clear it again.
+   */
+  const restoreActivateFocus = useRef(false);
+
+  // Each side of the confirmation replaces the button that was just pressed, so
+  // focus travels with it — otherwise the keyboard lands on <body> mid-decision.
+  useEffect(() => {
+    if (isConfirming) {
+      confirmRef.current?.focus();
+      return;
+    }
+    if (!restoreActivateFocus.current) return;
+    restoreActivateFocus.current = false;
+    activateRef.current?.focus();
+  }, [isConfirming]);
+
   // Two rows can share a number, so every accessible name carries the origin
   // too — otherwise a screen reader announces "Xem nội dung v2" twice.
   const rowName = row.label.origin ? `${row.label.number} — ${row.label.origin}` : row.label.number;
+  const writeBlockReason = disabled ? (readOnlyReason ?? undefined) : undefined;
 
   return (
     <Stack direction="vertical" gap={2} align="start">
       <HStack gap={2} wrap="wrap" align="center">
         <Button
+          ref={registerToggleRef}
           size="sm"
           variant="secondary"
           label={isOpen ? `Ẩn nội dung ${rowName}` : `Xem nội dung ${rowName}`}
           aria-expanded={isOpen}
-          aria-controls={detailId}
+          // Only while the panel exists: an IDREF to an unmounted node is a
+          // dead pointer for assistive tech.
+          aria-controls={isOpen ? detailId : undefined}
           onClick={onToggleDetail}
         >
           {isOpen ? "Ẩn nội dung" : "Xem nội dung"}
         </Button>
 
         {row.item.body ? (
+          // A write control: it opens the create form, so the read-only gate
+          // (M3.3) has to stop it here as well as at the section trigger.
           <Button
             size="sm"
             variant="ghost"
             label={`Dùng làm bản nháp — ${rowName}`}
+            isDisabled={disabled}
+            tooltip={writeBlockReason}
             onClick={onReuse}
           >
             Dùng làm bản nháp
@@ -244,10 +296,12 @@ function RowActions({
 
         {!isBuiltIn && row.item.status !== "active" && !isConfirming ? (
           <Button
+            ref={activateRef}
             size="sm"
             variant="secondary"
             label={`Kích hoạt ${rowName}`}
             isDisabled={disabled || isBusy}
+            tooltip={writeBlockReason}
             onClick={onStartConfirm}
           >
             Kích hoạt
@@ -268,6 +322,7 @@ function RowActions({
           </Text>
           <HStack gap={2} wrap="wrap" align="center">
             <Button
+              ref={confirmRef}
               size="sm"
               variant="primary"
               label={`Xác nhận kích hoạt ${rowName}`}
@@ -278,7 +333,15 @@ function RowActions({
               Xác nhận
             </Button>
             {/* Accessible name contains the visible text (WCAG 2.5.3). */}
-            <Button size="sm" variant="ghost" label="Không đổi bản đang dùng" onClick={onCancelConfirm}>
+            <Button
+              size="sm"
+              variant="ghost"
+              label="Không đổi bản đang dùng"
+              onClick={() => {
+                restoreActivateFocus.current = true;
+                onCancelConfirm();
+              }}
+            >
               Không
             </Button>
           </HStack>
