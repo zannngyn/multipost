@@ -1,16 +1,33 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  AlertDialog,
+  Badge,
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  HStack,
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Skeleton,
+  Stack,
+  Text,
+} from "@astryxdesign/core";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
 import { PromptVersionForm } from "@/ui/components/prompts/PromptVersionForm";
 import { PromptVersionTable } from "@/ui/components/prompts/PromptVersionTable";
-import { Badge } from "@/ui/components/ui/badge";
-import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
-import { Button } from "@/ui/components/ui/button";
+import {
+  firstRunDescription,
+  promptWriteAccess,
+  showsCreatePanel,
+} from "@/ui/components/prompts/prompt-write-access";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
-import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import {
   useActivatePromptVersion,
@@ -32,37 +49,87 @@ import {
  * older one. Prompt rows are immutable, so there is no edit button anywhere —
  * "sửa" means "dùng làm bản nháp" then save a new version.
  *
+ * WAVE 2 — where the form lives: "Tạo phiên bản mới" now opens as an inline
+ * panel DIRECTLY under the button that asked for it, with focus in the first
+ * field. It used to render at the very bottom of the page, so clicking a button
+ * in the middle of the screen appeared to do nothing at all.
+ *
  * The four mandatory states:
- *   loading — skeleton with the real columns, delayed 300ms
+ *   loading — skeleton with the real blocks, delayed 300ms
  *   data    — active banner + version table + create form
  *   empty   — cannot happen for the table (the built-in row is always there),
  *             so the empty state belongs to the tenant's OWN versions: it says
  *             "đang chạy mẫu mặc định", which is a different fact from "trống"
  *   error   — 4xx vs 5xx via <ApiErrorNotice>
  */
-export function PromptTemplatesScreen() {
+/** Result of the last write, plus the non-blocking remarks the API sent with it. */
+interface ScreenNotice {
+  message: string;
+  warnings: readonly string[];
+}
 
+export function PromptTemplatesScreen() {
   const versions = usePromptVersions(PROMPT_TASK, PROMPT_PLATFORM);
   const create = useCreatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
   const activate = useActivatePromptVersion(PROMPT_TASK, PROMPT_PLATFORM);
   // Support mode is read-only (M3.3): a prompt version decides what the AI
   // writes for the CUSTOMER's posts, so neither creating nor activating one is
   // something MYSP staff do from inside a support session.
-  const gate = writeGate(useReadOnlyReason(), create.isPending);
+  //
+  // The PURE read-only signal, deliberately not `writeGate(...).isDisabled`:
+  // that one also goes true while a create is in flight, and this screen uses
+  // read-only to decide what is MOUNTED. Gating the panel on the combined flag
+  // unmounted the form mid-submit — see `prompt-write-access.ts`. Busy is a
+  // separate axis and only ever disables a control.
+  const access = promptWriteAccess(useReadOnlyReason());
+  const isSaving = create.isPending;
 
+  const formPanelId = useId();
   const [formOpen, setFormOpen] = useState(false);
   const [draft, setDraft] = useState<Partial<PromptVersionFormValues> | undefined>(undefined);
   /** Remount key: a new prefill must reset the uncontrolled RHF fields. */
   const [draftKey, setDraftKey] = useState(0);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ScreenNotice | null>(null);
+  /** Whether the open panel holds typed work that a prefill would destroy. */
+  const [formDirty, setFormDirty] = useState(false);
+  /** Row whose text is waiting to overwrite that work, pending confirmation. */
+  const [pendingReuse, setPendingReuse] = useState<PromptVersion | null>(null);
+  /**
+   * Every write unmounts the control that was clicked — the form panel closes,
+   * and an activated row loses its "Kích hoạt" button. So the result banner is
+   * the landing spot: focus goes to the answer instead of falling to <body>.
+   */
   const noticeRef = useRef<HTMLDivElement>(null);
+  /** Cancelling produces no banner, so focus goes back to what opened the panel. */
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  /** Fallback landing spot when there is no trigger (read-only session). */
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  /** First field of the open panel, so a confirmed prefill can be typed into. */
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+  /** One-shot: set when a prefill was confirmed through the dialog. */
+  const focusAfterConfirmedReuse = useRef(false);
 
   const showSkeleton = useDelayedFlag(versions.isPending && versions.fetchStatus === "fetching");
 
-  // Focus the result so a keyboard user lands on it instead of the old form.
   useEffect(() => {
     if (notice) noticeRef.current?.focus();
   }, [notice]);
+
+  /**
+   * Astryx's `Dialog` restores focus to whatever was focused when it opened —
+   * the row button — in a passive effect, which lands AFTER React has applied
+   * the remounted panel's autofocus. So the panel would be filled and the
+   * keyboard would be back in the table. This effect belongs to the PARENT of
+   * the dialog, so it runs after that restore and gets the last word.
+   */
+  useEffect(() => {
+    if (!focusAfterConfirmedReuse.current) return;
+    // Consumed either way. The flag is a one-shot for THIS prefill: if the panel
+    // is not on screen there is nothing to focus, and carrying the intent over
+    // to some later, unrelated open would be worse than dropping it.
+    focusAfterConfirmedReuse.current = false;
+    firstFieldRef.current?.focus();
+  }, [draftKey]);
 
   function openBlankForm() {
     create.reset();
@@ -71,7 +138,32 @@ export function PromptTemplatesScreen() {
     setFormOpen(true);
   }
 
+  function closeForm() {
+    create.reset();
+    setFormOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  /** Dismissing the result must not drop focus on the floor. */
+  function dismissNotice() {
+    setNotice(null);
+    (triggerRef.current ?? headingRef.current)?.focus();
+  }
+
+  /**
+   * Prefilling REPLACES whatever is in the open panel. Doing that silently
+   * throws away typed work, so the confirmation comes first and the prefill
+   * only happens on the far side of it.
+   */
   function reuse(version: PromptVersion) {
+    if (formOpen && formDirty) {
+      setPendingReuse(version);
+      return;
+    }
+    applyReuse(version);
+  }
+
+  function applyReuse(version: PromptVersion) {
     create.reset();
     setDraft({
       name: `${version.name} (bản sửa)`,
@@ -97,11 +189,13 @@ export function PromptTemplatesScreen() {
       {
         onSuccess: (result) => {
           setFormOpen(false);
-          setNotice(
-            result.template.status === "active"
-              ? `Đã lưu và kích hoạt phiên bản v${result.template.version}. Caption sinh từ giờ dùng bản này.`
-              : `Đã lưu phiên bản v${result.template.version} ở dạng nháp. Bấm “Kích hoạt” khi muốn dùng.`,
-          );
+          setNotice({
+            message:
+              result.template.status === "active"
+                ? `Đã lưu và kích hoạt phiên bản v${result.template.version}. Caption sinh từ giờ dùng bản này.`
+                : `Đã lưu phiên bản v${result.template.version} ở dạng nháp. Bấm “Kích hoạt” khi muốn dùng.`,
+            warnings: result.warnings,
+          });
         },
         // The refusal is rendered inside the form, next to the body field.
         onError: () => setNotice(null),
@@ -115,7 +209,10 @@ export function PromptTemplatesScreen() {
       { version },
       {
         onSuccess: (template) =>
-          setNotice(`Đã chuyển sang phiên bản v${template.version} (${template.name}).`),
+          setNotice({
+            message: `Đã chuyển sang phiên bản v${template.version} (${template.name}).`,
+            warnings: [],
+          }),
         onError: () => setNotice(null),
       },
     );
@@ -124,143 +221,255 @@ export function PromptTemplatesScreen() {
   const data = versions.data;
   const tenantVersions = data?.versions.filter((item) => item.source === "tenant") ?? [];
 
+  /**
+   * THE one decision about whether the create panel is on screen, delegated
+   * whole so no hand-rolled boolean can creep back in and make "busy" mean
+   * "unmount" again. `create-panel-mount.test.ts` pins both halves: that this
+   * call is the guard, and that it holds no logic of its own.
+   */
+  const isCreatePanelVisible = showsCreatePanel({
+    formOpen,
+    isReadOnly: access.isReadOnly,
+    isBusy: isSaving,
+  });
+
   return (
-    <section className="space-y-6" aria-labelledby="prompts-heading">
-      <header className="space-y-1">
-        <h1 id="prompts-heading" className="text-2xl font-semibold tracking-tight">
-          Mẫu prompt AI
-        </h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Prompt dùng để AI viết caption Facebook. Mỗi lần sửa là một phiên bản mới — bản cũ giữ
-          nguyên để truy lại caption đã sinh. Chỉ một phiên bản được dùng tại một thời điểm.
-        </p>
-      </header>
+    <Layout
+      height="auto"
+      header={
+        <LayoutHeader hasDivider>
+          {/* `AppShell contentPadding={0}` (AppFrame) means the shell adds no
+              inline padding of its own, so the page column's `px-6` is the only
+              one — claiming the block axis here and none of the inline axis is
+              what lets the divider run the full width of that column. */}
+          <Stack direction="vertical" gap={1} paddingBlock={3} paddingInline={0}>
+            <HStack gap={3} justify="between" align="start" wrap="wrap">
+              <Heading level={1} ref={headingRef} tabIndex={-1}>
+                Mẫu prompt AI
+              </Heading>
+              <Button
+                size="sm"
+                variant="secondary"
+                label="Tải lại danh sách phiên bản"
+                isLoading={versions.isFetching}
+                isDisabled={versions.isFetching}
+                onClick={() => void versions.refetch()}
+              >
+                Tải lại
+              </Button>
+            </HStack>
+            <Text type="supporting">
+              Prompt để AI viết caption Facebook. Mỗi lần sửa là một phiên bản mới — bản cũ giữ
+              nguyên, và chỉ một bản được dùng tại một thời điểm.
+            </Text>
+          </Stack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={0}>
+          <Stack direction="vertical" gap={4} paddingBlock={4} paddingInline={0}>
+            {notice ? (
+              // Warnings ride along with the result instead of living inside the
+              // form: the form is closed by the time the server answers, so a
+              // banner in there would never be read.
+              <Banner
+                ref={noticeRef}
+                tabIndex={-1}
+                // Astryx picks the role from `status` (success -> status,
+                // warning -> alert); an override here would only weaken the
+                // announcement of the warning case.
+                status={notice.warnings.length > 0 ? "warning" : "success"}
+                title={notice.message}
+                description={
+                  notice.warnings.length > 0 ? "Có lưu ý cần đọc trước khi dùng:" : undefined
+                }
+                isDismissable
+                onDismiss={dismissNotice}
+                defaultIsExpanded={notice.warnings.length > 0}
+              >
+                {notice.warnings.length > 0 ? (
+                  <Stack direction="vertical" gap={1}>
+                    {notice.warnings.map((warning) => (
+                      <Text key={warning} type="supporting">
+                        {warning}
+                      </Text>
+                    ))}
+                  </Stack>
+                ) : null}
+              </Banner>
+            ) : null}
 
-      {notice ? (
-        <div
-          ref={noticeRef}
-          tabIndex={-1}
-          role="alert"
-          className="border-success/30 bg-success/10 text-success-foreground rounded-lg border px-3 py-2 text-sm outline-none"
-        >
-          {notice}
-        </div>
-      ) : null}
+            {/*
+              No retry button: the list was already re-read (onSettled), so the
+              truth on screen is fresh and the operator decides what to do next.
+              A "Thử lại" that only hides the message would be a lie
+              (core-feedback-states).
+            */}
+            {activate.isError ? <ApiErrorNotice error={activate.error} /> : null}
 
-      {/*
-        No retry button: the list was already re-read (onSettled), so the truth
-        on screen is fresh and the operator decides what to do next. A "Thử lại"
-        that only hides the message would be a lie (core-feedback-states).
-      */}
-      {activate.isError ? <ApiErrorNotice error={activate.error} /> : null}
+            {showSkeleton ? <PromptVersionsSkeleton /> : null}
 
-      {showSkeleton ? <PromptVersionsSkeleton /> : null}
+            {!showSkeleton && versions.isError ? (
+              <ApiErrorNotice error={versions.error} onRetry={() => void versions.refetch()} />
+            ) : null}
 
-      {!showSkeleton && versions.isError ? (
-        <ApiErrorNotice error={versions.error} onRetry={() => void versions.refetch()} />
-      ) : null}
+            {!versions.isError && data ? (
+              <>
+                <Card padding={4} aria-labelledby="prompt-active-heading">
+                  <Stack direction="vertical" gap={3}>
+                    <HStack gap={2} justify="between" align="center" wrap="wrap">
+                      <Heading level={2} id="prompt-active-heading">
+                        Đang dùng
+                      </Heading>
+                      <Badge
+                        variant={data.effective.source === "built_in" ? "neutral" : "success"}
+                        label={
+                          data.effective.source === "built_in"
+                            ? "Mẫu mặc định của hệ thống"
+                            : `Phiên bản v${data.effective.version}`
+                        }
+                      />
+                    </HStack>
+                    <HStack gap={2} align="center" wrap="wrap">
+                      <Text type="supporting" color="secondary">
+                        Tên
+                      </Text>
+                      <Text weight="medium">{data.effective.name}</Text>
+                    </HStack>
+                    <pre className="bg-muted/40 max-h-64 overflow-auto rounded-md border p-3 font-mono text-xs break-words whitespace-pre-wrap">
+                      {data.effective.body}
+                    </pre>
+                  </Stack>
+                </Card>
 
-      {!versions.isError && data ? (
-        <>
-          <section
-            aria-labelledby="prompt-active-heading"
-            className="bg-card space-y-3 rounded-xl border p-5"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 id="prompt-active-heading" className="text-base font-semibold">
-                Đang dùng
-              </h2>
-              <Badge tone={data.effective.source === "built_in" ? "neutral" : "success"}>
-                {data.effective.source === "built_in"
-                  ? "Mẫu mặc định của hệ thống"
-                  : `Phiên bản v${data.effective.version}`}
-              </Badge>
-            </div>
-            <p className="text-sm">
-              <span className="text-muted-foreground">Tên:</span>{" "}
-              <span className="font-medium break-words">{data.effective.name}</span>
-            </p>
-            <pre className="bg-muted/40 max-h-64 overflow-auto rounded-lg border p-3 text-xs break-words whitespace-pre-wrap">
-              {data.effective.body}
-            </pre>
-          </section>
+                {tenantVersions.length === 0 ? (
+                  <EmptyState
+                    headingLevel={2}
+                    title="Đơn vị này chưa có phiên bản riêng"
+                    // A read-only session has no create button anywhere on the
+                    // screen, so the first-run copy must not point at one. Keyed
+                    // on read-only ONLY: an operator waiting for a save is still
+                    // allowed to write, and must not be told otherwise.
+                    description={firstRunDescription(access)}
+                    actions={
+                      access.isReadOnly || formOpen ? undefined : (
+                        <Button
+                          variant="primary"
+                          label="Tạo phiên bản đầu tiên"
+                          onClick={openBlankForm}
+                        />
+                      )
+                    }
+                  />
+                ) : null}
 
-          {tenantVersions.length === 0 ? (
-            <EmptyState
-              kind="first-run"
-              title="Đơn vị này chưa có phiên bản riêng"
-              description="Hệ thống đang chạy mẫu prompt mặc định đi kèm sản phẩm. Tạo phiên bản riêng khi muốn đổi giọng văn, độ dài hay cách gắn hashtag."
-              action={
-                gate.isDisabled ? (
-                  <ReadOnlyNotice reason={gate.reason} />
-                ) : !formOpen ? (
-                  <Button type="button" onClick={openBlankForm}>
-                    Tạo phiên bản đầu tiên
-                  </Button>
-                ) : null
-              }
+                <Stack direction="vertical" gap={3}>
+                  <HStack gap={3} justify="between" align="center" wrap="wrap">
+                    <Heading level={2} id="prompt-versions-heading">
+                      Các phiên bản ({data.versions.length})
+                    </Heading>
+                    {access.isReadOnly ? (
+                      <ReadOnlyNotice reason={access.reason} />
+                    ) : (
+                      <Button
+                        ref={triggerRef}
+                        variant="primary"
+                        size="sm"
+                        label="Tạo phiên bản mới"
+                        aria-expanded={formOpen}
+                        // Only while the panel is mounted — see the row toggles.
+                        aria-controls={formOpen ? formPanelId : undefined}
+                        isDisabled={formOpen}
+                        // Only while the panel is open — and `tooltip` is what
+                        // keeps the button aria-disabled rather than natively
+                        // disabled, so it can take focus back when it closes.
+                        tooltip={formOpen ? "Biểu mẫu đang mở ngay bên dưới." : undefined}
+                        onClick={openBlankForm}
+                      />
+                    )}
+                  </HStack>
+
+                  {/*
+                    Directly under the trigger, not at the bottom of the page:
+                    the button and its consequence have to be one glance apart.
+                  */}
+                  {/* Read-only hides the panel because it is a write surface and
+                      no route may reach one in support mode (M3.3). Decided in
+                      one place above — never inline, never with `isSaving`. */}
+                  {isCreatePanelVisible ? (
+                    <Card padding={4} id={formPanelId}>
+                      <PromptVersionForm
+                        key={draftKey}
+                        nextVersion={data.nextVersion}
+                        defaultValues={draft}
+                        pending={isSaving}
+                        error={create.isError ? create.error : undefined}
+                        firstFieldRef={firstFieldRef}
+                        onDirtyChange={setFormDirty}
+                        onSubmit={submit}
+                        onCancel={closeForm}
+                      />
+                    </Card>
+                  ) : null}
+
+                  <PromptVersionTable
+                    versions={data.versions}
+                    activatingVersion={
+                      activate.isPending ? (activate.variables?.version ?? null) : null
+                    }
+                    readOnlyReason={access.reason}
+                    // Busy, not read-only: swapping the draft while its own save
+                    // is in flight is nonsense, but it says nothing about rights.
+                    isBusy={isSaving}
+                    onActivate={handleActivate}
+                    onReuse={reuse}
+                  />
+                </Stack>
+              </>
+            ) : null}
+
+            {/* Overwriting typed work is not undoable, so it is confirmed —
+                same contract as "Xoá nháp" on the compose screen. */}
+            <AlertDialog
+              isOpen={pendingReuse !== null}
+              onOpenChange={(isOpen) => {
+                if (!isOpen) setPendingReuse(null);
+              }}
+              title="Bỏ nội dung đang soạn?"
+              description="Biểu mẫu đang mở có nội dung chưa lưu. Nạp phiên bản này vào sẽ ghi đè toàn bộ những gì bạn vừa gõ, và không lấy lại được."
+              actionLabel="Nạp bản này"
+              cancelLabel="Giữ nội dung đang soạn"
+              onAction={() => {
+                const version = pendingReuse;
+                setPendingReuse(null);
+                if (!version) return;
+                // Claim focus back from the dialog's own restore (see the effect
+                // on `draftKey`) — the operator asked for this text, they should
+                // land in it.
+                focusAfterConfirmedReuse.current = true;
+                applyReuse(version);
+              }}
             />
-          ) : null}
-
-          <section aria-labelledby="prompt-versions-heading" className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 id="prompt-versions-heading" className="text-lg font-semibold">
-                Các phiên bản ({data.versions.length})
-              </h2>
-              {gate.isDisabled ? (
-                <ReadOnlyNotice reason={gate.reason} />
-              ) : !formOpen ? (
-                <Button type="button" variant="outline" onClick={openBlankForm}>
-                  Tạo phiên bản mới
-                </Button>
-              ) : null}
-            </div>
-
-            <PromptVersionTable
-              versions={data.versions}
-              activatingVersion={activate.isPending ? (activate.variables?.version ?? null) : null}
-              disabled={gate.isDisabled}
-              onActivate={handleActivate}
-              onReuse={reuse}
-            />
-          </section>
-
-          {formOpen ? (
-            <section className="bg-card rounded-xl border p-5">
-              <PromptVersionForm
-                key={draftKey}
-                nextVersion={data.nextVersion}
-                defaultValues={draft}
-                pending={create.isPending}
-                error={create.isError ? create.error : undefined}
-                warnings={create.data?.warnings}
-                onSubmit={submit}
-                onCancel={() => {
-                  create.reset();
-                  setFormOpen(false);
-                }}
-              />
-            </section>
-          ) : null}
-        </>
-      ) : null}
-    </section>
+          </Stack>
+        </LayoutContent>
+      }
+    />
   );
 }
 
 /** Same shape as the loaded screen so nothing jumps when data arrives. */
 function PromptVersionsSkeleton() {
   return (
-    <div aria-hidden="true" className="space-y-4 motion-safe:animate-pulse">
-      <div className="space-y-2 rounded-xl border p-5">
-        <div className="bg-muted h-5 w-32 rounded" />
-        <div className="bg-muted h-24 w-full rounded" />
-      </div>
-      <div className="space-y-2 rounded-xl border p-3">
+    <Stack direction="vertical" gap={4} aria-hidden="true">
+      <Stack direction="vertical" gap={2}>
+        <Skeleton width={160} height={20} />
+        <Skeleton width="100%" height={96} />
+      </Stack>
+      <Stack direction="vertical" gap={2}>
         {[0, 1, 2].map((row) => (
-          <div key={row} className="bg-muted h-8 w-full rounded" />
+          <Skeleton key={row} width="100%" height={32} index={row} />
         ))}
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }
