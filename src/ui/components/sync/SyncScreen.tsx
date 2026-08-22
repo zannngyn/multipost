@@ -117,18 +117,19 @@ export function SyncScreen() {
           and an absolutely positioned `sr-only` node inside an unpositioned one
           anchors OUTSIDE it — see the note in AppFrame for what that does to the
           document height. */}
-      <div className="relative flex h-full min-h-0 flex-col overflow-y-auto @5xl:flex-row @5xl:overflow-hidden">
-        <div className="relative flex min-w-0 flex-1 flex-col @5xl:min-h-0 @5xl:overflow-y-auto @5xl:[scrollbar-gutter:stable]">
-          <header className="bg-background border-border sticky top-0 z-10 flex flex-wrap items-end justify-between gap-x-4 gap-y-3 border-b px-6 py-4">
-            <div className="min-w-0 space-y-1">
-              <h1 className="text-2xl leading-tight font-semibold tracking-tight">
-                Đồng bộ dữ liệu
-              </h1>
-              <p className="text-muted-foreground max-w-prose text-sm">
-                Đọc ảnh/video từ Drive và sản phẩm từ Sheet, rồi ghi vào hệ thống. Mọi file bị bỏ
-                qua đều được ghi nhận bên dưới.
-              </p>
-            </div>
+      {/* `scroll-pt-14` on both scrollers: the header below is `sticky top-0`,
+          so anything scrolled to — a focused control, a hash target — lands
+          UNDER the band and gets cut in half. The padding is the band's own
+          height, which is why the band may not grow: the page description used
+          to live in it and pushed it to ~108px, swallowing the heading of every
+          block an operator scrolled to (stage "03" at a 900px viewport). It now
+          scrolls with the content it introduces. */}
+      <div className="relative flex h-full min-h-0 scroll-pt-14 flex-col overflow-y-auto @5xl:flex-row @5xl:overflow-hidden">
+        <div className="relative flex min-w-0 flex-1 scroll-pt-14 flex-col @5xl:min-h-0 @5xl:overflow-y-auto @5xl:[scrollbar-gutter:stable]">
+          <header className="bg-background border-border sticky top-0 z-10 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-6 py-3">
+            <h1 className="min-w-0 text-2xl leading-tight font-semibold tracking-tight">
+              Đồng bộ dữ liệu
+            </h1>
 
             <div className="flex flex-wrap items-center gap-3">
               {status.isFetching && !isFirstLoad ? (
@@ -166,7 +167,14 @@ export function SyncScreen() {
                   : ""}
           </p>
 
-          <div className="flex min-w-0 flex-col gap-5 px-6 py-5">
+          <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+            {/* Body-quiet, and in the scrolling column: it is read once on the
+                first visit, so it does not get to sit on screen forever. */}
+            <p className="text-muted-foreground max-w-prose text-[13px]">
+              Đọc ảnh/video từ Drive và sản phẩm từ Sheet, rồi ghi vào hệ thống. Mọi file bị bỏ qua
+              đều được ghi nhận bên dưới.
+            </p>
+
             {run.isPending ? <SyncRunningCard /> : null}
 
             {/* A client timeout is NOT a failed sync: the request gave up at
