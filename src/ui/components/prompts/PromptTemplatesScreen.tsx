@@ -20,6 +20,7 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
+import { ACTIVATING_VERSION } from "@/ui/components/prompts/prompt-busy";
 import { PromptVersionForm } from "@/ui/components/prompts/PromptVersionForm";
 import { PromptVersionTable } from "@/ui/components/prompts/PromptVersionTable";
 import {
@@ -414,6 +415,14 @@ export function PromptTemplatesScreen() {
                           nextVersion={data.nextVersion}
                           defaultValues={draft}
                           pending={isSaving}
+                          /* The reverse lock (F1): while an activation is in
+                             flight this form may not submit either. "Lưu" can
+                             carry `activate: true`, so letting both run leaves
+                             the last response to decide which version is live —
+                             the same race the table refuses the other way
+                             round. Only the button locks; the fields stay
+                             live. */
+                          blockedReason={activate.isPending ? ACTIVATING_VERSION : null}
                           error={create.isError ? create.error : undefined}
                           firstFieldRef={firstFieldRef}
                           onDirtyChange={setFormDirty}
