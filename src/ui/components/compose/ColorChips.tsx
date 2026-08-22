@@ -142,7 +142,8 @@ function Chip({
         aria-hidden="true"
         style={swatch ? { background: swatch } : undefined}
         className={cn(
-          "flex size-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold shadow-[inset_0_0_0_1px_var(--border)]",
+          // 10px is the floor of the ramp (micro-label); 9px was below it.
+          "flex size-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold shadow-[inset_0_0_0_1px_var(--border)]",
           swatch ? "" : "bg-[var(--muted)] text-[var(--muted-foreground)]",
         )}
       >

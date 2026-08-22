@@ -35,6 +35,10 @@ typography:
     fontFamily: "Be Vietnam Pro, system-ui, sans-serif"
     fontSize: "1rem"
     fontWeight: 500
+  action-label:
+    fontFamily: "Be Vietnam Pro, system-ui, sans-serif"
+    fontSize: "15px"
+    fontWeight: 500
   body:
     fontFamily: "Be Vietnam Pro, system-ui, sans-serif"
     fontSize: "0.875rem"
@@ -190,6 +194,7 @@ Bảng màu là thuốc nhuộm tự nhiên trên vải mộc: chàm cho hành �
 - **Headline** (600, 1.25rem, tracking -0.025em): tiêu đề section trong trang ("Việc cần chú ý", "Lô đang chạy"), h1 màn compose.
 - **Title** (500, 1rem): nhấn trong card — hành động doorway, giá trị nổi.
 - **Body** (400/500, 0.875rem, lh 1.5): mặc định toàn UI — công cụ mật độ cao chạy trên text-sm.
+- **Action label** (500/600, **15px**): nhãn của control cỡ lớn màn compose (h-13 "Chọn kênh" / "Đăng ngay" / "Hẹn lịch"). Một bậc trên body, dưới title — nút cao 52px mà đeo chữ 14px thì chữ trôi trong ô; đây là bậc DUY NHẤT sinh ra cho control oversized, không dùng cho văn bản chạy.
 - **Body-quiet** (400, **13px**): bậc body phụ đã hợp thức hoá (PM ruling) — câu phụ đề, hint, note giải thích, control phụ trong compose.
 - **Label** (mono, 400, 0.75rem, tracking 0.1em, UPPERCASE): nhãn dệt (Eyebrow) trên heading và ô tape.
 - **Meta** (400, **11px**): chip đếm, đánh dấu inline nhỏ.
@@ -198,7 +203,7 @@ Bảng màu là thuốc nhuộm tự nhiên trên vải mộc: chàm cho hành �
 ### Named Rules
 **The Mono Ledger Rule.** Mã sản phẩm, số đuôi ảnh, số lượng, ID, số bước — luôn JetBrains Mono (`tabular-nums` khi là số đếm) để thẳng cột trong bảng, badge và tape.
 **The Woven Label Rule.** Nhãn dệt (Eyebrow) là mono uppercase tracking-widest màu Ink Subtle, luôn là `<p>` gắn nhãn cho khối theo sau — không bao giờ là heading, để không tạo outline trùng cho screen reader.
-**The Legitimized Ramp Rule.** Ramp gồm đúng các bậc trên, kể cả 13/11/10px đã được duyệt. Không thêm cỡ lẻ mới ngoài ramp; cần nhỏ hơn body thì chọn đúng bậc 13 → 12 → 11 → 10 theo vai trò, không theo chỗ trống.
+**The Legitimized Ramp Rule.** Ramp gồm đúng các bậc trên, kể cả **15**/13/11/10px đã được duyệt. Không thêm cỡ lẻ mới ngoài ramp: cần nhỏ hơn body thì chọn đúng bậc 13 → 12 → 11 → 10 theo vai trò (không theo chỗ trống), cần lớn hơn body thì 15 (action label) → 16 (title) → 18 (`text-lg`) → 20 (headline). Các cỡ đã bị loại vì nằm ngoài ramp: 19px (tiêu đề dialog chọn kênh → 18px) và 9px (chữ trong swatch tròn → 10px).
 **The Diacritics Rule.** Mọi font mới bắt buộc ship subset `vietnamese`; một mặt chữ không có dấu thanh cùng họ là bị loại ngay (lý do Outfit của bản duyệt gốc bị thay bằng Be Vietnam Pro).
 
 ## Layout
@@ -231,7 +236,7 @@ Cảm giác chung: **đồ nghề xưởng may** — phẳng, thẳng cột, m�
 - **Outline:** viền hairline, nền Muslin, hover Sunken Cloth. **Ghost:** trong suốt, hover Sunken Cloth. **Destructive:** nền Madder 10%, chữ Madder, hover 20% — không bao giờ khối đỏ đặc.
 
 ### Compose Controls (oversized)
-Màn compose dùng control cỡ 52px (h-13), chữ 15px, nền Swatch Card với vòng khâu inset thay border; hàng phụ 38px (h-9.5) chữ 13px. Nút toggle active ("Hẹn lịch" đang bật) = nền Indigo Wash + vòng khâu 1.5px chàm. Cạnh nút mờ luôn có câu 13px nói VÌ SAO (The Named Status Rule).
+Màn compose dùng control cỡ 52px (h-13), chữ **15px — bậc "action label" của ramp**, nền Swatch Card với vòng khâu inset thay border; hàng phụ 38px (h-9.5) chữ 13px. Nút toggle active ("Hẹn lịch" đang bật) = nền Indigo Wash + vòng khâu 1.5px chàm. Cạnh nút mờ luôn có câu 13px nói VÌ SAO (The Named Status Rule).
 
 ### Badges (status pill)
 - **Style:** rounded-full, text-xs font-medium, px-2.5 py-0.5.

@@ -13,7 +13,7 @@ import {
   Text,
 } from "@astryxdesign/core";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ChannelConnectPanel } from "@/ui/components/channels/ChannelConnectPanel";
 import { ChannelGroupsScreen } from "@/ui/components/channels/ChannelGroupsScreen";
@@ -111,17 +111,21 @@ export function ChannelsHub({ tab }: { tab: ChannelsTab }) {
   /** Which sentence the tooltips carry. Secrets first: it is the harder stop. */
   const writeBlockReason = secretsMissing ? undefined : (readOnlyReason ?? undefined);
 
-  const tokenInputRef = useRef<HTMLInputElement | null>(null);
   /**
-   * Set when a panel SENT the operator to "Kết nối thêm" — focus follows on the
-   * next render. A ref, not state: nothing renders differently because of it,
-   * and a setState inside the effect below would cost an extra render pass.
+   * Set when a panel SENT the operator to "Kết nối thêm" to paste a token.
+   * STATE, not a ref: the token box now lives behind a disclosure in that
+   * panel, so the request has to reach the panel's render — a ref would be
+   * invisible to it, and `tokenInputRef.current` would be `null` while the
+   * disclosure was still shut.
    */
-  const shouldFocusToken = useRef(false);
+  const [shouldOpenTokenField, setShouldOpenTokenField] = useState(false);
 
   const goToTab = useCallback(
     (next: ChannelsTab) => {
       if (next === active) return;
+      // Leaving "Kết nối thêm" drops the request: an operator who wandered off
+      // and came back later did not ask for a password box to pop open at them.
+      if (next !== "connect") setShouldOpenTokenField(false);
       // Only `?tab=` survives the switch: the rest of the query belongs to the
       // view being left. replace(), not push() — this is one page seen three
       // ways, and pushing would make Back walk the operator through every tab
@@ -131,20 +135,14 @@ export function ChannelsHub({ tab }: { tab: ChannelsTab }) {
     [active, pathname, router],
   );
 
-  // Sending someone to another tab without their focus is how a keyboard user
-  // ends up typing into the panel they just left (core-accessibility §4).
-  useEffect(() => {
-    if (active !== "connect") {
-      shouldFocusToken.current = false;
-      return;
-    }
-    if (!shouldFocusToken.current) return;
-    shouldFocusToken.current = false;
-    tokenInputRef.current?.focus();
-  }, [active]);
-
+  /**
+   * The flag is set in the SAME handler that switches the tab, so the panel is
+   * mounted with it already true and opens its token disclosure on the first
+   * frame — see `ChannelConnectPanel`. It is cleared on the way out of the tab
+   * (`goToTab` above), which is the only moment it could go stale.
+   */
   function goToConnectAndFocusToken() {
-    shouldFocusToken.current = true;
+    setShouldOpenTokenField(true);
     goToTab("connect");
   }
 
@@ -209,7 +207,7 @@ export function ChannelsHub({ tab }: { tab: ChannelsTab }) {
               ) : active === "connect" ? (
                 <Stack direction="vertical" padding={4} maxWidth={880}>
                   <ChannelConnectPanel
-                    tokenInputRef={tokenInputRef}
+                    shouldOpenTokenField={shouldOpenTokenField}
                     areWritesBlocked={areWritesBlocked}
                     blockedReasonOverride={writeBlockReason}
                   />

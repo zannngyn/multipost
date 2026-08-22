@@ -212,7 +212,9 @@ export function ChannelPickerDialog({
         className="bg-card text-foreground max-w-160 gap-0 overflow-hidden rounded-xl border-0 p-0"
       >
         <div className="px-6 py-5 shadow-[inset_0_-1px_0_var(--border)]">
-          <DialogTitle id={titleId} className="text-[19px] font-semibold">
+          {/* `text-lg` (18px), a step of the ramp — the 19px it used to carry
+              was a size the ramp does not have (The Legitimized Ramp Rule). */}
+          <DialogTitle id={titleId} className="text-lg font-semibold">
             Chọn kênh đăng
           </DialogTitle>
           <DialogDescription className="sr-only">

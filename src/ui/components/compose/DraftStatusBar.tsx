@@ -149,7 +149,9 @@ function describe(draft: ComposeDraftState, showRestoring: boolean): DraftStatus
       return { title: "Đang lưu nháp…", detail: null, dotClass: "bg-accent-foreground" };
     case "saved":
       return {
-        title: draft.updatedAt ? `Đã lưu nháp lúc ${formatSavedAt(draft.updatedAt)}` : "Đã lưu nháp",
+        title: draft.updatedAt
+          ? `Đã lưu nháp lúc ${formatDraftSavedAt(draft.updatedAt)}`
+          : "Đã lưu nháp",
         detail: "Đóng tab hay F5 đều không mất phần bạn đã gõ.",
         dotClass: "bg-success",
       };
@@ -177,9 +179,43 @@ function describe(draft: ComposeDraftState, showRestoring: boolean): DraftStatus
   }
 }
 
-/** "15:30" in the operator's own zone; the date is not news on this screen. */
-function formatSavedAt(iso: string): string {
+/**
+ * "15:30" today, "20/08 15:30" any other day, in the operator's own zone.
+ *
+ * The hour alone was a trap on the screen this line lives on: a draft is
+ * restored days later, and "Đã lưu nháp lúc 01:31" reads as "a minute ago" —
+ * the operator then trusts content typed before a catalog sync moved the stock.
+ * The date shows up exactly when it carries news, so the everyday case stays
+ * short (`formatDraftSavedAt` is exported for its test).
+ */
+export function formatDraftSavedAt(iso: string, now: Date = new Date()): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" }).format(date);
+
+  const time = new Intl.DateTimeFormat("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+  if (isSameLocalDay(date, now)) return time;
+
+  // The year is in, and on purpose: the `day/month` skeleton alone renders as
+  // "22-07" in the vi-VN ICU data, a separator that appears nowhere else in
+  // this app. Every other date on screen is dd/MM/yyyy (`formatScheduledAt`,
+  // `formatDateTime`), and one line reading differently is the kind of detail
+  // an operator notices without being able to name.
+  const day = new Intl.DateTimeFormat("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+  return `${day} ${time}`;
+}
+
+/** Local calendar day, not UTC — the operator reads their own clock. */
+function isSameLocalDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
