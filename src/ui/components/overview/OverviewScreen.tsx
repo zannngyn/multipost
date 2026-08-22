@@ -15,6 +15,7 @@ import {
   failureReason,
   pickAttentionItems,
   pickRunningBatches,
+  statTotal,
   statValue,
   type AttentionItem,
   type RunningBatch,
@@ -23,11 +24,13 @@ import {
 import { TenantHealthPanel } from "@/ui/components/tenant/TenantHealthPanel";
 import { Button } from "@/ui/components/ui/button";
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
+import { useCatalogProducts } from "@/ui/hooks/useCatalogProducts";
 import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useNowMs } from "@/ui/hooks/useNowMs";
 import { usePostJobLog } from "@/ui/hooks/usePostJobs";
 import { useScheduledJobs } from "@/ui/hooks/useScheduledJobs";
+import type { ProductFilter } from "@/ui/schemas/catalog.schema";
 import type { JobLogFilter } from "@/ui/schemas/post-batch.schema";
 import {
   formatCountdown,
@@ -94,6 +97,21 @@ const FAILED_JOBS: JobLogFilter = { status: "failed", batchId: null };
  * moving and costs nothing on a quiet morning.
  */
 const ALL_JOBS: JobLogFilter = { status: null, batchId: null };
+/**
+ * The published page, counted the same way as the other two log cells — one
+ * cursor page, "N+" while a cursor is outstanding. A `published` row is never
+ * `queued`/`publishing`, so `jobLogPollInterval` returns `false` for it and
+ * this query costs exactly one request per visit.
+ */
+const PUBLISHED_JOBS: JobLogFilter = { status: "published", batchId: null };
+/**
+ * The blocked codes. The KEY matches `/products?status=blocked`, the screen
+ * behind the cell, so opening it reuses this page instead of refetching — and
+ * the response carries `totals`, aggregated by SQL over the whole catalog
+ * rather than over the page. That number is EXACT, so this one cell says "12",
+ * not "12+": the "+" exists for cursor counts that cannot see the rest.
+ */
+const BLOCKED_PRODUCTS: ProductFilter = { status: "blocked", q: null };
 
 const SCHEDULED_HREF = "/posts?tab=scheduled";
 const FAILED_HREF = "/posts?tab=log&status=failed";
@@ -111,6 +129,8 @@ export function OverviewScreen() {
   const scheduled = useScheduledJobs(ALL_SCHEDULED);
   const failed = usePostJobLog(FAILED_JOBS);
   const running = usePostJobLog(ALL_JOBS);
+  const published = usePostJobLog(PUBLISHED_JOBS);
+  const blocked = useCatalogProducts(BLOCKED_PRODUCTS);
   // Names only: a row that cannot be named falls back to the raw channel id
   // rather than waiting for this query (see `channelLabel`).
   const channels = useChannels();
@@ -126,7 +146,13 @@ export function OverviewScreen() {
    */
   const scheduledWaiting = scheduled.data === undefined && !scheduled.isError;
   const failedWaiting = failed.data === undefined && !failed.isError;
-  const showSkeleton = useDelayedFlag(scheduledWaiting || failedWaiting);
+  const publishedWaiting = published.data === undefined && !published.isError;
+  const blockedWaiting = blocked.data === undefined && !blocked.isError;
+  // One flag for the whole tape: four cells that each decided their own moment
+  // to stop pulsing would flicker in sequence, which reads as four bugs.
+  const showSkeleton = useDelayedFlag(
+    scheduledWaiting || failedWaiting || publishedWaiting || blockedWaiting,
+  );
 
   const scheduledItems = useMemo(
     () => scheduled.data?.pages.flatMap((page) => page.items) ?? [],
@@ -136,6 +162,16 @@ export function OverviewScreen() {
     () => failed.data?.pages.flatMap((page) => page.items) ?? [],
     [failed.data],
   );
+  const publishedItems = useMemo(
+    () => published.data?.pages.flatMap((page) => page.items) ?? [],
+    [published.data],
+  );
+  /**
+   * `totals` is the SAME object on every page of the query (the usecase folds
+   * it before paging), so the first page is as good as the last — and reading
+   * page 0 means the cell has its number as soon as anything arrives.
+   */
+  const blockedTotal = blocked.data?.pages[0]?.totals.blocked;
 
   const attention = useMemo(
     () =>
@@ -146,6 +182,10 @@ export function OverviewScreen() {
           color: job.color,
           channelName: channelLabel(job.channelId, channels.data?.channels),
           reason: failureReason(job),
+          // Lets a folded row open the log filtered to its OWN lot instead of
+          // to every failure in the tenant — the log has no `?code=` filter,
+          // and a lot is one code's fan-out.
+          batchId: job.batchId,
         })),
         upcoming: scheduledItems.map((job) => ({
           id: job.postJobId,
@@ -153,6 +193,7 @@ export function OverviewScreen() {
           color: job.color,
           channelName: channelLabel(job.channelId, channels.data?.channels),
           scheduledAt: job.scheduledAt,
+          batchId: job.batchId,
         })),
       }),
     [failedItems, scheduledItems, channels.data],
@@ -182,7 +223,12 @@ export function OverviewScreen() {
     [running.data],
   );
 
-  const isRefreshing = scheduled.isFetching || failed.isFetching || running.isFetching;
+  const isRefreshing =
+    scheduled.isFetching ||
+    failed.isFetching ||
+    running.isFetching ||
+    published.isFetching ||
+    blocked.isFetching;
   /**
    * Only a refresh the OPERATOR asked for. The live region below is keyed on
    * this, not on `isRefreshing`: the lists poll on their own, and announcing
@@ -201,6 +247,8 @@ export function OverviewScreen() {
       scheduled.refetch(),
       failed.refetch(),
       running.refetch(),
+      published.refetch(),
+      blocked.refetch(),
       channels.isError ? channels.refetch() : Promise.resolve(),
     ]).then(() => setIsUserRefreshing(false));
   }
@@ -243,6 +291,17 @@ export function OverviewScreen() {
                 isError: failed.isError,
                 loaded: failedItems.length,
                 hasNextPage: failed.hasNextPage,
+              })}
+              published={statValue({
+                hasData: published.data !== undefined,
+                isError: published.isError,
+                loaded: publishedItems.length,
+                hasNextPage: published.hasNextPage,
+              })}
+              blocked={statTotal({
+                hasData: blocked.data !== undefined,
+                isError: blocked.isError,
+                total: blockedTotal,
               })}
               showSkeleton={showSkeleton}
             />
@@ -335,10 +394,14 @@ export function OverviewScreen() {
 function StatTape({
   scheduled,
   failed,
+  published,
+  blocked,
   showSkeleton,
 }: {
   scheduled: StatValue;
   failed: StatValue;
+  published: StatValue;
+  blocked: StatValue;
   showSkeleton: boolean;
 }) {
   return (
@@ -369,14 +432,20 @@ function StatTape({
         <StatCell
           label="Bài đã đăng"
           href={PUBLISHED_HREF}
-          action="Mở nhật ký"
-          hint="Chưa có số liệu đếm sẵn"
+          source={published}
+          showSkeleton={showSkeleton}
+          unit="bài đã lên"
+          destination="Mở nhật ký lọc theo bài đã đăng"
         />
+        {/* The only EXACT number on the tape: the catalog endpoint aggregates
+            its totals over the whole tenant, so this cell never wears a "+". */}
         <StatCell
           label="Mã bị chặn"
           href={BLOCKED_PRODUCTS_HREF}
-          action="Mở danh sách mã"
-          hint="Chưa có số liệu đếm sẵn"
+          source={blocked}
+          showSkeleton={showSkeleton}
+          unit="mã không đăng được"
+          destination="Mở danh sách mã bị chặn"
         />
       </ul>
     </nav>
@@ -384,9 +453,11 @@ function StatTape({
 }
 
 /**
- * One cell of the tape. Either it counts something (`source`) or it is a plain
- * doorway (`action`) — a doorway never shows a number, because there is no
- * endpoint behind it yet and a made-up figure on this screen would be believed.
+ * One cell of the tape: a woven label, a number, and where the number goes.
+ *
+ * All four cells count now. The two that used to say "Chưa có số liệu đếm sẵn"
+ * were doorways with a sentence where the figure belonged — the operator had to
+ * open the screen to learn whether there was anything to open it for.
  */
 function StatCell({
   label,
@@ -395,18 +466,13 @@ function StatCell({
   showSkeleton,
   unit,
   destination,
-  action,
-  hint,
 }: {
   label: string;
   href: string;
-  /** Absent = this cell is a doorway, not a count (see `action`). */
-  source?: StatValue;
-  showSkeleton?: boolean;
-  unit?: string;
-  destination?: string;
-  action?: string;
-  hint?: string;
+  source: StatValue;
+  showSkeleton: boolean;
+  unit: string;
+  destination: string;
 }) {
   return (
     <li className="bg-card">
@@ -416,45 +482,38 @@ function StatCell({
       >
         <Eyebrow>{label}</Eyebrow>
 
-        {source ? (
-          <span className="flex min-h-9 items-baseline gap-2">
-            {source.kind === "loading" ? (
-              showSkeleton ? (
-                <span
-                  aria-hidden="true"
-                  className="bg-muted h-8 w-16 self-center rounded motion-safe:animate-pulse"
-                />
-              ) : null
-            ) : source.kind === "unavailable" ? (
-              <span className="text-muted-foreground text-base">Không tải được</span>
-            ) : (
-              <>
-                {/* Keyed by the value: a count that CHANGED is the one thing on
-                    this screen allowed to move (raise 2). Same value, same key,
-                    no animation — a poll that changes nothing looks like
-                    nothing.
+        <span className="flex min-h-9 items-baseline gap-2">
+          {source.kind === "loading" ? (
+            showSkeleton ? (
+              <span
+                aria-hidden="true"
+                className="bg-muted h-8 w-16 self-center rounded motion-safe:animate-pulse"
+              />
+            ) : null
+          ) : source.kind === "unavailable" ? (
+            <span className="text-muted-foreground text-base">Không tải được</span>
+          ) : (
+            <>
+              {/* Keyed by the value: a count that CHANGED is the one thing on
+                  this screen allowed to move (raise 2). Same value, same key,
+                  no animation — a poll that changes nothing looks like nothing.
 
-                    It SETTLES rather than fades: the digit is at full ink for
-                    every frame it exists (craft floor — animate from an
-                    already-visible default), so a dropped frame or a throttled
-                    tab can never leave a washed-out number on screen. */}
-                <span
-                  key={source.text}
-                  className="font-mono text-4xl leading-none font-semibold tabular-nums motion-safe:animate-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-500 motion-safe:ease-out"
-                >
-                  {source.text}
-                </span>
-                <span className="text-muted-foreground text-sm">{unit}</span>
-              </>
-            )}
-          </span>
-        ) : (
-          <span className="flex min-h-9 items-center">
-            <span className="text-base font-medium">{action}</span>
-          </span>
-        )}
+                  It SETTLES rather than fades: the digit is at full ink for
+                  every frame it exists (craft floor — animate from an
+                  already-visible default), so a dropped frame or a throttled
+                  tab can never leave a washed-out number on screen. */}
+              <span
+                key={source.text}
+                className="font-mono text-4xl leading-none font-semibold tabular-nums motion-safe:animate-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-500 motion-safe:ease-out"
+              >
+                {source.text}
+              </span>
+              <span className="text-muted-foreground text-sm">{unit}</span>
+            </>
+          )}
+        </span>
 
-        <span className="text-muted-foreground text-xs">{hint ?? destination}</span>
+        <span className="text-muted-foreground text-xs">{destination}</span>
       </Link>
     </li>
   );
@@ -538,9 +597,26 @@ function AttentionBlock({
   );
 }
 
+/**
+ * One row of the block — which may stand for one job or for a whole fan-out.
+ *
+ * A folded row says the SHAPE of the problem ("× 5 kênh — lỗi giống nhau")
+ * instead of repeating one sentence five times, and it lands on a narrower
+ * destination: the log filtered to that lot, which is this code's fan-out. The
+ * job log has no `?code=` filter, so a lot every folded job agrees on is the
+ * closest true filter there is — and when they do not agree, the row keeps the
+ * wide link rather than picking one lot and calling it the answer.
+ */
 function AttentionRow({ item, nowMs }: { item: AttentionItem; nowMs: number }) {
   const isFailed = item.kind === "failed";
-  const href = isFailed ? FAILED_HREF : SCHEDULED_HREF;
+  const base = isFailed ? FAILED_HREF : SCHEDULED_HREF;
+  const href =
+    isFailed && item.batchId !== null
+      ? `${base}&batchId=${encodeURIComponent(item.batchId)}`
+      : base;
+
+  const isFolded = item.jobCount > 1;
+  const channels = item.channelNames.join(", ");
 
   return (
     <li>
@@ -560,15 +636,31 @@ function AttentionRow({ item, nowMs }: { item: AttentionItem; nowMs: number }) {
                 out loud and compares column-wise, never prose. */}
             <span className="font-mono text-sm font-semibold">{item.code}</span>
             {item.color ? <span className="text-sm">{item.color}</span> : null}
-            <span className="text-muted-foreground text-sm">· {item.channelName}</span>
+            <span className="text-muted-foreground text-sm">
+              {isFolded ? (
+                <>
+                  · <span className="tabular-nums">{item.jobCount}</span> kênh
+                </>
+              ) : (
+                <>· {item.channelNames[0]}</>
+              )}
+            </span>
           </span>
 
           {/* No `block` next to `line-clamp-2`: the clamp needs
               `display:-webkit-box`, and a display utility beside it silently
               turns the clamp off — three-line reasons in a six-row list. */}
           <span className="text-muted-foreground line-clamp-2 text-sm">
-            {isFailed ? item.reason : upcomingLine(item.scheduledAt, nowMs)}
+            {isFailed ? failedLine(item.reason, item.jobCount, item.isUniform) : null}
+            {!isFailed ? upcomingLine(item.scheduledAt, nowMs, item.isUniform) : null}
           </span>
+
+          {/* WHICH Pages, on its own line and only when there is more than one:
+              the sentence above says how many, and an operator's next question
+              is always which. One line, clamped — the log has the full list. */}
+          {isFolded ? (
+            <span className="text-muted-foreground/80 line-clamp-1 text-xs">{channels}</span>
+          ) : null}
         </span>
 
         <span className="sr-only">
@@ -580,47 +672,65 @@ function AttentionRow({ item, nowMs }: { item: AttentionItem; nowMs: number }) {
 }
 
 /**
+ * "Token hết hạn — 5 kênh lỗi giống nhau", or the honest version when they did
+ * not: one member's sentence must never be printed as if it spoke for the rest.
+ */
+function failedLine(reason: string, jobCount: number, isUniform: boolean): string {
+  if (jobCount <= 1) return reason;
+  if (isUniform) return `${reason} — ${jobCount} kênh lỗi giống nhau`;
+  return `${jobCount} kênh lỗi với lý do khác nhau — mở nhật ký để xem từng kênh.`;
+}
+
+/**
  * "Lên lúc 21/08/2026 15:30 · còn 2 giờ".
  *
  * `nowMs === 0` means the browser clock is not known yet (server render, first
  * frame): the hour is still shown, the countdown is not — a countdown computed
  * against a zero clock would read "quá giờ 56 năm".
+ *
+ * `isUniform === false` means the folded jobs do NOT share this hour, so the
+ * hour is labelled as the first of several rather than as the row's hour.
  */
-function upcomingLine(scheduledAt: string, nowMs: number): string {
+function upcomingLine(scheduledAt: string, nowMs: number, isUniform: boolean): string {
   const at = formatScheduledAt(scheduledAt);
   const instant = Date.parse(scheduledAt);
-  if (nowMs === 0 || Number.isNaN(instant)) return `Lên lúc ${at}`;
-  return `Lên lúc ${at} · ${formatCountdown(instant - nowMs)}`;
+  const lead = isUniform ? "Lên lúc" : "Sớm nhất lúc";
+  if (nowMs === 0 || Number.isNaN(instant)) return `${lead} ${at}`;
+  return `${lead} ${at} · ${formatCountdown(instant - nowMs)}`;
 }
 
 /**
- * The one primary action, drawn as the swatch card it is: pulled half out of
- * its sleeve, tab showing, ready to be taken. Under the pointer it comes out
- * a little further — the single hover moment on the page.
+ * The one primary action, drawn as the swatch card it is: stepped tabs on the
+ * top edge, ready to be taken. Under the pointer it lifts — the single hover
+ * moment on the page.
+ *
+ * NO SLEEVE BEHIND IT ANY MORE. The cream rectangle that used to sit under the
+ * indigo card read as a rendering fault at 1440 — an off-white edge poking out
+ * below the card, next to two tabs that overlapped each other (the accent tab
+ * started at 6.5rem, inside the 2–7rem the indigo one already occupied). The
+ * section box now CONTAINS its own decoration: `pt-3.5` is exactly the height
+ * of the taller tab, so nothing escapes the row above and the only thing left
+ * of the fan is the signature it was there for.
  */
 function ComposeCard({ headingId }: { headingId: string }) {
   return (
-    <section aria-labelledby={headingId} className="relative pb-4">
-      {/* The sleeve the card sits in. Decorative: the link below carries the
-          whole meaning, so this is hidden from the accessibility tree. */}
-      <span
-        aria-hidden="true"
-        className="border-border bg-secondary absolute inset-x-6 bottom-0 h-14 rounded-md border"
-      />
-
+    <section aria-labelledby={headingId} className="relative pt-3.5">
       <Link
         href="/compose"
         className="group border-primary bg-primary text-primary-foreground focus-visible:ring-ring/50 relative flex items-center justify-between gap-6 rounded-md border px-6 py-6 shadow-sm transition duration-300 ease-out outline-none hover:shadow-md focus-visible:ring-3 motion-safe:hover:-translate-y-1.5 motion-safe:focus-visible:-translate-y-1.5"
       >
         {/* The stepped tabs that identify a swatch card in this world: the card
-            in hand, and the next one in the fan behind it. */}
+            in hand, and the next one in the fan behind it. Decorative — the
+            link carries the whole meaning. Side by side, not stacked: 2→6rem
+            and 8→11.5rem, inside the 21rem column at every width, so the two
+            never sit on top of one another. */}
         <span
           aria-hidden="true"
-          className="bg-accent absolute -top-3.5 left-26 h-3.5 w-14 rounded-t-sm"
+          className="bg-primary absolute -top-2.5 left-8 h-2.5 w-16 rounded-t-sm"
         />
         <span
           aria-hidden="true"
-          className="bg-primary absolute -top-2.5 left-8 h-2.5 w-20 rounded-t-sm"
+          className="bg-accent absolute -top-3.5 left-32 h-3.5 w-14 rounded-t-sm"
         />
 
         <span className="space-y-1">
