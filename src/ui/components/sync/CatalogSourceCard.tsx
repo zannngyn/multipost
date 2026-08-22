@@ -19,6 +19,7 @@ import { useGoogleConnection } from "@/ui/hooks/useGoogleDrive";
 import { shortenId, type CatalogSource } from "@/ui/schemas/catalog.schema";
 import {
   parseGoogleConnectOutcome,
+  sourceAccessWarning,
   type GoogleConnectOutcome,
 } from "@/ui/schemas/google-drive.schema";
 
@@ -39,6 +40,12 @@ import {
  * Four states per region: loading (skeleton) / data / empty (chưa cấu hình) /
  * error. The connection and the source are separate queries on purpose — one
  * failing must not blank the other.
+ *
+ * On top of those, the card has a SIZE: once a source is stored and nothing on
+ * it needs attention, the whole thing folds into one summary row so the run's
+ * numbers are not pushed under the fold by settled configuration. See
+ * `canCollapse` for the list of things that keep it open — the full card is the
+ * default, and the row is the exception it has to earn.
  */
 export function CatalogSourceCard({
   onSourceChanged,
@@ -51,6 +58,8 @@ export function CatalogSourceCard({
   // Lifted out of the disclosure: the "Đổi nguồn" button in the header points
   // at the SAME panel, so both controls need the id.
   const manualPanelId = `${baseId}-manual`;
+  /** The whole card body, so the collapsed row's button can point at it. */
+  const detailsId = `${baseId}-details`;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -69,6 +78,13 @@ export function CatalogSourceCard({
   const [isPicking, setIsPicking] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
   const [hasAutoOpenedManual, setHasAutoOpenedManual] = useState(false);
+  /**
+   * Operator intent, not a derived value: once this card is opened it STAYS
+   * open until the operator closes it or a source change completes. Deriving it
+   * would collapse the card underneath somebody mid-task — e.g. the moment a
+   * disconnect succeeds, or the moment an OAuth banner is dismissed.
+   */
+  const [isExpanded, setIsExpanded] = useState(false);
 
   // --- OAuth callback: `?google=connected|cancelled|error&reason=…` ---------
   const search = searchParams.toString();
@@ -82,7 +98,13 @@ export function CatalogSourceCard({
   if (lastReadSearch !== search) {
     setLastReadSearch(search);
     const parsed = parseGoogleConnectOutcome(new URLSearchParams(search));
-    if (parsed) setOutcome(parsed);
+    if (parsed) {
+      setOutcome(parsed);
+      // Coming back from Google IS the source-setup flow. The card has to be
+      // open to show what the round trip produced — and it must stay open after
+      // the banner is dismissed, or the answer would take the card with it.
+      setIsExpanded(true);
+    }
   }
 
   useEffect(() => {
@@ -136,15 +158,58 @@ export function CatalogSourceCard({
   function finishSourceChange() {
     setIsPicking(false);
     setIsManualOpen(false);
+    // The change is done and the facts are settled — back to one line.
+    setIsExpanded(false);
     onSourceChanged?.();
   }
+
+  /**
+   * The source is set-once configuration; on a normal morning it is 400px of
+   * settled facts standing between the operator and the run they came to read.
+   * It collapses to a single row — but ONLY when there is genuinely nothing to
+   * act on, and every condition below is a thing that must never be hidden:
+   *
+   *  - no stored source, or either query still loading / failed — the card is
+   *    the only place that says so;
+   *  - `expired` — a running failure the tenant does not know about (rule 5);
+   *  - a source-access warning — the sentence that stops somebody pressing
+   *    "Chạy đồng bộ" and wiping the catalogue;
+   *  - an OAuth outcome still on screen, the picker open, or the manual form
+   *    open — the operator is mid-flow.
+   *
+   * Anything unexpected therefore renders the FULL card: the collapsed row is
+   * the exception, not the default path.
+   */
+  const connectionData = connection.data ?? null;
+  const sourceWarning =
+    connectionData?.state === "connected" && connectionData.sourceAccess
+      ? sourceAccessWarning(connectionData.sourceAccess)
+      : null;
+  const canCollapse =
+    configured !== null &&
+    !isFirstLoad &&
+    !source.isError &&
+    !isConnectionFirstLoad &&
+    !connection.isError &&
+    connectionData !== null &&
+    connectionData.state !== "expired" &&
+    sourceWarning === null &&
+    outcome === null &&
+    !isPicking &&
+    !isManualOpen;
+  const isCollapsed = canCollapse && !isExpanded;
 
   return (
     <section
       aria-labelledby={headingId}
       className="@container bg-card border-border overflow-hidden rounded-xl border"
     >
-      <div className="border-border flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5",
+          isCollapsed ? null : "border-border border-b",
+        )}
+      >
         {/* Eyebrow styling on a real heading: the block needs a title in the
             outline, and <Eyebrow> is a <p> by design. */}
         <h2
@@ -153,14 +218,52 @@ export function CatalogSourceCard({
         >
           Nguồn đang đọc
         </h2>
+
+        {/* Collapsed: the two ids and the tab name ARE the summary. There is no
+            folder or spreadsheet NAME in `CatalogSource` (the API stores ids,
+            urls and `sheetName` only), and inventing one — or fetching it from
+            Drive in the browser — is not on the table. */}
+        {isCollapsed && configured !== null ? (
+          <p className="text-muted-foreground min-w-0 flex-1 text-xs">
+            <span className="font-mono" title={configured.driveFolderId}>
+              Drive {shortenId(configured.driveFolderId)}
+            </span>
+            <span aria-hidden="true"> · </span>
+            <span className="font-mono" title={configured.spreadsheetId}>
+              Sheet {shortenId(configured.spreadsheetId)}
+            </span>
+            <span aria-hidden="true"> · </span>
+            tab <span className="text-foreground font-medium">{configured.sheetName}</span>
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-2">
           {source.isFetching || connection.isFetching ? (
             <Badge tone="neutral">Đang làm mới…</Badge>
           ) : null}
+
+          {/* One control for the whole card, and it names what it does. It is
+              offered in read-only mode too: opening the facts is reading. */}
+          {canCollapse ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-expanded={isExpanded}
+              aria-controls={detailsId}
+              onClick={() => setIsExpanded((open) => !open)}
+            >
+              {isExpanded ? "Thu gọn" : "Đổi nguồn"}
+            </Button>
+          ) : null}
           {/* Only for the tenants the picker cannot serve, and only once the
               status is known — offering it while the answer is still loading
-              would flash a button at everyone. */}
-          {configured !== null && needsManualEntry && !isPicking && !gate.isDisabled ? (
+              would flash a button at everyone. Suppressed while the card can
+              collapse: the control above already carries this label, and two
+              buttons reading "Đổi nguồn" side by side is a coin toss. The
+              manual editor is still one click away as its own disclosure at the
+              foot of the opened card. */}
+          {!canCollapse && configured !== null && needsManualEntry && !isPicking && !gate.isDisabled ? (
             <Button
               type="button"
               variant="outline"
@@ -175,54 +278,58 @@ export function CatalogSourceCard({
         </div>
       </div>
 
-      <GoogleConnectionPanel
-        connection={connection}
-        outcome={outcome}
-        onDismissOutcome={() => setOutcome(null)}
-        onPickSource={() => setIsPicking(true)}
-        isPicking={isPicking}
-      />
-
-      {isPicking ? (
-        <div className="border-border space-y-3 border-b p-4">
-          <p className="text-muted-foreground max-w-prose text-sm">
-            Chọn thư mục ảnh, bảng Google Sheet và tab dữ liệu ngay tại đây. Nguồn chỉ được lưu ở
-            bước cuối, sau khi bạn xác nhận.
-          </p>
-          <GoogleDrivePicker
-            onSaved={finishSourceChange}
-            onCancel={() => setIsPicking(false)}
+      {/* Unmounted when collapsed, not hidden: the picker and the manual form
+          hold draft values and server errors, and a form nobody can see must
+          not keep either alive. */}
+      {isCollapsed ? null : (
+        <div id={detailsId}>
+          <GoogleConnectionPanel
+            connection={connection}
+            outcome={outcome}
+            onDismissOutcome={() => setOutcome(null)}
+            onPickSource={() => setIsPicking(true)}
+            isPicking={isPicking}
           />
+
+          {isPicking ? (
+            <div className="border-border space-y-3 border-b p-4">
+              <p className="text-muted-foreground max-w-prose text-sm">
+                Chọn thư mục ảnh, bảng Google Sheet và tab dữ liệu ngay tại đây. Nguồn chỉ được lưu
+                ở bước cuối, sau khi bạn xác nhận.
+              </p>
+              <GoogleDrivePicker onSaved={finishSourceChange} onCancel={() => setIsPicking(false)} />
+            </div>
+          ) : (
+            <SourceRegion
+              isFirstLoad={isFirstLoad}
+              showSkeleton={showSkeleton}
+              isError={source.isError}
+              error={source.error}
+              onRetry={() => void source.refetch()}
+              configured={configured}
+              isConnectionPending={isConnectionFirstLoad}
+              canPick={isConnected && !gate.isDisabled}
+              onPick={() => setIsPicking(true)}
+              readOnlyReason={gate.reason}
+            />
+          )}
+
+          {/* The manual editor is not offered at all in read-only mode: a form
+              whose save can only 403 invites typing that gets thrown away. */}
+          {gate.isDisabled ? null : (
+            <ManualSourceDisclosure
+              panelId={manualPanelId}
+              isOpen={isManualOpen}
+              onToggle={() => setIsManualOpen((open) => !open)}
+            >
+              <CatalogSourceForm
+                current={configured ?? undefined}
+                onSaved={finishSourceChange}
+                onCancel={() => setIsManualOpen(false)}
+              />
+            </ManualSourceDisclosure>
+          )}
         </div>
-      ) : (
-        <SourceRegion
-          isFirstLoad={isFirstLoad}
-          showSkeleton={showSkeleton}
-          isError={source.isError}
-          error={source.error}
-          onRetry={() => void source.refetch()}
-          configured={configured}
-          isConnectionPending={isConnectionFirstLoad}
-          canPick={isConnected && !gate.isDisabled}
-          onPick={() => setIsPicking(true)}
-          readOnlyReason={gate.reason}
-        />
-      )}
-
-      {/* The manual editor is not offered at all in read-only mode: a form
-          whose save can only 403 invites typing that gets thrown away. */}
-      {gate.isDisabled ? null : (
-        <ManualSourceDisclosure
-          panelId={manualPanelId}
-          isOpen={isManualOpen}
-          onToggle={() => setIsManualOpen((open) => !open)}
-        >
-          <CatalogSourceForm
-            current={configured ?? undefined}
-            onSaved={finishSourceChange}
-            onCancel={() => setIsManualOpen(false)}
-          />
-        </ManualSourceDisclosure>
       )}
     </section>
   );
