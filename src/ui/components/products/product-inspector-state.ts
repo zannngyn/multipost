@@ -60,7 +60,17 @@ export interface InspectorRecovery {
 }
 
 /** The same thing once the screen has attached the handler that performs it. */
-export type InspectorRecoveryAction = InspectorRecovery & { onPress: () => void };
+export type InspectorRecoveryAction = InspectorRecovery & {
+  onPress: () => void;
+  /**
+   * The action is in flight. Required, not optional: "Tải thêm sản phẩm" fetches
+   * a page WITHOUT changing anything the drawer shows — it keeps saying "Không
+   * thấy mã …" until the row arrives — so a button with no busy state reads as
+   * dead and gets pressed again. Whoever attaches `onPress` is the only one who
+   * knows when it has landed, so they have to answer this.
+   */
+  isBusy: boolean;
+};
 
 const RECOVERY_LABELS: Record<InspectorRecoveryKind, string> = {
   "clear-filter": "Bỏ bộ lọc và tìm lại",

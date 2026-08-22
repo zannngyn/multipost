@@ -115,7 +115,17 @@ export function ProductInspector({
         // behind is pointing at something the dialog has made inert.
         actions={
           recovery ? (
-            <Button variant="secondary" label={recovery.label} onClick={recovery.onPress} />
+            // `isLoading`, not a swapped label: the fetch it starts changes
+            // nothing else in this box — the title still reads "Không thấy mã
+            // …" until the row lands — so the button is the only thing that can
+            // say the press was heard. It also disables while pending, which is
+            // what stops a second press queuing a second page.
+            <Button
+              variant="secondary"
+              label={recovery.label}
+              isLoading={recovery.isBusy}
+              onClick={recovery.onPress}
+            />
           ) : undefined
         }
       />
