@@ -1,9 +1,13 @@
 "use client";
 
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { useWatch } from "react-hook-form";
 
-import { channelNameOf } from "@/ui/components/channels/channel-option-labels";
+import {
+  channelLabelIndex,
+  channelNameOf,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
 import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
 import { activeCaptionChannel } from "@/ui/components/compose/caption-targets";
 import { ChannelChoice } from "@/ui/components/compose/ChannelChoice";
@@ -183,15 +187,24 @@ export function ComposeFocus() {
     ? channelName(channels.data?.channels, previewChannelId)
     : PREVIEW_PAGE_NAME;
 
+  /**
+   * ONE index for the whole missing-caption list, resolved before the map:
+   * `channelNameOf` rebuilds a Map of every channel per call, and naming a list
+   * row by row is the O(rows × channels) shape `channelLabelIndex` exists to
+   * stop (its own docblock asks callers not to do it).
+   */
+  const missingCaptionNames = useMemo(() => {
+    const index = channelLabelIndex(publish.missingCaptionIds, channels.data?.channels);
+    return publish.missingCaptionIds.map((id) => channelSentenceName(id, index));
+  }, [publish.missingCaptionIds, channels.data]);
+
   const action = describeAction({
     readOnlyReason,
     hasChannels: publishableChannels(channels.data?.channels ?? []).length > 0,
     hasComposed: Boolean(composed),
     // NAMED, not counted: "Camilla chưa có caption" is actionable, "1 kênh
     // thiếu caption" sends the operator hunting through tabs.
-    missingCaptionChannels: publish.missingCaptionIds.map((id) =>
-      channelName(channels.data?.channels, id),
-    ),
+    missingCaptionChannels: missingCaptionNames,
     channels: publish.selectedIds.length,
     canSubmit: publish.canSubmit,
   });
@@ -577,7 +590,8 @@ function Step({ n, label, children }: { n: number; label: string; children: Reac
 const PREVIEW_CHANNEL = "facebook";
 
 /**
- * A Page's name, said the way the whole app says it (spec §3.1).
+ * A Page's name, said the way the whole app says it (spec §3.1). ONE id only —
+ * the preview header; a list resolves once with `channelLabelIndex` instead.
  *
  * Delegates rather than re-deriving: the id alone is printed only when there is
  * genuinely no name to print — the channel list has not arrived — and a Page
