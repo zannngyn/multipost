@@ -102,6 +102,18 @@ describe("BulkProgressTable", () => {
     expect(html).toContain("cuộn ngang được");
   });
 
+  it("uses the app's ONE scroll-cue frame, not a sentence of its own", () => {
+    // Ruling T3: `TableScrollRegion` + `scroll-cue-x` is the single pattern for
+    // a table wider than its box. This table used to print its own hint under
+    // itself, keyed to a container breakpoint guessed from `min-w-160` — a
+    // second dialect for the same fact, and one that could not tell whether the
+    // table was really overflowing.
+    const html = render([row()]);
+
+    expect(html).toContain("scroll-cue-x");
+    expect(html).not.toContain("Cuộn bảng sang phải");
+  });
+
   it("shows the refusal sentence and its error code on the row that was refused", () => {
     const html = render([
       row({
