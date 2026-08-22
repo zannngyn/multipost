@@ -131,10 +131,13 @@ export function ChannelConnectPanel({
   const isBusy = importChannels.isPending || refresh.isPending;
 
   /**
-   * Every disabled control below carries this sentence. Astryx keeps a control
-   * with `disabledMessage`/`tooltip` focusable via aria-disabled, so a keyboard
-   * user reaches the reason too — a dead control that explains nothing is worse
-   * than one that fails loudly.
+   * The reason every blocked control below is off. It is also rendered as plain
+   * text beside the primary action, which is the only route a keyboard user has
+   * to it today: that button is a native `<button disabled>`, so it takes no
+   * focus and exposes no `disabledMessage`/`tooltip`. The Astryx controls in the
+   * manual-token form do carry the sentence on `disabledMessage`/`tooltip`.
+   * TODO(wave 2): give the primary action the aria-disabled treatment so the
+   * reason is reachable from the control itself, not only from the text below.
    */
   const blockedReason = areWritesBlocked
     ? (blockedReasonOverride ?? secretsNotConfiguredReason())

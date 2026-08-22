@@ -444,7 +444,7 @@ function StatTape({
           href={BLOCKED_PRODUCTS_HREF}
           source={blocked}
           showSkeleton={showSkeleton}
-          unit="mã không đăng được"
+          unit="mã bị chặn"
           destination="Mở danh sách mã bị chặn"
         />
       </ul>
@@ -508,7 +508,9 @@ function StatCell({
               >
                 {source.text}
               </span>
-              <span className="text-muted-foreground text-sm">{unit}</span>
+              {/* nowrap: a unit that wraps to a second line drags its cell's
+                  baseline down and the tape stops reading as one row. */}
+              <span className="text-muted-foreground text-sm whitespace-nowrap">{unit}</span>
             </>
           )}
         </span>
