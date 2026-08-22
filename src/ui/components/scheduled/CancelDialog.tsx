@@ -99,7 +99,7 @@ export function CancelDialog({
                   // scheduled — so this is worded as an attempt, not a promise.
                   // "Facebook sẽ không đăng nữa" belongs to the success message
                   // the server sends back, where it is true.
-                  "Bài này đang được Facebook giữ. Khi bấm huỷ, hệ thống sẽ cố gỡ bài khỏi Facebook trước, gỡ được mới đánh dấu “Bị chặn”. Nếu không gỡ được, màn hình sẽ báo lại kèm hướng dẫn — bài vẫn sẽ tự đăng cho tới khi bạn vào Trang xoá tay. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."
+                  "Bài này đang được Facebook giữ. Khi bấm huỷ, hệ thống sẽ cố gỡ bài khỏi Facebook trước, gỡ được mới đánh dấu “Bị chặn”. Nếu không gỡ được, màn hình sẽ báo lại kèm hướng dẫn — bài vẫn sẽ tự đăng cho tới khi bạn vào Page xoá tay. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."
                 : "Huỷ xong bài sẽ chuyển sang trạng thái “Bị chặn” và không bao giờ lên kênh này. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."}
             </p>
 

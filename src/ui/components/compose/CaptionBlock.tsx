@@ -46,7 +46,7 @@ import { COMPOSE_CHANNELS, type ComposeResponse } from "@/ui/schemas/compose.sch
  *   body    the caption on a raised card, hashtags on their own blue line (96–99)
  *   footer  "GỢI Ý THẺ" · đã dùng x/10 · chips "+ #tag"                  (100–109)
  *
- * ONE CAPTION PER CHANNEL (brief §7.2). A post that goes to five Fanpages needs
+ * ONE CAPTION PER CHANNEL (brief §7.2). A post that goes to five Pages needs
  * five texts, not one repeated five times — the platform reads identical posts
  * as spam and the server's validator (D1: trùng > 8 từ liên tiếp) refuses them.
  * So above the header sits a row of channel tabs, one per ticked Page, each
@@ -100,7 +100,7 @@ export function CaptionBlock({
   const { selectedIds, captionSources } = publish;
 
   /**
-   * "Viết caption cho N trang" — one press, one call per Page, each landing on
+   * "Viết caption cho N kênh" — one press, one call per Page, each landing on
    * its own tab. Declared before the early return below, as every hook must be.
    */
   const fanOut = useCaptionFanOut({
@@ -177,7 +177,7 @@ export function CaptionBlock({
   const channelNames = channelLabelIndex(selectedIds, channels.data?.channels);
   const nameOf = (channelId: string): string => channelSentenceName(channelId, channelNames);
 
-  // The AI answers for the PLATFORM channel ("facebook"), never for a Fanpage
+  // The AI answers for the PLATFORM channel ("facebook"), never for a Page
   // id — the request carries the product, not the Page. Its result therefore
   // belongs to whichever tab asked for it.
   const answer = captions.data;
@@ -393,7 +393,7 @@ export function CaptionBlock({
             >
               {fanOut.isRunning
                 ? `Đang viết ${fanOut.done}/${fanOut.total}…`
-                : `Viết caption cho ${selectedIds.length} trang`}
+                : `Viết caption cho ${selectedIds.length} kênh`}
             </button>
           ) : null}
 
@@ -408,7 +408,7 @@ export function CaptionBlock({
               ? "Đang viết…"
               : value.trim().length > 0
                 ? canFanOut && selectedIds.length > 1
-                  ? "Viết lại trang này"
+                  ? "Viết lại kênh này"
                   : "Viết lại"
                 : "Nhờ AI viết"}
           </button>
@@ -441,7 +441,7 @@ export function CaptionBlock({
               disabled={busy}
               className="focus-visible:ring-ring cursor-pointer rounded-md px-2 py-0.5 font-semibold underline underline-offset-2 outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Viết lại trang này
+              Viết lại kênh này
             </button>
           </p>
         ) : null}
@@ -453,7 +453,7 @@ export function CaptionBlock({
           <p className="mx-4 mb-3 rounded-xl bg-[var(--warning)]/15 px-3.5 py-2.5 text-xs leading-relaxed text-[var(--warning-foreground)]">
             Caption này trùng {MAX_SHARED_WORD_RUN + 1} từ liên tiếp với{" "}
             {nameOf(duplicates[activeId].otherChannelId)}: “{duplicates[activeId].run}”. Bấm “Viết
-            lại trang này” để có bản khác — máy chủ sẽ chặn bài trùng khi đăng.
+            lại kênh này” để có bản khác — máy chủ sẽ chặn bài trùng khi đăng.
           </p>
         ) : null}
 
@@ -481,7 +481,7 @@ export function CaptionBlock({
         {activeId && channelCaptionState(captionSources, activeId) === "inherited" ? (
           <p className="mx-4 mb-3 rounded-xl bg-[var(--warning)]/15 px-3.5 py-2.5 text-xs leading-relaxed text-[var(--warning-foreground)]">
             Kênh này đang dùng chung caption với các kênh khác. Sửa hoặc bấm “Viết lại” để có bản
-            riêng — nhiều Fanpage đăng y hệt nhau dễ bị coi là spam.
+            riêng — nhiều Page đăng y hệt nhau dễ bị coi là spam.
           </p>
         ) : null}
 
@@ -501,11 +501,11 @@ export function CaptionBlock({
 
       <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">
         {publish.shareCaption
-          ? "Mọi kênh đã chọn sẽ nhận đúng caption này. Bật “caption riêng” khi đăng nhiều Fanpage — nội dung trùng hệt nhau dễ bị nền tảng coi là spam."
+          ? "Mọi kênh đã chọn sẽ nhận đúng caption này. Bật “caption riêng” khi đăng nhiều Page — nội dung trùng hệt nhau dễ bị nền tảng coi là spam."
           : selectedIds.length > 1
-            ? "Mỗi kênh một caption riêng. Bấm “Viết caption cho N trang” để AI viết cho tất cả, hoặc mở từng tab để sửa tay."
+            ? "Mỗi kênh một caption riêng. Bấm “Viết caption cho N kênh” để AI viết cho tất cả, hoặc mở từng tab để sửa tay."
             : selectedIds.length === 1
-              ? "Chọn thêm kênh để mỗi Fanpage có một caption riêng."
+              ? "Chọn thêm kênh để mỗi kênh có một caption riêng."
               : ""}
       </p>
     </div>
@@ -565,9 +565,9 @@ function PerChannelSwitch({
       <span className="text-xs text-[var(--muted-foreground)]">
         {perChannel
           ? channelCount > 1
-            ? `${channelCount} trang, mỗi trang một bản`
-            : "mỗi trang một bản"
-          : "một caption cho mọi trang"}
+            ? `${channelCount} kênh, mỗi kênh một bản`
+            : "mỗi kênh một bản"
+          : "một caption cho mọi kênh"}
       </span>
     </label>
   );
@@ -582,7 +582,7 @@ function NoChannelYet({ onOpenPicker }: { onOpenPicker: () => void }) {
     <div className="flex flex-col items-start gap-2 rounded-lg bg-[var(--muted)] px-4 py-8 shadow-[inset_0_0_0_1px_var(--border)]">
       <p className="text-sm font-medium">Chọn kênh đăng trước để viết caption</p>
       <p className="max-w-110 text-xs leading-relaxed text-[var(--muted-foreground)]">
-        Mỗi Fanpage cần một caption riêng, nên hệ thống hỏi bạn đăng lên đâu trước rồi mới viết.
+        Mỗi kênh cần một caption riêng, nên hệ thống hỏi bạn đăng lên đâu trước rồi mới viết.
       </p>
       <button
         type="button"

@@ -79,11 +79,11 @@ describe("ChannelGroupFormSchema", () => {
 
   it("accepts a normal group and trims the name", () => {
     const parsed = ChannelGroupFormSchema.safeParse({
-      name: "  Fanpage chính ",
+      name: "  Page chính ",
       channelIds: ["ch-1", "ch-2"],
     });
     expect(parsed.success).toBe(true);
-    expect(parsed.success && parsed.data.name).toBe("Fanpage chính");
+    expect(parsed.success && parsed.data.name).toBe("Page chính");
     expect(parsed.success && parsed.data.channelIds).toEqual(["ch-1", "ch-2"]);
   });
 });

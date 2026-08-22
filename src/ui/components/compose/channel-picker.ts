@@ -6,7 +6,7 @@ import type { Channel } from "@/ui/schemas/channel.schema";
  *
  * Everything here decides WHICH Pages a post is about to go to, so it lives
  * outside React where it can be tested directly: a wrong answer means a post
- * landing on the wrong Fanpage, which is not something a component test on a
+ * landing on the wrong Page, which is not something a component test on a
  * rendered checkbox would reliably catch.
  */
 

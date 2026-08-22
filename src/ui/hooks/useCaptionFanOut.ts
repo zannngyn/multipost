@@ -13,10 +13,10 @@ import { ApiError } from "@/ui/services/api-error";
 import { generateCaptions } from "@/ui/services/post.api";
 
 /**
- * "Viết caption cho N trang" — one press, one caption per selected Fanpage.
+ * "Viết caption cho N kênh" — one press, one caption per selected Page.
  *
  * WHY N CALLS AND NOT ONE: `POST /api/posts/captions` takes the PLATFORM
- * catalogue (`["facebook"]`), never a Fanpage id — the prompt is built from the
+ * catalogue (`["facebook"]`), never a Page id — the prompt is built from the
  * product, so there is nothing per-Page to send. Asking N times is what
  * produces N different texts, which is the whole point: brief §7.2 and the
  * server's validator D1 both refuse a post whose channels carry the same words.

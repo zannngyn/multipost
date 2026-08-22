@@ -14,7 +14,7 @@ import type { Channel } from "@/ui/schemas/channel.schema";
  * they can only compare character by character. Every screen that used to print
  * one now prints the NAME, and keeps the id as the secondary, mono line for
  * quoting to support. The rule itself lives here, out of React, because getting
- * it wrong means posting to the wrong Fanpage.
+ * it wrong means posting to the wrong Page.
  *
  * Built on `resolveGroupChannelLabels` (wave 1) so there is ONE answer to
  * "what do we say about this channel id" — including its most important clause:

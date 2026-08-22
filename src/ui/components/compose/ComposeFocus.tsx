@@ -412,7 +412,7 @@ export function ComposeFocus() {
             </Step>
 
             {/* KÊNH ĐĂNG BEFORE CAPTION (PM, 21/08/2026): a caption is written
-                per Fanpage, so "đăng lên đâu" has to be answered before there is
+                per Page, so "đăng lên đâu" has to be answered before there is
                 anything to write. The caption block below says so in words when
                 nothing is ticked yet. The two stops appear together, under the
                 same condition the colours and the album do — a composed post. */}
@@ -589,7 +589,7 @@ function channelName(channels: readonly Channel[] | undefined, channelId: string
 }
 
 /** Stand-in until a channel is ticked — naming a Page nobody chose would lie. */
-const PREVIEW_PAGE_NAME = "Trang Facebook của bạn";
+const PREVIEW_PAGE_NAME = "Page Facebook của bạn";
 
 /**
  * "Kiểu bài" as the design draws it — one track — over the two fields the API
@@ -608,7 +608,7 @@ const POST_KINDS = [
   {
     value: "video",
     label: "Video",
-    hint: "Một clip, đăng lên dòng thời gian của Trang. Tỷ lệ 9:16 đến 16:9.",
+    hint: "Một clip, đăng lên dòng thời gian của Page. Tỷ lệ 9:16 đến 16:9.",
     mediaKind: "video" as MediaKind,
     videoTarget: "facebook_video" as VideoTarget,
   },

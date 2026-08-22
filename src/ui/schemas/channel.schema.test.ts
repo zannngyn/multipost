@@ -429,12 +429,36 @@ describe("formatImportSummary", () => {
 
   it("reports the real numbers", () => {
     expect(formatImportSummary({ imported: 2, updated: 1 })).toBe(
-      "Đã thêm 2 Page, cập nhật 1 Page.",
+      "Đã nhập 2 Page, cập nhật 1 Page.",
     );
   });
 
   it("never leaves a skipped Page unmentioned", () => {
-    expect(formatImportSummary({ imported: 1, updated: 0, skipped: 2 })).toContain("Bỏ qua 2 Page");
-    expect(formatImportSummary({ imported: 1, updated: 0, skipped: 0 })).not.toContain("Bỏ qua");
+    expect(formatImportSummary({ imported: 1, updated: 0, skipped: 2 })).toContain(
+      "2 Page bị bỏ qua",
+    );
+    expect(formatImportSummary({ imported: 1, updated: 0, skipped: 0 })).not.toContain("bỏ qua");
+  });
+
+  // Spec §3.5, the reason this test exists at all: the two doors into "Kênh"
+  // (pasted token here, OAuth in `connectSuccessView`) drifted into two voices.
+  // Pinning the shared words is what stops the next edit to one door from
+  // re-opening the gap — a reviewer cannot see both files at once.
+  it("speaks the same words as the OAuth door", () => {
+    const pasted = formatImportSummary({ imported: 2, updated: 1, skipped: 3 });
+    const oauth = connectSuccessView({ kind: "connected", count: 2, newCount: 1, skipped: 3 });
+
+    // Same verb for "these Pages are now in the tool".
+    expect(pasted).toContain("Đã nhập 2 Page");
+    expect(oauth.title).toContain("Đã nhập 2 Page");
+
+    // Same skeleton for a refused Page: "N Page bị bỏ qua — <lý do>".
+    expect(pasted).toContain("3 Page bị bỏ qua — ");
+    expect(`${oauth.title} ${oauth.description}`).toContain("3 Page bị bỏ qua");
+    expect(oauth.description).toContain("3 Page bị bỏ qua — ");
+
+    // Both send the operator to the same place to check.
+    expect(pasted).toContain("tài khoản Facebook");
+    expect(oauth.description).toContain("tài khoản Facebook");
   });
 });

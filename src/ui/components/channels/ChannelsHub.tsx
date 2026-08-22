@@ -159,7 +159,7 @@ export function ChannelsHub({ tab }: { tab: ChannelsTab }) {
             <Stack direction="vertical" gap={1}>
               <Heading level={1}>Kênh</Heading>
               <Text type="supporting">
-                Những Fanpage bài viết có thể được đăng lên, các nhóm kênh dùng để tick nhanh ở màn
+                Những Page bài viết có thể được đăng lên, các nhóm kênh dùng để tick nhanh ở màn
                 soạn bài, và chỗ kết nối thêm Page mới.
               </Text>
             </Stack>

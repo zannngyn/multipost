@@ -15,7 +15,7 @@ import {
 
 /**
  * "Mỗi kênh một caption" (brief §7.2). These tests protect the answer to one
- * question: what text is about to be published to THIS Fanpage? A wrong answer
+ * question: what text is about to be published to THIS Page? A wrong answer
  * is a wrong post, so the edge cases come first.
  */
 

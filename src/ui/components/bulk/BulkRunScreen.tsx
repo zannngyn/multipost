@@ -498,7 +498,7 @@ export function BulkRunScreen() {
                         </Link>
                       ) : (
                         <Link href="/posts?tab=log" className="underline underline-offset-4">
-                          Nhật ký đăng bài
+                          Nhật ký đăng
                         </Link>
                       )}
                       .

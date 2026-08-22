@@ -103,7 +103,7 @@ function payload(overrides: Partial<ComposeDraftPayload> = {}): ComposeDraftPayl
     captions: { facebook: "Áo dài trắng — mã MGKVX6310" },
     captionOverrides: {},
     albumOrder: ["drive-file-1", "drive-file-2"],
-    selectedChannelIds: ["fanpage-a"],
+    selectedChannelIds: ["page-a"],
     shareCaption: true,
     schedule: { mode: "now", value: "" },
     savedAt: "2026-08-17T03:00:00.000Z",
@@ -342,7 +342,7 @@ describe("compose-draft-buffer — happy path", () => {
   it("round-trips exactly what was written", () => {
     const draft = payload({
       step: "xem-lai",
-      captionOverrides: { "fanpage-a": "Bản riêng cho fanpage A" },
+      captionOverrides: { "page-a": "Bản riêng cho Page A" },
       schedule: { mode: "scheduled", value: "2026-08-20T09:30" },
       shareCaption: false,
     });

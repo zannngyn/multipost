@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Contracts of the "Kênh" screen (E5.1) — the Fanpages a tenant may publish to.
+ * Contracts of the "Kênh" screen (E5.1) — the Pages a tenant may publish to.
  *
  * `ui/` may not import `core/` (docs/07 §2), so this mirrors the DTO the
  * internal API returns instead of reusing the domain type. Anything the server
@@ -287,10 +287,21 @@ export function connectSuccessView(
 }
 
 /**
- * "Đã thêm 2 Page, cập nhật 1 Page." — one sentence, real numbers.
+ * "Đã nhập 2 Page, cập nhật 1 Page." — one sentence, real numbers.
  *
  * A skipped Page is never left unsaid: it is the answer to "vì sao Page X
  * không có trong danh sách" (business rule 5).
+ *
+ * ONE VOICE FOR BOTH DOORS (spec §3.5): the pasted-token door and the OAuth
+ * door used to describe the same three facts with different verbs — "Đã thêm"
+ * here versus "Đã nhập" in `connectSuccessView`, and a skipped Page introduced
+ * as "Bỏ qua N Page vì …" here versus "N Page bị bỏ qua — …" there. An operator
+ * who uses both doors reads one screen twice, not two products, so the verb and
+ * the skipped-sentence skeleton are now shared. The REASON still differs,
+ * because the two doors really do fail differently (no token for that Page vs
+ * missing permission / owned by another company) — only the shape is common:
+ *
+ *   "{n} Page bị bỏ qua — {lý do}; {chỗ cần kiểm tra}."
  */
 export function formatImportSummary(counts: {
   imported: number;
@@ -299,11 +310,11 @@ export function formatImportSummary(counts: {
 }): string {
   const skippedNote =
     counts.skipped && counts.skipped > 0
-      ? ` Bỏ qua ${counts.skipped} Page vì Facebook không cấp token cho Page đó — kiểm tra lại quyền quản trị Page rồi lấy token mới.`
+      ? ` ${counts.skipped} Page bị bỏ qua — Facebook không cấp token cho Page đó; kiểm tra lại quyền quản trị Page trong tài khoản Facebook rồi lấy token mới.`
       : "";
 
   if (counts.imported === 0 && counts.updated === 0) {
     return `Không có Page nào thay đổi — danh sách đã khớp với Facebook.${skippedNote}`;
   }
-  return `Đã thêm ${counts.imported} Page, cập nhật ${counts.updated} Page.${skippedNote}`;
+  return `Đã nhập ${counts.imported} Page, cập nhật ${counts.updated} Page.${skippedNote}`;
 }
