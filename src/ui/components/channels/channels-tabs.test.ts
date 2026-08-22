@@ -96,9 +96,9 @@ describe("withoutConnectParams", () => {
   });
 
   /**
-   * `parseConnectOutcome` reads three of the five (it has no use for the counts),
-   * so it can only pin part of the list — but that part is the one whose names
-   * are spelt twice, here and in a schema file this change may not edit.
+   * `parseConnectOutcome` now reads all five names, so this check covers the
+   * whole list — and the counts it reads are the ones that would otherwise
+   * survive the wipe and replay "3 Page bị bỏ qua" on the next reload.
    */
   it("leaves nothing behind that parseConnectOutcome would still read", () => {
     for (const search of [
