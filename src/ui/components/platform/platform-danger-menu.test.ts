@@ -76,8 +76,29 @@ describe("platform: the dangerous action lives in the row's overflow menu", () =
   it("hands the keyboard back to the trigger when the confirmation closes", () => {
     // Astryx's Dialog restores focus to the MENU ITEM, which is gone by then,
     // so without this the keyboard lands on <body>.
-    expect(table).toMatch(/useEffect\([\s\S]*?triggerRefs\.current\.get\([\s\S]*?\)\?\.focus\(\)/);
+    expect(table).toMatch(/useEffect\([\s\S]*?triggerRefs\.current\.get\(/);
     expect(table).toMatch(/<MoreMenu[\s\S]*?ref=\{/);
+  });
+
+  it("drops the pending confirmation when its row leaves the answer", () => {
+    // `confirmingTenant` is derived from the live list, so a refetch that drops
+    // the row already takes the dialog off the screen — but `confirmingId`
+    // would still point at it, and the next refetch bringing the row back would
+    // reopen the confirmation nobody asked for, pre-armed to lock a company.
+    // Anchored at two-space indent: that is the component body itself. Adjusted
+    // DURING render, not in an effect — an effect would paint one frame still
+    // carrying the stale id, and `react-hooks` rejects setState in an effect
+    // body anyway. Four spaces would mean it slid inside one.
+    expect(table).toMatch(
+      /^ {2}if \(confirmingId !== null && confirmingTenant === null\) \{\n {4}setConfirmingId\(null\);\n {2}\}/m,
+    );
+  });
+
+  it("still has somewhere to put the keyboard when the trigger is gone too", () => {
+    // The row that owned the "⋯" left with it, so `triggerRefs.get()` is empty.
+    // Falling through to nothing means <body>, i.e. starting the page over.
+    expect(table).toMatch(/listRef\.current\?\.focus\(\)/);
+    expect(table).toMatch(/<Stack[\s\S]*?ref=\{listRef\}[\s\S]*?tabIndex=\{-1\}/);
   });
 });
 
@@ -92,8 +113,27 @@ describe("platform: the confirmation still demands a reason", () => {
   });
 
   it("hands the PARSED reason on, never the raw box", () => {
-    expect(dialog).toMatch(/onConfirm\(target,\s*parsed\.data\.reason\)/);
+    expect(dialog).toMatch(/onConfirm\(tenant,\s*parsed\.data\.reason\)/);
     expect(dialog).not.toMatch(/onConfirm\([^)]*,\s*reason\s*\)/);
+  });
+
+  it("spends the confirm button while this row's write is in flight", () => {
+    // Locking a company twice is not a double click anyone should be able to
+    // make. `tooltip` is what keeps the button aria-disabled instead of
+    // natively disabled, so pressing it does not drop the keyboard on <body>
+    // — inside a modal, the worst place for it.
+    expect(dialog).toMatch(/isLoading=\{isBusy\}/);
+    expect(dialog).toMatch(/isDisabled=\{isBusy\}/);
+    expect(dialog).toMatch(/tooltip=\{isBusy \? SAVING_MESSAGE : undefined\}/);
+    // Never disabled for an empty reason: the box is checked on press.
+    expect(dialog).not.toMatch(/isDisabled=\{[^}]*reason[^}]*\}/);
+  });
+
+  it("takes the row it confirms, not a maybe-row", () => {
+    // The caller mounts this only when it has one, so a nullable prop was a
+    // second, unreachable "closed" state to keep in sync with the first.
+    expect(dialog).toMatch(/tenant: PlatformTenant;/);
+    expect(dialog).not.toContain("if (!tenant) return null;");
   });
 
   it("spells out the consequence and keeps the reason required", () => {

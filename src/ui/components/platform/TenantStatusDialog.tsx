@@ -21,6 +21,9 @@ import {
   type PlatformTenant,
 } from "@/ui/schemas/platform.schema";
 
+/** Shown as the confirm button's tooltip while its write is in flight. */
+const SAVING_MESSAGE = "Đang lưu thay đổi cho công ty này…";
+
 /**
  * The confirmation behind "Khoá công ty" / "Mở khoá công ty".
  *
@@ -48,21 +51,21 @@ import {
  */
 export function TenantStatusDialog({
   tenant,
+  isBusy,
   onCancel,
   onConfirm,
 }: {
-  /** The row being confirmed. Null keeps the dialog unmounted. */
-  tenant: PlatformTenant | null;
+  /** The row being confirmed. The caller mounts this only when it has one. */
+  tenant: PlatformTenant;
+  /** This row's lock/unlock write is in flight — the confirm button is spent. */
+  isBusy: boolean;
   onCancel: () => void;
   onConfirm: (tenant: PlatformTenant, reason: string) => void;
 }) {
   const [reason, setReason] = useState("");
   const [reasonError, setReasonError] = useState<string | null>(null);
 
-  if (!tenant) return null;
-
-  const target = tenant;
-  const isSuspended = target.status === "suspended";
+  const isSuspended = tenant.status === "suspended";
   const verb = isSuspended ? "mở khoá" : "khoá";
 
   function submit() {
@@ -74,13 +77,13 @@ export function TenantStatusDialog({
       return;
     }
     setReasonError(null);
-    onConfirm(target, parsed.data.reason);
+    onConfirm(tenant, parsed.data.reason);
   }
 
   return (
     <Dialog isOpen onOpenChange={(open) => (open ? undefined : onCancel())} purpose="form" width={560}>
       <DialogHeader
-        title={isSuspended ? `Mở khoá ${target.name}` : `Khoá ${target.name}`}
+        title={isSuspended ? `Mở khoá ${tenant.name}` : `Khoá ${tenant.name}`}
         subtitle={
           isSuspended
             ? "Thành viên của công ty này vào lại được ngay."
@@ -93,13 +96,13 @@ export function TenantStatusDialog({
             inline block carried, kept word for word. */}
         <Text role="alert">
           {isSuspended
-            ? `Mở khoá ${target.name}? ${activateConsequence(target)}`
-            : `Khoá ${target.name}? ${suspendConsequence(target)}`}
+            ? `Mở khoá ${tenant.name}? ${activateConsequence(tenant)}`
+            : `Khoá ${tenant.name}? ${suspendConsequence(tenant)}`}
         </Text>
 
         {/* The one row where "khoá công ty này" means "khoá chính chúng ta" —
             worth its own band here, where there is room to say it. */}
-        {!isSuspended && isInternalTenant(target) ? (
+        {!isSuspended && isInternalTenant(tenant) ? (
           <Banner
             status="warning"
             title="Đây là công ty nội bộ của MYSP"
@@ -108,7 +111,7 @@ export function TenantStatusDialog({
         ) : null}
 
         <TextArea
-          label={`Lý do ${verb} ${target.name}`}
+          label={`Lý do ${verb} ${tenant.name}`}
           description={`Bắt buộc, ít nhất ${SUSPEND_REASON_MIN} ký tự. Dòng này được lưu lại để đối chiếu về sau.`}
           isRequired
           rows={3}
@@ -122,15 +125,25 @@ export function TenantStatusDialog({
         />
 
         <HStack gap={2} align="center" wrap="wrap">
-          {/* Never disabled on empty: bấm được, rồi chỉ ra thiếu gì. */}
+          {/* Never disabled on an empty box: it stays pressable and then says
+              what is missing. The ONLY thing that spends it is this row's own
+              write already being in flight — locking a company twice is not a
+              double click anyone should be able to make. `tooltip` is load
+              bearing there: Astryx only swaps native `disabled` for
+              `aria-disabled` when a tooltip is present (Button.js), and a
+              natively disabled button that had focus drops the keyboard on
+              <body> — inside a modal, that is the worst place for it. */}
           <Button
             variant={isSuspended ? "primary" : "destructive"}
-            label={`Xác nhận ${verb} ${target.name}`}
+            label={`Xác nhận ${verb} ${tenant.name}`}
+            isLoading={isBusy}
+            isDisabled={isBusy}
+            tooltip={isBusy ? SAVING_MESSAGE : undefined}
             onClick={submit}
           >
             {isSuspended ? "Mở khoá công ty" : "Khoá công ty"}
           </Button>
-          <Button variant="ghost" label={`Không ${verb} ${target.name}`} onClick={onCancel}>
+          <Button variant="ghost" label={`Không ${verb} ${tenant.name}`} onClick={onCancel}>
             Giữ nguyên
           </Button>
         </HStack>

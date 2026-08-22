@@ -78,10 +78,28 @@ export function PlatformTenantTable({
   /**
    * Resolved from the LIVE list, not remembered from the click: a refetch can
    * land between opening the confirmation and confirming it, and the sentence
-   * the operator reads has to describe the company as it is now. A row that
-   * disappeared from the answer closes the dialog by itself.
+   * the operator reads has to describe the company as it is now.
    */
-  const confirmingTenant = tenants.find((tenant) => tenant.id === confirmingId) ?? null;
+  const confirmingTenant =
+    confirmingId === null ? null : (tenants.find((tenant) => tenant.id === confirmingId) ?? null);
+
+  /**
+   * The row left the answer WHILE its confirmation was open — a refetch dropped
+   * it, or another admin removed it. `confirmingTenant` is already null so the
+   * dialog is off the screen, but `confirmingId` would still point at that row,
+   * and the NEXT refetch bringing the row back would resolve it again and pop
+   * the confirmation open on its own — in front of an operator who never asked
+   * for it, pre-armed to lock a company. The intent dies with the row.
+   *
+   * Adjusted DURING render, not in an effect: React re-runs this component
+   * immediately with the new state and nothing intermediate reaches the screen
+   * ("You Might Not Need an Effect" §Adjusting state when a prop changes). An
+   * effect would paint one frame with a stale `confirmingId`, and `react-hooks`
+   * rejects `setState` in an effect body for exactly that reason.
+   */
+  if (confirmingId !== null && confirmingTenant === null) {
+    setConfirmingId(null);
+  }
 
   /**
    * The "⋯" trigger of each row, so the keyboard can be given back to the
@@ -94,6 +112,13 @@ export function PlatformTenantTable({
   const triggerRefs = useRef(new Map<string, HTMLButtonElement | null>());
   /** Which row to hand focus back to once the confirmation is gone. */
   const returnFocusTo = useRef<string | null>(null);
+  /**
+   * The fallback landing spot for the keyboard: the list itself. Used when the
+   * row that opened the confirmation is no longer in the answer, so there is no
+   * "⋯" left to give focus back to. <body> is not an option — a keyboard on
+   * <body> means the operator starts the page over.
+   */
+  const listRef = useRef<HTMLElement | null>(null);
 
   /**
    * A passive effect in the PARENT of the dialog, so it runs after the dialog's
@@ -105,11 +130,18 @@ export function PlatformTenantTable({
     if (confirmingId !== null) return;
     const rowId = returnFocusTo.current;
     if (rowId === null) return;
-    // Consumed either way: a row that left the list between the click and now
-    // has no trigger to focus, and carrying the intent to some later, unrelated
-    // open would be worse than dropping it.
+    // Consumed either way: carrying the intent to some later, unrelated open
+    // would be worse than dropping it.
     returnFocusTo.current = null;
-    triggerRefs.current.get(rowId)?.focus();
+    const trigger = triggerRefs.current.get(rowId) ?? null;
+    if (trigger !== null) {
+      trigger.focus();
+      return;
+    }
+    // The row — and its trigger with it — left the list. The list is the
+    // nearest thing that still exists, and it keeps the keyboard on this
+    // screen, one Tab away from the rows that remain.
+    listRef.current?.focus();
   }, [confirmingId]);
 
   function ask(tenantId: string) {
@@ -257,7 +289,16 @@ export function PlatformTenantTable({
   }
 
   return (
-    <Stack direction="vertical" isScrollable height="100%">
+    <Stack
+      direction="vertical"
+      isScrollable
+      height="100%"
+      ref={listRef}
+      // Programmatic target only (never in the tab order): where focus goes
+      // when the row it belonged to is gone. A scroll region you can reach with
+      // the keyboard is what `core-accessibility` asks for anyway.
+      tabIndex={-1}
+    >
       <Table
         data={tenants as PlatformTenantRow[]}
         columns={columns}
@@ -275,6 +316,7 @@ export function PlatformTenantTable({
         <TenantStatusDialog
           key={confirmingTenant.id}
           tenant={confirmingTenant}
+          isBusy={busyTenantId === confirmingTenant.id}
           onCancel={() => setConfirmingId(null)}
           onConfirm={confirm}
         />

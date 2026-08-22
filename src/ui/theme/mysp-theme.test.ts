@@ -41,6 +41,21 @@ const PINNED_TOKENS = [
   "--color-on-accent",
   "--color-icon-accent",
   "--color-accent-muted",
+  // The ground and the surfaces standing on it. `AppShell` is the only element
+  // that paints the area behind a screen, and it reads `--color-background-body`
+  // — leaving that one unpinned is how a stale build puts the neutral theme's
+  // cold `#F1F1F1` back under all fifteen routes with nothing failing.
+  "--color-background-body",
+  "--color-background-surface",
+  "--color-background-card",
+  "--color-background-popover",
+  "--color-background-muted",
+  // The Ink Hairline Rule: warm ink at 8%, not the neutral theme's cold black.
+  "--color-border",
+  "--color-border-emphasized",
+  // Loading is one of the four mandatory states; its slabs belong to the world.
+  "--color-skeleton",
+  "--color-track",
 ] as const;
 
 function readBuiltCss(): string {
