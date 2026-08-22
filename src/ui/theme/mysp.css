@@ -164,11 +164,11 @@
     --color-syntax-property: light-dark(#005348, #83dac9);
     --color-syntax-punctuation: light-dark(#a3a3a3, #525252);
     --color-syntax-background: light-dark(#fafafa, #0a0a0a);
-    --color-background-surface: light-dark(#ffffff, #262626);
-    --color-background-body: light-dark(#f1f1f1, #1b1b1b);
-    --color-background-card: light-dark(#ffffff, #1b1b1b);
-    --color-background-popover: light-dark(#ffffff, #1b1b1b);
-    --color-background-muted: light-dark(#f1f1f1, #1b1b1b);
+    --color-background-surface: var(--card);
+    --color-background-body: var(--background);
+    --color-background-card: var(--card);
+    --color-background-popover: var(--popover);
+    --color-background-muted: var(--muted);
     --color-accent: var(--primary);
     --color-accent-muted: var(--accent);
     --color-neutral: light-dark(#0000000F, #FFFFFF1A);
@@ -195,9 +195,9 @@
     --color-success-muted: light-dark(#c5e5c0, #84c9803D);
     --color-error-muted: light-dark(#facecb, #ff9e973D);
     --color-warning-muted: light-dark(#f8da9d, #deb4333D);
-    --color-border: light-dark(#00000014, #FFFFFF1A);
-    --color-border-emphasized: light-dark(#d4d4d4, #525252);
-    --color-skeleton: light-dark(#ebebeb, #525252);
+    --color-border: var(--border);
+    --color-border-emphasized: var(--input);
+    --color-skeleton: var(--muted);
     --color-shadow: light-dark(#0000001A, #0000004D);
     --color-tint-hover: light-dark(black, white);
     --color-background-red: light-dark(#facecb, #ff9e973D);
@@ -254,6 +254,7 @@
     --shadow-inset-success: inset 0px 0px 0px 2px #1981004D;
     --shadow-inset-warning: inset 0px 0px 0px 2px #ffce2f4D;
     --shadow-inset-error: inset 0px 0px 0px 2px #e33f4a4D;
+    --color-track: var(--muted);
   }
 
   .astryx-heading.level-1 {

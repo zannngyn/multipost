@@ -238,219 +238,231 @@ export function PromptTemplatesScreen() {
       height="auto"
       header={
         <LayoutHeader hasDivider>
-          {/* `AppShell contentPadding={0}` (AppFrame) means the shell adds no
-              inline padding of its own, so the page column's `px-6` is the only
-              one — claiming the block axis here and none of the inline axis is
-              what lets the divider run the full width of that column. */}
-          <Stack direction="vertical" gap={1} paddingBlock={3} paddingInline={0}>
-            <HStack gap={3} justify="between" align="start" wrap="wrap">
-              <Heading level={1} ref={headingRef} tabIndex={-1}>
-                Mẫu prompt AI
-              </Heading>
-              <Button
-                size="sm"
-                variant="secondary"
-                label="Tải lại danh sách phiên bản"
-                isLoading={versions.isFetching}
-                isDisabled={versions.isFetching}
-                onClick={() => void versions.refetch()}
-              >
-                Tải lại
-              </Button>
-            </HStack>
-            <Text type="supporting">
-              Prompt để AI viết caption Facebook. Mỗi lần sửa là một phiên bản mới — bản cũ giữ
-              nguyên, và chỉ một bản được dùng tại một thời điểm.
-            </Text>
-          </Stack>
+          {/* The column lives HERE, not on the page: `AppShell
+              contentPadding={0}` (AppFrame) means the shell adds no padding of
+              its own, and the page used to wrap this whole screen in
+              `max-w-5xl px-6` — which bounded the header band too, so the
+              divider stopped short of the shell edge instead of running the
+              full width. Same box as the content below, so the h1 sits on the
+              left edge of the panel it titles (the `/bulk` frame). */}
+          <div className="mx-auto w-full max-w-5xl px-6 py-4">
+            <Stack direction="vertical" gap={1} paddingBlock={0} paddingInline={0}>
+              <HStack gap={3} justify="between" align="start" wrap="wrap">
+                <Heading level={1} ref={headingRef} tabIndex={-1}>
+                  Mẫu prompt AI
+                </Heading>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  label="Tải lại danh sách phiên bản"
+                  isLoading={versions.isFetching}
+                  isDisabled={versions.isFetching}
+                  onClick={() => void versions.refetch()}
+                >
+                  Tải lại
+                </Button>
+              </HStack>
+              <Text type="supporting">
+                Prompt để AI viết caption Facebook. Mỗi lần sửa là một phiên bản mới — bản cũ giữ
+                nguyên, và chỉ một bản được dùng tại một thời điểm.
+              </Text>
+            </Stack>
+          </div>
         </LayoutHeader>
       }
       content={
         <LayoutContent padding={0}>
-          <Stack direction="vertical" gap={4} paddingBlock={4} paddingInline={0}>
-            {notice ? (
-              // Warnings ride along with the result instead of living inside the
-              // form: the form is closed by the time the server answers, so a
-              // banner in there would never be read.
-              <Banner
-                ref={noticeRef}
-                tabIndex={-1}
-                // Astryx picks the role from `status` (success -> status,
-                // warning -> alert); an override here would only weaken the
-                // announcement of the warning case.
-                status={notice.warnings.length > 0 ? "warning" : "success"}
-                title={notice.message}
-                description={
-                  notice.warnings.length > 0 ? "Có lưu ý cần đọc trước khi dùng:" : undefined
-                }
-                isDismissable
-                onDismiss={dismissNotice}
-                defaultIsExpanded={notice.warnings.length > 0}
-              >
-                {notice.warnings.length > 0 ? (
-                  <Stack direction="vertical" gap={1}>
-                    {notice.warnings.map((warning) => (
-                      <Text key={warning} type="supporting">
-                        {warning}
-                      </Text>
-                    ))}
-                  </Stack>
-                ) : null}
-              </Banner>
-            ) : null}
+          {/* `relative`: `sr-only` is `position: absolute`, so every visually
+              hidden node below anchors to the nearest POSITIONED ancestor.
+              Claiming it here keeps them inside this column instead of letting
+              them escape to the shell wrapper (the trap AppFrame and
+              BulkRunScreen both document). */}
+          <div className="relative mx-auto w-full max-w-5xl px-6 py-8">
+            <Stack direction="vertical" gap={4} paddingBlock={0} paddingInline={0}>
+              {notice ? (
+                // Warnings ride along with the result instead of living inside the
+                // form: the form is closed by the time the server answers, so a
+                // banner in there would never be read.
+                <Banner
+                  ref={noticeRef}
+                  tabIndex={-1}
+                  // Astryx picks the role from `status` (success -> status,
+                  // warning -> alert); an override here would only weaken the
+                  // announcement of the warning case.
+                  status={notice.warnings.length > 0 ? "warning" : "success"}
+                  title={notice.message}
+                  description={
+                    notice.warnings.length > 0 ? "Có lưu ý cần đọc trước khi dùng:" : undefined
+                  }
+                  isDismissable
+                  onDismiss={dismissNotice}
+                  defaultIsExpanded={notice.warnings.length > 0}
+                >
+                  {notice.warnings.length > 0 ? (
+                    <Stack direction="vertical" gap={1}>
+                      {notice.warnings.map((warning) => (
+                        <Text key={warning} type="supporting">
+                          {warning}
+                        </Text>
+                      ))}
+                    </Stack>
+                  ) : null}
+                </Banner>
+              ) : null}
 
-            {/*
-              No retry button: the list was already re-read (onSettled), so the
-              truth on screen is fresh and the operator decides what to do next.
-              A "Thử lại" that only hides the message would be a lie
-              (core-feedback-states).
-            */}
-            {activate.isError ? <ApiErrorNotice error={activate.error} /> : null}
+              {/*
+                No retry button: the list was already re-read (onSettled), so the
+                truth on screen is fresh and the operator decides what to do next.
+                A "Thử lại" that only hides the message would be a lie
+                (core-feedback-states).
+              */}
+              {activate.isError ? <ApiErrorNotice error={activate.error} /> : null}
 
-            {showSkeleton ? <PromptVersionsSkeleton /> : null}
+              {showSkeleton ? <PromptVersionsSkeleton /> : null}
 
-            {!showSkeleton && versions.isError ? (
-              <ApiErrorNotice error={versions.error} onRetry={() => void versions.refetch()} />
-            ) : null}
+              {!showSkeleton && versions.isError ? (
+                <ApiErrorNotice error={versions.error} onRetry={() => void versions.refetch()} />
+              ) : null}
 
-            {!versions.isError && data ? (
-              <>
-                <Card padding={4} aria-labelledby="prompt-active-heading">
-                  <Stack direction="vertical" gap={3}>
-                    <HStack gap={2} justify="between" align="center" wrap="wrap">
-                      <Heading level={2} id="prompt-active-heading">
-                        Đang dùng
-                      </Heading>
-                      <Badge
-                        variant={data.effective.source === "built_in" ? "neutral" : "success"}
-                        label={
-                          data.effective.source === "built_in"
-                            ? "Mẫu mặc định của hệ thống"
-                            : `Phiên bản v${data.effective.version}`
-                        }
-                      />
-                    </HStack>
-                    <HStack gap={2} align="center" wrap="wrap">
-                      <Text type="supporting" color="secondary">
-                        Tên
-                      </Text>
-                      <Text weight="medium">{data.effective.name}</Text>
-                    </HStack>
-                    <pre className="bg-muted/40 max-h-64 overflow-auto rounded-md border p-3 font-mono text-xs break-words whitespace-pre-wrap">
-                      {data.effective.body}
-                    </pre>
-                  </Stack>
-                </Card>
-
-                {tenantVersions.length === 0 ? (
-                  <EmptyState
-                    headingLevel={2}
-                    title="Đơn vị này chưa có phiên bản riêng"
-                    // A read-only session has no create button anywhere on the
-                    // screen, so the first-run copy must not point at one. Keyed
-                    // on read-only ONLY: an operator waiting for a save is still
-                    // allowed to write, and must not be told otherwise.
-                    description={firstRunDescription(access)}
-                    actions={
-                      access.isReadOnly || formOpen ? undefined : (
-                        <Button
-                          variant="primary"
-                          label="Tạo phiên bản đầu tiên"
-                          onClick={openBlankForm}
+              {!versions.isError && data ? (
+                <>
+                  <Card padding={4} aria-labelledby="prompt-active-heading">
+                    <Stack direction="vertical" gap={3}>
+                      <HStack gap={2} justify="between" align="center" wrap="wrap">
+                        <Heading level={2} id="prompt-active-heading">
+                          Đang dùng
+                        </Heading>
+                        <Badge
+                          variant={data.effective.source === "built_in" ? "neutral" : "success"}
+                          label={
+                            data.effective.source === "built_in"
+                              ? "Mẫu mặc định của hệ thống"
+                              : `Phiên bản v${data.effective.version}`
+                          }
                         />
-                      )
-                    }
-                  />
-                ) : null}
+                      </HStack>
+                      <HStack gap={2} align="center" wrap="wrap">
+                        <Text type="supporting" color="secondary">
+                          Tên
+                        </Text>
+                        <Text weight="medium">{data.effective.name}</Text>
+                      </HStack>
+                      <pre className="bg-muted/40 max-h-64 overflow-auto rounded-md border p-3 font-mono text-xs break-words whitespace-pre-wrap">
+                        {data.effective.body}
+                      </pre>
+                    </Stack>
+                  </Card>
 
-                <Stack direction="vertical" gap={3}>
-                  <HStack gap={3} justify="between" align="center" wrap="wrap">
-                    <Heading level={2} id="prompt-versions-heading">
-                      Các phiên bản ({data.versions.length})
-                    </Heading>
-                    {access.isReadOnly ? (
-                      <ReadOnlyNotice reason={access.reason} />
-                    ) : (
-                      <Button
-                        ref={triggerRef}
-                        variant="primary"
-                        size="sm"
-                        label="Tạo phiên bản mới"
-                        aria-expanded={formOpen}
-                        // Only while the panel is mounted — see the row toggles.
-                        aria-controls={formOpen ? formPanelId : undefined}
-                        isDisabled={formOpen}
-                        // Only while the panel is open — and `tooltip` is what
-                        // keeps the button aria-disabled rather than natively
-                        // disabled, so it can take focus back when it closes.
-                        tooltip={formOpen ? "Biểu mẫu đang mở ngay bên dưới." : undefined}
-                        onClick={openBlankForm}
-                      />
-                    )}
-                  </HStack>
-
-                  {/*
-                    Directly under the trigger, not at the bottom of the page:
-                    the button and its consequence have to be one glance apart.
-                  */}
-                  {/* Read-only hides the panel because it is a write surface and
-                      no route may reach one in support mode (M3.3). Decided in
-                      one place above — never inline, never with `isSaving`. */}
-                  {isCreatePanelVisible ? (
-                    <Card padding={4} id={formPanelId}>
-                      <PromptVersionForm
-                        key={draftKey}
-                        nextVersion={data.nextVersion}
-                        defaultValues={draft}
-                        pending={isSaving}
-                        error={create.isError ? create.error : undefined}
-                        firstFieldRef={firstFieldRef}
-                        onDirtyChange={setFormDirty}
-                        onSubmit={submit}
-                        onCancel={closeForm}
-                      />
-                    </Card>
+                  {tenantVersions.length === 0 ? (
+                    <EmptyState
+                      headingLevel={2}
+                      title="Đơn vị này chưa có phiên bản riêng"
+                      // A read-only session has no create button anywhere on the
+                      // screen, so the first-run copy must not point at one. Keyed
+                      // on read-only ONLY: an operator waiting for a save is still
+                      // allowed to write, and must not be told otherwise.
+                      description={firstRunDescription(access)}
+                      actions={
+                        access.isReadOnly || formOpen ? undefined : (
+                          <Button
+                            variant="primary"
+                            label="Tạo phiên bản đầu tiên"
+                            onClick={openBlankForm}
+                          />
+                        )
+                      }
+                    />
                   ) : null}
 
-                  <PromptVersionTable
-                    versions={data.versions}
-                    activatingVersion={
-                      activate.isPending ? (activate.variables?.version ?? null) : null
-                    }
-                    readOnlyReason={access.reason}
-                    // Busy, not read-only: swapping the draft while its own save
-                    // is in flight is nonsense, but it says nothing about rights.
-                    isBusy={isSaving}
-                    onActivate={handleActivate}
-                    onReuse={reuse}
-                  />
-                </Stack>
-              </>
-            ) : null}
+                  <Stack direction="vertical" gap={3}>
+                    <HStack gap={3} justify="between" align="center" wrap="wrap">
+                      <Heading level={2} id="prompt-versions-heading">
+                        Các phiên bản ({data.versions.length})
+                      </Heading>
+                      {access.isReadOnly ? (
+                        <ReadOnlyNotice reason={access.reason} />
+                      ) : (
+                        <Button
+                          ref={triggerRef}
+                          variant="primary"
+                          size="sm"
+                          label="Tạo phiên bản mới"
+                          aria-expanded={formOpen}
+                          // Only while the panel is mounted — see the row toggles.
+                          aria-controls={formOpen ? formPanelId : undefined}
+                          isDisabled={formOpen}
+                          // Only while the panel is open — and `tooltip` is what
+                          // keeps the button aria-disabled rather than natively
+                          // disabled, so it can take focus back when it closes.
+                          tooltip={formOpen ? "Biểu mẫu đang mở ngay bên dưới." : undefined}
+                          onClick={openBlankForm}
+                        />
+                      )}
+                    </HStack>
 
-            {/* Overwriting typed work is not undoable, so it is confirmed —
-                same contract as "Xoá nháp" on the compose screen. */}
-            <AlertDialog
-              isOpen={pendingReuse !== null}
-              onOpenChange={(isOpen) => {
-                if (!isOpen) setPendingReuse(null);
-              }}
-              title="Bỏ nội dung đang soạn?"
-              description="Biểu mẫu đang mở có nội dung chưa lưu. Nạp phiên bản này vào sẽ ghi đè toàn bộ những gì bạn vừa gõ, và không lấy lại được."
-              actionLabel="Nạp bản này"
-              cancelLabel="Giữ nội dung đang soạn"
-              onAction={() => {
-                const version = pendingReuse;
-                setPendingReuse(null);
-                if (!version) return;
-                // Claim focus back from the dialog's own restore (see the effect
-                // on `draftKey`) — the operator asked for this text, they should
-                // land in it.
-                focusAfterConfirmedReuse.current = true;
-                applyReuse(version);
-              }}
-            />
-          </Stack>
+                    {/*
+                      Directly under the trigger, not at the bottom of the page:
+                      the button and its consequence have to be one glance apart.
+                    */}
+                    {/* Read-only hides the panel because it is a write surface and
+                        no route may reach one in support mode (M3.3). Decided in
+                        one place above — never inline, never with `isSaving`. */}
+                    {isCreatePanelVisible ? (
+                      <Card padding={4} id={formPanelId}>
+                        <PromptVersionForm
+                          key={draftKey}
+                          nextVersion={data.nextVersion}
+                          defaultValues={draft}
+                          pending={isSaving}
+                          error={create.isError ? create.error : undefined}
+                          firstFieldRef={firstFieldRef}
+                          onDirtyChange={setFormDirty}
+                          onSubmit={submit}
+                          onCancel={closeForm}
+                        />
+                      </Card>
+                    ) : null}
+
+                    <PromptVersionTable
+                      versions={data.versions}
+                      activatingVersion={
+                        activate.isPending ? (activate.variables?.version ?? null) : null
+                      }
+                      readOnlyReason={access.reason}
+                      // Busy, not read-only: swapping the draft while its own save
+                      // is in flight is nonsense, but it says nothing about rights.
+                      isBusy={isSaving}
+                      onActivate={handleActivate}
+                      onReuse={reuse}
+                    />
+                  </Stack>
+                </>
+              ) : null}
+
+              {/* Overwriting typed work is not undoable, so it is confirmed —
+                  same contract as "Xoá nháp" on the compose screen. */}
+              <AlertDialog
+                isOpen={pendingReuse !== null}
+                onOpenChange={(isOpen) => {
+                  if (!isOpen) setPendingReuse(null);
+                }}
+                title="Bỏ nội dung đang soạn?"
+                description="Biểu mẫu đang mở có nội dung chưa lưu. Nạp phiên bản này vào sẽ ghi đè toàn bộ những gì bạn vừa gõ, và không lấy lại được."
+                actionLabel="Nạp bản này"
+                cancelLabel="Giữ nội dung đang soạn"
+                onAction={() => {
+                  const version = pendingReuse;
+                  setPendingReuse(null);
+                  if (!version) return;
+                  // Claim focus back from the dialog's own restore (see the effect
+                  // on `draftKey`) — the operator asked for this text, they should
+                  // land in it.
+                  focusAfterConfirmedReuse.current = true;
+                  applyReuse(version);
+                }}
+              />
+            </Stack>
+          </div>
         </LayoutContent>
       }
     />
