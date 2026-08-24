@@ -1,51 +1,120 @@
 /**
  * The colour presets an MYSP platform admin may put on the whole app.
  *
- * WHY A TABLE OF HUES AND NOT A TABLE OF COLOURS: a preset is the approved
- * "Sổ mẫu vải" palette with ONE number moved — the hue of the dye. Lightness is
- * carried over from `app/globals.css` untouched, and lightness is what carries
- * contrast, so a preset cannot quietly turn a readable button into an
- * unreadable one. That is the whole safety argument for letting a non-designer
- * repaint the product from a screen, and it is CHECKED, not asserted:
- * `appearance-presets.test.ts` measures every pair in both schemes.
+ * A preset repaints the WHOLE surface — ground, cards, sunken panels, hairlines
+ * and ink — not just the action colour. What it never touches is LIGHTNESS.
+ * Every token keeps the exact lightness `app/globals.css` gave it, and
+ * lightness is what carries contrast, so a preset cannot turn a readable screen
+ * into an unreadable one. That is the whole safety argument for letting a
+ * non-designer repaint the product from a settings screen, and it is CHECKED,
+ * not asserted: `appearance-presets.test.ts` measures every text/surface pair
+ * in both schemes and pins the lightness of every role.
  *
- * WHY CHROMA IS SCALED PER PRESET: sRGB does not hold the same chroma at every
- * hue. Teal at L 0.45 tops out well below the indigo's 0.105, and a value
- * outside the gamut is silently clipped by the browser — which moves lightness
- * behind our back and voids the argument above. Each preset therefore carries
- * the largest scale that keeps EVERY token it touches inside sRGB (measured,
- * not guessed). Ratios stay ≥ 4.86:1 across the whole table.
+ * TWO KNOBS, NOT ONE. The dye (action colour) and the cloth (everything else)
+ * move independently:
+ *   - `hue` + `chromaScale` rotate the dye;
+ *   - `groundShift` + `surfaceChromaScale` / `inkChromaScale` tint the cloth.
+ * Surfaces take the tint strongly — that is what makes a preset read as a
+ * theme rather than as a button colour. Ink takes it faintly: text that is as
+ * saturated as the paper stops reading as ink.
+ *
+ * CHROMA IS CLAMPED PER TOKEN, NOT SCALED BLINDLY. sRGB holds far less chroma
+ * at L 0.984 (a card, nearly white) than at L 0.53, and it holds different
+ * amounts at different hues. A value outside the gamut is silently clipped by
+ * the browser — and clipping MOVES LIGHTNESS, which would void the argument
+ * above. So each token asks for `base × scale` and gets whatever the gamut can
+ * actually hold. That is why a card stays paler than the ground it sits on: it
+ * is not a compromise, it is the only honest value.
+ *
+ * `cham` IS THE ORIGINAL. Its shifts are zero and its scales are one, so it
+ * reproduces `globals.css` value for value — "hoàn nguyên" is a real return,
+ * not an approximation of one. It is the only preset that keeps the warm
+ * unbleached-muslin ground; every other one tints the cloth toward its own dye.
  *
  * WHY IT LIVES IN `shared/`: the CSS generator (a script), the usecase that
  * validates what is stored (core) and the screen that draws the swatches (ui)
  * all need the SAME list, and `ui` may import nothing but `@/shared` and
- * `@/ui` (eslint.config.mjs). One table, three readers — the alternative is
- * three copies that drift apart on the first new preset.
+ * `@/ui` (eslint.config.mjs). One table, three readers.
  *
  * ADDING A PRESET: add the row, run `pnpm run theme:presets`, run the tests.
- * The test refuses a row whose chroma leaves the gamut or whose contrast falls
- * under 4.5:1, so a bad hue cannot reach an operator's screen.
+ * The test refuses a row whose contrast falls under 4.5:1 or whose lightness
+ * moved, so a bad hue cannot reach an operator's screen.
  */
 
-// --- The palette this all rotates around ------------------------------------
+// --- Colour primitives ------------------------------------------------------
 
 /** A colour in OKLCH, as `app/globals.css` writes them. */
 export interface OklchColor {
   readonly l: number;
   readonly c: number;
   readonly h: number;
-  /** 0–1. Present only for the ring tokens, which are the dye at low alpha. */
+  /** 0–1. Present only where the palette uses a translucent value. */
   readonly alpha?: number;
-  /**
-   * False for the one role whose hue belongs to the CLOTH, not to the dye:
-   * the ink that stands on a dye-coloured surface is the muslin of the card,
-   * and rotating it would tint the label on every primary button.
-   */
-  readonly rotates: boolean;
 }
 
-/** The five distinct colours the dye family is made of, per scheme. */
-interface DyeRoles {
+function toLinearSrgb(color: OklchColor): [number, number, number] {
+  const hueRadians = (color.h * Math.PI) / 180;
+  const a = color.c * Math.cos(hueRadians);
+  const b = color.c * Math.sin(hueRadians);
+
+  const lRoot = color.l + 0.3963377774 * a + 0.2158037573 * b;
+  const mRoot = color.l - 0.1055613458 * a - 0.0638541728 * b;
+  const sRoot = color.l - 0.0894841775 * a - 1.291485548 * b;
+
+  const l = lRoot ** 3;
+  const m = mRoot ** 3;
+  const s = sRoot ** 3;
+
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ];
+}
+
+/** Half a 16-bit step of slack, so an exact-boundary colour is not "outside". */
+const GAMUT_EPSILON = 0.0005;
+
+export function isInSrgbGamut(color: OklchColor): boolean {
+  return toLinearSrgb(color).every(
+    (channel) => channel >= -GAMUT_EPSILON && channel <= 1 + GAMUT_EPSILON,
+  );
+}
+
+/**
+ * The most chroma this lightness and hue can hold in sRGB, with 2% headroom.
+ *
+ * Binary search rather than a table: the gamut boundary is a different curve
+ * for every hue, and a table would be a second set of numbers to keep true.
+ */
+function maxChromaFor(l: number, h: number): number {
+  let low = 0;
+  let high = 0.4;
+  for (let i = 0; i < 40; i += 1) {
+    const mid = (low + high) / 2;
+    if (isInSrgbGamut({ l, c: mid, h })) low = mid;
+    else high = mid;
+  }
+  return Math.floor(low * 0.98 * 1e4) / 1e4;
+}
+
+/** Trims float noise (0.02 * 1.5 = 0.030000000000000002) without lying. */
+function round(value: number, places: number): number {
+  const factor = 10 ** places;
+  return Math.round(value * factor) / factor;
+}
+
+// --- The palette a preset rotates -------------------------------------------
+
+/**
+ * Every role the palette is cut from, per scheme. Two families:
+ *
+ *  - the DYE: the action colour and what stands on it;
+ *  - the CLOTH: the ground, the surfaces above it, and the ink on them.
+ *
+ * Values copied from `:root` and `.dark` in `app/globals.css`.
+ */
+interface PaletteRoles {
   /** The action colour itself. */
   readonly dye: OklchColor;
   /** The ink that stands ON the dye. */
@@ -56,39 +125,109 @@ interface DyeRoles {
   readonly washInk: OklchColor;
   /** Focus ring: the dye at low alpha. */
   readonly dyeRing: OklchColor;
+
+  /** The page itself — the largest area a preset repaints. */
+  readonly ground: OklchColor;
+  /** One step above the ground: card, popover, dialog, sidebar. */
+  readonly card: OklchColor;
+  /** One step below: a sunken panel, a segmented control's trough. */
+  readonly sunken: OklchColor;
+  /** Stand-in surface for media we cannot show. */
+  readonly mediaEmpty: OklchColor;
+  readonly mediaCover: OklchColor;
+  /** Body copy and headings. */
+  readonly ink: OklchColor;
+  /** Supporting lines and descriptions. */
+  readonly inkMuted: OklchColor;
+  /** The third tone: eyebrows, mono metadata. The tightest ratio in the set. */
+  readonly inkSubtle: OklchColor;
+  /** Hairline borders — the ink at low alpha, never a grey. */
+  readonly hairline: OklchColor;
+  /** The slightly stronger hairline an input wears. */
+  readonly inputLine: OklchColor;
 }
 
-/** Light scheme, copied from `:root` in `app/globals.css`. */
-const LIGHT_ROLES: DyeRoles = {
-  dye: { l: 0.45, c: 0.105, h: 262, rotates: true },
-  dyeInk: { l: 0.984, c: 0.007, h: 84, rotates: false },
-  wash: { l: 0.89, c: 0.045, h: 262, rotates: true },
-  washInk: { l: 0.38, c: 0.11, h: 263, rotates: true },
-  dyeRing: { l: 0.45, c: 0.105, h: 262, alpha: 0.45, rotates: true },
+const LIGHT_ROLES: PaletteRoles = {
+  dye: { l: 0.45, c: 0.105, h: 262 },
+  // The one role whose hue belongs to the CLOTH, not the dye: the ink standing
+  // on a dye-coloured surface IS the card. Tied to `card` below, not rotated
+  // with the dye — rotating it would tint the label on every primary button.
+  dyeInk: { l: 0.984, c: 0.007, h: 84 },
+  wash: { l: 0.89, c: 0.045, h: 262 },
+  washInk: { l: 0.38, c: 0.11, h: 263 },
+  dyeRing: { l: 0.45, c: 0.105, h: 262, alpha: 0.45 },
+
+  ground: { l: 0.955, c: 0.013, h: 84 },
+  card: { l: 0.984, c: 0.007, h: 84 },
+  sunken: { l: 0.933, c: 0.014, h: 84 },
+  mediaEmpty: { l: 0.92, c: 0.02, h: 84 },
+  mediaCover: { l: 0.9, c: 0.025, h: 80 },
+  ink: { l: 0.28, c: 0.018, h: 55 },
+  inkMuted: { l: 0.47, c: 0.02, h: 58 },
+  inkSubtle: { l: 0.53, c: 0.02, h: 60 },
+  hairline: { l: 0.28, c: 0.018, h: 55, alpha: 0.12 },
+  inputLine: { l: 0.28, c: 0.018, h: 55, alpha: 0.16 },
 };
 
 /**
- * Dark scheme, copied from `.dark`. `dyeInk` DOES rotate here: on dark cloth
- * the ink on a primary button is a very dark tint of the dye itself, not the
- * muslin — so leaving it at 262 would put an indigo label on a plum button.
+ * The dark scheme. `dyeInk` DOES follow the dye here: on dark cloth the ink on
+ * a primary button is a very dark tint of the dye itself, not the muslin — so
+ * leaving it behind would put an indigo label on a plum button.
+ *
+ * The hairlines are white-at-alpha rather than ink-at-alpha (shadows are
+ * invisible on a dark ground, so elevation comes from a lighter edge). Chroma 0
+ * means a rotation is a no-op on them, which is correct: a tinted hairline on
+ * dark cloth reads as a colour fringe.
  */
-const DARK_ROLES: DyeRoles = {
-  dye: { l: 0.68, c: 0.09, h: 262, rotates: true },
-  dyeInk: { l: 0.22, c: 0.03, h: 262, rotates: true },
-  wash: { l: 0.36, c: 0.075, h: 262, rotates: true },
-  washInk: { l: 0.86, c: 0.06, h: 262, rotates: true },
-  dyeRing: { l: 0.68, c: 0.09, h: 262, alpha: 0.5, rotates: true },
+const DARK_ROLES: PaletteRoles = {
+  dye: { l: 0.68, c: 0.09, h: 262 },
+  dyeInk: { l: 0.22, c: 0.03, h: 262 },
+  wash: { l: 0.36, c: 0.075, h: 262 },
+  washInk: { l: 0.86, c: 0.06, h: 262 },
+  dyeRing: { l: 0.68, c: 0.09, h: 262, alpha: 0.5 },
+
+  ground: { l: 0.24, c: 0.012, h: 60 },
+  card: { l: 0.28, c: 0.014, h: 60 },
+  sunken: { l: 0.32, c: 0.014, h: 60 },
+  mediaEmpty: { l: 0.33, c: 0.018, h: 60 },
+  mediaCover: { l: 0.36, c: 0.022, h: 75 },
+  ink: { l: 0.94, c: 0.01, h: 84 },
+  inkMuted: { l: 0.72, c: 0.016, h: 65 },
+  inkSubtle: { l: 0.66, c: 0.018, h: 60 },
+  hairline: { l: 1, c: 0, h: 0, alpha: 0.12 },
+  inputLine: { l: 1, c: 0, h: 0, alpha: 0.16 },
 };
 
+export type PaletteRole = keyof PaletteRoles;
+
+/** Which family a role belongs to — it decides which knob moves it. */
+const DYE_ROLES: readonly PaletteRole[] = ["dye", "wash", "washInk", "dyeRing"];
+const SURFACE_ROLES: readonly PaletteRole[] = [
+  "ground",
+  "card",
+  "sunken",
+  "mediaEmpty",
+  "mediaCover",
+];
+const INK_ROLES: readonly PaletteRole[] = [
+  "ink",
+  "inkMuted",
+  "inkSubtle",
+  "hairline",
+  "inputLine",
+];
+
 /**
- * Every CSS variable cut from the dye, and which role it wears. Both schemes
+ * Every CSS variable the palette owns, and which role it wears. Both schemes
  * use this same map — `.dark` re-values the roles, it does not re-assign them.
  *
- * `--chart-2..5` are deliberately ABSENT: those are the status hues (fact,
- * good, attention, failure), and a status colour that follows the brand stops
- * meaning what it says. `--chart-1` is in, because it IS the action colour.
+ * `--chart-2..5` are deliberately ABSENT, and so are `--destructive`,
+ * `--warning`, `--success` and `--info`: those are the status hues, and a
+ * status colour that follows the brand stops meaning what it says. `--chart-1`
+ * is in, because it IS the action colour.
  */
 const TOKEN_ROLES = {
+  // The dye
   "--primary": "dye",
   "--primary-foreground": "dyeInk",
   "--accent": "wash",
@@ -100,7 +239,29 @@ const TOKEN_ROLES = {
   "--sidebar-accent": "wash",
   "--sidebar-accent-foreground": "washInk",
   "--sidebar-ring": "dyeRing",
-} as const satisfies Record<string, keyof DyeRoles>;
+
+  // The cloth — surfaces
+  "--background": "ground",
+  "--card": "card",
+  "--popover": "card",
+  "--sidebar": "card",
+  "--secondary": "sunken",
+  "--muted": "sunken",
+  "--media-empty": "mediaEmpty",
+  "--media-empty-cover": "mediaCover",
+
+  // The cloth — ink and hairlines
+  "--foreground": "ink",
+  "--card-foreground": "ink",
+  "--popover-foreground": "ink",
+  "--secondary-foreground": "ink",
+  "--sidebar-foreground": "ink",
+  "--muted-foreground": "inkMuted",
+  "--foreground-subtle": "inkSubtle",
+  "--border": "hairline",
+  "--input": "inputLine",
+  "--sidebar-border": "hairline",
+} as const satisfies Record<string, PaletteRole>;
 
 export type AppearanceTokenName = keyof typeof TOKEN_ROLES;
 
@@ -117,66 +278,88 @@ export interface AppearancePreset {
   readonly description: string;
   /** OKLCH hue of the dye, 0–359. */
   readonly hue: number;
-  /**
-   * Fraction of the base chroma this hue can hold inside sRGB, 0–1. Measured
-   * per hue; see the file header. 1 = the full chroma of the original palette.
-   */
+  /** Fraction of the base dye chroma this hue can hold inside sRGB, 0–1. */
   readonly chromaScale: number;
+  /**
+   * Degrees added to every CLOTH hue. Chosen so the light ground lands on the
+   * dye's hue — the cloth and the dye come from one family. Zero for `cham`,
+   * which keeps the warm unbleached muslin of the approved design.
+   */
+  readonly groundShift: number;
+  /** Multiplier on surface chroma. The tint you actually see. */
+  readonly surfaceChromaScale: number;
+  /** Multiplier on ink chroma. Deliberately far lower — ink stays ink. */
+  readonly inkChromaScale: number;
 }
 
 /**
  * Six presets, spread far enough apart that nobody has to compare two swatches
- * side by side to tell them apart. `cham` is the original and reproduces
- * `globals.css` value for value — so "hoàn nguyên" is a real return, not an
- * approximation of one.
+ * side by side to tell them apart.
  *
  * NO RED PRESET, on purpose: `--destructive` is madder at hue 30, and an action
- * colour a few degrees away from the delete colour is the one confusion this
- * palette must never sell. The warm slot is `ca-phe`, far enough down in chroma
- * to read as brown rather than as a dulled red.
+ * colour a few degrees from the delete colour is the one confusion this palette
+ * must never sell. The warm slot is `ca-phe`.
  */
 export const APPEARANCE_PRESETS = [
   {
     id: "cham",
     label: "Chàm",
-    description: "Bản gốc của sổ mẫu vải — chàm nhuộm, trầm và lạnh.",
+    description: "Bản gốc của sổ mẫu vải — nền vải mộc ấm, chàm nhuộm trầm và lạnh.",
     hue: 262,
     chromaScale: 1,
+    groundShift: 0,
+    surfaceChromaScale: 1,
+    inkChromaScale: 1,
   },
   {
     id: "ngoc-luc",
     label: "Ngọc lục",
-    description: "Xanh ngọc trầm, mát nhất trong bộ.",
+    description: "Nền ngả xanh ngọc, mực cùng tông — mát nhất trong bộ.",
     hue: 190,
     chromaScale: 0.6,
+    groundShift: 106,
+    surfaceChromaScale: 4,
+    inkChromaScale: 1.5,
   },
   {
     id: "reu",
     label: "Rêu",
-    description: "Xanh lá ngả rêu, ấm và tĩnh.",
+    description: "Nền xanh lá ngả rêu, ấm và tĩnh.",
     hue: 145,
     chromaScale: 1,
+    groundShift: 61,
+    surfaceChromaScale: 4,
+    inkChromaScale: 1.5,
   },
   {
     id: "ca-phe",
     label: "Cà phê",
-    description: "Nâu cà phê, gần như hoà vào nền vải mộc.",
+    description: "Nền giấy nâu, mực cà phê — trầm và ấm nhất.",
     hue: 60,
     chromaScale: 0.8,
+    groundShift: -24,
+    surfaceChromaScale: 4,
+    inkChromaScale: 1.5,
   },
   {
     id: "tia",
     label: "Tía",
-    description: "Tím tía, đậm và trang trọng.",
+    description: "Nền ngả tím nhạt, tím tía đậm cho hành động.",
     hue: 300,
     chromaScale: 1,
+    groundShift: 216,
+    surfaceChromaScale: 4,
+    inkChromaScale: 1.5,
   },
   {
     id: "man",
     label: "Mận",
-    description: "Đỏ mận ngả hồng, ấm nhất trong bộ.",
+    description: "Nền ngả hồng, đỏ mận cho hành động — ấm và tươi.",
     hue: 335,
     chromaScale: 1,
+    groundShift: 251,
+    surfaceChromaScale: 4,
+    inkChromaScale: 1.5,
   },
 ] as const satisfies readonly AppearancePreset[];
 
@@ -212,19 +395,62 @@ export function findAppearancePreset(id: AppearancePresetId): AppearancePreset {
 
 // --- Deriving the tokens ----------------------------------------------------
 
-/** Trims float noise (0.105 * 0.6 = 0.06300000000000001) without lying. */
-function round(value: number, places: number): number {
-  const factor = 10 ** places;
-  return Math.round(value * factor) / factor;
+/**
+ * The dye's own hue in the original palette. Roles sitting a degree off it
+ * (washInk at 263) keep that offset when a preset rotates the family, so `cham`
+ * round-trips to the shipped values exactly.
+ *
+ * The cloth needs no anchor: `groundShift` is already a delta.
+ */
+const DYE_ANCHOR_HUE = LIGHT_ROLES.dye.h;
+
+function rotate(hue: number, by: number): number {
+  return (((hue + by) % 360) + 360) % 360;
 }
 
-/** Applies a preset to one role. Untouched roles come back verbatim. */
-function applyPreset(color: OklchColor, preset: AppearancePreset): OklchColor {
-  if (!color.rotates) return color;
-  // The dye's own hue is 262; a role sitting a degree off (washInk at 263)
-  // keeps that offset, so `cham` round-trips to the original values exactly.
-  const hue = (((color.h - LIGHT_ROLES.dye.h + preset.hue) % 360) + 360) % 360;
-  return { ...color, h: hue, c: round(color.c * preset.chromaScale, 4) };
+/**
+ * Applies a preset to one role.
+ *
+ * The requested chroma is clamped to what sRGB can hold at that lightness and
+ * hue — see the file header. Lightness and alpha are never touched.
+ */
+function applyPreset(role: PaletteRole, color: OklchColor, preset: AppearancePreset): OklchColor {
+  let hue = color.h;
+  let scale = 1;
+
+  if (DYE_ROLES.includes(role)) {
+    // A role sitting a degree off the anchor (washInk at 263) keeps that
+    // offset, so `cham` round-trips to the original values exactly.
+    hue = rotate(color.h - DYE_ANCHOR_HUE + preset.hue, 0);
+    scale = preset.chromaScale;
+  } else if (SURFACE_ROLES.includes(role)) {
+    hue = rotate(color.h, preset.groundShift);
+    scale = preset.surfaceChromaScale;
+  } else if (INK_ROLES.includes(role)) {
+    hue = rotate(color.h, preset.groundShift);
+    scale = preset.inkChromaScale;
+  } else {
+    // `dyeInk` in the light scheme: it is the CARD, so it moves with the cloth
+    // and must stay identical to `--card` or the label on a primary button
+    // stops matching the paper it was cut from.
+    hue = rotate(color.h, preset.groundShift);
+    scale = preset.surfaceChromaScale;
+  }
+
+  const wanted = color.c * scale;
+  const chroma = round(Math.min(wanted, maxChromaFor(color.l, hue)), 4);
+
+  return { l: color.l, c: chroma, h: hue, ...(color.alpha === undefined ? {} : { alpha: color.alpha }) };
+}
+
+/**
+ * In the DARK scheme `dyeInk` belongs to the dye, not the cloth (see
+ * DARK_ROLES). Handled here rather than by another table so the role list stays
+ * one list.
+ */
+function roleFamilyFor(role: PaletteRole, scheme: AppearanceScheme): PaletteRole {
+  if (role === "dyeInk" && scheme === "dark") return "dye";
+  return role;
 }
 
 /** The CSS value, in the same notation `globals.css` uses. */
@@ -236,59 +462,38 @@ export function formatOklch(color: OklchColor): string {
 
 export type AppearanceScheme = "light" | "dark";
 
+/** Every role of one scheme, with the preset applied. */
+export function derivePresetColors(
+  preset: AppearancePreset,
+  scheme: AppearanceScheme,
+): Record<PaletteRole, OklchColor> {
+  const roles = scheme === "light" ? LIGHT_ROLES : DARK_ROLES;
+  const out = {} as Record<PaletteRole, OklchColor>;
+
+  for (const role of Object.keys(roles) as PaletteRole[]) {
+    out[role] = applyPreset(roleFamilyFor(role, scheme), roles[role], preset);
+  }
+
+  return out;
+}
+
 /**
  * Every token a preset sets, for one scheme. Values are CSS strings, ready to
- * be written into a stylesheet or handed to a `style` attribute for a preview.
+ * be written into a stylesheet.
  */
 export function derivePresetTokens(
   preset: AppearancePreset,
   scheme: AppearanceScheme,
 ): Record<AppearanceTokenName, string> {
-  const roles = scheme === "light" ? LIGHT_ROLES : DARK_ROLES;
+  const colors = derivePresetColors(preset, scheme);
   const tokens = {} as Record<AppearanceTokenName, string>;
 
   for (const name of APPEARANCE_TOKEN_NAMES) {
-    tokens[name] = formatOklch(applyPreset(roles[TOKEN_ROLES[name]], preset));
+    tokens[name] = formatOklch(colors[TOKEN_ROLES[name]]);
   }
 
   return tokens;
 }
-
-/**
- * The raw colours behind `derivePresetTokens`, for the contrast test and for
- * the swatch the settings screen draws. Kept separate so nothing has to parse
- * a CSS string back into numbers.
- */
-export function derivePresetColors(
-  preset: AppearancePreset,
-  scheme: AppearanceScheme,
-): Record<keyof DyeRoles, OklchColor> {
-  const roles = scheme === "light" ? LIGHT_ROLES : DARK_ROLES;
-  return {
-    dye: applyPreset(roles.dye, preset),
-    dyeInk: applyPreset(roles.dyeInk, preset),
-    wash: applyPreset(roles.wash, preset),
-    washInk: applyPreset(roles.washInk, preset),
-    dyeRing: applyPreset(roles.dyeRing, preset),
-  };
-}
-
-/**
- * The two surfaces a dye has to stand on, unchanged by any preset — the cloth
- * ground and the swatch card. Exported so the contrast test measures against
- * the real palette rather than a copy of it.
- */
-export const APPEARANCE_SURFACES: Record<AppearanceScheme, { ground: OklchColor; card: OklchColor }> =
-  {
-    light: {
-      ground: { l: 0.955, c: 0.013, h: 84, rotates: false },
-      card: { l: 0.984, c: 0.007, h: 84, rotates: false },
-    },
-    dark: {
-      ground: { l: 0.24, c: 0.012, h: 60, rotates: false },
-      card: { l: 0.28, c: 0.014, h: 60, rotates: false },
-    },
-  };
 
 /** The attribute the root element carries. One place, three readers. */
 export const APPEARANCE_PRESET_ATTRIBUTE = "data-theme-preset";

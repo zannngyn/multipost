@@ -177,8 +177,9 @@ export function AppearanceScreen() {
               <Stack direction="vertical" gap={1}>
                 <Heading level={2}>Bộ màu</Heading>
                 <Text type="supporting">
-                  Mỗi bộ chỉ đổi màu hành động — nền vải, màu chữ và bốn màu trạng thái (lỗi, cảnh
-                  báo, thành công, thông tin) giữ nguyên, nên không bộ nào làm chữ khó đọc đi.
+                  Mỗi bộ đổi cả nền, thẻ, viền, màu chữ và màu hành động. Độ sáng của từng lớp giữ
+                  nguyên nên không bộ nào làm chữ khó đọc đi — mọi cặp chữ/nền đều được đo, thấp
+                  nhất 4.5:1. Bốn màu trạng thái (lỗi, cảnh báo, thành công, thông tin) không đổi.
                 </Text>
               </Stack>
 
