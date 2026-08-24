@@ -380,7 +380,7 @@ export function ChannelPickerDialog({
               <div className="flex flex-col items-start gap-2 py-4">
                 <p className="text-sm font-medium">Chưa có Page nào</p>
                 <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">
-                  Bài đăng cần ít nhất một Fanpage. Kết nối Facebook ở màn Kênh — chỉ làm một lần.
+                  Bài đăng cần ít nhất một kênh. Kết nối Facebook ở màn Kênh — chỉ làm một lần.
                 </p>
                 <Link
                   href="/channels"

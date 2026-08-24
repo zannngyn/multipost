@@ -19,7 +19,7 @@ import { AccessRequestTable } from "@/ui/components/access/AccessRequestTable";
 import { AccessRequestTableSkeleton } from "@/ui/components/access/AccessRequestTableSkeleton";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { presentApiError, toApiError } from "@/ui/components/feedback/present-api-error";
-import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
+import { TAB_PARAM, withTabParam } from "@/ui/components/navigation/tab-param";
 import { useAccessRequests } from "@/ui/hooks/useAccessRequests";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import {
@@ -97,10 +97,7 @@ export function AccessRequestsScreen({
       // reads no tab, falls back to "members" and the history disappears
       // mid-filter. The raw value is carried, not re-normalised: an unknown tab
       // already renders the default panel.
-      const query = withTabParam(
-        accessSearchParams(next).toString(),
-        searchParams.get(POSTS_TAB_PARAM),
-      );
+      const query = withTabParam(accessSearchParams(next).toString(), searchParams.get(TAB_PARAM));
       // `replace`: switching a filter is not a navigation step to walk back to.
       router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     },

@@ -15,6 +15,8 @@ import {
 import { useGridFocus } from "@astryxdesign/core/hooks";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import type { GroupChannelLabel } from "@/ui/components/channels/channel-group-labels";
+import { channelSentenceName } from "@/ui/components/channels/channel-option-labels";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import {
   CALENDAR_COLUMNS,
@@ -58,6 +60,10 @@ import {
  * and "nothing loaded at all"; this component owns "nothing in THIS month",
  * which is a different sentence with a different way out.
  */
+
+/** One shared empty map, so the default prop keeps a stable identity. */
+const EMPTY_CHANNEL_LABELS: ReadonlyMap<string, GroupChannelLabel> = new Map();
+
 export function ScheduledCalendar({
   monthKey,
   selectedDayKey,
@@ -69,6 +75,7 @@ export function ScheduledCalendar({
   onDaySelect,
   onClearFilters,
   renderDayDetail,
+  channelLabels = EMPTY_CHANNEL_LABELS,
 }: {
   /** "YYYY-MM" — already resolved by the screen, never null here. */
   monthKey: string;
@@ -91,6 +98,12 @@ export function ScheduledCalendar({
   onClearFilters: () => void;
   /** The day panel's body — the screen passes its existing actions table in. */
   renderDayDetail: (dayKey: string, jobs: readonly ScheduledJobEntry[]) => ReactNode;
+  /**
+   * Page names for the second line of each post in a cell, resolved ONCE by the
+   * screen (`channelLabelIndex`). Missing or empty means the channel list is not
+   * known — the cell then shows the shortened id, which is what it always did.
+   */
+  channelLabels?: ReadonlyMap<string, GroupChannelLabel>;
 }) {
   const month = useMemo(
     () => buildCalendarMonth({ monthKey, items, nowMs }),
@@ -309,6 +322,7 @@ export function ScheduledCalendar({
                   nowMs={nowMs}
                   isSelected={day.dayKey === selectedDayKey}
                   onSelect={() => onDaySelect(day.dayKey)}
+                  channelLabels={channelLabels}
                 />
               </StackItem>
             ))}
@@ -360,11 +374,13 @@ function DayCell({
   nowMs,
   isSelected,
   onSelect,
+  channelLabels,
 }: {
   day: CalendarDayCell;
   nowMs: number;
   isSelected: boolean;
   onSelect: () => void;
+  channelLabels: ReadonlyMap<string, GroupChannelLabel>;
 }) {
   const count = day.jobs.length;
   // What a screen reader announces when an arrow key lands here: the full date
@@ -399,9 +415,11 @@ function DayCell({
         </HStack>
 
         {/* Two lines per post, not one: a month column is ~130px wide, and
-            "20:00 · MGKVX6310 · fbpage-a" on one line truncates to "20:00 · MG…",
-            which answers nothing. Hour + mã is what an operator scans for; the
-            channel sits under it, and the day panel has the full row. */}
+            "20:00 · MGKVX6310 · Lady Fashion" on one line truncates to
+            "20:00 · MG…", which answers nothing. Hour + mã is what an operator
+            scans for; the PAGE NAME sits under it — a cell too narrow for a
+            19-character id is exactly where a raw id was worth least — and the
+            day panel has the full row. */}
         {day.visibleJobs.map((job) => (
           <VStack key={job.postJobId} gap={0}>
             <Text type="supporting" size="2xs" display="block" maxLines={1} hasTabularNumbers>
@@ -414,7 +432,7 @@ function DayCell({
               display="block"
               maxLines={1}
             >
-              {job.channelId}
+              {channelSentenceName(job.channelId, channelLabels)}
             </Text>
           </VStack>
         ))}

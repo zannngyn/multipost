@@ -12,7 +12,7 @@ import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import type { Channel, ChannelStatus } from "@/ui/schemas/channel.schema";
 
 /**
- * "Page đã kết nối" (E5.1) — the Fanpages this tenant may publish to, and the
+ * "Page đã kết nối" (E5.1) — the Pages this tenant may publish to, and the
  * screen that has to exist before a channel group can contain anything real.
  *
  * Since the wave-1 IA this is a PANEL of the "Kênh" hub, not a page: the hub
@@ -168,7 +168,7 @@ function ChannelListBody({
         <Stack direction="vertical" padding={4}>
           <EmptyState
             headingLevel={3}
-            title="Công ty này chưa kết nối Fanpage nào"
+            title="Công ty này chưa kết nối Page nào"
             description={`Chưa có Page nào để đăng bài. ${blockedReasonOverride}`}
           />
         </Stack>
@@ -180,7 +180,7 @@ function ChannelListBody({
         <Stack direction="vertical" padding={4}>
           <EmptyState
             headingLevel={3}
-            title="Chưa kết nối Fanpage nào"
+            title="Chưa kết nối Page nào"
             description={`Chưa thể kết nối Page cho tới khi máy chủ được cấu hình xong. ${secretsNotConfiguredReason()}`}
           />
         </Stack>
@@ -191,9 +191,9 @@ function ChannelListBody({
       <Stack direction="vertical" padding={4}>
         <EmptyState
           headingLevel={3}
-          title="Chưa kết nối Fanpage nào"
+          title="Chưa kết nối Page nào"
           description="Chưa có Page nào để đăng bài, nên màn soạn bài sẽ không có kênh để chọn. Sang tab “Kết nối thêm” rồi bấm “Đăng nhập bằng Facebook” — hệ thống sẽ tự lấy về mọi Page bạn quản lý. Nếu công ty chưa cấu hình App Secret thì mở mục “Cách nâng cao” để dán User Access Token."
-          actions={<Button variant="primary" label="Kết nối Fanpage" onClick={onGoToConnect} />}
+          actions={<Button variant="primary" label="Kết nối Page" onClick={onGoToConnect} />}
         />
       </Stack>
     );

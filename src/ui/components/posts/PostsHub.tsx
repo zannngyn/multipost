@@ -1,6 +1,14 @@
 "use client";
 
-import { Tab, TabList } from "@astryxdesign/core";
+import {
+  Heading,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  Tab,
+  TabList,
+  Text,
+} from "@astryxdesign/core";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback } from "react";
 
@@ -62,23 +70,50 @@ export function PostsHub({ tab }: { tab: PostsTab }) {
   );
 
   return (
-    <div className="space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Bài đăng</h1>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          Bài đang chờ tới giờ đăng và nhật ký những bài đã chạy — theo dõi ở cùng một chỗ.
-        </p>
-      </header>
+    <Layout
+      height="fill"
+      header={
+        <LayoutHeader hasDivider>
+          {/* The SAME column as the content below — `max-w-5xl` centred, `px-6`
+              — so the h1 sits on the left edge of the panel it titles, while
+              the divider still runs the full width of the shell because it
+              belongs to LayoutHeader rather than to this box. The frame the
+              other two hubs already use (`ChannelsHub`, `MembersHub`); this
+              screen was the last one still hand-rolling a page container. */}
+          <div className="mx-auto w-full max-w-5xl space-y-4 px-6 py-4">
+            <div className="max-w-prose space-y-1">
+              <Heading level={1}>Bài đăng</Heading>
+              <Text type="supporting">
+                Bài đang chờ tới giờ đăng và nhật ký những bài đã chạy — theo dõi ở cùng một chỗ.
+              </Text>
+            </div>
 
-      {/* The shell's side nav is the other <nav> on the page, so this one says
-          what it navigates (core-accessibility §2). */}
-      <TabList value={active} onChange={handleChange} aria-label="Chế độ xem bài đăng" hasDivider>
-        {POSTS_TABS.map((value) => (
-          <Tab key={value} value={value} label={POSTS_TAB_LABELS[value]} />
-        ))}
-      </TabList>
-
-      {active === "scheduled" ? <ScheduledScreen /> : <JobLogScreen />}
-    </div>
+            {/* The shell's side nav is the other <nav> on the page, so this one
+                says what it navigates (core-accessibility §2). */}
+            <TabList value={active} onChange={handleChange} aria-label="Chế độ xem bài đăng">
+              {POSTS_TABS.map((value) => (
+                <Tab key={value} value={value} label={POSTS_TAB_LABELS[value]} />
+              ))}
+            </TabList>
+          </div>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent padding={0} isScrollable>
+          {/* `relative`, and it is load-bearing — the same trap AppFrame
+              documents, one level down, and the one `BulkRunScreen` was patched
+              for. `sr-only` is `position: absolute`, so every visually hidden
+              node below (the job-log table captions, the scheduled list's
+              headings) anchors to the nearest POSITIONED ancestor. Astryx's
+              layout content is `static`, so they escape this scroll box and
+              land on the shell wrapper above it — which stretches
+              `documentElement.scrollHeight` past the viewport and hands the
+              page a SECOND scrollbar with nothing but background in it. */}
+          <div className="relative mx-auto w-full max-w-5xl px-6 py-8">
+            {active === "scheduled" ? <ScheduledScreen /> : <JobLogScreen />}
+          </div>
+        </LayoutContent>
+      }
+    />
   );
 }

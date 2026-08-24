@@ -22,8 +22,15 @@ import { Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+import {
+  inspectorRecovery,
+  isInspectorDrawerOpen,
+  productInspectorState,
+} from "@/ui/components/products/product-inspector-state";
 import { matchingTotal } from "@/ui/components/products/product-totals";
 import { ProductInspector } from "@/ui/components/products/ProductInspector";
+import { ProductInspectorDrawer } from "@/ui/components/products/ProductInspectorDrawer";
+import { ProductStatusLegend } from "@/ui/components/products/ProductStatusLegend";
 import { ProductTable } from "@/ui/components/products/ProductTable";
 import { ProductTableSkeleton } from "@/ui/components/products/ProductTableSkeleton";
 import { useCatalogProducts } from "@/ui/hooks/useCatalogProducts";
@@ -51,6 +58,12 @@ import {
  * object — no second source of truth. The selected row rides in `?chon=` which
  * is deliberately NOT part of ProductFilter: selecting a row must not refetch.
  *
+ * Responsive contract (`astryx docs layout` asks for this at the frame root):
+ *   > 1024px  content | inspector LayoutPanel 380
+ *   <= 1024px inspector becomes a modal drawer pinned to the inline end, so
+ *             selecting a code still leads somewhere and "Soạn bài" is reachable
+ *   <= 1024px filter cluster stacks: search on its own row, status below it
+ *
  * The four mandatory states:
  *   loading — skeleton with the real columns, delayed 300ms
  *   data    — rows + "Tải thêm" (cursor, so no page numbers)
@@ -71,8 +84,8 @@ export function ProductListScreen() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // Responsive contract: below 1024px the inspector would squeeze the rows, so
-  // it drops out and the code button is a no-op target until the viewport grows.
+  // Read at runtime, not once: a tablet leaving split-screen must get its panel
+  // back without a reload (web-multi-device).
   const isNarrow = useMediaQuery("(max-width: 1024px)");
 
   const filter = useMemo(
@@ -93,7 +106,12 @@ export function ProductListScreen() {
   // the first page is authoritative and every page repeats it.
   const totals = products.data?.pages[0]?.totals ?? { total: 0, ok: 0, blocked: 0 };
   const hasFilter = filter.status !== null || filter.q !== null;
-  const selected = items.find((item) => item.code === selectedCode) ?? null;
+  // `isFetching` and not `isFirstLoad`: a "Tải lại" that empties the list for a
+  // moment must not turn the open inspector into "không thấy mã này".
+  const inspector = productInspectorState(selectedCode, items, {
+    isLoading: products.isFetching,
+  });
+  const isDrawerOpen = isInspectorDrawerOpen(isNarrow, inspector);
 
   /** Writes filter + selection together so neither clobbers the other. */
   const pushUrl = useCallback(
@@ -143,86 +161,205 @@ export function ProductListScreen() {
     pushUrl({ status, q: filter.q }, selectedCode);
   }
 
-  return (
-    <Layout
-      height="fill"
-      header={
-        <LayoutHeader hasDivider>
-          <Stack direction="vertical" gap={3} padding={4}>
-            <Stack direction="vertical" gap={1}>
-              <Heading level={1}>Sản phẩm</Heading>
-              <Text type="supporting">
-                Dữ liệu của lần đồng bộ gần nhất: mã nào đăng được, mã nào bị chặn và vì sao. Tồn
-                kho ở đây là thông tin nội bộ — không bao giờ đi vào caption.
-              </Text>
-            </Stack>
+  // --- Focus, across the drawer's life -------------------------------------
+  /**
+   * Which element opened the drawer, so closing can hand focus back to it.
+   *
+   * The native <dialog> restores focus when IT closes — but this drawer closes
+   * by unmounting (the selection lives in the URL, and clearing it removes the
+   * dialog from the tree), so the browser has nothing to restore to and focus
+   * falls to <body>. A keyboard user would then be back at the top of the page
+   * with the row they were reading nowhere near the caret (core-accessibility).
+   *
+   * The row's code button is rendered inside Astryx's Table, so there is no ref
+   * to reach for; the element that had focus at the moment of the press is the
+   * same element and needs no plumbing through the table.
+   */
+  const invokerRef = useRef<HTMLElement | null>(null);
+  const shouldRestoreFocus = useRef(false);
 
-            <HStack gap={3} align="end">
-              <StackItem size="fill">
-                <TextInput
-                  label="Tìm theo mã hoặc tên"
-                  value={draft}
-                  onChange={setDraft}
-                  placeholder="MGKVX6310 hoặc Giannal"
-                  startIcon={Search}
-                  size="sm"
-                  description="Gõ xong đợi một nhịp là danh sách tự lọc. Bộ lọc nằm trong địa chỉ trang nên gửi link được."
-                />
-              </StackItem>
+  useEffect(() => {
+    if (isDrawerOpen || !shouldRestoreFocus.current) return;
+    shouldRestoreFocus.current = false;
 
-              <SegmentedControl
-                label="Lọc theo trạng thái đăng bài"
-                value={filter.status ?? "all"}
-                onChange={selectStatus}
-                size="sm"
-              >
-                <SegmentedControlItem label={`Tất cả ${formatCount(totals.total)}`} value="all" />
-                <SegmentedControlItem label={`Đăng được ${formatCount(totals.ok)}`} value="ok" />
-                <SegmentedControlItem
-                  label={`Bị chặn ${formatCount(totals.blocked)}`}
-                  value="blocked"
-                />
-              </SegmentedControl>
+    const invoker = invokerRef.current;
+    invokerRef.current = null;
+    // The row may have been re-rendered away (a filter change, a refetch).
+    // Silently doing nothing is right: there is nothing to go back to.
+    if (invoker?.isConnected) invoker.focus();
+  }, [isDrawerOpen]);
 
-              {hasFilter ? (
-                <Button variant="ghost" size="sm" label="Bỏ bộ lọc" onClick={clearFilters} />
-              ) : null}
+  function selectProduct(code: string) {
+    const active = document.activeElement;
+    invokerRef.current = active instanceof HTMLElement ? active : null;
+    pushUrl(filter, code);
+  }
 
-              <Button
-                variant="secondary"
-                size="sm"
-                label={products.isFetching ? "Đang tải…" : "Tải lại"}
-                isDisabled={products.isFetching}
-                onClick={() => void products.refetch()}
-              />
-            </HStack>
-          </Stack>
-        </LayoutHeader>
-      }
-      content={
-        <LayoutContent padding={0}>
-          <ProductListBody
-            isFirstLoad={isFirstLoad}
-            showSkeleton={showSkeleton}
-            products={products}
-            items={items}
-            totals={totals}
-            filter={filter}
-            hasFilter={hasFilter}
-            selectedCode={selectedCode}
-            onSelect={(code) => pushUrl(filter, code)}
-            onClearFilters={clearFilters}
-          />
-        </LayoutContent>
-      }
-      end={
-        isNarrow ? undefined : (
-          <LayoutPanel width={380} hasDivider label="Chi tiết sản phẩm">
-            <ProductInspector product={selected} />
-          </LayoutPanel>
-        )
+  function closeDrawer() {
+    shouldRestoreFocus.current = true;
+    pushUrl(filter, null);
+  }
+
+  /**
+   * What the drawer offers when the selected code is not among the loaded rows.
+   * Clearing the filter KEEPS `?chon=`, so the drawer stays open and fills
+   * itself in as the unfiltered page arrives — one press, no re-finding.
+   */
+  const recoveryPlan = inspectorRecovery({ hasFilter, hasNextPage: products.hasNextPage });
+  const recovery =
+    recoveryPlan === null
+      ? null
+      : {
+          ...recoveryPlan,
+          onPress:
+            recoveryPlan.kind === "clear-filter"
+              ? clearFilters
+              : () => void products.fetchNextPage(),
+          // Only the fetch has a wait to report. Clearing the filter rewrites
+          // the URL on the same tick and the drawer redraws with it, so there
+          // is no in-between state to show for that one.
+          isBusy: recoveryPlan.kind === "load-more" && products.isFetchingNextPage,
+        };
+
+  /**
+   * The status filter. The counts ride in the labels on a wide viewport, where
+   * three segments plus two numbers fit; on a narrow one they are dropped —
+   * "Đăng đ… 1.2" truncated inside a segment is worse than no number, and the
+   * footer already says how many rows the active filter matches.
+   */
+  const statusFilter = (
+    <SegmentedControl
+      label="Lọc theo trạng thái đăng bài"
+      value={filter.status ?? "all"}
+      onChange={selectStatus}
+      size="sm"
+      layout={isNarrow ? "fill" : "hug"}
+    >
+      <SegmentedControlItem
+        label={isNarrow ? "Tất cả" : `Tất cả ${formatCount(totals.total)}`}
+        value="all"
+      />
+      <SegmentedControlItem
+        label={isNarrow ? "Đăng được" : `Đăng được ${formatCount(totals.ok)}`}
+        value="ok"
+      />
+      <SegmentedControlItem
+        label={isNarrow ? "Bị chặn" : `Bị chặn ${formatCount(totals.blocked)}`}
+        value="blocked"
+      />
+    </SegmentedControl>
+  );
+
+  const searchBox = (
+    <TextInput
+      label="Tìm theo mã hoặc tên"
+      value={draft}
+      onChange={setDraft}
+      placeholder="MGKVX6310 hoặc Giannal"
+      startIcon={Search}
+      size="sm"
+      // Three lines of help under a full-width field is most of a phone screen
+      // (spec §3.4). The placeholder carries the example; the behaviour is
+      // discovered by typing.
+      description={
+        isNarrow
+          ? undefined
+          : "Gõ xong đợi một nhịp là danh sách tự lọc. Bộ lọc nằm trong địa chỉ trang nên gửi link được."
       }
     />
+  );
+
+  const clearButton = hasFilter ? (
+    <Button variant="ghost" size="sm" label="Bỏ bộ lọc" onClick={clearFilters} />
+  ) : null;
+
+  return (
+    <>
+      <Layout
+        height="fill"
+        header={
+          <LayoutHeader hasDivider>
+            <Stack direction="vertical" gap={3} padding={4}>
+              {/* Title row owns "Tải lại": it acts on the whole screen, not on
+                  the filter, and keeping it here is what frees the filter row
+                  from wrapping to a third tier on a phone. */}
+              <HStack gap={3} align="start">
+                <StackItem size="fill">
+                  <Stack direction="vertical" gap={1}>
+                    <Heading level={1}>Sản phẩm</Heading>
+                    <Text type="supporting">
+                      Dữ liệu của lần đồng bộ gần nhất: mã nào đăng được, mã nào bị chặn và vì
+                      sao. Tồn kho ở đây là thông tin nội bộ — không bao giờ đi vào caption.
+                    </Text>
+                  </Stack>
+                </StackItem>
+
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  label={products.isFetching ? "Đang tải…" : "Tải lại"}
+                  isDisabled={products.isFetching}
+                  onClick={() => void products.refetch()}
+                />
+              </HStack>
+
+              {isNarrow ? (
+                // Two tiers, always: search, then status. What used to happen
+                // here was a single HStack wrapping into three ragged rows.
+                <Stack direction="vertical" gap={2}>
+                  {searchBox}
+                  <HStack gap={2} align="center">
+                    <StackItem size="fill">{statusFilter}</StackItem>
+                    {clearButton}
+                  </HStack>
+                </Stack>
+              ) : (
+                <HStack gap={3} align="end">
+                  <StackItem size="fill">{searchBox}</StackItem>
+                  {statusFilter}
+                  {clearButton}
+                </HStack>
+              )}
+            </Stack>
+          </LayoutHeader>
+        }
+        content={
+          <LayoutContent padding={0}>
+            <ProductListBody
+              isFirstLoad={isFirstLoad}
+              showSkeleton={showSkeleton}
+              products={products}
+              items={items}
+              totals={totals}
+              filter={filter}
+              hasFilter={hasFilter}
+              selectedCode={selectedCode}
+              onSelect={selectProduct}
+              onClearFilters={clearFilters}
+            />
+          </LayoutContent>
+        }
+        end={
+          isNarrow ? undefined : (
+            <LayoutPanel width={380} hasDivider label="Chi tiết sản phẩm">
+              {/* The panel is not modal, so the header controls stay usable —
+                  but one press beats two, here as much as in the drawer. */}
+              <ProductInspector state={inspector} recovery={recovery} />
+            </LayoutPanel>
+          )
+        }
+      />
+
+      {/* Same inspector, other frame. Closing clears `?chon=` so Back does not
+          re-open a drawer the operator just dismissed, and hands focus back to
+          the row that opened it. */}
+      <ProductInspectorDrawer
+        state={inspector}
+        isOpen={isDrawerOpen}
+        onClose={closeDrawer}
+        recovery={recovery}
+      />
+    </>
   );
 }
 
@@ -295,6 +432,10 @@ function ProductListBody({
   // --- Data ----------------------------------------------------------------
   return (
     <Stack direction="vertical" height="100%">
+      {/* Above the rows, not below: the key has to be read before the dots are,
+          and it must survive the table scrolling. */}
+      <ProductStatusLegend items={items} />
+
       <StackItem size="fill">
         <ProductTable items={items} selectedCode={selectedCode} onSelect={onSelect} />
       </StackItem>

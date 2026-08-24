@@ -65,11 +65,12 @@ export function resolveActiveChannelsTab(
  *   `?connected=N&new=X&skipped=Y` · `?connect=cancelled` ·
  *   `?connect=error&reason=…`
  *
- * `new` and `skipped` are NOT read by `parseConnectOutcome`, so leaving them out
- * of this list did not break any banner — it just left `?new=1&skipped=3` stuck
- * in the address bar for the rest of the session. Hence the test pins this list
- * against the callback's real strings, not against what the parser happens to
- * look at.
+ * `new` and `skipped` went unread by `parseConnectOutcome` for a while, so
+ * leaving them out of this list broke no banner — it just left `?new=1&skipped=3`
+ * stuck in the address bar for the rest of the session. The banner reads them
+ * now, which makes stripping them mandatory rather than merely tidy: hence the
+ * test pins this list against the callback's real strings, not against whatever
+ * the parser happens to look at today.
  */
 const CONNECT_CALLBACK_PARAMS = ["connected", "new", "skipped", "connect", "reason"] as const;
 

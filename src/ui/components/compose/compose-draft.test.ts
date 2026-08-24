@@ -31,7 +31,7 @@ function payload(overrides: Partial<ComposeDraftPayload> = {}): ComposeDraftPayl
     captions: { facebook: "Áo dài trắng" },
     captionOverrides: {},
     albumOrder: ["a", "b"],
-    selectedChannelIds: ["fanpage-a"],
+    selectedChannelIds: ["page-a"],
     shareCaption: true,
     schedule: { mode: "now", value: "" },
     savedAt: "2026-08-17T03:00:00.000Z",
@@ -51,7 +51,7 @@ function snapshot(overrides: Partial<ComposeDraftSnapshot> = {}): ComposeDraftSn
     captions: { facebook: "Áo dài trắng" },
     captionOverrides: {},
     albumOrder: ["a", "b"],
-    selectedChannelIds: ["fanpage-a"],
+    selectedChannelIds: ["page-a"],
     shareCaption: true,
     schedule: { mode: "now", value: "" },
     ...overrides,
@@ -223,15 +223,15 @@ describe("buildComposeDraftPayload", () => {
     const built = buildComposeDraftPayload(
       snapshot({
         captions: { facebook: "   ", tiktok: "Có nội dung" },
-        captionOverrides: { "fanpage-a": "" },
+        captionOverrides: { "page-a": "" },
         albumOrder: ["a", ""],
-        selectedChannelIds: ["", "fanpage-b"],
+        selectedChannelIds: ["", "page-b"],
       }),
     );
     expect(built.captions).toEqual({ tiktok: "Có nội dung" });
     expect(built.captionOverrides).toEqual({});
     expect(built.albumOrder).toEqual(["a"]);
-    expect(built.selectedChannelIds).toEqual(["fanpage-b"]);
+    expect(built.selectedChannelIds).toEqual(["page-b"]);
   });
 
   it("falls back to the current clock when handed a broken one", () => {

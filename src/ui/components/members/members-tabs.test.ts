@@ -6,7 +6,7 @@ import {
   parseMembersTab,
   resolveActiveMembersTab,
 } from "@/ui/components/members/members-tabs";
-import { withTabParam } from "@/ui/components/posts/posts-tabs";
+import { withTabParam } from "@/ui/components/navigation/tab-param";
 import { accessSearchParams } from "@/ui/schemas/access-request.schema";
 
 describe("parseMembersTab", () => {

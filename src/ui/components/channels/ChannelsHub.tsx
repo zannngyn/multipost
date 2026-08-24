@@ -30,7 +30,11 @@ import { secretsNotConfiguredView } from "@/ui/components/channels/channel-secre
 import { ConnectedChannelsScreen } from "@/ui/components/channels/ConnectedChannelsScreen";
 import { useChannels } from "@/ui/hooks/useChannels";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
-import { parseConnectOutcome, type ConnectOutcome } from "@/ui/schemas/channel.schema";
+import {
+  connectSuccessView,
+  parseConnectOutcome,
+  type ConnectOutcome,
+} from "@/ui/schemas/channel.schema";
 
 /**
  * "Kênh" — the wave-1 hub over the three views of one subject: the Pages this
@@ -155,7 +159,7 @@ export function ChannelsHub({ tab }: { tab: ChannelsTab }) {
             <Stack direction="vertical" gap={1}>
               <Heading level={1}>Kênh</Heading>
               <Text type="supporting">
-                Những Fanpage bài viết có thể được đăng lên, các nhóm kênh dùng để tick nhanh ở màn
+                Những Page bài viết có thể được đăng lên, các nhóm kênh dùng để tick nhanh ở màn
                 soạn bài, và chỗ kết nối thêm Page mới.
               </Text>
             </Stack>
@@ -255,19 +259,16 @@ function ConnectOutcomeBanner({
   onDismiss: () => void;
 }) {
   if (outcome.kind === "connected") {
+    // Wording, tone and the skipped-Page sentence are decided in one pure
+    // place (`connectSuccessView`) so they can be tested without a DOM.
+    const view = connectSuccessView(outcome);
     return (
       <Banner
-        status="success"
+        status={view.tone}
         isDismissable
         onDismiss={onDismiss}
-        title={
-          outcome.count === null
-            ? "Đã kết nối xong với Facebook"
-            : outcome.count === 0
-              ? "Không có Page mới nào được thêm"
-              : `Đã kết nối ${outcome.count} Page`
-        }
-        description="Kiểm tra tab “Page đã kết nối” trước khi đăng bài — chỉ những Page đang bật mới nhận bài."
+        title={view.title}
+        description={view.description}
       />
     );
   }

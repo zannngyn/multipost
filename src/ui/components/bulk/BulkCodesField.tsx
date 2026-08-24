@@ -63,7 +63,12 @@ export function BulkCodesField({
       </p>
 
       {/* Polite: the count changes on every keystroke, it must not interrupt. */}
-      <p id={summaryId} role="status" aria-live="polite" className="text-muted-foreground text-xs">
+      <p
+        id={summaryId}
+        role="status"
+        aria-live="polite"
+        className="text-muted-foreground text-xs tabular-nums"
+      >
         Đã đọc được {parsed.codes.length} mã hợp lệ
         {parsed.duplicates > 0 ? ` · bỏ ${parsed.duplicates} mã trùng` : ""}
         {parsed.invalid.length > 0 ? ` · ${parsed.invalid.length} dòng chưa đúng` : ""}
@@ -79,7 +84,7 @@ export function BulkCodesField({
       {parsed.invalid.length > 0 ? (
         <div
           id={issuesId}
-          className="border-warning/40 bg-warning/10 max-h-48 overflow-auto rounded-lg border p-3"
+          className="border-warning/40 bg-warning/10 max-h-48 overflow-auto rounded-md border p-3"
         >
           <p className="text-warning-foreground text-xs font-medium">
             Các dòng sau không phải mã sản phẩm:
@@ -87,7 +92,7 @@ export function BulkCodesField({
           <ul className="mt-1 space-y-1">
             {parsed.invalid.map((issue, index) => (
               <li key={`${issue.line}-${index}`} className="text-xs">
-                <span className="font-medium">Dòng {issue.line}:</span>{" "}
+                <span className="font-medium tabular-nums">Dòng {issue.line}:</span>{" "}
                 <span className="font-mono break-all">{issue.raw}</span> — {issue.message}
               </li>
             ))}
@@ -97,8 +102,11 @@ export function BulkCodesField({
 
       {parsed.overLimit.length > 0 ? (
         <p role="alert" className="text-destructive text-xs">
-          Vượt giới hạn {MAX_BULK_CODES} mã: {parsed.overLimit.map((item) => item.code).join(", ")}.
-          Hãy bỏ bớt rồi chạy lượt sau.
+          Vượt giới hạn {MAX_BULK_CODES} mã:{" "}
+          <span className="font-mono">
+            {parsed.overLimit.map((item) => item.code).join(", ")}
+          </span>
+          . Hãy bỏ bớt rồi chạy lượt sau.
         </p>
       ) : null}
     </div>

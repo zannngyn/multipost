@@ -22,13 +22,14 @@ import type { BatchChannelProgress } from "@/ui/schemas/post-batch.schema";
 export function ChannelProgress({
   progress,
   steps,
-  channelId,
+  channelLabel,
   /** The row's status sentence; the detail line is dropped when it repeats it. */
   statusMessage,
 }: {
   progress: BatchChannelProgress;
   steps: readonly string[];
-  channelId: string;
+  /** What the progress bars call this channel — the Page name when known. */
+  channelLabel: string;
   statusMessage: string;
 }) {
   // 1s: this is the only per-second update on the screen, and it re-renders one
@@ -44,13 +45,13 @@ export function ChannelProgress({
       <ProgressStepper
         steps={steps}
         currentIndex={progress.stepIndex}
-        label={`Các bước đăng bài của kênh ${channelId}`}
+        label={`Các bước đăng bài của kênh ${channelLabel}`}
       />
 
       <Progress
         value={bar.kind === "determinate" ? bar.valueNow : null}
         max={bar.kind === "determinate" ? bar.valueMax : undefined}
-        label={`Tiến độ bước đang chạy của kênh ${channelId}`}
+        label={`Tiến độ bước đang chạy của kênh ${channelLabel}`}
         valueText={bar.valueText}
       />
 

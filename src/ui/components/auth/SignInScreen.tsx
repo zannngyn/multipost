@@ -1,22 +1,16 @@
 "use client";
 
 import {
-  Badge,
   Banner,
   Button,
   Divider,
   Grid,
   Heading,
   Icon,
-  Link,
   Section,
   Stack,
-  Tab,
-  TabList,
   Text,
-  TextInput,
 } from "@astryxdesign/core";
-import { useState } from "react";
 import { useFormStatus } from "react-dom";
 
 /**
@@ -33,24 +27,18 @@ import { useFormStatus } from "react-dom";
  *              the operator is signing in to, and hiding them on a phone would
  *              leave a bare pair of buttons.
  *
- * What is real and what is a preview:
- *   - REAL: the Google and Facebook forms. Each is a plain `<form action>` with
- *     a Server Action, so they submit before the client bundle loads
- *     (web-auth-flows rule 5) — this page is the front door.
- *   - PREVIEW: the email/password fields, "Quên mật khẩu" and the submit button
- *     are disabled and carry a "Sắp ra mắt" badge. They are deliberately NOT
- *     inside a `<form>`: a real login form here would make password managers
- *     offer to fill a box that can never be submitted, and would let Enter
- *     "submit" nothing.
+ * EVERY CONTROL ON THIS SCREEN WORKS (spec §3.7). It used to also carry a
+ * disabled email/password block, a dead "Quên mật khẩu" link and a
+ * "Đăng nhập / Đăng ký" tab strip whose only effect was relabelling that block
+ * — a preview of a feature with no ticket behind it. Showing an operator two
+ * ways in and then refusing one of them costs more trust than the empty space
+ * costs curiosity, and the tab strip made the screen look like it had a state
+ * to choose before the two buttons that actually sign anyone in.
+ *
+ * What is left: the Google and Facebook forms. Each is a plain `<form action>`
+ * with a Server Action, so they submit before the client bundle loads
+ * (web-auth-flows rule 5) — this page is the front door.
  */
-
-/** The two preview tabs. The value lives in state, not the URL: nothing here
- *  can be linked to or bookmarked yet, so a query param would be a promise the
- *  screen cannot keep. */
-type AuthTab = "signin" | "signup";
-
-const COMING_SOON_REASON =
-  "Đăng nhập bằng email và mật khẩu chưa mở. Hiện tại hãy dùng Google hoặc Facebook bên dưới.";
 
 /** Why the product exists, in the operator's words — not feature names. */
 const VALUE_POINTS = [
@@ -85,9 +73,6 @@ export function SignInScreen({
   signInWithGoogle,
   signInWithFacebook,
 }: SignInScreenProps) {
-  const [tab, setTab] = useState<AuthTab>("signin");
-  const isSignUp = tab === "signup";
-
   return (
     <Grid
       columns={{ minWidth: 460, max: 2, repeat: "fit" }}
@@ -106,9 +91,9 @@ export function SignInScreen({
             maxWidth={420}
             className="mx-auto"
             as="section"
-            aria-label="Tự động hóa cùng MysP ngay"
+            aria-label="Tự động hóa cùng MYSP ngay"
           >
-            <Heading level={2}>Tự động hóa cùng MysP ngay</Heading>
+            <Heading level={2}>Tự động hóa cùng MYSP ngay</Heading>
 
             {/* Neither banner is decoration: they are the only explanation an
                 operator gets for a round trip that ended back here. */}
@@ -141,24 +126,6 @@ export function SignInScreen({
               </Stack>
             ) : null}
 
-            {/* Astryx TabList renders a <nav> with roving tabindex and
-                aria-current — a navigation strip, not a WAI-ARIA tab widget.
-                So no role="tab"/"tabpanel" is bolted on here: hand-written ARIA
-                on top of a different pattern reads worse than the plain one. */}
-            <TabList
-              value={tab}
-              onChange={(value) => setTab(value as AuthTab)}
-              hasDivider
-              aria-label="Tự động hóa với MysP ngay"
-            >
-              <Tab value="signin" label="Đăng nhập" />
-              <Tab value="signup" label="Đăng ký" />
-            </TabList>
-
-            <CredentialsPreview isSignUp={isSignUp} />
-
-            <Divider label="Hoặc" />
-
             {/* Two independent forms, not one with two buttons: each carries its
                 own Server Action, and a failure of one must not touch the other.
                 Grid, not HStack: the pair sits side by side while there is room
@@ -190,7 +157,7 @@ export function SignInScreen({
               {/* One shared line for both buttons. Two separate paragraphs said
                   the same thing twice and pushed the terms line off the fold. */}
               <Text type="supporting">
-                Liên hệ với MysP ngay để nhận hỗ trợ.
+                Liên hệ với MYSP ngay để nhận hỗ trợ.
               </Text>
             </Stack>
 
@@ -207,7 +174,7 @@ export function SignInScreen({
             <Divider />
 
             <Stack direction="vertical" as="footer">
-              <Text type="supporting">© MysP 2026. All right reserved.</Text>
+              <Text type="supporting">© MYSP 2026. All rights reserved.</Text>
             </Stack>
           </Stack>
         </Stack>
@@ -260,62 +227,6 @@ function BrandColumn() {
         </Stack>
       </Stack>
     </Section>
-  );
-}
-
-/**
- * The email/password block: visible, explained once, and inert.
- *
- * Showing it disabled rather than hiding it is a deliberate choice — operators
- * keep asking whether they can have a password account, and an empty space
- * answers nothing.
- *
- * The reason is stated EXACTLY ONCE, as visible text. An earlier revision also
- * passed it as `disabledMessage` on both fields and `tooltip` on the button;
- * Astryx turns each of those into an `aria-describedby` target, so a screen
- * reader read the same sentence four times in a row. Dropping them also drops
- * the aria-disabled escape hatch, which is the right trade here: the controls
- * become natively `disabled`, leave the tab order entirely, and there is
- * nothing left to "discover a reason" on. The sentence sits in the same labelled
- * region, immediately before them.
- */
-function CredentialsPreview({ isSignUp }: { isSignUp: boolean }) {
-  return (
-    <Stack direction="vertical" gap={3}>
-      <Stack direction="horizontal" gap={2} align="center" wrap="wrap">
-        <Text type="label">{isSignUp ? "Đăng ký bằng email" : "Đăng nhập bằng email"}</Text>
-        <Badge variant="neutral" label="Sắp ra mắt" />
-      </Stack>
-
-      {/* The single source of truth for "why is this dead". */}
-      <Text type="supporting">{COMING_SOON_REASON}</Text>
-
-      <Stack direction="vertical" gap={2}>
-        <TextInput label="Email" type="email" value="" placeholder="ban@congty.com" isDisabled />
-        <TextInput
-          label={isSignUp ? "Mật khẩu mới" : "Mật khẩu"}
-          type="password"
-          value=""
-          placeholder={isSignUp ? "Đặt mật khẩu mới" : "Mật khẩu của bạn"}
-          isDisabled
-        />
-        {isSignUp ? null : (
-          <Stack direction="horizontal" hAlign="end">
-            <Link href="#" isDisabled isStandalone>
-              Quên mật khẩu
-            </Link>
-          </Stack>
-        )}
-      </Stack>
-
-      <Button
-        label={isSignUp ? "Đăng ký" : "Đăng nhập"}
-        variant="secondary"
-        size="lg"
-        width="100%"
-        isDisabled
-      />
-    </Stack>
   );
 }
 

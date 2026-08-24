@@ -1,6 +1,9 @@
 import { redirect } from "next/navigation";
 
-import { legacyRedirectTarget } from "@/ui/components/posts/legacy-routes";
+import {
+  legacyRedirectQuery,
+  legacyRedirectTarget,
+} from "@/ui/components/posts/legacy-routes";
 
 /**
  * `/jobs` moved into the "Bài đăng" hub (wave-1 IA). It stays as a redirect,
@@ -18,10 +21,9 @@ export default async function JobsRedirect({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(await searchParams)) {
-    if (typeof v === "string") params.set(k, v);
-  }
+  // Repeated parameters are kept, not dropped — same as the edge redirect does
+  // (`legacyRedirectQuery`).
+  const query = legacyRedirectQuery(await searchParams);
   // redirect() throws NEXT_REDIRECT — it must stay outside try/catch.
-  redirect(legacyRedirectTarget("/jobs", params.toString()) ?? "/posts");
+  redirect(legacyRedirectTarget("/jobs", query) ?? "/posts");
 }

@@ -145,6 +145,14 @@ function presentCancelError(error: ApiError): ApiErrorView | null {
         kind: "business",
         title: "Chưa gỡ được bài khỏi Facebook",
         description: error.userMessage,
+        // "Trang", not "Page", ON PURPOSE — and the one place in the UI still
+        // spelling it that way after the spec §3.5 sweep. `description` right
+        // above is the server's own `userMessage` ("… hãy vào Trang, mục bài đã
+        // lên lịch …", from core/usecases/cancel-scheduled-job.ts and
+        // adapters/meta/facebook-publisher.ts, both outside this layer). Two
+        // words for one thing INSIDE ONE BANNER is worse than the old word, so
+        // this line follows the sentence it is glued to. Flip it in the same
+        // change that renames the three back-end strings, not before.
         hint: "Hệ thống không tự huỷ lại lần nữa. Sau khi xoá tay trên Trang, hãy tải lại danh sách bài đã hẹn để đối chiếu; bài ở đây vẫn giữ nguyên trạng thái cũ.",
         canRetry: false,
       };

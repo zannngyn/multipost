@@ -23,9 +23,9 @@ export default async function PromptsPage() {
   // Component must not trust that it was reached through the guard.
   if (!session) redirect("/signin?returnUrl=%2Fprompts");
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <PromptTemplatesScreen />
-    </div>
-  );
+  // No container here: the screen owns its own frame (Layout + full-width
+  // header band), same split as `/channels`, `/members` and `/bulk`. The
+  // wrapper this used to add sat INSIDE that frame and bounded the header as
+  // well, so the divider stopped short of the shell edge.
+  return <PromptTemplatesScreen />;
 }

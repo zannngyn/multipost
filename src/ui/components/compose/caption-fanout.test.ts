@@ -9,7 +9,7 @@ import {
 } from "./caption-fanout";
 
 /**
- * "Viết caption cho N trang". The rule under test throughout: ONE channel
+ * "Viết caption cho N kênh". The rule under test throughout: ONE channel
  * failing must not stop the others (CLAUDE.md business rule 6), and every
  * channel must end up with either a caption or a stated reason — never with
  * silence.
@@ -201,20 +201,20 @@ describe("describeFanOut", () => {
 
   it("counts progress while it runs", () => {
     expect(describeFanOut({ isRunning: true, done: 2, total: 3, failed: 0 })).toBe(
-      "Đang viết caption — đã xong 2/3 trang…",
+      "Đang viết caption — đã xong 2/3 kênh…",
     );
   });
 
   it("reports a clean finish", () => {
     expect(describeFanOut({ isRunning: false, done: 3, total: 3, failed: 0 })).toBe(
-      "Đã viết caption cho 3 trang.",
+      "Đã viết caption cho 3 kênh.",
     );
   });
 
   it("NAMES the failures instead of only counting the successes", () => {
     const note = describeFanOut({ isRunning: false, done: 3, total: 3, failed: 1 });
     expect(note).toContain("2/3");
-    expect(note).toContain("1 trang lỗi");
+    expect(note).toContain("1 kênh lỗi");
     expect(note).toContain("Viết lại");
   });
 });

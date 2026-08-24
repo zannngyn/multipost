@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Contracts of the "Kênh" screen (E5.1) — the Fanpages a tenant may publish to.
+ * Contracts of the "Kênh" screen (E5.1) — the Pages a tenant may publish to.
  *
  * `ui/` may not import `core/` (docs/07 §2), so this mirrors the DTO the
  * internal API returns instead of reusing the domain type. Anything the server
@@ -123,11 +123,39 @@ export const REQUIRED_TOKEN_SCOPES = [
 ] as const;
 
 /**
+ * A counter that WAS sent but is not a count. Distinct from `null` ("không ai
+ * gửi con số đó") — see `ConnectOutcome` below for why only `skipped` needs it.
+ */
+export const UNREADABLE_COUNT = "unreadable";
+
+/** Y from the callback: a real number, "không gửi" (null), or "không đọc được". */
+export type SkippedCount = number | typeof UNREADABLE_COUNT | null;
+
+/**
  * What Facebook sent us back to `/channels`. Three outcomes, three different
  * sentences — "người dùng bấm Huỷ" is NOT an error (web-auth-methods §4).
+ *
+ * The success outcome carries all THREE counters the callback writes
+ * (`?connected=N&new=X&skipped=Y`, see `app/api/channels/callback/route.ts`):
+ *   - `count`   — N, Pages saved this round (imported + updated);
+ *   - `newCount`— X, of which genuinely new (`new` is a reserved word, hence
+ *                 the rename; the URL spelling stays `new`);
+ *   - `skipped` — Y, Pages Facebook listed but did NOT hand a usable token for.
+ *                 They were not saved, and business rule 5 says the operator
+ *                 must be told rather than left wondering where Page X went.
+ *
+ * `null` means "no such number here". It is deliberately NOT 0: the banner must
+ * never claim "0 Page bị bỏ qua" from a fact nobody sent.
+ *
+ * `skipped` alone also tells the two silences apart, because only there do they
+ * mean different things (rule 5): `null` = the callback sent no `skipped` at
+ * all, `UNREADABLE_COUNT` = it sent one that is not a count. The first is
+ * nothing to report; the second is a Page that MAY have been dropped and must
+ * be said out loud. For `count` and `newCount` both silences produce the same
+ * sentence, so they stay plain `number | null`.
  */
 export type ConnectOutcome =
-  | { kind: "connected"; count: number | null }
+  | { kind: "connected"; count: number | null; newCount: number | null; skipped: SkippedCount }
   | { kind: "cancelled" }
   | { kind: "error"; reason: string | null };
 
@@ -142,6 +170,29 @@ function safeReason(raw: string | null): string | null {
 }
 
 /**
+ * A counter out of the query string: digits only, nothing else.
+ *
+ * `Number.parseInt` was too generous for a URL anyone can type — it reads
+ * "3.7" and "3 quả" as 3. Anything that is not a plain, safe, non-negative
+ * integer is `null` ("không đọc được"), never a silent default.
+ */
+function parseCount(raw: string | null): number | null {
+  if (raw === null || !/^\d+$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+/**
+ * Same rules, but a `skipped=` that IS present and unreadable keeps its own
+ * answer: silently rounding it to "không có Page nào bị bỏ qua" would hide
+ * exactly the fact business rule 5 exists to surface.
+ */
+function parseSkipped(raw: string | null): SkippedCount {
+  if (raw === null) return null;
+  return parseCount(raw) ?? UNREADABLE_COUNT;
+}
+
+/**
  * Query string is user-controlled input — parsed, never trusted. Returns null
  * when the URL carries no callback at all (the normal visit).
  */
@@ -150,10 +201,15 @@ export function parseConnectOutcome(params: URLSearchParams | null | undefined):
 
   const connected = params.get("connected");
   if (connected !== null) {
-    const count = Number.parseInt(connected, 10);
     // A malformed count still means the callback ran; say so without a number
-    // rather than pretending nothing happened.
-    return { kind: "connected", count: Number.isInteger(count) && count >= 0 ? count : null };
+    // rather than pretending nothing happened. Each counter is read on its own,
+    // so one unreadable value does not blank out the two beside it.
+    return {
+      kind: "connected",
+      count: parseCount(connected),
+      newCount: parseCount(params.get("new")),
+      skipped: parseSkipped(params.get("skipped")),
+    };
   }
 
   const connect = params.get("connect");
@@ -165,11 +221,99 @@ export function parseConnectOutcome(params: URLSearchParams | null | undefined):
   return { kind: "error", reason: null };
 }
 
+export type ConnectSuccessView = {
+  /** Success vs warning — the WORDS say the same thing, colour never alone. */
+  tone: "success" | "warning";
+  title: string;
+  description: string;
+};
+
+/** Where the operator goes to check what actually landed. */
+const CHECK_PAGES_HINT =
+  "Kiểm tra tab “Page đã kết nối” trước khi đăng bài — chỉ những Page đang bật mới nhận bài.";
+
 /**
- * "Đã thêm 2 Page, cập nhật 1 Page." — one sentence, real numbers.
+ * How many Pages came in, and how many of them were new. A counter nobody sent
+ * (or nobody could read) is simply not mentioned — never guessed at, and never
+ * a reason to drop the counter NEXT to it: an unreadable `connected=` still
+ * leaves "3 Page mới" worth saying.
+ */
+function connectTitle(count: number | null, newCount: number | null): string {
+  if (count === null) {
+    // The round trip finished; the total it reported was unreadable.
+    const done = "Đã kết nối xong với Facebook";
+    if (newCount === null) return done;
+    return newCount === 0 ? `${done}, không có Page mới` : `${done} (${newCount} Page mới)`;
+  }
+  if (count === 0) return "Không có Page nào thay đổi";
+  if (newCount === null) return `Đã nhập ${count} Page`;
+  return newCount === 0
+    ? `Đã cập nhật ${count} Page, không có Page mới`
+    : `Đã nhập ${count} Page (${newCount} mới)`;
+}
+
+/**
+ * The sentence a finished OAuth round trip gets: how many Pages came in, how
+ * many of them were new, and — the part that used to be missing entirely — how
+ * many Facebook refused to hand over.
+ *
+ * A skipped Page is the answer to "vì sao Page X không có trong danh sách"
+ * (business rule 5), so it moves the banner to `warning` and says so IN THE
+ * TITLE: an operator reading only the heading would otherwise take a
+ * warning-coloured success message at face value (core-accessibility: named
+ * status). The long "why, and where to look" sentence rides in the description.
+ *
+ * A `skipped=` that arrived unreadable gets its own sentence rather than being
+ * rounded down to "nothing was skipped" — the two silences are not the same —
+ * and rides in the title on the same footing, minus the number it never had.
+ */
+export function connectSuccessView(
+  outcome: Extract<ConnectOutcome, { kind: "connected" }>,
+): ConnectSuccessView {
+  const { count, newCount, skipped } = outcome;
+  const skippedCount = typeof skipped === "number" && skipped > 0 ? skipped : null;
+  const isSkippedUnreadable = skipped === UNREADABLE_COUNT;
+
+  const title = connectTitle(count, newCount);
+
+  const skippedNote =
+    skippedCount !== null
+      ? `${skippedCount} Page bị bỏ qua — thường do thiếu quyền hoặc đã thuộc công ty khác; ` +
+        "kiểm tra danh sách Page trong tài khoản Facebook. "
+      : isSkippedUnreadable
+        ? "Không đọc được số Page bị bỏ qua — kiểm tra danh sách Page trong tài khoản Facebook. "
+        : "";
+
+  const titleNote =
+    skippedCount !== null
+      ? `${skippedCount} Page bị bỏ qua`
+      : isSkippedUnreadable
+        ? "không đọc được số Page bị bỏ qua"
+        : null;
+
+  return {
+    tone: titleNote !== null ? "warning" : "success",
+    title: titleNote !== null ? `${title} · ${titleNote}` : title,
+    description: `${skippedNote}${CHECK_PAGES_HINT}`,
+  };
+}
+
+/**
+ * "Đã nhập 2 Page, cập nhật 1 Page." — one sentence, real numbers.
  *
  * A skipped Page is never left unsaid: it is the answer to "vì sao Page X
  * không có trong danh sách" (business rule 5).
+ *
+ * ONE VOICE FOR BOTH DOORS (spec §3.5): the pasted-token door and the OAuth
+ * door used to describe the same three facts with different verbs — "Đã thêm"
+ * here versus "Đã nhập" in `connectSuccessView`, and a skipped Page introduced
+ * as "Bỏ qua N Page vì …" here versus "N Page bị bỏ qua — …" there. An operator
+ * who uses both doors reads one screen twice, not two products, so the verb and
+ * the skipped-sentence skeleton are now shared. The REASON still differs,
+ * because the two doors really do fail differently (no token for that Page vs
+ * missing permission / owned by another company) — only the shape is common:
+ *
+ *   "{n} Page bị bỏ qua — {lý do}; {chỗ cần kiểm tra}."
  */
 export function formatImportSummary(counts: {
   imported: number;
@@ -178,11 +322,11 @@ export function formatImportSummary(counts: {
 }): string {
   const skippedNote =
     counts.skipped && counts.skipped > 0
-      ? ` Bỏ qua ${counts.skipped} Page vì Facebook không cấp token cho Page đó — kiểm tra lại quyền quản trị Page rồi lấy token mới.`
+      ? ` ${counts.skipped} Page bị bỏ qua — Facebook không cấp token cho Page đó; kiểm tra lại quyền quản trị Page trong tài khoản Facebook rồi lấy token mới.`
       : "";
 
   if (counts.imported === 0 && counts.updated === 0) {
     return `Không có Page nào thay đổi — danh sách đã khớp với Facebook.${skippedNote}`;
   }
-  return `Đã thêm ${counts.imported} Page, cập nhật ${counts.updated} Page.${skippedNote}`;
+  return `Đã nhập ${counts.imported} Page, cập nhật ${counts.updated} Page.${skippedNote}`;
 }
