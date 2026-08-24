@@ -7,11 +7,20 @@ import {
   Grid,
   Heading,
   Icon,
+  LinkProvider,
   Section,
   Stack,
   Text,
+  Theme,
 } from "@astryxdesign/core";
+import { InternationalizationProvider } from "@astryxdesign/core/i18n";
 import { useFormStatus } from "react-dom";
+
+import { AppLink } from "@/ui/components/shell/AppLink";
+import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
+// The BUILT theme, same import AppFrame uses — see the note there for why the
+// artifact and not the source module.
+import { myspTheme } from "@/ui/theme/mysp";
 
 /**
  * `/signin` — the split sign-in screen (E10).
@@ -74,12 +83,30 @@ export function SignInScreen({
   signInWithFacebook,
 }: SignInScreenProps) {
   return (
-    <Grid
-      columns={{ minWidth: 460, max: 2, repeat: "fit" }}
-      gap={0}
-      width="100%"
-      className="flex-1"
-    >
+    /* THE SAME THREE PROVIDERS AppFrame wraps the app in, because this screen
+       lives OUTSIDE the `(app)` group and therefore outside AppFrame.
+       Measured on /signin in the T11 inspect round, before this wrapper:
+       `--color-accent` resolved to Astryx's own `#0064e0` while `--primary`
+       was Indigo Dye, so "Tiếp tục với Facebook" — a `variant="primary"`
+       Astryx Button — rendered in a bright product blue on the front door of a
+       product whose only action colour is indigo (DESIGN.md, The One Indigo
+       Rule). The ink went with it: body text came out at the neutral theme's
+       cold near-black instead of Warm Ink.
+       `LinkProvider` and the Vietnamese catalog come along for the same reason
+       they do in AppFrame — an Astryx `Link` here must route like every other,
+       and Astryx's built-in strings must speak Vietnamese on this page too. */
+    <LinkProvider component={AppLink}>
+      <InternationalizationProvider
+        locale={ASTRYX_LOCALE}
+        messages={{ [ASTRYX_LOCALE]: ASTRYX_VI }}
+      >
+        <Theme theme={myspTheme}>
+          <Grid
+            columns={{ minWidth: 460, max: 2, repeat: "fit" }}
+            gap={0}
+            width="100%"
+            className="flex-1"
+          >
       <BrandColumn />
 
       <Section variant="transparent" padding={8}>
@@ -179,7 +206,10 @@ export function SignInScreen({
           </Stack>
         </Stack>
       </Section>
-    </Grid>
+          </Grid>
+        </Theme>
+      </InternationalizationProvider>
+    </LinkProvider>
   );
 }
 
