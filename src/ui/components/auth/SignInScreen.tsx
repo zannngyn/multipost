@@ -338,7 +338,18 @@ function BrandColumn() {
       // theme instead of freezing a pair of hex stops.
       className="bg-linear-to-br from-accent/35 via-muted to-background"
     >
-      <Stack direction="vertical" gap={6} height="100%" vAlign="center">
+      {/* Bounded to the same measure the auth island uses and centred in the
+          half, so the two columns read as facing blocks instead of one text
+          rail pinned to the window edge. */}
+      <Stack
+        direction="vertical"
+        gap={6}
+        height="100%"
+        vAlign="center"
+        width="100%"
+        maxWidth={448}
+        className="mx-auto"
+      >
         <Stack direction="horizontal" gap={2} align="center" as="header">
           <Text weight="bold" size="lg">
             MYSP
