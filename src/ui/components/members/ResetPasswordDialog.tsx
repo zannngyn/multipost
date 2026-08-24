@@ -6,15 +6,14 @@ import {
   Dialog,
   DialogHeader,
   HStack,
-  Icon,
   Stack,
   Text,
-  TextInput,
 } from "@astryxdesign/core";
 import type { TextInputProps } from "@astryxdesign/core";
 import { useActionState, useEffect, useRef, useState } from "react";
 
 import { PasswordHint } from "@/ui/components/auth/PasswordHint";
+import { PasswordInput } from "@/ui/components/auth/PasswordInput";
 import { PASSWORD_MAX_LENGTH } from "@/shared/password-policy";
 import {
   authFailureHint,
@@ -165,13 +164,11 @@ export function ResetPasswordDialog({
                 {hint ? <Text type="supporting">{hint}</Text> : null}
               </Stack>
 
-              <TextInput
+              <PasswordInput
                 ref={passwordRef}
                 label="Mật khẩu mới"
-                /* The rules themselves are the one line under the box; this
-                   description only says what it alone can say. */
-                description="Nên dùng mật khẩu do trình quản lý mật khẩu sinh ra."
-                type={isVisible ? "text" : "password"}
+                isVisible={isVisible}
+                onToggleVisibility={() => setIsVisible((visible) => !visible)}
                 isRequired
                 hasAutoFocus
                 value={password}
@@ -188,27 +185,21 @@ export function ResetPasswordDialog({
                 })}
               />
 
-              <HStack gap={2} align="center" wrap="wrap">
-                {/* `type="button"`, or it would submit the form. Labelled, not a
-                    bare icon (web-accessibility). */}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  icon={<Icon icon="eyeSlash" size="sm" />}
-                  label={isVisible ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
-                  isDisabled={isPending}
-                  onClick={() => setIsVisible((visible) => !visible)}
-                />
-              </HStack>
-
               <PasswordHint value={password} />
+
+              {/* Under the field rather than as its `description`: a
+                  description would push the control down and take the show/hide
+                  button with it (see PasswordInput). */}
+              <Text type="supporting">
+                Nên dùng mật khẩu do trình quản lý mật khẩu sinh ra.
+              </Text>
 
               {/* Never submitted — the confirmation exists to catch a typo in a
                   password nobody else can read back. */}
-              <TextInput
+              <PasswordInput
                 label="Nhập lại mật khẩu mới"
-                type={isVisible ? "text" : "password"}
+                isVisible={isVisible}
+                onToggleVisibility={() => setIsVisible((visible) => !visible)}
                 isRequired
                 value={confirmation}
                 onChange={setConfirmation}
