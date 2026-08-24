@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
+import { makeScryptPasswordHasher } from "@/adapters/auth/scrypt-password-hasher";
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
 import type { TenantId } from "@/core/domain/tenant-context";
@@ -14,6 +15,7 @@ import { DrizzleTenantOnboardingRepo } from "@/adapters/db/tenant-onboarding-rep
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
+import { DrizzleCredentialRepo } from "@/adapters/db/credential-repo.drizzle";
 import { closeDbHandle, getDbHandle, type Database } from "@/adapters/db/client";
 import { DrizzleGoogleOAuthRepo } from "@/adapters/db/google-oauth-repo.drizzle";
 import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
@@ -78,6 +80,7 @@ import {
   makeManageSupportSessions,
   type ManageSupportSessions,
 } from "@/core/usecases/manage-support-sessions";
+import { makePasswordAuth, type PasswordAuth } from "@/core/usecases/password-auth";
 import {
   makeResolveOperatorAccount,
 } from "@/core/usecases/resolve-operator-account";
@@ -174,6 +177,10 @@ import {
 import { makeLazyGoogleSources } from "./google-sources";
 import { makeOperatorAccessGate, type OperatorAccessGate } from "./operator-access-gate";
 import { makeOAuthStateService, type OAuthStateService } from "./oauth-state-service";
+import {
+  makeLazyAuthRateLimiter,
+  type AuthRateLimiter,
+} from "./auth-rate-limiter";
 import { makeOperatorAccountGate, type OperatorAccountGate } from "./operator-account-gate";
 import { makeRequirePlatformAdmin, type RequirePlatformAdmin } from "./require-platform-admin";
 import { makeRequireTenant, type RequireTenant } from "./require-tenant";
@@ -256,6 +263,19 @@ export interface Usecases {
    * (short-cached; a suspension is felt within ACCOUNT_CACHE_TTL_MS).
    */
   operatorAccounts: OperatorAccountGate;
+  /**
+   * E-mail + password sign-up / sign-in / admin reset. The DECISION only —
+   * Auth.js still mints the session and `decideSignIn` still has the last word
+   * through the account tables, exactly as for Google and Facebook.
+   */
+  passwordAuth: PasswordAuth;
+  /**
+   * The sliding window in front of the two password doors (per IP, per
+   * address). Exposed on the container rather than hidden inside the usecase
+   * because the KEY is an interface-layer fact: only the server action can see
+   * the caller's IP.
+   */
+  authRateLimit: AuthRateLimiter;
   /** M1.2 — `GET /api/me`: account + companies + active tenant. */
   getOperatorOverview: GetOperatorOverview;
   /**
@@ -780,6 +800,25 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     clock: deps.clock,
     logger: deps.logger,
   });
+  /**
+   * Password sign-in. The hasher is stateless and cheap to build (the cost is
+   * paid per call, in `scrypt`), so unlike Redis/Google it needs no lazy seam.
+   */
+  const authRateLimit = makeLazyAuthRateLimiter({
+    redisUrl: deps.config.REDIS_URL,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  // Registered with the SAME set the lazy queue/progress connections use, so
+  // `closeContainer()` drains it without knowing whether it was ever opened.
+  lazyQueueClosers.add(() => authRateLimit.close());
+  const passwordAuth = makePasswordAuth({
+    credentials: new DrizzleCredentialRepo(deps.db, { logger: deps.logger }),
+    accounts: accountRepo,
+    hasher: makeScryptPasswordHasher(),
+    clock: deps.clock,
+    logger: deps.logger,
+  });
   const supportSessionRepo = new DrizzleSupportSessionRepo(deps.db, { logger: deps.logger });
   const tenantGate = makeRequireTenant({
     accounts: accountRepo,
@@ -986,6 +1025,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     operatorAccess,
     accessRequests,
     operatorAccounts,
+    passwordAuth,
+    authRateLimit,
     getOperatorOverview: makeGetOperatorOverview({ accounts: accountRepo, logger: deps.logger }),
     oauthStates: makeOAuthStateService({
       store: new DrizzleOAuthStateStore(deps.db, { logger: deps.logger }),
@@ -1254,6 +1295,14 @@ export type {
   OperatorAccountState as OperatorAccountSessionState,
 } from "@/core/usecases/resolve-operator-account";
 export type { OperatorOverview } from "@/core/usecases/get-operator-overview";
+
+/**
+ * Password sign-in vocabulary for the app layer (which may not import
+ * `core/usecases` or `core/ports` — docs/07 §2): what `authorize` hands Auth.js,
+ * and the two budgets the server action spends before it hashes anything.
+ */
+export type { PasswordIdentity } from "@/core/usecases/password-auth";
+export { AUTH_EMAIL_RULE, AUTH_IP_RULE } from "./auth-rate-limiter";
 export type { PlatformRole } from "@/core/domain/account";
 export type { TenantContext, TenantId } from "@/core/domain/tenant-context";
 

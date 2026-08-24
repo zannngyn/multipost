@@ -20,7 +20,13 @@ export const auditLogs = pgTable(
      * without that tenant (B1). Every TENANT-SCOPED event stays NOT NULL by
      * discipline: those writers go through `scope.row(...)`, which stamps the
      * tenant and cannot emit NULL. A NULL here MUST mean `action LIKE
-     * 'platform.%'` — anything else is a writer bug.
+     * 'platform.%'` OR `action LIKE 'auth.%'` — anything else is a writer bug.
+     *
+     * `auth.%` joined the list with password sign-in: registering an account and
+     * having a super_admin reset its password are events about a PERSON, and at
+     * sign-up time the person belongs to no company at all (docs/09 §3.8 — the
+     * NoMembership lobby). Borrowing a tenant id to satisfy the column would
+     * file the event under a company that had nothing to do with it.
      */
     tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
     /** Null for system/worker actions with no human actor. */

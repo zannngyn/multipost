@@ -15,6 +15,11 @@ import type { TableColumn } from "@astryxdesign/core";
 import { useState } from "react";
 
 import { MEMBERSHIP_ROLE_BADGE_TONES } from "@/ui/components/members/role-badge";
+import { ResetPasswordDialog } from "@/ui/components/members/ResetPasswordDialog";
+import {
+  resetPasswordBlockReason,
+  type SetPasswordAction,
+} from "@/ui/schemas/password-auth.schema";
 import { MEMBERSHIP_ROLE_LABELS, type MembershipRole } from "@/ui/schemas/me.schema";
 import {
   ACCESS_ROLE_DESCRIPTIONS,
@@ -60,6 +65,7 @@ export function MemberTable({
   busyMembershipId,
   onChangeRole,
   onRemove,
+  resetPassword,
 }: {
   members: readonly Member[];
   /** The signed-in operator's role in THIS company, from `/api/me`. */
@@ -68,10 +74,20 @@ export function MemberTable({
   busyMembershipId: string | null;
   onChangeRole: (member: Member, role: MembershipRole) => void;
   onRemove: (member: Member) => void;
+  /**
+   * `setPasswordAction`, or null when this operator is not a platform
+   * super_admin. NULL MEANS THE COLUMN NEVER RENDERS THE BUTTON — a control
+   * whose only possible outcome is a 403 is worse than no control
+   * (core-auth-session §"ẩn vs vô hiệu hoá": hide what the person can never do,
+   * disable-with-a-reason only what they could do in another context).
+   */
+  resetPassword: SetPasswordAction | null;
 }) {
   const [pending, setPending] = useState<PendingAction | null>(null);
   /** The role about to be granted, while the question is open. */
   const [draftRole, setDraftRole] = useState<MembershipRole | null>(null);
+  /** The member whose password is being set, while the dialog is open. */
+  const [resetTarget, setResetTarget] = useState<Member | null>(null);
 
   const grantable = assignableRoles(actorRole);
   const roleOptions = grantable.map((role) => ({
@@ -141,7 +157,7 @@ export function MemberTable({
     {
       key: "actions",
       header: "Thao tác",
-      width: pixel(420),
+      width: pixel(520),
       renderCell: (member) => {
         const name = memberDisplayName(member);
         const isBusy = busyMembershipId === member.membershipId;
@@ -264,6 +280,23 @@ export function MemberTable({
             >
               {member.isYou ? "Rời công ty" : "Gỡ"}
             </Button>
+            {/* Only a platform super_admin ever sees this (`resetPassword` is
+                null otherwise). An account with no address has no password
+                credential to replace, so the button says why instead of
+                offering a round trip that can only come back
+                AUTH_CREDENTIAL_NOT_FOUND. */}
+            {resetPassword ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                label={`Đặt lại mật khẩu cho ${name}`}
+                isDisabled={isBusy || resetPasswordBlockReason(member) !== null}
+                tooltip={resetPasswordBlockReason(member) ?? undefined}
+                onClick={() => setResetTarget(member)}
+              >
+                Đặt lại mật khẩu
+              </Button>
+            ) : null}
           </HStack>
         );
       },
@@ -282,6 +315,23 @@ export function MemberTable({
         textOverflow="truncate"
         rowCount={members.length}
       />
+
+      {/* Mounted only while it is open, and `key`ed by the account: opening the
+          dialog for a second member must not inherit the first one's typed
+          value or its refusal. Astryx's Dialog returns focus to the control
+          that opened it. */}
+      {resetPassword && resetTarget ? (
+        <ResetPasswordDialog
+          key={resetTarget.accountId}
+          isOpen
+          onOpenChange={(open) => {
+            if (!open) setResetTarget(null);
+          }}
+          action={resetPassword}
+          memberName={memberDisplayName(resetTarget)}
+          memberAccountId={resetTarget.accountId}
+        />
+      ) : null}
     </Stack>
   );
 }

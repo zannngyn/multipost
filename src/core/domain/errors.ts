@@ -55,6 +55,24 @@ export const ERROR_CODES = [
    * from ACCESS_FORBIDDEN (the legacy /access screen gate, retiring at M2.4).
    */
   "FORBIDDEN",
+  // Password sign-in / sign-up (email + password, docs/09 §3.1)
+  /** The chosen password breaks the shared policy (shared/password-policy). */
+  "AUTH_WEAK_PASSWORD",
+  /** Sign-up: a credential already exists for this address. */
+  "AUTH_EMAIL_TAKEN",
+  /**
+   * ONE code for EVERY sign-in refusal — unknown address, wrong password,
+   * suspended account, malformed input. Deliberately indistinguishable outside
+   * (anti-enumeration, same discipline as INVITE_INVALID); the precise reason
+   * goes to the log.
+   */
+  "AUTH_INVALID_CREDENTIALS",
+  /** Too many consecutive failures: refused until `locked_until` passes. */
+  "AUTH_ACCOUNT_LOCKED",
+  /** Sliding-window limiter said no (per-IP or per-address) before any hashing. */
+  "AUTH_RATE_LIMITED",
+  /** Admin reset asked for an account that signs in some other way. */
+  "AUTH_CREDENTIAL_NOT_FOUND",
   "JOB_PAYLOAD_INVALID",
   // Data pipeline (E2/E3)
   "DRIVE_ERROR",
@@ -143,6 +161,14 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   MEMBER_NOT_FOUND: "Không tìm thấy thành viên tương ứng trong công ty.",
   RETIRED: "Tính năng này đã thay đổi — thành viên mới vào công ty bằng link mời.",
   FORBIDDEN: "Vai trò của bạn trong công ty này không đủ quyền thực hiện thao tác.",
+  AUTH_WEAK_PASSWORD: "Mật khẩu chưa đủ mạnh. Vui lòng chọn mật khẩu khác.",
+  AUTH_EMAIL_TAKEN: "Email này đã được đăng ký. Hãy đăng nhập, hoặc dùng email khác.",
+  AUTH_INVALID_CREDENTIALS: "Email hoặc mật khẩu không đúng.",
+  AUTH_ACCOUNT_LOCKED:
+    "Tài khoản đang tạm khoá do nhập sai mật khẩu nhiều lần. Vui lòng thử lại sau ít phút.",
+  AUTH_RATE_LIMITED: "Bạn thử quá nhiều lần. Vui lòng chờ ít phút rồi thử lại.",
+  AUTH_CREDENTIAL_NOT_FOUND:
+    "Tài khoản này không đăng nhập bằng mật khẩu — không có mật khẩu để đặt lại.",
   JOB_PAYLOAD_INVALID: "Dữ liệu công việc nền không hợp lệ — công việc đã bị từ chối.",
   DRIVE_ERROR: "Không truy cập được Google Drive. Kiểm tra quyền Service Account hoặc thử lại sau.",
   SHEET_ERROR: "Không đọc được Google Sheet. Kiểm tra quyền Service Account hoặc thử lại sau.",
@@ -207,6 +233,12 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   MEMBER_NOT_FOUND: "No membership with that id in this tenant",
   RETIRED: "Endpoint retired — members join through invite links",
   FORBIDDEN: "Membership role is below the required role for this action",
+  AUTH_WEAK_PASSWORD: "Password does not satisfy the password policy",
+  AUTH_EMAIL_TAKEN: "A credential already exists for this e-mail address",
+  AUTH_INVALID_CREDENTIALS: "E-mail/password sign-in refused",
+  AUTH_ACCOUNT_LOCKED: "Credential is locked after consecutive failed attempts",
+  AUTH_RATE_LIMITED: "Authentication rate limit exceeded",
+  AUTH_CREDENTIAL_NOT_FOUND: "Account has no password credential",
   JOB_PAYLOAD_INVALID: "Job payload failed schema validation",
   DRIVE_ERROR: "Google Drive operation failed",
   SHEET_ERROR: "Google Sheets operation failed",

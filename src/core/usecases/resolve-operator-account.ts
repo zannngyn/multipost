@@ -6,7 +6,7 @@ import type { Logger } from "@/core/ports/infra";
 import {
   isOperatorProvider,
   isPlaceholderProviderAccountId,
-  normaliseProviderAccountId,
+  normaliseIdentityKey,
   operatorSessionEmail,
   type OperatorRole,
 } from "@/shared/operator-access";
@@ -95,7 +95,13 @@ export function makeResolveOperatorAccount(deps: ResolveOperatorAccountDeps): Re
         });
       }
       const provider = input.provider;
-      const providerAccountId = normaliseProviderAccountId(input?.providerAccountId);
+      /**
+       * Provider-AWARE: Google/Facebook hand out an opaque id, `password` is
+       * keyed by its own address (shared/operator-access). The plain id
+       * normaliser refuses anything containing `@`, so a password identity
+       * would never resolve through it.
+       */
+      const providerAccountId = normaliseIdentityKey(provider, input?.providerAccountId);
       if (!providerAccountId) {
         throw new AppError("INVALID_INPUT", {
           message: "Provider account id is missing or malformed",
