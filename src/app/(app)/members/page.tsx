@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 
+import { setPasswordAction } from "@/app/(app)/members/_actions";
 import { canManageAccess } from "@/app/_auth/operator-session";
 import { getOperatorSession } from "@/app/_auth/session";
 import { MembersFallback } from "@/ui/components/members/MembersFallback";
@@ -56,6 +57,10 @@ export default async function MembersPage(props: PageProps<"/members">) {
         tab={tab}
         canViewHistory={canManageAccess(session)}
         operatorEmail={session.email}
+        /* The Server Action travels as a prop: `ui/` may not import `@/app/*`,
+           and the action re-checks the session and the platform standing on
+           every call, so handing it over costs no authority. */
+        resetPassword={setPasswordAction}
       />
     </Suspense>
   );

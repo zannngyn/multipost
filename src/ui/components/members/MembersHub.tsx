@@ -27,6 +27,7 @@ import {
 } from "@/ui/components/members/members-tabs";
 import { MembersScreen } from "@/ui/components/members/MembersScreen";
 import { useActiveTenant } from "@/ui/hooks/useMe";
+import type { SetPasswordAction } from "@/ui/schemas/password-auth.schema";
 
 /**
  * "Thành viên" — the wave-1 hub over the three views of one subject: who is in
@@ -51,6 +52,7 @@ export function MembersHub({
   tab,
   canViewHistory,
   operatorEmail,
+  resetPassword,
 }: {
   tab: MembersTab;
   /**
@@ -63,6 +65,12 @@ export function MembersHub({
   canViewHistory: boolean;
   /** Named in the refusal so the operator knows which account is being judged. */
   operatorEmail: string;
+  /**
+   * `setPasswordAction`. Carried as a prop rather than imported because it is a
+   * Server Action in `src/app/**` and `ui/` may not reach into that layer
+   * (docs/07 §4) — the same route `SignInScreen` takes for its actions.
+   */
+  resetPassword: SetPasswordAction;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -99,9 +107,14 @@ export function MembersHub({
       header={
         <LayoutHeader hasDivider>
           <Stack direction="vertical" gap={3} padding={4}>
+            {/* `max-w-prose` on the intro, like every other screen's: this hub
+                is full-bleed, so at 1440 the three sentences ran the whole
+                1152px of the content area as one line of small type — measured
+                in the T11 inspect round. DESIGN.md §Layout: văn bản dài
+                `max-w-prose`. The heading keeps the full width. */}
             <Stack direction="vertical" gap={1}>
               <Heading level={1}>Thành viên</Heading>
-              <Text type="supporting">
+              <Text type="supporting" className="max-w-prose">
                 Ai đang làm việc trong {tenant?.name ?? "công ty này"} và với quyền gì, những link
                 mời đang phát hành, và lịch sử của luồng chờ duyệt cũ. Mỗi công ty có danh sách
                 riêng — đổi công ty ở thanh trên cùng để xem công ty khác.
@@ -141,7 +154,7 @@ export function MembersHub({
                   <AccessForbidden email={operatorEmail} />
                 )
               ) : (
-                <MembersScreen showInvites={false} />
+                <MembersScreen showInvites={false} resetPassword={resetPassword} />
               )}
             </StackItem>
           </Stack>

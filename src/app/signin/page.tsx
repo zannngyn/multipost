@@ -1,8 +1,13 @@
 import type { Metadata } from "next";
 
 import { signIn } from "@/app/_auth/auth";
+import {
+  registerWithPasswordAction,
+  signInWithPasswordAction,
+} from "@/app/_auth/password-actions";
 import { DEFAULT_RETURN_URL, safeReturnUrl } from "@/app/_auth/return-url";
 import { SignInScreen } from "@/ui/components/auth/SignInScreen";
+import { parseAuthMode, type PasswordAuthState } from "@/ui/schemas/password-auth.schema";
 
 /**
  * Sign-in page — a thin Server Component: read the query string, turn it into
@@ -79,9 +84,43 @@ async function signInWithFacebook(formData: FormData) {
   await signIn("facebook", { redirectTo: target });
 }
 
+/**
+ * The two password actions, wrapped as `useActionState` reducers.
+ *
+ * WHY THE WRAPPER LIVES HERE AND NOT IN THE CLIENT COMPONENT: `useActionState`
+ * only keeps a form working before hydration while the function it is given is
+ * a SERVER Action. Wrapping in the component would produce a client closure and
+ * quietly cost `/signin` its no-JavaScript path — on the one page that must
+ * never need JavaScript (web-auth-flows rule 5).
+ *
+ * `_state` is ignored on purpose: each submit is judged on its own, and the
+ * previous refusal must not influence the next one.
+ *
+ * NO try/catch. Success REDIRECTS, and the redirect travels as a thrown signal
+ * — catching it here would turn every successful sign-in into an error banner.
+ */
+async function signInWithPassword(
+  _state: PasswordAuthState,
+  formData: FormData,
+): Promise<PasswordAuthState> {
+  "use server";
+  return signInWithPasswordAction(formData);
+}
+
+async function registerWithPassword(
+  _state: PasswordAuthState,
+  formData: FormData,
+): Promise<PasswordAuthState> {
+  "use server";
+  return registerWithPasswordAction(formData);
+}
+
 export default async function SignInPage(props: PageProps<"/signin">) {
   const searchParams = await props.searchParams;
   const returnUrl = safeReturnUrl(firstParam(searchParams.returnUrl));
+  // Anything that is not exactly `register` opens the sign-in tab — a
+  // hand-edited value falls back, it does not break the page.
+  const mode = parseAuthMode(firstParam(searchParams.mode));
   const errorCode = firstParam(searchParams.error);
   const isPendingApproval = errorCode === PENDING_APPROVAL_ERROR;
   const errorMessage =
@@ -99,6 +138,9 @@ export default async function SignInPage(props: PageProps<"/signin">) {
         errorMessage={errorMessage}
         unknownErrorCode={unknownErrorCode}
         isPendingApproval={isPendingApproval}
+        mode={mode}
+        signInWithPassword={signInWithPassword}
+        registerWithPassword={registerWithPassword}
         signInWithGoogle={signInWithGoogle}
         signInWithFacebook={signInWithFacebook}
       />

@@ -13,7 +13,10 @@ const ROWS = 4;
  */
 export function PlatformTenantTableSkeleton() {
   return (
-    <Stack direction="vertical" gap={0} padding={0} aria-hidden="true">
+    // `paddingInline={4}`: the real table now stands in the screen's 16px
+    // column (see PlatformScreen), and a skeleton on a different edge is the
+    // jump this component exists to prevent.
+    <Stack direction="vertical" gap={0} paddingBlock={0} paddingInline={4} aria-hidden="true">
       {Array.from({ length: ROWS }, (_, row) => (
         <HStack key={row} gap={3} padding={3} align="center">
           {COLUMNS.map((width, column) => (

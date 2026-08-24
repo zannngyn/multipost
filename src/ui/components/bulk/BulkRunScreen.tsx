@@ -220,29 +220,30 @@ export function BulkRunScreen() {
            added its own inside that, so a header written as 16px of vertical
            padding rendered at 32px.
 
-           The numbers below are therefore TOTALS, not additions, and they are
-           the totals that were already rendering:
-             block  32px = `py-8`   (was 16 + 16)
-             inline 40px = `px-10`  (was 16 + 24)
-           `px-10` looks odd next to the content column's `px-6` and is
-           deliberate: this band is measured against the OTHER header bands in
-           the app — /posts and /prompts build the same centred `max-w-5xl`
-           column and start 40px in — not against the column under it. Dropping
-           to 24px here made /bulk the one screen whose title started somewhere
-           else. Locked by `bulk-header-inset.test.ts`.
+           The VERTICAL number below is therefore a TOTAL, not an addition:
+             block 32px = `py-8` (was 16 + 16)
+
+           The INLINE half does NOT add up that way, and an earlier round of
+           this fix assumed it did. The box is `mx-auto max-w-5xl`: it is
+           CENTRED in whatever width the header leaves it, so the header's own
+           inline padding is eaten by the centring and never reaches the title.
+           Measured at 1440 in the T11 inspect round: /posts and /prompts
+           (`LayoutHeader` default 16px + `px-6`) put their h1 at x=360, while
+           /bulk with `px-10` put its at x=376 — 16px right of every other
+           screen AND 16px off its own content column below, which pads `px-6`.
+           So the column's own padding is the only number that counts here, and
+           it is `px-6` like theirs. Locked by `bulk-header-inset.test.ts`.
 
            LayoutHeader has no per-axis padding prop (`astryx component
            LayoutHeader`: padding is one SpacingStep), which is why the split
            lives in the class rather than in a prop. */
         <LayoutHeader hasDivider padding={0}>
-          {/* The same COLUMN as the content below — `max-w-5xl`, centred — so
-              the h1 sits over the card it titles at every width above the
-              column. The inline padding differs on purpose (see the note on
-              the header above: this band matches the other header bands). The
-              divider stays full width because it belongs to LayoutHeader, not
-              to this box. Measured before the fix: 88px of disagreement at
-              1440, which reads as two layouts that were never introduced. */}
-          <div className="mx-auto flex w-full max-w-5xl flex-wrap items-start justify-between gap-4 px-10 py-8">
+          {/* The same COLUMN as the content below — `max-w-5xl`, centred,
+              `px-6` — so the h1 sits on the left edge of the card it titles at
+              every width above the column, and on the same edge as the titles
+              of /posts and /prompts. The divider stays full width because it
+              belongs to LayoutHeader, not to this box. */}
+          <div className="mx-auto flex w-full max-w-5xl flex-wrap items-start justify-between gap-4 px-6 py-8">
             <div className="max-w-prose space-y-1">
               <Heading level={1}>Chạy hàng loạt</Heading>
               {/* Two sentences: what the screen does, and what it does when a

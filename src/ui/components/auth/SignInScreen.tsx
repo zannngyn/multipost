@@ -3,15 +3,36 @@
 import {
   Banner,
   Button,
+  Card,
   Divider,
   Grid,
   Heading,
   Icon,
+  LinkProvider,
   Section,
   Stack,
+  Tab,
+  TabList,
   Text,
+  Theme,
 } from "@astryxdesign/core";
+import { InternationalizationProvider } from "@astryxdesign/core/i18n";
+import { useState } from "react";
 import { useFormStatus } from "react-dom";
+
+import { PasswordAuthForm } from "@/ui/components/auth/PasswordAuthForm";
+import { AppLink } from "@/ui/components/shell/AppLink";
+import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
+import {
+  AUTH_MODES,
+  AUTH_MODE_LABELS,
+  authModeHref,
+  type AuthMode,
+  type PasswordAuthAction,
+} from "@/ui/schemas/password-auth.schema";
+// The BUILT theme, same import AppFrame uses — see the note there for why the
+// artifact and not the source module.
+import { myspTheme } from "@/ui/theme/mysp";
 
 /**
  * `/signin` — the split sign-in screen (E10).
@@ -27,17 +48,21 @@ import { useFormStatus } from "react-dom";
  *              the operator is signing in to, and hiding them on a phone would
  *              leave a bare pair of buttons.
  *
- * EVERY CONTROL ON THIS SCREEN WORKS (spec §3.7). It used to also carry a
- * disabled email/password block, a dead "Quên mật khẩu" link and a
- * "Đăng nhập / Đăng ký" tab strip whose only effect was relabelling that block
- * — a preview of a feature with no ticket behind it. Showing an operator two
- * ways in and then refusing one of them costs more trust than the empty space
- * costs curiosity, and the tab strip made the screen look like it had a state
- * to choose before the two buttons that actually sign anyone in.
+ * EVERY CONTROL ON THIS SCREEN WORKS (spec §3.7). It once carried a DISABLED
+ * email/password block, a dead "Quên mật khẩu" link and a tab strip whose only
+ * effect was relabelling that block; commit 521d47b removed the lot, because a
+ * preview of a feature with no ticket behind it costs more trust than the empty
+ * space costs curiosity. The tab strip is back now for the opposite reason: the
+ * password backend exists, both tabs submit, and both sign people in.
  *
- * What is left: the Google and Facebook forms. Each is a plain `<form action>`
- * with a Server Action, so they submit before the client bundle loads
- * (web-auth-flows rule 5) — this page is the front door.
+ * THE ORDER — password first, providers second, separated by "Hoặc". The
+ * password pair is what a brand-new operator without a company Google account
+ * has, and Facebook stays visible below because that same round trip also
+ * brings the Page tokens back (E5.2).
+ *
+ * Every form here is a plain `<form action>` with a Server Action, so they all
+ * submit before the client bundle loads (web-auth-flows rule 5) — this page is
+ * the front door. The tab switch is an ANCHOR for the same reason.
  */
 
 /** Why the product exists, in the operator's words — not feature names. */
@@ -60,6 +85,12 @@ export type SignInScreenProps = {
   unknownErrorCode: string | null;
   /** The account exists and is queued for an admin. Not a failure. */
   isPendingApproval: boolean;
+  /** Which tab the address asks for (`?mode=`), parsed on the server. */
+  mode: AuthMode;
+  /** `signInWithPasswordAction`, already wrapped as a `useActionState` reducer. */
+  signInWithPassword: PasswordAuthAction;
+  /** `registerWithPasswordAction`, same wrapping. */
+  registerWithPassword: PasswordAuthAction;
   signInWithGoogle: (formData: FormData) => Promise<void>;
   signInWithFacebook: (formData: FormData) => Promise<void>;
 };
@@ -70,30 +101,88 @@ export function SignInScreen({
   errorMessage,
   unknownErrorCode,
   isPendingApproval,
+  mode,
+  signInWithPassword,
+  registerWithPassword,
   signInWithGoogle,
   signInWithFacebook,
 }: SignInScreenProps) {
+  /**
+   * The address survives a tab switch because it lives HERE, above both forms
+   * (core-auth-flows §"Chuyển giữa ba luồng"). The two forms themselves are
+   * separate mounts, so the refusal from the tab being left never bleeds into
+   * the one being opened.
+   */
+  const [email, setEmail] = useState("");
+
   return (
-    <Grid
-      columns={{ minWidth: 460, max: 2, repeat: "fit" }}
-      gap={0}
-      width="100%"
-      className="flex-1"
-    >
+    /* THE SAME THREE PROVIDERS AppFrame wraps the app in, because this screen
+       lives OUTSIDE the `(app)` group and therefore outside AppFrame.
+       Measured on /signin in the T11 inspect round, before this wrapper:
+       `--color-accent` resolved to Astryx's own `#0064e0` while `--primary`
+       was Indigo Dye, so "Tiếp tục với Facebook" — a `variant="primary"`
+       Astryx Button — rendered in a bright product blue on the front door of a
+       product whose only action colour is indigo (DESIGN.md, The One Indigo
+       Rule). The ink went with it: body text came out at the neutral theme's
+       cold near-black instead of Warm Ink.
+       `LinkProvider` and the Vietnamese catalog come along for the same reason
+       they do in AppFrame — an Astryx `Link` here must route like every other,
+       and Astryx's built-in strings must speak Vietnamese on this page too. */
+    <LinkProvider component={AppLink}>
+      <InternationalizationProvider
+        locale={ASTRYX_LOCALE}
+        messages={{ [ASTRYX_LOCALE]: ASTRYX_VI }}
+      >
+        <Theme theme={myspTheme}>
+          <Grid
+            columns={{ minWidth: 460, max: 2, repeat: "fit" }}
+            gap={0}
+            width="100%"
+            className="flex-1"
+          >
       <BrandColumn />
 
-      <Section variant="transparent" padding={8}>
-        <Stack direction="vertical" vAlign="center" height="100%">
+      {/* THE AUTH COLUMN — one island card floating on an otherwise empty half.
+          A Card here is deliberate even though the layout doc keeps cards out of
+          page structure: this is a single discrete widget with a hard boundary
+          (the whole point of the island), not a wrapper around page sections. */}
+      <Section variant="transparent" padding={8} className="relative overflow-hidden">
+        {/* Decoration only. The halo is mixed from the same accent token the
+            brand column's gradient uses, so it re-values itself with the theme;
+            aria-hidden because it says nothing. */}
+        <Stack
+          aria-hidden
+          className="pointer-events-none absolute start-0 bottom-10 size-72 rounded-full bg-accent/40 blur-3xl"
+        />
+
+        <Stack
+          direction="vertical"
+          vAlign="center"
+          height="100%"
+          gap={4}
+          className="relative"
+        >
+          <Card
+            elevation="med"
+            padding={8}
+            width="100%"
+            maxWidth={480}
+            className="mx-auto"
+          >
           <Stack
             direction="vertical"
             gap={4}
-            width="100%"
-            maxWidth={420}
-            className="mx-auto"
             as="section"
             aria-label="Tự động hóa cùng MYSP ngay"
           >
-            <Heading level={2}>Tự động hóa cùng MYSP ngay</Heading>
+            <Stack direction="vertical" gap={1}>
+              <Heading level={2}>Tự động hóa cùng MYSP ngay</Heading>
+              <Text type="supporting">
+                {mode === "register"
+                  ? "Tạo tài khoản để bắt đầu dùng MYSP."
+                  : "Chào mừng bạn trở lại. Đăng nhập để tiếp tục soạn và đăng bài."}
+              </Text>
+            </Stack>
 
             {/* Neither banner is decoration: they are the only explanation an
                 operator gets for a round trip that ended back here. */}
@@ -126,6 +215,44 @@ export function SignInScreen({
               </Stack>
             ) : null}
 
+            {/* Anchors, not buttons: `/signin?mode=register` is a real address,
+                so the switch works before hydration, survives F5 and Back, and
+                can be sent to a colleague. `TabList` requires `onChange`, but
+                the anchors already own the navigation — handling it a second
+                time is what would navigate twice (the same trap MembersHub
+                documents). AppLink comes from the LinkProvider above, so the
+                move stays client-side and the typed e-mail is preserved. */}
+            <TabList
+              value={mode}
+              onChange={() => undefined}
+              layout="fill"
+              aria-label="Chọn cách vào hệ thống"
+            >
+              {AUTH_MODES.map((value) => (
+                <Tab
+                  key={value}
+                  value={value}
+                  label={AUTH_MODE_LABELS[value]}
+                  href={authModeHref(value, returnUrl)}
+                />
+              ))}
+            </TabList>
+
+            {/* `key` — switching tabs must build a NEW form, not re-label the
+                old one: a refusal from the tab being left has nothing to say
+                about the tab being opened (core-form-architecture §"Đổi ID reset
+                bằng key prop"). The e-mail lives above, so it survives. */}
+            <PasswordAuthForm
+              key={mode}
+              mode={mode}
+              action={mode === "register" ? registerWithPassword : signInWithPassword}
+              returnUrl={returnUrl}
+              email={email}
+              onEmailChange={setEmail}
+            />
+
+            <Divider label="Hoặc tiếp tục với" />
+
             {/* Two independent forms, not one with two buttons: each carries its
                 own Server Action, and a failure of one must not touch the other.
                 Grid, not HStack: the pair sits side by side while there is room
@@ -133,17 +260,19 @@ export function SignInScreen({
                 query. */}
             <Stack direction="vertical" gap={2}>
               <Grid columns={{ minWidth: 170, max: 2, repeat: "fit" }} gap={3}>
-                {/* E5.2 — the same round trip signs the operator in AND brings
-                    back the Page tokens, so a successful Facebook sign-in leaves
-                    the channels already connected. That extra payoff is why it
-                    carries the primary weight. Full-page redirect, never a popup
-                    (web-auth-methods rule 1). */}
+                {/* Both secondary since the password form arrived: the screen
+                    gets ONE primary button, and it is the submit of the form the
+                    operator is looking at (DESIGN.md, The One Indigo Rule).
+                    E5.2 still makes Facebook the more valuable of the two — the
+                    same round trip signs the operator in AND brings back the
+                    Page tokens — so it keeps the first slot. Full-page redirect,
+                    never a popup (web-auth-methods rule 1). */}
                 <ProviderForm
                   action={signInWithFacebook}
                   returnUrl={returnUrl}
                   label="Tiếp tục với Facebook"
                   pendingLabel="Đang chuyển sang Facebook…"
-                  variant="primary"
+                  variant="secondary"
                 />
                 <ProviderForm
                   action={signInWithGoogle}
@@ -170,16 +299,27 @@ export function SignInScreen({
             <Text type="supporting">
               Khi tiếp tục, bạn đồng ý với quy định sử dụng nội bộ của MYSP.
             </Text>
+          </Stack>
+          </Card>
 
-            <Divider />
-
-            <Stack direction="vertical" as="footer">
-              <Text type="supporting">© MYSP 2026. All rights reserved.</Text>
-            </Stack>
+          {/* OUTSIDE the card, the way the template puts it under the island:
+              the copyright is about the product, not about signing in, and one
+              more divider inside the card only made the card longer. */}
+          <Stack
+            direction="vertical"
+            as="footer"
+            width="100%"
+            maxWidth={480}
+            className="mx-auto"
+          >
+            <Text type="supporting">© MYSP 2026. All rights reserved.</Text>
           </Stack>
         </Stack>
       </Section>
-    </Grid>
+          </Grid>
+        </Theme>
+      </InternationalizationProvider>
+    </LinkProvider>
   );
 }
 
@@ -198,12 +338,42 @@ function BrandColumn() {
       // theme instead of freezing a pair of hex stops.
       className="bg-linear-to-br from-accent/35 via-muted to-background"
     >
-      <Stack direction="vertical" gap={6} height="100%" vAlign="center">
+      {/* Bounded to the same measure the auth island uses and centred in the
+          half, so the two columns read as facing blocks instead of one text
+          rail pinned to the window edge. */}
+      <Stack
+        direction="vertical"
+        gap={6}
+        height="100%"
+        vAlign="center"
+        width="100%"
+        maxWidth={448}
+        className="mx-auto"
+      >
         <Stack direction="horizontal" gap={2} align="center" as="header">
           <Text weight="bold" size="lg">
             MYSP
           </Text>
           <Text type="supporting">Đăng bài tự động</Text>
+        </Stack>
+
+        {/* The template's floating collage, as GEOMETRY rather than photographs.
+            The template fills it with stock portraits; the only pictures this
+            product owns are customer product photos and none of them belong on
+            a public sign-in page, so the shapes carry the motion instead.
+            Purely decorative — aria-hidden — and dropped below `sm`, where it
+            would only push the form down a phone screen. */}
+        <Stack
+          aria-hidden
+          width="100%"
+          maxWidth={360}
+          height={160}
+          className="relative hidden sm:flex"
+        >
+          <Stack className="absolute start-0 top-0 size-20 rounded-full bg-card/80 ring-1 ring-border" />
+          <Stack className="absolute end-0 top-4 h-12 w-32 rounded-full bg-accent/70" />
+          <Stack className="absolute end-16 bottom-0 size-24 rounded-full bg-card/70 ring-1 ring-border" />
+          <Stack className="absolute start-20 bottom-5 size-8 rounded-full bg-card/60" />
         </Stack>
 
         <Stack direction="vertical" gap={2}>

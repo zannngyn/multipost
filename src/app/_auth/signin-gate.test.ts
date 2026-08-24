@@ -125,6 +125,86 @@ describe("first sign-in — provisioning replaces the approval queue", () => {
   });
 });
 
+// --- Password sign-in (e-mail + mật khẩu) ---------------------------------------
+
+/**
+ * A password identity is keyed by its ADDRESS (there is no third-party `sub`),
+ * and it must reach the account tables WITHOUT passing the Google domain filter
+ * — that list is a statement about a Workspace directory, not about people who
+ * signed up here. The account tables still decide everything else.
+ */
+const passwordUser = {
+  provider: "password",
+  providerAccountId: "person@gmail.com",
+  email: "person@gmail.com",
+  // No third party verified this address; the gate must not demand it.
+  emailVerified: undefined,
+  displayName: "Người Dùng",
+};
+
+describe("password provider", () => {
+  it("reaches the registry even though the address is OUTSIDE AUTH_ALLOWED_DOMAINS", async () => {
+    // Same env as every other test here: AUTH_ALLOWED_DOMAINS = "mysp.vn".
+    const { deps, signInAccount } = harness({ account: "member" });
+    const decideSignIn = await loadGate();
+
+    await expect(decideSignIn(deps, passwordUser)).resolves.toBe(true);
+    expect(signInAccount).toHaveBeenCalledWith({
+      provider: "password",
+      providerAccountId: "person@gmail.com",
+      email: "person@gmail.com",
+      displayName: "Người Dùng",
+    });
+  });
+
+  it("does NOT require emailVerified — nobody outside vouched for the address", async () => {
+    const { deps } = harness({ account: "no_membership" });
+    const decideSignIn = await loadGate();
+    await expect(decideSignIn(deps, { ...passwordUser, emailVerified: false })).resolves.toBe(true);
+  });
+
+  it("still refuses a SUSPENDED password account", async () => {
+    const { deps } = harness({ account: "suspended" });
+    const decideSignIn = await loadGate();
+    await expect(decideSignIn(deps, passwordUser)).resolves.toBe(false);
+  });
+
+  it("never gets the bootstrap escape hatch, even at a bootstrap address", async () => {
+    // AUTH_BOOTSTRAP_ADMINS = boss@mysp.vn. If a password sign-in could claim
+    // that grant, the emergency door would be something anyone can create by
+    // filling in a sign-up form.
+    const { deps, signInAccount } = harness({ account: "suspended" });
+    const decideSignIn = await loadGate();
+
+    await expect(
+      decideSignIn(deps, {
+        ...passwordUser,
+        providerAccountId: "boss@mysp.vn",
+        email: "boss@mysp.vn",
+      }),
+    ).resolves.toBe(false);
+    expect(signInAccount).toHaveBeenCalled();
+  });
+
+  it("provisions a first password sign-in like any other stranger", async () => {
+    const { deps, provisionAccount } = harness({ account: "unknown" });
+    const decideSignIn = await loadGate();
+    await expect(decideSignIn(deps, passwordUser)).resolves.toBe(true);
+    expect(provisionAccount).toHaveBeenCalledWith({
+      provider: "password",
+      providerAccountId: "person@gmail.com",
+      email: "person@gmail.com",
+      displayName: "Người Dùng",
+    });
+  });
+
+  it("fails CLOSED when the database cannot answer", async () => {
+    const { deps } = harness({ failing: true });
+    const decideSignIn = await loadGate();
+    await expect(decideSignIn(deps, passwordUser)).resolves.toBe(false);
+  });
+});
+
 // --- Refusals that SURVIVE the retirement --------------------------------------
 
 describe("sign-in refusals — unchanged by M2.4", () => {

@@ -4,6 +4,7 @@ export * from "./account";
 export * from "./tenant";
 export * from "./tenant-integration";
 export * from "./identity";
+export * from "./credential";
 export * from "./membership";
 export * from "./invite";
 export * from "./user";

@@ -43,8 +43,14 @@ import { evaluateEnvAllowList } from "./auth.config";
  * registered with a phone number have none), not a value to invent.
  */
 const SignInProfileSchema = z.object({
-  provider: z.enum(["google", "facebook"]),
-  providerAccountId: z.string().trim().min(1).max(128),
+  provider: z.enum(["google", "facebook", "password"]),
+  /**
+   * 320, not 128: for `password` this field IS the e-mail address (there is no
+   * third-party `sub` to key on — shared/operator-access.normaliseIdentityKey),
+   * and 128 would refuse long but perfectly ordinary addresses. Google and
+   * Facebook ids are far below either bound, so nothing is loosened for them.
+   */
+  providerAccountId: z.string().trim().min(1).max(320),
   email: z.string().trim().max(320).nullish().catch(null),
   displayName: z.string().trim().max(500).nullish().catch(null),
 });

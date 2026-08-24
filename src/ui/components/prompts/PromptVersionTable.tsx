@@ -101,11 +101,38 @@ export function PromptVersionTable({
     if (previous) toggleRefs.current.get(previous)?.focus();
   }
 
+  /**
+   * COLUMN BUDGET, and why these numbers.
+   *
+   * The screen gives this table a `max-w-5xl` column minus `px-6`: 976px at
+   * 1440. The first cut asked for 150 + 190 + 190 + 320 = 850px of FIXED width
+   * and then handed what was left — 126px — to the two columns that hold
+   * sentences. Measured in the T11 inspect round: "Vì sao đổi" came out 110px
+   * wide and turned one changelog line into a twelve-line ribbon, "Tên" broke
+   * `facebook-product-content` across three lines, and the table still needed
+   * 1090px, so "Thao tác" was cut off by the window on a 1440 screen.
+   *
+   * The fixed columns hold short, known content — a status pill, a timestamp,
+   * two buttons — so they are the ones that give room back:
+   *   Phiên bản  110  "v12" + one origin word
+   *   Trạng thái 130  the widest pill ("Đang dùng") plus its note, wrapped
+   *   Tạo lúc    160  `hh:mm:ss d/M/yy` + the author line, which may wrap
+   *   Thao tác   210  the row's two buttons; their Stack wraps rather than
+   *                   clips, so this is a floor to design to, not a promise
+   * = 610, leaving 366 for the prose pair. `proportional(2)` on the changelog
+   * gives the sentence twice the room of the name it sits beside, which is the
+   * ratio their content actually has.
+   *
+   * Re-measured after the change: the table asks for exactly 976 at 1440, so it
+   * no longer scrolls sideways on a desktop, and the changelog reads in four
+   * lines instead of twelve. Narrower than the column it still scrolls — that
+   * is what the scroll wrapper is for.
+   */
   const columns: TableColumn<VersionRow>[] = [
     {
       key: "version",
       header: "Phiên bản",
-      width: pixel(150),
+      width: pixel(110),
       renderCell: (row) => (
         <Stack direction="vertical" gap={0.5}>
           <Text weight="semibold" hasTabularNumbers>
@@ -128,7 +155,7 @@ export function PromptVersionTable({
     {
       key: "status",
       header: "Trạng thái",
-      width: pixel(190),
+      width: pixel(130),
       renderCell: (row) => (
         <Stack direction="vertical" gap={0.5} align="start">
           <Badge
@@ -147,7 +174,7 @@ export function PromptVersionTable({
     {
       key: "changelog",
       header: "Vì sao đổi",
-      width: proportional(1),
+      width: proportional(2),
       renderCell: (row) =>
         row.item.changelog.trim() ? (
           <Text color="secondary">{row.item.changelog}</Text>
@@ -158,7 +185,7 @@ export function PromptVersionTable({
     {
       key: "createdAt",
       header: "Tạo lúc",
-      width: pixel(190),
+      width: pixel(160),
       renderCell: (row) => (
         <Stack direction="vertical" gap={0.5}>
           <Text color="secondary" hasTabularNumbers>
@@ -175,7 +202,7 @@ export function PromptVersionTable({
     {
       key: "actions",
       header: "Thao tác",
-      width: pixel(320),
+      width: pixel(210),
       renderCell: (row) => (
         <RowActions
           row={row}

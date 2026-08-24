@@ -1,12 +1,16 @@
 import NextAuth, { type NextAuthConfig } from "next-auth";
+import Credentials from "next-auth/providers/credentials";
 import Facebook from "next-auth/providers/facebook";
 import Google from "next-auth/providers/google";
 
 import { loadMetaOAuthConfig } from "@/composition/config";
 import { FACEBOOK_CONNECT_SCOPES, getContainer } from "@/composition/container";
+import { AppError } from "@/core/domain/errors";
 import { facebookSessionEmail } from "@/shared/operator-access";
+import { SignInWithPasswordSchema } from "@/shared/password-policy";
 
 import { buildBaseAuthConfig, loadAuthEnv } from "./auth.config";
+import { PASSWORD_PROVIDER_ID, PasswordSignInError } from "./password-errors";
 import { importChannelsFromSignIn } from "./signin-channel-import";
 import { decideSignIn } from "./signin-gate";
 
@@ -52,6 +56,76 @@ function facebookProvider(): ReturnType<typeof Facebook> | null {
   });
 }
 
+/**
+ * E-mail + password. Always on — there is no `AUTH_PASSWORD_ENABLED`: a door
+ * that some deployments have and others do not is a door the sign-in screen has
+ * to ask about, and the account tables gate it exactly like the OAuth ones.
+ *
+ * `id: "password"` (not the default `"credentials"`) so ONE word means this
+ * everywhere: the `access_provider` enum value, `identity.provider`, the
+ * sign-in gate's verdict branch and `signIn("password", ...)` in the server
+ * action. Two names for one concept is how the wrong branch gets taken.
+ *
+ * WHY THE VERIFICATION LIVES HERE, and not in the server action that calls
+ * `signIn`: `/api/auth/callback/password` is a real endpoint that a client can
+ * POST to directly (with a CSRF token). If the action verified and this only
+ * minted a cookie, that endpoint would be an unauthenticated session vending
+ * machine. `authorize` is the ONE choke point every path goes through, so the
+ * password is checked exactly once, here.
+ */
+function passwordProvider(): ReturnType<typeof Credentials> {
+  return Credentials({
+    id: PASSWORD_PROVIDER_ID,
+    name: "Email và mật khẩu",
+    credentials: {
+      email: { label: "Email", type: "email" },
+      password: { label: "Mật khẩu", type: "password" },
+    },
+    async authorize(raw) {
+      // --- Edge cases first: the payload is a form body, i.e. untrusted -----
+      const parsed = SignInWithPasswordSchema.safeParse({
+        email: raw?.email,
+        password: raw?.password,
+      });
+      if (!parsed.success) {
+        // Same refusal a wrong password gets — a shape complaint here would
+        // tell a probe which addresses are even worth trying.
+        throw new PasswordSignInError("AUTH_INVALID_CREDENTIALS");
+      }
+
+      const container = getContainer();
+      try {
+        const identity = await container.usecases.passwordAuth.signIn(parsed.data);
+        /**
+         * `id` becomes `account.providerAccountId` (see the signIn callback
+         * above), and for a password identity the KEY IS THE ADDRESS — so the
+         * gate looks the person up under exactly the string the `identity` row
+         * holds.
+         */
+        return {
+          id: identity.sessionEmail,
+          email: identity.sessionEmail,
+          name: identity.displayName,
+        };
+      } catch (error) {
+        /**
+         * NOT swallowed: the usecase already logged the real reason with its
+         * code, and the AppError is re-thrown here as the ONE error type
+         * @auth/core forwards intact to the server action (`CredentialsSignin`
+         * subclasses survive `Auth()`; anything else is rebranded
+         * `CallbackRouteError` and the reason is lost).
+         */
+        const appError = AppError.from(error, "INTERNAL");
+        container.logger.warn("Password authorize refused the sign-in", {
+          error_code: appError.code,
+          provider: PASSWORD_PROVIDER_ID,
+        });
+        throw new PasswordSignInError(appError.code, appError.userMessage);
+      }
+    },
+  });
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth(() => {
   const env = loadAuthEnv();
   const base = buildBaseAuthConfig();
@@ -66,8 +140,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => {
        * consults the access registry (see ./signin-gate). The container is
        * resolved per call, not at module load, so `next build` needs no DB.
        */
-      signIn: ({ account, profile }) => {
+      signIn: ({ account, profile, user }) => {
         const container = getContainer();
+        /**
+         * A CREDENTIALS callback carries NO `profile` — @auth/core builds
+         * `account` from the object `authorize` returned and passes that object
+         * as `user` (lib/actions/callback: `{providerAccountId: user.id, type:
+         * "credentials", provider: provider.id}`). Reading `profile` here would
+         * hand the gate an identity with no address, which it correctly refuses.
+         *
+         * `emailVerified` stays undefined for passwords and that is right:
+         * `evaluateEnvAllowList` never reads it on this branch (there is no
+         * third party whose verification we could be trusting). What proves the
+         * address here is having signed up with it — the same standing a
+         * password account has anywhere.
+         */
+        const isPassword = account?.provider === PASSWORD_PROVIDER_ID;
         return decideSignIn(
           {
             signInAccount: (input) => container.usecases.operatorAccounts.signIn(input),
@@ -79,9 +167,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => {
           {
             provider: account?.provider,
             providerAccountId: account?.providerAccountId,
-            email: profile?.email,
+            email: isPassword ? user?.email : profile?.email,
             emailVerified: profile?.email_verified,
-            displayName: profile?.name,
+            displayName: isPassword ? user?.name : profile?.name,
           },
         );
       },
@@ -94,6 +182,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => {
         authorization: { params: { prompt: "select_account" } },
       }),
       ...(facebook ? [facebook] : []),
+      passwordProvider(),
     ],
     events: {
       ...base.events,
