@@ -1,10 +1,16 @@
+import type { SetupStepId } from "@/ui/schemas/setup-progress.schema";
+
 /** Bốn vai thật của hệ thống (ACCESS_ROLES). Không có "member". */
 export type OnboardingRole = "owner" | "admin" | "editor" | "viewer";
 
 /** Trạng thái THỊ GIÁC của một bước — không phải trạng thái server. */
 export type StepState = "done" | "current" | "running" | "locked" | "error";
 
-export type StepId = "google" | "source" | "sync" | "channels" | "invites";
+/**
+ * The six first-run steps. Aliased to the schema's `SetupStepId` rather than
+ * repeated, so a step added to the API contract cannot silently miss the UI.
+ */
+export type StepId = SetupStepId;
 
 export interface StepAction {
   readonly label: string;
@@ -16,9 +22,15 @@ export interface StepAction {
 
 export interface StepView {
   readonly id: StepId;
-  readonly ordinal: 1 | 2 | 3 | 4 | 5;
+  readonly ordinal: 1 | 2 | 3 | 4 | 5 | 6;
   readonly title: string;
   readonly description: string;
+  /**
+   * The screen that OWNS this step. A row is a LINK, not a button that calls a
+   * router — so it opens in a new tab on middle-click and shows its
+   * destination on hover, like every other navigation in the app.
+   */
+  readonly href: string;
   readonly state: StepState;
   /** Câu phụ đổi theo state: "Đã nối shop@gmail.com" · lý do khoá · câu lỗi. */
   readonly detail: string | null;
