@@ -4,7 +4,13 @@ import { timestamps } from "./_columns";
 import { tenantIdColumn } from "./_tenant-column";
 import { users, userRoleEnum } from "./user";
 
-export const accessProviderEnum = pgEnum("access_provider", ["google", "facebook"]);
+/**
+ * Mirrors OPERATOR_PROVIDERS in shared/operator-access.ts — keep both in sync.
+ * `password` joined at migration 0017: e-mail + password is a third way in, and
+ * it gets a normal `identity` row like the two OAuth providers so nothing
+ * downstream has to learn a second shape of person.
+ */
+export const accessProviderEnum = pgEnum("access_provider", ["google", "facebook", "password"]);
 export const accessStatusEnum = pgEnum("access_status", ["pending", "approved", "blocked"]);
 
 /**

@@ -10,14 +10,25 @@ import {
   LinkProvider,
   Section,
   Stack,
+  Tab,
+  TabList,
   Text,
   Theme,
 } from "@astryxdesign/core";
 import { InternationalizationProvider } from "@astryxdesign/core/i18n";
+import { useState } from "react";
 import { useFormStatus } from "react-dom";
 
+import { PasswordAuthForm } from "@/ui/components/auth/PasswordAuthForm";
 import { AppLink } from "@/ui/components/shell/AppLink";
 import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
+import {
+  AUTH_MODES,
+  AUTH_MODE_LABELS,
+  authModeHref,
+  type AuthMode,
+  type PasswordAuthAction,
+} from "@/ui/schemas/password-auth.schema";
 // The BUILT theme, same import AppFrame uses — see the note there for why the
 // artifact and not the source module.
 import { myspTheme } from "@/ui/theme/mysp";
@@ -36,17 +47,21 @@ import { myspTheme } from "@/ui/theme/mysp";
  *              the operator is signing in to, and hiding them on a phone would
  *              leave a bare pair of buttons.
  *
- * EVERY CONTROL ON THIS SCREEN WORKS (spec §3.7). It used to also carry a
- * disabled email/password block, a dead "Quên mật khẩu" link and a
- * "Đăng nhập / Đăng ký" tab strip whose only effect was relabelling that block
- * — a preview of a feature with no ticket behind it. Showing an operator two
- * ways in and then refusing one of them costs more trust than the empty space
- * costs curiosity, and the tab strip made the screen look like it had a state
- * to choose before the two buttons that actually sign anyone in.
+ * EVERY CONTROL ON THIS SCREEN WORKS (spec §3.7). It once carried a DISABLED
+ * email/password block, a dead "Quên mật khẩu" link and a tab strip whose only
+ * effect was relabelling that block; commit 521d47b removed the lot, because a
+ * preview of a feature with no ticket behind it costs more trust than the empty
+ * space costs curiosity. The tab strip is back now for the opposite reason: the
+ * password backend exists, both tabs submit, and both sign people in.
  *
- * What is left: the Google and Facebook forms. Each is a plain `<form action>`
- * with a Server Action, so they submit before the client bundle loads
- * (web-auth-flows rule 5) — this page is the front door.
+ * THE ORDER — password first, providers second, separated by "Hoặc". The
+ * password pair is what a brand-new operator without a company Google account
+ * has, and Facebook stays visible below because that same round trip also
+ * brings the Page tokens back (E5.2).
+ *
+ * Every form here is a plain `<form action>` with a Server Action, so they all
+ * submit before the client bundle loads (web-auth-flows rule 5) — this page is
+ * the front door. The tab switch is an ANCHOR for the same reason.
  */
 
 /** Why the product exists, in the operator's words — not feature names. */
@@ -69,6 +84,12 @@ export type SignInScreenProps = {
   unknownErrorCode: string | null;
   /** The account exists and is queued for an admin. Not a failure. */
   isPendingApproval: boolean;
+  /** Which tab the address asks for (`?mode=`), parsed on the server. */
+  mode: AuthMode;
+  /** `signInWithPasswordAction`, already wrapped as a `useActionState` reducer. */
+  signInWithPassword: PasswordAuthAction;
+  /** `registerWithPasswordAction`, same wrapping. */
+  registerWithPassword: PasswordAuthAction;
   signInWithGoogle: (formData: FormData) => Promise<void>;
   signInWithFacebook: (formData: FormData) => Promise<void>;
 };
@@ -79,9 +100,20 @@ export function SignInScreen({
   errorMessage,
   unknownErrorCode,
   isPendingApproval,
+  mode,
+  signInWithPassword,
+  registerWithPassword,
   signInWithGoogle,
   signInWithFacebook,
 }: SignInScreenProps) {
+  /**
+   * The address survives a tab switch because it lives HERE, above both forms
+   * (core-auth-flows §"Chuyển giữa ba luồng"). The two forms themselves are
+   * separate mounts, so the refusal from the tab being left never bleeds into
+   * the one being opened.
+   */
+  const [email, setEmail] = useState("");
+
   return (
     /* THE SAME THREE PROVIDERS AppFrame wraps the app in, because this screen
        lives OUTSIDE the `(app)` group and therefore outside AppFrame.
@@ -153,6 +185,44 @@ export function SignInScreen({
               </Stack>
             ) : null}
 
+            {/* Anchors, not buttons: `/signin?mode=register` is a real address,
+                so the switch works before hydration, survives F5 and Back, and
+                can be sent to a colleague. `TabList` requires `onChange`, but
+                the anchors already own the navigation — handling it a second
+                time is what would navigate twice (the same trap MembersHub
+                documents). AppLink comes from the LinkProvider above, so the
+                move stays client-side and the typed e-mail is preserved. */}
+            <TabList
+              value={mode}
+              onChange={() => undefined}
+              layout="fill"
+              aria-label="Chọn cách vào hệ thống"
+            >
+              {AUTH_MODES.map((value) => (
+                <Tab
+                  key={value}
+                  value={value}
+                  label={AUTH_MODE_LABELS[value]}
+                  href={authModeHref(value, returnUrl)}
+                />
+              ))}
+            </TabList>
+
+            {/* `key` — switching tabs must build a NEW form, not re-label the
+                old one: a refusal from the tab being left has nothing to say
+                about the tab being opened (core-form-architecture §"Đổi ID reset
+                bằng key prop"). The e-mail lives above, so it survives. */}
+            <PasswordAuthForm
+              key={mode}
+              mode={mode}
+              action={mode === "register" ? registerWithPassword : signInWithPassword}
+              returnUrl={returnUrl}
+              email={email}
+              onEmailChange={setEmail}
+            />
+
+            <Divider label="Hoặc" />
+
             {/* Two independent forms, not one with two buttons: each carries its
                 own Server Action, and a failure of one must not touch the other.
                 Grid, not HStack: the pair sits side by side while there is room
@@ -160,17 +230,19 @@ export function SignInScreen({
                 query. */}
             <Stack direction="vertical" gap={2}>
               <Grid columns={{ minWidth: 170, max: 2, repeat: "fit" }} gap={3}>
-                {/* E5.2 — the same round trip signs the operator in AND brings
-                    back the Page tokens, so a successful Facebook sign-in leaves
-                    the channels already connected. That extra payoff is why it
-                    carries the primary weight. Full-page redirect, never a popup
-                    (web-auth-methods rule 1). */}
+                {/* Both secondary since the password form arrived: the screen
+                    gets ONE primary button, and it is the submit of the form the
+                    operator is looking at (DESIGN.md, The One Indigo Rule).
+                    E5.2 still makes Facebook the more valuable of the two — the
+                    same round trip signs the operator in AND brings back the
+                    Page tokens — so it keeps the first slot. Full-page redirect,
+                    never a popup (web-auth-methods rule 1). */}
                 <ProviderForm
                   action={signInWithFacebook}
                   returnUrl={returnUrl}
                   label="Tiếp tục với Facebook"
                   pendingLabel="Đang chuyển sang Facebook…"
-                  variant="primary"
+                  variant="secondary"
                 />
                 <ProviderForm
                   action={signInWithGoogle}

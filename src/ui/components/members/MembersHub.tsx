@@ -27,6 +27,7 @@ import {
 } from "@/ui/components/members/members-tabs";
 import { MembersScreen } from "@/ui/components/members/MembersScreen";
 import { useActiveTenant } from "@/ui/hooks/useMe";
+import type { SetPasswordAction } from "@/ui/schemas/password-auth.schema";
 
 /**
  * "Thành viên" — the wave-1 hub over the three views of one subject: who is in
@@ -51,6 +52,7 @@ export function MembersHub({
   tab,
   canViewHistory,
   operatorEmail,
+  resetPassword,
 }: {
   tab: MembersTab;
   /**
@@ -63,6 +65,12 @@ export function MembersHub({
   canViewHistory: boolean;
   /** Named in the refusal so the operator knows which account is being judged. */
   operatorEmail: string;
+  /**
+   * `setPasswordAction`. Carried as a prop rather than imported because it is a
+   * Server Action in `src/app/**` and `ui/` may not reach into that layer
+   * (docs/07 §4) — the same route `SignInScreen` takes for its actions.
+   */
+  resetPassword: SetPasswordAction;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -146,7 +154,7 @@ export function MembersHub({
                   <AccessForbidden email={operatorEmail} />
                 )
               ) : (
-                <MembersScreen showInvites={false} />
+                <MembersScreen showInvites={false} resetPassword={resetPassword} />
               )}
             </StackItem>
           </Stack>

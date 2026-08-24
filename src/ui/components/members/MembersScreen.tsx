@@ -19,10 +19,12 @@ import { InvitePanel } from "@/ui/components/members/InvitePanel";
 import { MemberTable } from "@/ui/components/members/MemberTable";
 import { MemberTableSkeleton } from "@/ui/components/members/MemberTableSkeleton";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
-import { useActiveTenant } from "@/ui/hooks/useMe";
+import { useActiveTenant, useMe } from "@/ui/hooks/useMe";
 import { useMembers, useRemoveMember, useUpdateMemberRole } from "@/ui/hooks/useMembers";
 import { MEMBERSHIP_ROLE_LABELS, type MembershipRole } from "@/ui/schemas/me.schema";
 import { canManageMembers, memberDisplayName, type Member } from "@/ui/schemas/member.schema";
+import type { SetPasswordAction } from "@/ui/schemas/password-auth.schema";
+import { canAdministerPlatform } from "@/ui/schemas/platform.schema";
 
 /**
  * "Danh sách thành viên" (M2.3): who is in this company and what they may do.
@@ -54,8 +56,18 @@ export function MembersScreen({
    * `InvitePanel` in its own tab instead — the panel must never appear twice.
    */
   showInvites = true,
-}: { showInvites?: boolean } = {}) {
+  resetPassword = null,
+}: {
+  showInvites?: boolean;
+  /**
+   * `setPasswordAction`, handed down from the page (`ui/` may not import
+   * `@/app/*`). Default null so every existing caller keeps compiling and, more
+   * importantly, keeps the button OFF unless it was explicitly given.
+   */
+  resetPassword?: SetPasswordAction | null;
+} = {}) {
   const { role: actorRole, tenant, isResolved } = useActiveTenant();
+  const me = useMe();
   const members = useMembers();
   const updateRole = useUpdateMemberRole();
   const remove = useRemoveMember();
@@ -66,6 +78,16 @@ export function MembersScreen({
   const items = members.data?.items ?? [];
   const isFirstLoad = members.isPending && members.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
+
+  /**
+   * The reset button belongs to the PLATFORM ladder, not the membership one: a
+   * company owner is not allowed to set anybody's password, only MYSP's own
+   * super_admin is (`passwordAuth.setPassword` re-reads that standing from the
+   * database and refuses everyone else). Reading it here keeps the control off
+   * the screen for the people it would only ever answer 403 to.
+   */
+  const canResetPassword =
+    resetPassword !== null && canAdministerPlatform(me.data?.account?.platformRole ?? null);
 
   const busyMembershipId = updateRole.isPending
     ? (updateRole.variables?.membershipId ?? null)
@@ -192,6 +214,7 @@ export function MembersScreen({
           busyMembershipId={busyMembershipId}
           onChangeRole={handleChangeRole}
           onRemove={handleRemove}
+          resetPassword={canResetPassword ? resetPassword : null}
         />
       </StackItem>
     </Stack>
@@ -209,6 +232,7 @@ function MemberListBody({
   busyMembershipId,
   onChangeRole,
   onRemove,
+  resetPassword,
 }: {
   isFirstLoad: boolean;
   showSkeleton: boolean;
@@ -220,6 +244,7 @@ function MemberListBody({
   busyMembershipId: string | null;
   onChangeRole: (member: Member, role: MembershipRole) => void;
   onRemove: (member: Member) => void;
+  resetPassword: SetPasswordAction | null;
 }) {
   // --- Loading (delayed so a fast answer does not flash) -------------------
   if (isFirstLoad) return showSkeleton ? <MemberTableSkeleton /> : null;
@@ -278,6 +303,7 @@ function MemberListBody({
             busyMembershipId={busyMembershipId}
             onChangeRole={onChangeRole}
             onRemove={onRemove}
+            resetPassword={resetPassword}
           />
         </Stack>
       </StackItem>
