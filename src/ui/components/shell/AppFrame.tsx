@@ -5,6 +5,7 @@ import { InternationalizationProvider } from "@astryxdesign/core/i18n";
 import type { ReactNode } from "react";
 
 import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
+import { SetupDock } from "@/ui/components/onboarding/SetupDock";
 import { AppLink } from "@/ui/components/shell/AppLink";
 import { AppSideNav } from "@/ui/components/shell/AppSideNav";
 import { AppTopBar } from "@/ui/components/shell/AppTopBar";
@@ -91,6 +92,12 @@ export function AppFrame({
                 `h-full`, not auto: screens size themselves with `h-full` against
                 this box, exactly as they did against the content element. */}
             <div className="relative h-full min-h-0">{children}</div>
+            {/* The setup pointer lives in the SHELL, not on a screen: the steps
+                it lists are spread across /sync, /channels and /compose, and an
+                operator sent to one of them would otherwise lose the list they
+                were working through. It decides for itself whether to appear —
+                nothing here has to know about onboarding. */}
+            <SetupDock />
           </AppShell>
         </Theme>
       </InternationalizationProvider>
