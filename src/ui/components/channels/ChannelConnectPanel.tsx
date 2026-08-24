@@ -28,7 +28,7 @@ import {
 import { channelConnectHref } from "@/ui/services/channel.api";
 
 /**
- * The two ways a Fanpage gets into this tool (E5.1).
+ * The two ways a Page gets into this tool (E5.1).
  *
  *  1. PRIMARY — "Đăng nhập bằng Facebook", a full-page redirect to
  *     `/api/channels/connect`. This is the route an operator can actually
@@ -71,7 +71,7 @@ export function ChannelConnectPanel({
   blockedReasonOverride,
 }: {
   /**
-   * The empty state on "Trang đã kết nối" sends the operator here to paste a
+   * The empty state on "Page đã kết nối" sends the operator here to paste a
    * token, and the token box now lives behind a disclosure. A boolean rather
    * than the input ref this used to take: a ref into a subtree that is not
    * mounted is `null`, so the old `tokenInputRef.current?.focus()` would have
@@ -169,7 +169,7 @@ export function ChannelConnectPanel({
   return (
     <Stack direction="vertical" gap={4}>
       <Stack direction="vertical" gap={1}>
-        <Heading level={2}>Kết nối Fanpage</Heading>
+        <Heading level={2}>Kết nối thêm Page</Heading>
         <Text type="supporting">
           Đăng nhập bằng Facebook rồi cấp quyền cho những Page bạn muốn đăng bài. Hệ thống chỉ lưu
           token của từng Page ở máy chủ — không có token nào hiển thị lại trên màn hình này.
@@ -194,7 +194,7 @@ export function ChannelConnectPanel({
           </ActionButton>
         )}
         <Text type="supporting" color="secondary">
-          Bạn sẽ được chuyển sang Facebook để cấp quyền, xong quay lại đây với danh sách Trang đã
+          Bạn sẽ được chuyển sang Facebook để cấp quyền, xong quay lại đây với danh sách Page đã
           lấy về. Không cần dán token bằng tay.
         </Text>
         {/* The Named Status Rule: a control that is off says why, right next to

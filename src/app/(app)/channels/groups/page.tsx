@@ -1,6 +1,9 @@
 import { redirect } from "next/navigation";
 
-import { legacyRedirectTarget } from "@/ui/components/posts/legacy-routes";
+import {
+  legacyRedirectQuery,
+  legacyRedirectTarget,
+} from "@/ui/components/posts/legacy-routes";
 
 /**
  * `/channels/groups` moved into the "Kênh" hub (wave-1 IA). It stays as a
@@ -18,10 +21,9 @@ export default async function ChannelGroupsRedirect({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(await searchParams)) {
-    if (typeof v === "string") params.set(k, v);
-  }
+  // Repeated parameters are kept, not dropped — same as the edge redirect does
+  // (`legacyRedirectQuery`).
+  const query = legacyRedirectQuery(await searchParams);
   // redirect() throws NEXT_REDIRECT — it must stay outside try/catch.
-  redirect(legacyRedirectTarget("/channels/groups", params.toString()) ?? "/channels");
+  redirect(legacyRedirectTarget("/channels/groups", query) ?? "/channels");
 }

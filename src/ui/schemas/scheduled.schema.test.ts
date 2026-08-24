@@ -7,6 +7,7 @@ import {
   dayEndIso,
   dayStartIso,
   formatCountdown,
+  formatScheduledTime,
   groupScheduledByDay,
   hasScheduledFilter,
   isDateOnly,
@@ -217,6 +218,26 @@ describe("formatCountdown", () => {
     expect(formatCountdown(3 * 3_600_000)).toBe("còn 3 giờ");
     expect(formatCountdown(2 * 86_400_000 + 3_600_000)).toBe("còn 2 ngày 1 giờ");
     expect(formatCountdown(2 * 86_400_000)).toBe("còn 2 ngày");
+  });
+});
+
+describe("formatScheduledTime", () => {
+  it("gives junk back rather than an Invalid Date", () => {
+    expect(formatScheduledTime("hôm qua")).toBe("hôm qua");
+    expect(formatScheduledTime("")).toBe("");
+  });
+
+  it("cannot tell two days apart — which is why callers must render one day", () => {
+    // The constraint written on the function, locked so it cannot be lost by
+    // accident: `ScheduledJobTable` COMPARES this string to decide whether a
+    // folded row needs its "sớm nhất" caveat, and the fold key deliberately
+    // ignores `scheduledAt`. Two rows a day apart would compare equal and the
+    // caveat would go missing; only the per-day rendering keeps that off the
+    // table.
+    const today = formatScheduledTime("2026-08-13T20:00:00+07:00");
+    expect(today).toBe(formatScheduledTime("2026-08-14T20:00:00+07:00"));
+    // …and it really is the hour that came back, not an empty string.
+    expect(today).toMatch(/^\d{2}:\d{2}$/);
   });
 });
 

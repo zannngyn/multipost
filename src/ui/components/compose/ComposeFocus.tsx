@@ -1,8 +1,13 @@
 "use client";
 
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { useWatch } from "react-hook-form";
 
+import {
+  channelLabelIndex,
+  channelNameOf,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
 import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
 import { activeCaptionChannel } from "@/ui/components/compose/caption-targets";
 import { ChannelChoice } from "@/ui/components/compose/ChannelChoice";
@@ -182,15 +187,24 @@ export function ComposeFocus() {
     ? channelName(channels.data?.channels, previewChannelId)
     : PREVIEW_PAGE_NAME;
 
+  /**
+   * ONE index for the whole missing-caption list, resolved before the map:
+   * `channelNameOf` rebuilds a Map of every channel per call, and naming a list
+   * row by row is the O(rows × channels) shape `channelLabelIndex` exists to
+   * stop (its own docblock asks callers not to do it).
+   */
+  const missingCaptionNames = useMemo(() => {
+    const index = channelLabelIndex(publish.missingCaptionIds, channels.data?.channels);
+    return publish.missingCaptionIds.map((id) => channelSentenceName(id, index));
+  }, [publish.missingCaptionIds, channels.data]);
+
   const action = describeAction({
     readOnlyReason,
     hasChannels: publishableChannels(channels.data?.channels ?? []).length > 0,
     hasComposed: Boolean(composed),
     // NAMED, not counted: "Camilla chưa có caption" is actionable, "1 kênh
     // thiếu caption" sends the operator hunting through tabs.
-    missingCaptionChannels: publish.missingCaptionIds.map((id) =>
-      channelName(channels.data?.channels, id),
-    ),
+    missingCaptionChannels: missingCaptionNames,
     channels: publish.selectedIds.length,
     canSubmit: publish.canSubmit,
   });
@@ -411,7 +425,7 @@ export function ComposeFocus() {
             </Step>
 
             {/* KÊNH ĐĂNG BEFORE CAPTION (PM, 21/08/2026): a caption is written
-                per Fanpage, so "đăng lên đâu" has to be answered before there is
+                per Page, so "đăng lên đâu" has to be answered before there is
                 anything to write. The caption block below says so in words when
                 nothing is ticked yet. The two stops appear together, under the
                 same condition the colours and the album do — a composed post. */}
@@ -575,15 +589,21 @@ function Step({ n, label, children }: { n: number; label: string; children: Reac
 /** The form field holding the shared caption. Phase 1 publishes to Facebook. */
 const PREVIEW_CHANNEL = "facebook";
 
-/** A Page's name, or its id when the list has not arrived (or it is gone). */
+/**
+ * A Page's name, said the way the whole app says it (spec §3.1). ONE id only —
+ * the preview header; a list resolves once with `channelLabelIndex` instead.
+ *
+ * Delegates rather than re-deriving: the id alone is printed only when there is
+ * genuinely no name to print — the channel list has not arrived — and a Page
+ * that is off or gone is labelled as such instead of appearing as a bare id in
+ * "Camilla chưa có caption".
+ */
 function channelName(channels: readonly Channel[] | undefined, channelId: string): string {
-  const found = channels?.find((item) => item.channelId === channelId);
-  const name = found?.name?.trim();
-  return name && name.length > 0 ? name : channelId;
+  return channelNameOf(channelId, channels);
 }
 
 /** Stand-in until a channel is ticked — naming a Page nobody chose would lie. */
-const PREVIEW_PAGE_NAME = "Trang Facebook của bạn";
+const PREVIEW_PAGE_NAME = "Page Facebook của bạn";
 
 /**
  * "Kiểu bài" as the design draws it — one track — over the two fields the API
@@ -602,7 +622,7 @@ const POST_KINDS = [
   {
     value: "video",
     label: "Video",
-    hint: "Một clip, đăng lên dòng thời gian của Trang. Tỷ lệ 9:16 đến 16:9.",
+    hint: "Một clip, đăng lên dòng thời gian của Page. Tỷ lệ 9:16 đến 16:9.",
     mediaKind: "video" as MediaKind,
     videoTarget: "facebook_video" as VideoTarget,
   },

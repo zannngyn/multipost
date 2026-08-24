@@ -176,7 +176,7 @@ describe("the caption editor reads the published string", () => {
 
 /**
  * The order of the left card (PM, 21/08/2026): a caption is written per
- * Fanpage, so "đăng lên đâu" is asked BEFORE there is anything to write.
+ * Page, so "đăng lên đâu" is asked BEFORE there is anything to write.
  */
 describe("channels are chosen before the caption is written", () => {
   it("puts the channel block above the caption block", () => {
@@ -209,8 +209,8 @@ describe("channels are chosen before the caption is written", () => {
 
   it("offers one press for every ticked Page, and keeps the per-tab rewrite", () => {
     const source = readCompose("./CaptionBlock.tsx");
-    expect(source).toContain("Viết caption cho ${selectedIds.length} trang");
-    expect(source).toContain("Viết lại trang này");
+    expect(source).toContain("Viết caption cho ${selectedIds.length} kênh");
+    expect(source).toContain("Viết lại kênh này");
     expect(source).toContain("fanOut.run(selectedIds)");
   });
 });

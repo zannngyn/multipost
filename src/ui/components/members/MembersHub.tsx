@@ -99,9 +99,14 @@ export function MembersHub({
       header={
         <LayoutHeader hasDivider>
           <Stack direction="vertical" gap={3} padding={4}>
+            {/* `max-w-prose` on the intro, like every other screen's: this hub
+                is full-bleed, so at 1440 the three sentences ran the whole
+                1152px of the content area as one line of small type — measured
+                in the T11 inspect round. DESIGN.md §Layout: văn bản dài
+                `max-w-prose`. The heading keeps the full width. */}
             <Stack direction="vertical" gap={1}>
               <Heading level={1}>Thành viên</Heading>
-              <Text type="supporting">
+              <Text type="supporting" className="max-w-prose">
                 Ai đang làm việc trong {tenant?.name ?? "công ty này"} và với quyền gì, những link
                 mời đang phát hành, và lịch sử của luồng chờ duyệt cũ. Mỗi công ty có danh sách
                 riêng — đổi công ty ở thanh trên cùng để xem công ty khác.

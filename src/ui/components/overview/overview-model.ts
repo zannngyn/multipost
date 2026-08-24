@@ -1,3 +1,9 @@
+import type { GroupChannelLabel } from "@/ui/components/channels/channel-group-labels";
+import {
+  channelLabelIndex,
+  channelNameOf,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
 import type { Channel } from "@/ui/schemas/channel.schema";
 
 /**
@@ -404,23 +410,58 @@ export function failureReason(job: {
   return "Không rõ lý do — mở nhật ký để xem chi tiết.";
 }
 
+/** The id the way the label index keys it: trimmed, blank when there is none. */
+function normalizeChannelId(channelId: string): string {
+  return typeof channelId === "string" ? channelId.trim() : "";
+}
+
 /**
- * The Page name for a channel id, or the id itself.
+ * ONE index for a whole list of rows — built before the map, never inside it.
  *
- * `channels === undefined` means the list is not known yet (loading, or the
- * request failed): the row then shows the raw id, which is ugly but true. Same
- * rule as `resolveGroupChannelLabels` — this screen only needs the name, never
- * the "đã gỡ" verdict, so it does not repeat that logic.
+ * `channelNameOf` rebuilds a Map of every channel on each call, so naming rows
+ * one at a time is O(rows × channels) — exactly what `channelLabelIndex` exists
+ * to stop, and what its docblock asks callers not to do. Blank ids never reach
+ * the index: `channelLabelFrom` answers "—" for them without a lookup.
+ */
+export function channelLabelIndexFor(
+  channelIds: readonly string[],
+  channels: readonly Channel[] | undefined,
+): ReadonlyMap<string, GroupChannelLabel> {
+  return channelLabelIndex(
+    channelIds.map(normalizeChannelId).filter((id) => id.length > 0),
+    channels,
+  );
+}
+
+/**
+ * The Page name for a channel id, the way every other screen says it.
+ *
+ * Delegates to the shared rule (spec §3.1) instead of keeping a second, softer
+ * one: this screen used to print a bare id for a Page that had been removed,
+ * so the attention list quietly named something an operator could not look up.
+ * Now it says "…(đã gỡ)" / "…(đang tắt)" like the log, the schedule and /bulk.
+ *
+ * The one thing it keeps for itself: an EMPTY id becomes "—", because a
+ * dashboard row still has to render a cell.
+ */
+export function channelLabelFrom(
+  channelId: string,
+  index: ReadonlyMap<string, GroupChannelLabel>,
+): string {
+  const id = normalizeChannelId(channelId);
+  if (id.length === 0) return "—";
+  return channelSentenceName(id, index);
+}
+
+/**
+ * `channelLabelFrom` for a caller holding ONE id and no index — a single cell,
+ * never a list. A list resolves once with `channelLabelIndexFor` first.
  */
 export function channelLabel(
   channelId: string,
   channels: readonly Channel[] | undefined,
 ): string {
-  const id = typeof channelId === "string" ? channelId.trim() : "";
+  const id = normalizeChannelId(channelId);
   if (id.length === 0) return "—";
-  if (channels === undefined) return id;
-
-  const found = channels.find((channel) => channel.channelId === id);
-  const name = found?.name.trim() ?? "";
-  return name.length > 0 ? name : id;
+  return channelNameOf(id, channels);
 }

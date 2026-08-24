@@ -383,7 +383,24 @@ export function formatDayInput(dateOnly: string): string {
   return `${day}/${month}/${year}`;
 }
 
-/** "15:30" — used inside a day group, where the date is in the heading. */
+/**
+ * "15:30" — the hour alone.
+ *
+ * THE CONSTRAINT, because it is not visible in the signature: this string is
+ * only unambiguous INSIDE ONE DAY. It drops the date, so 20:00 today and 20:00
+ * tomorrow come back identical — which is fine where it is used (every caller
+ * renders one day at a time: the list view maps `groupScheduledByDay`, the
+ * calendar renders one day's detail) and wrong the moment a table spans days.
+ *
+ * It matters twice over, because `ScheduledJobTable` COMPARES this string —
+ * `isFoldUniform(group, m => formatScheduledTime(m.scheduledAt))` — to decide
+ * whether to caveat the folded hour with "sớm nhất". Two rows a day apart would
+ * compare equal and the caveat would go missing. The fold key deliberately
+ * leaves `scheduledAt` out (publish spacing staggers a fan-out), so nothing in
+ * the fold prevents that group; only the per-day rendering does.
+ *
+ * Junk comes back unchanged rather than as "Invalid Date".
+ */
 export function formatScheduledTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;

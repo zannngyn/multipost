@@ -94,5 +94,78 @@ export const myspTheme = defineTheme({
      * exists to keep off this cloth.
      */
     "--color-accent-muted": "var(--accent)",
+
+    /**
+     * THE GROUND — every screen in the app stands on this one.
+     *
+     * `AppShell` is the ONLY element that paints the area behind a screen
+     * (measured: `.astryx-app-shell` 1440×900, everything from `Layout` down is
+     * `rgba(0,0,0,0)`), and it paints `--color-background-body`. The neutral
+     * theme sets that to `#F1F1F1` — a cold generic grey — so the unbleached
+     * muslin `body { background: var(--background) }` paints was covered on
+     * every route, and the swatch cards on /sync, /compose and /prompts were
+     * warm panels floating on somebody else's grey.
+     *
+     * Painting the cloth here rather than in `globals.css` is the only
+     * supported way: the shell's rule is scoped to `[data-astryx-theme]`.
+     */
+    "--color-background-body": "var(--background)",
+    /**
+     * One step above the ground: the layer Astryx gives a dialog panel, a text
+     * input, a segmented control and the shell's nav bands. Neutral shipped
+     * `#FFFFFF` — the pure white this world does not contain — so it becomes
+     * the swatch card, the same surface `bg-card` paints on the Tailwind side.
+     */
+    "--color-background-surface": "var(--card)",
+    "--color-background-card": "var(--card)",
+    "--color-background-popover": "var(--popover)",
+    /**
+     * Sunken fills (a muted band, a filled cell). `--muted` is the same warm
+     * shade `bg-muted` uses, so an Astryx panel and a Tailwind one sink by the
+     * same amount instead of one going grey.
+     */
+    "--color-background-muted": "var(--muted)",
+
+    /**
+     * THE INK HAIRLINE RULE (DESIGN.md §Borders) applied to Astryx too. The
+     * neutral border is `#00000014` — black at 8%, which reads cold and blue on
+     * an unbleached ground; ours is the warm ink at the same weight, so a table
+     * rule and a card edge are drawn with the same pen.
+     */
+    "--color-border": "var(--border)",
+    /** The heavier hairline (focus-adjacent edges, dividers that must count). */
+    "--color-border-emphasized": "var(--input)",
+    /**
+     * Loading is one of the four mandatory states, so its slabs belong to the
+     * world as much as the data does. Neutral's `#EBEBEB` skeleton and grey
+     * track were the last cold rectangles left on screen.
+     */
+    "--color-skeleton": "var(--muted)",
+    "--color-track": "var(--muted)",
+  },
+  components: {
+    /**
+     * THE SR-ONLY TRAP, closed once instead of screen by screen.
+     *
+     * `sr-only` is `position: absolute`, so every visually hidden node anchors
+     * to the nearest POSITIONED ancestor. `LayoutContent` is the box that
+     * scrolls on nearly every screen here and it ships `position: static` — so
+     * a hidden line deep inside a long table escaped its own scroll container
+     * and landed at its UN-SCROLLED static position further up, stretching
+     * `documentElement.scrollHeight` past the viewport (measured: 3625px
+     * against a 900px viewport on the job log, 1382px on /sync). The page could
+     * then be dragged down onto a band of empty background with nothing visible
+     * to explain it — which is why it survived a design pass, and why three
+     * screens ended up patching it one at a time.
+     *
+     * It belongs here rather than in `globals.css` for the same reason the
+     * tokens above do: the shell's own rules are scoped to
+     * `[data-astryx-theme]`, and a bare selector outside that scope wins or
+     * loses by cascade accident. Nothing on screen moves — this only decides
+     * WHICH box an absolutely positioned child measures itself against.
+     */
+    "layout-content": {
+      base: { position: "relative" },
+    },
   },
 });

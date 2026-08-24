@@ -32,7 +32,7 @@ const GATED_SURFACES = [
     file: "scheduled/ScheduledScreen.tsx",
     writes: "huỷ / đổi giờ (bảng nhận qua prop)",
   },
-  { screen: "Nhật ký đăng bài", file: "jobs/JobLogScreen.tsx", writes: "chạy lại một bài" },
+  { screen: "Nhật ký đăng", file: "jobs/JobLogScreen.tsx", writes: "chạy lại một bài" },
   {
     screen: "Mẫu prompt",
     file: "prompts/PromptTemplatesScreen.tsx",

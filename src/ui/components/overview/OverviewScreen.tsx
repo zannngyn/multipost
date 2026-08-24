@@ -11,7 +11,8 @@ import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import {
   ATTENTION_LIMIT,
   RUNNING_BATCH_LIMIT,
-  channelLabel,
+  channelLabelFrom,
+  channelLabelIndexFor,
   failureReason,
   pickAttentionItems,
   pickRunningBatches,
@@ -132,7 +133,7 @@ export function OverviewScreen() {
   const published = usePostJobLog(PUBLISHED_JOBS);
   const blocked = useCatalogProducts(BLOCKED_PRODUCTS);
   // Names only: a row that cannot be named falls back to the raw channel id
-  // rather than waiting for this query (see `channelLabel`).
+  // rather than waiting for this query (see `channelLabelFrom`).
   const channels = useChannels();
 
   /**
@@ -173,6 +174,20 @@ export function OverviewScreen() {
    */
   const blockedTotal = blocked.data?.pages[0]?.totals.blocked;
 
+  /**
+   * Both attention lists name their Pages from ONE index, resolved before the
+   * maps run — naming row by row rebuilds the channel Map per row, which is
+   * what `channelLabelIndex` was introduced to stop.
+   */
+  const attentionChannelLabels = useMemo(
+    () =>
+      channelLabelIndexFor(
+        [...failedItems, ...scheduledItems].map((job) => job.channelId),
+        channels.data?.channels,
+      ),
+    [failedItems, scheduledItems, channels.data],
+  );
+
   const attention = useMemo(
     () =>
       pickAttentionItems({
@@ -180,7 +195,7 @@ export function OverviewScreen() {
           id: job.postJobId,
           code: job.productCode,
           color: job.color,
-          channelName: channelLabel(job.channelId, channels.data?.channels),
+          channelName: channelLabelFrom(job.channelId, attentionChannelLabels),
           reason: failureReason(job),
           // Lets a folded row open the log filtered to its OWN lot instead of
           // to every failure in the tenant — the log has no `?code=` filter,
@@ -191,12 +206,12 @@ export function OverviewScreen() {
           id: job.postJobId,
           code: job.productCode,
           color: job.color,
-          channelName: channelLabel(job.channelId, channels.data?.channels),
+          channelName: channelLabelFrom(job.channelId, attentionChannelLabels),
           scheduledAt: job.scheduledAt,
           batchId: job.batchId,
         })),
       }),
-    [failedItems, scheduledItems, channels.data],
+    [failedItems, scheduledItems, attentionChannelLabels],
   );
 
   /**

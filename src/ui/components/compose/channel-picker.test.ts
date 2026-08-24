@@ -24,7 +24,7 @@ import {
 
 /**
  * Rules of the "Chọn kênh đăng" modal. Every test here answers one question:
- * WHICH Fanpages is this post about to go to? A wrong answer is a post on the
+ * WHICH Pages is this post about to go to? A wrong answer is a post on the
  * wrong Page, so the edge cases come first (CLAUDE.md technical rule 1).
  */
 
@@ -194,7 +194,7 @@ describe("applyChannelGroup", () => {
  */
 describe("applyChannelGroupSafe", () => {
   it("refuses the press when the modal is listing no Pages at all", () => {
-    // Query still in flight, query failed, or a tenant with no Fanpage: all
+    // Query still in flight, query failed, or a tenant with no Page: all
     // three arrive here as an empty list, and all three would wipe the draft.
     expect(
       applyChannelGroupSafe({

@@ -3,11 +3,8 @@
 import { ChevronRight } from "lucide-react";
 import { useId } from "react";
 
-import {
-  avatarToneStyle,
-  channelInitials,
-  publishableChannels,
-} from "@/ui/components/compose/channel-picker";
+import { channelLabelIndex } from "@/ui/components/channels/channel-option-labels";
+import { avatarToneStyle, channelInitials } from "@/ui/components/compose/channel-picker";
 import { useChannels } from "@/ui/hooks/useChannels";
 import type { PublishForm } from "@/ui/hooks/usePublishForm";
 
@@ -42,14 +39,15 @@ export function ChannelChoice({
   const blockId = useId();
   const channels = useChannels();
 
-  const byId = new Map(
-    publishableChannels(channels.data?.channels ?? []).map((channel) => [
-      channel.channelId,
-      channel,
-    ]),
-  );
   const { selectedIds } = publish;
   const shown = selectedIds.slice(0, 3);
+  /**
+   * ONE resolve for the chips, via the shared rule (spec §3.1). It reads the
+   * FULL channel list rather than `publishableChannels`: a Page that was
+   * switched off is still a Page, and a chip that fell back to a raw id the
+   * moment a Page left the publishable set is exactly what this task removes.
+   */
+  const labels = channelLabelIndex(shown, channels.data?.channels);
 
   return (
     <section aria-labelledby={`${blockId}-heading`} className="flex flex-col gap-2">
@@ -73,8 +71,13 @@ export function ChannelChoice({
         ) : (
           <span className="flex min-w-0 flex-wrap items-center gap-2">
             {shown.map((channelId) => {
-              const name = byId.get(channelId)?.name?.trim();
-              const label = name && name.length > 0 ? name : channelId;
+              const resolved = labels.get(channelId);
+              // The avatar's initials and tone come from the NAME, never from
+              // the "(đã gỡ)" sentence: a decorative circle reading "F(" helps
+              // nobody, and the tone must stay stable for the same Page.
+              const label = resolved?.name ?? channelId;
+              const gone = resolved?.note === "removed";
+              const off = resolved?.note === "disabled";
 
               return (
                 <span
@@ -89,6 +92,14 @@ export function ChannelChoice({
                     {channelInitials(label)}
                   </span>
                   <span className="max-w-45 truncate text-[13px] font-medium">{label}</span>
+                  {/* Said on the chip, not left to the modal: this row is the
+                      operator's answer to "bài này lên đâu?", and a Page that
+                      cannot receive it must not look like one that can. */}
+                  {gone || off ? (
+                    <span className="text-[11px] text-[var(--warning-foreground)]">
+                      {gone ? "(đã gỡ)" : "(đang tắt)"}
+                    </span>
+                  ) : null}
                 </span>
               );
             })}

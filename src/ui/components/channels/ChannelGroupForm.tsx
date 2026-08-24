@@ -95,7 +95,7 @@ export function ChannelGroupForm({
       <p className="text-muted-foreground text-sm">
         Chưa có kênh nào đang bật để thêm vào nhóm. Hãy{" "}
         <Link href="/channels" className="underline underline-offset-4">
-          kết nối Fanpage ở màn Kênh
+          kết nối Page ở màn Kênh
         </Link>{" "}
         trước, rồi quay lại đây gom nhóm.
       </p>
@@ -119,7 +119,7 @@ export function ChannelGroupForm({
           {...form.register("name")}
           aria-invalid={nameError ? true : undefined}
           aria-describedby={nameError ? `${nameId}-error` : undefined}
-          placeholder="Ví dụ: Fanpage chính"
+          placeholder="Ví dụ: Page chính"
           autoComplete="off"
         />
         {nameError ? (

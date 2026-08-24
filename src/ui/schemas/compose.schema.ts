@@ -107,7 +107,7 @@ export const VIDEO_TARGET_LABELS: Record<VideoTarget, string> = {
  * server's, this text only helps the operator pick the right destination.
  */
 export const VIDEO_TARGET_HINTS: Record<VideoTarget, string> = {
-  facebook_video: "Đăng lên dòng thời gian của Trang. Tỷ lệ 9:16 đến 16:9, tối đa 240 phút.",
+  facebook_video: "Đăng lên dòng thời gian của Page. Tỷ lệ 9:16 đến 16:9, tối đa 240 phút.",
   facebook_reels: "Chỉ nhận video dọc 9:16, dài 3–90 giây, tối thiểu 540x960.",
 };
 
