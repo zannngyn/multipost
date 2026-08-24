@@ -57,8 +57,22 @@ export function SetupDock() {
   );
 }
 
-/** Shared frame: same corner, same stacking, same safe-area inset. */
-function DockAnchor({ children }: { children: React.ReactNode }) {
+/**
+ * Shared frame: same corner, same stacking, same safe-area inset.
+ *
+ * `isInline` drops the fixed positioning so the dev preview can show the dock
+ * in the flow of a gallery page instead of pinned over it — the same escape
+ * hatch Astryx's own Dialog offers, for the same reason.
+ */
+function DockAnchor({ children, isInline }: { children: React.ReactNode; isInline?: boolean }) {
+  if (isInline) {
+    return (
+      <div className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-300 inline-block">
+        {children}
+      </div>
+    );
+  }
+
   return (
     <div className="pointer-events-none fixed right-4 bottom-4 z-40 flex justify-end pb-[env(safe-area-inset-bottom)] print:hidden">
       <div className="pointer-events-auto motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-300">
@@ -74,18 +88,24 @@ function remainingOf(progress: SetupProgress): number {
 
 // --- Collapsed ---------------------------------------------------------------
 
-function DockPill({
+/**
+ * Exported for the dev preview page: a pure function of `progress`, so the
+ * gallery can show every shape without a session, a company or a live query.
+ */
+export function DockPill({
   progress,
   onExpand,
+  isInline,
 }: {
   progress: SetupProgress;
   onExpand: () => void;
+  isInline?: boolean;
 }) {
   const remaining = remainingOf(progress);
   const percent = Math.round((progress.doneCount / progress.requiredCount) * 100);
 
   return (
-    <DockAnchor>
+    <DockAnchor isInline={isInline}>
       <button
         type="button"
         onClick={onExpand}
@@ -117,12 +137,15 @@ function DockPill({
 
 // --- Expanded ----------------------------------------------------------------
 
-function DockPanel({
+/** Exported for the dev preview page — see `DockPill`. */
+export function DockPanel({
   progress,
   onCollapse,
+  isInline,
 }: {
   progress: SetupProgress;
   onCollapse: () => void;
+  isInline?: boolean;
 }) {
   const steps = buildStepViews(progress);
   const remaining = remainingOf(progress);
@@ -158,7 +181,7 @@ function DockPanel({
   const currentId = steps.find((step) => step.state === "current")?.id ?? null;
 
   return (
-    <DockAnchor>
+    <DockAnchor isInline={isInline}>
       <section
         aria-label="Tiến trình thiết lập công ty"
         className="bg-foreground text-background w-[min(21rem,calc(100vw-2rem))] overflow-hidden rounded-xl shadow-xl"
