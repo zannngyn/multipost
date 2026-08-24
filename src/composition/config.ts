@@ -334,6 +334,19 @@ export const UploadConfigSchema = z.object({
 export type UploadConfig = z.infer<typeof UploadConfigSchema>;
 
 /**
+ * Catalog files an operator uploaded instead of connecting a Google Sheet
+ * (phase 3). Its own group rather than a key of the upload group on purpose:
+ * these bytes are the tenant's ONLY product data, so they must never be swept
+ * by the orphan cleanup that owns UPLOAD_STORAGE_ROOT (E9.4).
+ */
+export const CatalogFileConfigSchema = z.object({
+  /** Directory the catalog file store writes under; one sub-directory per tenant. */
+  CATALOG_STORAGE_ROOT: z.string().trim().min(1).default("./var/catalog"),
+});
+
+export type CatalogFileConfig = z.infer<typeof CatalogFileConfigSchema>;
+
+/**
  * Drive byte cache (E3.6 hardening). Its own lazy group with working defaults,
  * like the upload group: a dev box needs no setup, and in Docker the path is a
  * mounted volume shared by web (writes on a miss) and worker (sweeps).
@@ -490,6 +503,10 @@ export function loadVideoConfig(env: EnvRecord = process.env): VideoConfig {
 
 export function loadUploadConfig(env: EnvRecord = process.env): UploadConfig {
   return parseEnv(UploadConfigSchema, env, "upload");
+}
+
+export function loadCatalogFileConfig(env: EnvRecord = process.env): CatalogFileConfig {
+  return parseEnv(CatalogFileConfigSchema, env, "catalog-file");
 }
 
 export function loadMediaCacheConfig(env: EnvRecord = process.env): MediaCacheConfig {

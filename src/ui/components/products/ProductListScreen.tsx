@@ -22,6 +22,8 @@ import { Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+import { StockCheckSkippedBanner } from "@/ui/components/inventory/StockCheckSkippedBanner";
+import { firstSkippedReason, hasSkippedStockCheck } from "@/ui/components/inventory/stock-check";
 import {
   inspectorRecovery,
   isInspectorDrawerOpen,
@@ -106,6 +108,13 @@ export function ProductListScreen() {
   // the first page is authoritative and every page repeats it.
   const totals = products.data?.pages[0]?.totals ?? { total: 0, ok: 0, blocked: 0 };
   const hasFilter = filter.status !== null || filter.q !== null;
+  /**
+   * Read from the ROWS, not from a setting: the flag travels with every decision
+   * the server made, so the banner cannot disagree with the column beside it.
+   * One banner for the screen — the column says the word on every row, the
+   * banner says why, once (business rule 3 is suspended for this tenant).
+   */
+  const isStockCheckSkipped = hasSkippedStockCheck(items);
   // `isFetching` and not `isFirstLoad`: a "Tải lại" that empties the list for a
   // moment must not turn the open inspector into "không thấy mã này".
   const inspector = productInspectorState(selectedCode, items, {
@@ -325,6 +334,15 @@ export function ProductListScreen() {
         }
         content={
           <LayoutContent padding={0}>
+            {/* Above the table, inside the scroll region: it belongs to the data
+                below it, and pinning it to the header would push the filters off
+                a short screen. */}
+            {isStockCheckSkipped ? (
+              <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+                <StockCheckSkippedBanner reason={firstSkippedReason(items)} />
+              </Stack>
+            ) : null}
+
             <ProductListBody
               isFirstLoad={isFirstLoad}
               showSkeleton={showSkeleton}

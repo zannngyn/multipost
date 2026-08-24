@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { ProductOriginSchema } from "@/ui/schemas/product-origin.schema";
+
 /**
  * Contracts of the publish screens (E7.5 theo dõi lô + E11.1 nhật ký job).
  *
@@ -186,10 +188,25 @@ export const BatchChannelProgressSchema = z.object({
 });
 export type BatchChannelProgress = z.infer<typeof BatchChannelProgressSchema>;
 
+/**
+ * Where a post's product TEXT came from — mirrors `ProductOrigin`
+ * (core/domain/product), stamped on the job row when it was created.
+ *
+ * `.default("sheet")` rather than required, and the reason is the opposite of
+ * the compose response's: that one is produced by the very server that served
+ * the page, while these rows can be MONTHS old and are read back long after the
+ * build that wrote them. Every job created before onboarding phase 3 carries no
+ * stamp at all, and "sheet" is the historical truth for all of them — the same
+ * default `productOrigin()` applies in the domain.
+ */
+const JobProductOriginSchema = ProductOriginSchema.default("sheet");
+
 export const BatchChannelStatusSchema = z.object({
   channelId: z.string().min(1),
   postJobId: z.string().min(1),
   status: PostJobStatusSchema,
+  /** On the LINE, not only on the batch: it is read next to the row that failed. */
+  productOrigin: JobProductOriginSchema,
   attemptCount: z.number(),
   publishedPostId: z.string().nullable(),
   publishedUrl: z.url().nullable(),
@@ -224,6 +241,8 @@ export const BatchStatusResponseSchema = z.object({
   tenantId: z.string().min(1),
   batchId: z.string().min(1),
   productCode: z.string().min(1),
+  /** Every job of a batch is built from the same product, so one stamp covers it. */
+  productOrigin: JobProductOriginSchema,
   color: z.string(),
   format: PostFormatSchema,
   status: PostBatchStatusSchema,
@@ -249,6 +268,11 @@ export const PostJobLogEntrySchema = z.object({
   postJobId: z.string().min(1),
   batchId: z.string().min(1),
   productCode: z.string().min(1),
+  /**
+   * THE answer to "bài này lấy dữ liệu từ đâu", months later. Read from the job
+   * row itself, never joined from `product` — by then that row may be gone.
+   */
+  productOrigin: JobProductOriginSchema,
   color: z.string(),
   channelId: z.string().min(1),
   format: PostFormatSchema,

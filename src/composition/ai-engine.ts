@@ -29,6 +29,7 @@ import type {
   ModelPolicyStore,
   PromptStore,
 } from "@/core/ports/ai";
+import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import {
   makeGenerateCaptions,
@@ -51,6 +52,11 @@ export interface AiWiringDeps {
   /** REDIS_URL. Absent = no hot cache; the YAML in-memory TTL still applies. */
   redisUrl?: string;
   env?: EnvRecord;
+  /**
+   * Source of the tenant's own sheet headers. Absent = every tenant validates
+   * against the MYSP preset labels, which is the pre-multi-tenant behaviour.
+   */
+  catalogConfig?: CatalogConfigRepo;
 }
 
 /**
@@ -266,7 +272,11 @@ export function makeLazyGenerateCaptions(deps: AiWiringDeps): GenerateCaptions {
       clock: deps.clock,
       ids: { newId: () => randomUUID() },
     });
-    cached = makeGenerateCaptions({ contentEngine, logger: deps.logger });
+    cached = makeGenerateCaptions({
+      contentEngine,
+      logger: deps.logger,
+      catalogConfig: deps.catalogConfig,
+    });
     return cached;
   };
 

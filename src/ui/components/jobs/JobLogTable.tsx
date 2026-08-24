@@ -22,6 +22,7 @@ import { TableScrollRegion } from "@/ui/components/posts/TableScrollRegion";
 import { Button } from "@/ui/components/ui/button";
 import type { GroupChannelLabel } from "@/ui/components/channels/channel-group-labels";
 import type { Channel } from "@/ui/schemas/channel.schema";
+import { MANUAL_PRODUCT_BADGE } from "@/ui/schemas/product-origin.schema";
 import {
   facebookPostUrl,
   formatDateTime,
@@ -232,6 +233,21 @@ function JobLogRows({
             column, and a code split over two lines cannot be. */}
         <th scope="row" className="px-3 py-2 text-left font-medium">
           <span className="whitespace-nowrap">{job.productCode}</span>
+          {/*
+            Onboarding phase 3 — provenance, on the row where "vì sao bài này
+            không lên" gets asked. Read from the stamp the job carries, never
+            joined from `product`: by the time somebody reads this log, that row
+            may have been swept by a sync.
+
+            Under the code rather than beside it: the code column is compared
+            straight down and a badge on the same line would break that scan. And
+            nothing at all for a synced job — that is nearly every row.
+          */}
+          {job.productOrigin === "manual" ? (
+            <span className="text-warning-foreground block text-xs font-normal">
+              {MANUAL_PRODUCT_BADGE}
+            </span>
+          ) : null}
           {isFolded ? (
             <span className="text-muted-foreground block text-xs font-normal">
               {foldCountLabel(group)}

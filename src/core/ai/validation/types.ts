@@ -3,6 +3,7 @@
  * Every stage is a pure function: (output, context) -> failures[].
  */
 
+import type { CatalogFieldMap } from "@/core/domain/catalog-field-map";
 import type { CaptionInput } from "@/core/domain/caption";
 import type { ContentConstraints } from "@/core/ports/content-engine";
 
@@ -28,6 +29,12 @@ export interface ValidationContext {
   constraints: ContentConstraints;
   /** Captions already accepted for other channels of the same post (D1). */
   existingCaptions: readonly string[];
+  /**
+   * The tenant's own sheet headers. Stage 3 names them in its operator messages
+   * and accepts them as label prefixes on a quoted source. Absent = the MYSP
+   * preset, so an internal generation behaves exactly as before.
+   */
+  fieldMap?: CatalogFieldMap;
 }
 
 export function failure(

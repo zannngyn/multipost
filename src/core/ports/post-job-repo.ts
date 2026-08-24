@@ -20,6 +20,7 @@ import type {
   PostJobMedia,
   PostJobStatus,
 } from "@/core/domain/post-job";
+import type { ProductOrigin } from "@/core/domain/product";
 import type { PostJobStage } from "@/core/domain/post-job-progress";
 import type { TenantId } from "@/core/domain/tenant-context";
 
@@ -41,6 +42,13 @@ export interface NewPostJob {
   readonly tenantId: TenantId;
   readonly batchId: string;
   readonly productCode: string;
+  /**
+   * REQUIRED on the write path even though `PostJob` reads it as optional: the
+   * creator always holds the product it built the post from, and defaulting to
+   * `sheet` here would invent an origin for a post typed by hand. A caller that
+   * cannot say must not guess.
+   */
+  readonly productOrigin: ProductOrigin;
   readonly color: string;
   readonly channelId: string;
   readonly format: PostFormat;

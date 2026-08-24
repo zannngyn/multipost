@@ -1,4 +1,7 @@
+import { Token } from "@astryxdesign/core";
+
 import { BatchStatusBadge } from "@/ui/components/post/PostStatusBadge";
+import { MANUAL_PRODUCT_BADGE } from "@/ui/schemas/product-origin.schema";
 import {
   formatDateTime,
   formatDurationMs,
@@ -12,6 +15,10 @@ import {
  * Business rule 2: the product CODE and colour are identity, not caption
  * material — and stock/price have no field here at all. Rule 6: `partial` is
  * shown as its own outcome, never softened into "xong".
+ *
+ * Since onboarding phase 3 it also carries PROVENANCE: a batch built from a
+ * product somebody typed by hand says so, months later, without a trip to the
+ * database.
  */
 
 /**
@@ -54,6 +61,29 @@ export function BatchSummaryCard({ batch }: { batch: BatchStatusResponse }) {
           <dt className="text-muted-foreground">Mã sản phẩm:</dt>
           <dd className="font-medium">{batch.productCode}</dd>
         </div>
+        {/*
+          Onboarding phase 3 — WHERE this batch's product text came from, read
+          from the stamp on the job row rather than joined from `product` (by the
+          time somebody asks, that row may be gone). Its own line in the summary
+          because "bài này lấy dữ liệu từ đâu" is asked about a whole batch, and
+          asked long after the batch ran.
+
+          Nothing is drawn for a synced batch: that is the overwhelming majority,
+          and a badge on every one of them would be noise nobody reads.
+        */}
+        {batch.productOrigin === "manual" ? (
+          <div className="flex gap-2">
+            <dt className="text-muted-foreground">Nguồn dữ liệu:</dt>
+            <dd>
+              <Token
+                size="sm"
+                color="orange"
+                label={MANUAL_PRODUCT_BADGE}
+                description="Thông tin sản phẩm của lô này do người vận hành nhập tay ở màn Soạn bài, không lấy từ dữ liệu đã đồng bộ."
+              />
+            </dd>
+          </div>
+        ) : null}
         <div className="flex gap-2">
           <dt className="text-muted-foreground">Màu:</dt>
           <dd>{batch.color.trim().length > 0 ? batch.color : "Tất cả màu"}</dd>

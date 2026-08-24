@@ -1,11 +1,16 @@
+import { DEFAULT_STOCK_POLICY, type StockPolicy } from "@/core/domain/catalog-field-map";
 import { AppError, type ErrorCode } from "@/core/domain/errors";
 import { evaluateProductInventory, type InventoryDecision } from "@/core/domain/inventory";
 import { isSameColor, normalizeColorName, type MediaKind } from "@/core/domain/media-file-name";
+import { buildManualProduct, type ManualProductInput } from "@/core/domain/manual-product";
 import {
+  productOrigin,
   toPromptInput,
   type MediaAsset,
   type MediaOrigin,
+  type Product,
   type ProductContent,
+  type ProductOrigin,
 } from "@/core/domain/product";
 import { isTenantId } from "@/core/domain/tenant";
 import {
@@ -15,9 +20,14 @@ import {
   type VideoSpec,
   type VideoTarget,
 } from "@/core/domain/video-spec";
+import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
-import type { MediaRepo, ProductRepo } from "@/core/ports/product-repo";
+import type {
+  ManualProductSaveResult,
+  MediaRepo,
+  ProductRepo,
+} from "@/core/ports/product-repo";
 import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
 /**
@@ -75,6 +85,16 @@ export interface ComposePostInput {
    * Ignored for photo posts; defaults to DEFAULT_VIDEO_TARGET.
    */
   readonly videoTarget?: VideoTarget;
+  /**
+   * ONBOARDING PHASE 3 — the operator types the product instead of it coming
+   * from a synced catalog. Absent = today's behaviour (look the code up).
+   *
+   * It changes WHERE the product data comes from and nothing else: the stock
+   * gate, the media gather and the video gate below run in the same order, on
+   * the same rules. In particular the typed `stockRaw` goes through the very
+   * same decision table, so "nhập tay" is not a way past business rule 3.
+   */
+  readonly manualProduct?: ManualProductInput;
 }
 
 export interface ComposeBlock {
@@ -89,6 +109,12 @@ export interface ComposeResult {
   readonly tenantId: TenantId;
   readonly productCode: string;
   readonly channel: string;
+  /**
+   * Where this post's product text came from — `sheet` (synced catalog) or
+   * `manual` (typed here). On screen and in the logs, so nobody has to guess
+   * later why a post carried the description it carried.
+   */
+  readonly productOrigin: ProductOrigin;
   /** Caption-safe fields. Null whenever the post is blocked. */
   readonly content: ProductContent | null;
   /** Null when the product does not exist at all. */
@@ -116,6 +142,12 @@ export interface ComposePostDeps {
    * with a warning, and the worker performs the binding check before upload.
    */
   videoProbe?: VideoAssetProbe;
+  /**
+   * Per-tenant stock policy (onboarding phase 1). Optional so a caller that is
+   * not wired yet keeps the `numeric` behaviour — the SAFE default, which still
+   * checks stock. A tenant on `textual`/`disabled` needs this wired.
+   */
+  catalogConfig?: CatalogConfigRepo;
 }
 
 export function makeComposePost(deps: ComposePostDeps) {
@@ -162,12 +194,81 @@ export function makeComposePost(deps: ComposePostDeps) {
       });
     }
 
-    const log = deps.logger.child({ tenant_id: tenantId, product_code: productCode, channel });
-    const base = { tenantId, productCode, channel, media: [] as MediaAsset[], video: null };
+    const wantsManual = input?.manualProduct !== undefined && input?.manualProduct !== null;
+    const requestedOrigin: ProductOrigin = wantsManual ? "manual" : "sheet";
 
-    const product = await deps.products.findByCode(tenantId, productCode);
-    if (!product) {
-      log.warn("Compose blocked: product not found in sheet snapshot", {
+    const log = deps.logger.child({
+      tenant_id: tenantId,
+      product_code: productCode,
+      channel,
+      product_origin: requestedOrigin,
+    });
+    const base = {
+      tenantId,
+      productCode,
+      channel,
+      productOrigin: requestedOrigin,
+      media: [] as MediaAsset[],
+      video: null,
+    };
+
+    // --- 1. Product data: synced catalog OR typed by the operator -----------
+    // Business rule 1 is about ORDER, not about the source: whichever of the
+    // two produced this product, the stock gate below runs before any media
+    // work and nothing may jump over it.
+    const stored = await deps.products.findByCode(tenantId, productCode);
+    let product: Product;
+
+    if (wantsManual) {
+      // The real catalog always wins: silently letting typed data shadow a
+      // synced row would also let it shadow that row's stock.
+      if (stored && productOrigin(stored) === "sheet") {
+        log.warn("Compose blocked: manual product collides with a synced one", {
+          error_code: "INVALID_INPUT",
+          reason: "MANUAL_PRODUCT_CONFLICT",
+        });
+        return {
+          ...base,
+          content: null,
+          inventory: null,
+          availableColors: [],
+          warnings: [],
+          blocked: {
+            // PENDING(error-code): no MANUAL_PRODUCT_CONFLICT code exists yet
+            // (adding one means editing the HTTP status table another agent
+            // owns). `reason` carries the precise meaning.
+            code: "INVALID_INPUT",
+            reason: "MANUAL_PRODUCT_CONFLICT",
+            userMessage: `Mã ${productCode} đã có sẵn trong dữ liệu đồng bộ — dùng dữ liệu đã đồng bộ, hoặc nhập tay với một mã khác`,
+          },
+        };
+      }
+
+      // Throws INVALID_INPUT on a bad shape/extra key — a typed product must
+      // never become a hole in the caption whitelist.
+      product = buildManualProduct(productCode, input?.manualProduct);
+
+      // Fail fast, before the operator picks photos: without a writer, the
+      // publish step could not re-check this product's stock (rule 3 runs
+      // twice), and a post nothing can publish is worse than a refusal.
+      if (typeof deps.products.saveManual !== "function") {
+        log.error("Compose refused: manual products are not wired in this process", {
+          error_code: "INTERNAL",
+          reason: "MANUAL_PRODUCT_NOT_SUPPORTED",
+        });
+        throw new AppError("INTERNAL", {
+          message: "ProductRepo has no saveManual: manual products cannot be persisted",
+          userMessage:
+            "Hệ thống chưa bật chế độ nhập tay sản phẩm ở tiến trình này — báo quản trị viên.",
+          context: {
+            tenant_id: tenantId,
+            product_code: productCode,
+            reason: "MANUAL_PRODUCT_NOT_SUPPORTED",
+          },
+        });
+      }
+    } else if (!stored) {
+      log.warn("Compose blocked: product not found in the synced catalog", {
         error_code: "PRODUCT_NOT_FOUND",
       });
       return {
@@ -179,13 +280,21 @@ export function makeComposePost(deps: ComposePostDeps) {
         blocked: {
           code: "PRODUCT_NOT_FOUND",
           reason: "PRODUCT_NOT_FOUND",
-          userMessage: `Không tìm thấy mã ${productCode} trên Sheet — chưa đăng được`,
+          userMessage: `Không tìm thấy mã ${productCode} trong dữ liệu sản phẩm — đồng bộ lại bảng dữ liệu, hoặc nhập tay thông tin sản phẩm cho bài này`,
         },
       };
+    } else {
+      product = stored;
     }
 
-    // --- Stock gate BEFORE anything else (business rule 1) ------------------
-    const inventory = evaluateProductInventory(product);
+    // A stored row can itself be a manual one (typed earlier, reused today), so
+    // the answer comes from the product, not from what this call asked for.
+    const resolvedOrigin = productOrigin(product);
+    base.productOrigin = resolvedOrigin;
+
+    // --- 2. Stock gate BEFORE anything else (business rule 1) ---------------
+    const stockPolicy = await resolveStockPolicy(deps.catalogConfig, tenantId, log);
+    const inventory = evaluateProductInventory(product, stockPolicy);
     if (inventory.blocked) {
       log.warn("Compose blocked by the stock gate", {
         error_code: "OUT_OF_STOCK",
@@ -375,12 +484,38 @@ export function makeComposePost(deps: ComposePostDeps) {
       );
     }
 
+    // --- Manual product: persist it so the publish step can re-check it -----
+    // Last, and only once the post actually holds together: an operator who
+    // abandons a blocked compose must not leave a product row behind. The
+    // stock this row carries is the one the gate above judged, so the second
+    // check before publishing (rule 3) reads exactly the same values.
+    if (wantsManual) {
+      const verdict = await persistManualProduct(deps, tenantId, product, log);
+      if (verdict === "refused_synced") {
+        return {
+          ...base,
+          content: null,
+          inventory,
+          availableColors,
+          warnings,
+          blocked: {
+            code: "INVALID_INPUT",
+            reason: "MANUAL_PRODUCT_CONFLICT",
+            userMessage: `Mã ${productCode} vừa được đồng bộ từ bảng dữ liệu — dùng dữ liệu đã đồng bộ, hoặc nhập tay với một mã khác`,
+          },
+        };
+      }
+    }
+
     log.info("Compose ready", {
+      product_origin: resolvedOrigin,
       media_kind: kind,
       media_count: selected.length,
       cover_file: selected[0]?.fileName,
       stock: inventory.stock,
       inventory_status: inventory.status,
+      stock_policy_mode: inventory.policyMode,
+      stock_check_skipped: inventory.stockCheckSkipped,
       media_needing_review: needingReview,
       video_target: kind === "video" ? videoTarget : null,
       video_checked: videoSpec !== null,
@@ -400,6 +535,66 @@ export function makeComposePost(deps: ComposePostDeps) {
 }
 
 export type ComposePost = ReturnType<typeof makeComposePost>;
+
+/**
+ * Writes the typed product, or says the synced catalog claimed the code first.
+ *
+ * A storage failure is NOT downgraded to a warning: the publish step re-reads
+ * this row to check stock, so composing "successfully" without it would produce
+ * a post that dies later with "không tìm thấy mã" — the confusing failure this
+ * whole rung exists to avoid.
+ */
+async function persistManualProduct(
+  deps: ComposePostDeps,
+  tenantId: TenantId,
+  product: Product,
+  log: Logger,
+): Promise<ManualProductSaveResult> {
+  const save = deps.products.saveManual;
+  if (typeof save !== "function") {
+    // Guarded far above; kept so this helper cannot be misused into silence.
+    throw new AppError("INTERNAL", {
+      message: "ProductRepo has no saveManual: manual products cannot be persisted",
+      userMessage: "Hệ thống chưa bật chế độ nhập tay sản phẩm ở tiến trình này — báo quản trị viên.",
+      context: {
+        tenant_id: tenantId,
+        product_code: product.content.code,
+        reason: "MANUAL_PRODUCT_NOT_SUPPORTED",
+      },
+    });
+  }
+
+  let verdict: ManualProductSaveResult;
+  try {
+    verdict = await save.call(deps.products, tenantId, product);
+  } catch (error) {
+    const appError = AppError.from(error, "DB_ERROR", {
+      tenant_id: tenantId,
+      product_code: product.content.code,
+      reason: "MANUAL_PRODUCT_SAVE_FAILED",
+    });
+    log.error("Compose failed: the typed product could not be stored", {
+      ...appError.toLogObject(),
+      reason: "MANUAL_PRODUCT_SAVE_FAILED",
+    });
+    throw appError;
+  }
+
+  if (verdict === "refused_synced") {
+    log.warn("Manual product refused: the code now belongs to the synced catalog", {
+      error_code: "INVALID_INPUT",
+      reason: "MANUAL_PRODUCT_CONFLICT",
+    });
+    return verdict;
+  }
+
+  log.info("Manual product stored", {
+    reason: "MANUAL_PRODUCT_SAVED",
+    stock_raw: product.operational.stockRaw,
+    note_raw: product.operational.noteRaw,
+  });
+  return verdict;
+}
 
 // --- video gate -------------------------------------------------------------
 
@@ -666,4 +861,32 @@ function promoteFrontCover(selected: MediaAsset[]): MediaAsset[] {
   if (frontIndex <= 0) return selected;
   const front = selected[frontIndex];
   return [front, ...selected.filter((asset) => asset !== front)];
+}
+
+/**
+ * Reads the tenant's stock policy for one compose.
+ *
+ * No repo wired -> `numeric`: the default every tenant had before onboarding,
+ * and the safe one (stock IS checked). A FAILURE is rethrown, never downgraded:
+ * the repo only throws when the STORED policy cannot be parsed, and turning
+ * that into "compose anyway" is the silent fallback this feature must not have.
+ */
+async function resolveStockPolicy(
+  catalogConfig: CatalogConfigRepo | undefined,
+  tenantId: TenantId,
+  log: Logger,
+): Promise<StockPolicy> {
+  if (!catalogConfig) return DEFAULT_STOCK_POLICY;
+
+  try {
+    return await catalogConfig.findStockPolicy(tenantId);
+  } catch (error) {
+    const appError = AppError.from(error, "SYNC_FAILED", { tenant_id: tenantId });
+    log.error("Compose stopped: the tenant stock policy could not be read", {
+      error_code: appError.code,
+      err: appError,
+      ...appError.toLogObject(),
+    });
+    throw appError;
+  }
 }

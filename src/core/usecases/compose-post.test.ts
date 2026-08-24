@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { MYSP_FIELD_MAP } from "@/core/domain/catalog-field-map";
 import { AppError } from "@/core/domain/errors";
 import type { MediaAsset, Product } from "@/core/domain/product";
+import type { TenantId } from "@/core/domain/tenant-context";
 import type { VideoSpec } from "@/core/domain/video-spec";
 import type { Logger } from "@/core/ports/infra";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
-import type { MediaRepo, ProductRepo } from "@/core/ports/product-repo";
+import type {
+  ManualProductSaveResult,
+  MediaRepo,
+  ProductRepo,
+} from "@/core/ports/product-repo";
 
-import { makeComposePost, VIDEO_NOT_CHECKED_WARNING } from "./compose-post";
+import { makeComposePost, VIDEO_NOT_CHECKED_WARNING, type ComposePostDeps } from "./compose-post";
 import { testTenantId } from "@/core/domain/tenant-context.testing";
 
 const TENANT = testTenantId("00000000-0000-0000-0000-000000000001");
@@ -754,5 +760,316 @@ describe("composePost — media source", () => {
     });
 
     expect(result.warnings.some((line) => line.includes("tối thiểu"))).toBe(false);
+  });
+});
+
+
+// --- Onboarding phase 3: the product typed by the operator -------------------
+
+/**
+ * Harness with a manual-capable ProductRepo. `saveManual` is recorded so the
+ * tests can assert BOTH that the row is persisted (the publish step re-checks
+ * stock from the database) and that it is only persisted for a post that made
+ * it through every gate.
+ */
+function manualHarness(
+  options: {
+    stored?: Product | null;
+    media?: MediaAsset[];
+    saveResult?: ManualProductSaveResult;
+    withSaveManual?: boolean;
+    catalogConfig?: ComposePostDeps["catalogConfig"];
+  } = {},
+) {
+  const calls: { findByCode: number; saveManual: Product[]; listMedia: number } = {
+    findByCode: 0,
+    saveManual: [],
+    listMedia: 0,
+  };
+
+  const products: ProductRepo = {
+    findByCode: async () => {
+      calls.findByCode += 1;
+      return options.stored ?? null;
+    },
+    upsertMany: async () => 0,
+    deleteStale: async () => 0,
+    countAll: async () => 0,
+    ...(options.withSaveManual === false
+      ? {}
+      : {
+          saveManual: async (_tenantId: TenantId, product: Product) => {
+            calls.saveManual.push(product);
+            return options.saveResult ?? "saved";
+          },
+        }),
+  };
+
+  const media: MediaRepo = {
+    listByProductCode: async () => {
+      calls.listMedia += 1;
+      return options.media ?? numbered([1, 2, 3, 4, 5]);
+    },
+    upsertMany: async () => 0,
+    deleteStale: async () => 0,
+    ...UPLOAD_STUBS,
+  };
+
+  return {
+    calls,
+    compose: makeComposePost({
+      products,
+      media,
+      logger: makeLogger(),
+      ...(options.catalogConfig ? { catalogConfig: options.catalogConfig } : {}),
+    }),
+  };
+}
+
+const TYPED = {
+  name: "Váy Giannal",
+  description: "Váy dáng xoè",
+  category: "Váy",
+  season: "Xuân hè 2026",
+  stockRaw: "12",
+};
+
+describe("composePost — manual product: the stock gate is NOT optional", () => {
+  it.each([
+    ["no stock typed at all", {}, "STOCK_EMPTY"],
+    ["stock 0", { stockRaw: "0" }, "STOCK_ZERO"],
+    ["stock that is not a number", { stockRaw: "còn ít" }, "STOCK_NOT_A_NUMBER"],
+    ["a HẾT HÀNG note", { stockRaw: "50", noteRaw: "HẾT HÀNG" }, "NOTE_SOLD_OUT"],
+  ])("blocks a typed product with %s", async (_label, overrides, reason) => {
+    const { compose, calls } = manualHarness();
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      manualProduct: { name: "Váy Giannal", ...overrides },
+    });
+
+    expect(result.blocked).toMatchObject({ code: "OUT_OF_STOCK", reason });
+    expect(result.content).toBeNull();
+    expect(result.media).toEqual([]);
+    // Order is the invariant (business rule 1): blocked BEFORE any media work.
+    expect(calls.listMedia).toBe(0);
+    // And a blocked compose stores nothing — no row for a post that cannot go.
+    expect(calls.saveManual).toEqual([]);
+  });
+
+  it("blocks a typed word the tenant never declared under a textual policy", async () => {
+    const { compose } = manualHarness({
+      catalogConfig: {
+        findCatalogConfig: async () => null,
+        findCatalogSource: async () => null,
+        findFieldMap: async () => MYSP_FIELD_MAP,
+        findStockPolicy: async () => ({
+          mode: "textual",
+          inStockValues: ["còn hàng"],
+          outOfStockValues: ["hết hàng"],
+        }),
+        saveCatalogSource: async () => ({ previous: null }),
+      },
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      manualProduct: { name: "Váy", stockRaw: "sắp về" },
+    });
+
+    expect(result.blocked).toMatchObject({ code: "OUT_OF_STOCK", reason: "STOCK_TEXT_UNKNOWN" });
+  });
+
+  it("posts without a number ONLY through the tenant's written disabled policy", async () => {
+    const { compose, calls } = manualHarness({
+      catalogConfig: {
+        findCatalogConfig: async () => null,
+        findCatalogSource: async () => null,
+        findFieldMap: async () => MYSP_FIELD_MAP,
+        findStockPolicy: async () => ({
+          mode: "disabled",
+          reason: "Đơn vị không theo dõi tồn kho trên bảng tính",
+        }),
+        saveCatalogSource: async () => ({ previous: null }),
+      },
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      manualProduct: { name: "Váy Giannal" },
+    });
+
+    expect(result.blocked).toBeNull();
+    // The flag says nobody checked — "in_stock" here does not mean còn hàng.
+    expect(result.inventory).toMatchObject({ stockCheckSkipped: true, policyMode: "disabled" });
+    expect(calls.saveManual).toHaveLength(1);
+  });
+
+  it("warns on a low typed stock instead of hiding it", async () => {
+    const { compose } = manualHarness();
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      manualProduct: { name: "Váy Giannal", stockRaw: "2" },
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.inventory).toMatchObject({ status: "low_stock", stock: 2 });
+    expect(result.warnings.some((line) => line.includes("Tồn thấp 2"))).toBe(true);
+  });
+});
+
+describe("composePost — manual product: provenance and persistence", () => {
+  it("composes a post from typed data and marks it as manual", async () => {
+    const { compose, calls } = manualHarness();
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "mgkvx6310",
+      channel: CHANNEL,
+      manualProduct: TYPED,
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.productOrigin).toBe("manual");
+    expect(result.content).toEqual({
+      code: "MGKVX6310",
+      name: "Váy Giannal",
+      description: "Váy dáng xoè",
+      category: "Váy",
+      season: "Xuân hè 2026",
+    });
+    expect(result.media).toHaveLength(5);
+
+    // Persisted with the SAME stock the gate judged, so the publish recheck
+    // (business rule 3, second run) reads exactly these values.
+    expect(calls.saveManual).toHaveLength(1);
+    expect(calls.saveManual[0]).toMatchObject({
+      origin: "manual",
+      operational: { stockRaw: "12" },
+      content: { code: "MGKVX6310" },
+    });
+  });
+
+  it("reports a synced product as origin 'sheet'", async () => {
+    const { compose } = manualHarness({ stored: product() });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+    });
+
+    expect(result.productOrigin).toBe("sheet");
+  });
+
+  it("reuses a product typed earlier without asking for it again", async () => {
+    const stored: Product = {
+      content: {
+        code: "MGKVX6310",
+        name: "Váy Giannal",
+        description: null,
+        category: null,
+        season: null,
+      },
+      operational: { stockRaw: "8", noteRaw: "", colorsRaw: "" },
+      hasConflict: false,
+      sourceRows: [],
+      origin: "manual",
+    };
+    const { compose, calls } = manualHarness({ stored });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.productOrigin).toBe("manual");
+    // Nothing typed this time, so nothing is written.
+    expect(calls.saveManual).toEqual([]);
+  });
+
+  it("refuses to let typed data shadow a synced code", async () => {
+    const { compose, calls } = manualHarness({ stored: product() });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      manualProduct: { name: "Tên khác", stockRaw: "999" },
+    });
+
+    expect(result.blocked).toMatchObject({ reason: "MANUAL_PRODUCT_CONFLICT" });
+    expect(calls.saveManual).toEqual([]);
+    expect(calls.listMedia).toBe(0);
+  });
+
+  it("blocks when a sync claimed the code while the operator was composing", async () => {
+    const { compose } = manualHarness({ saveResult: "refused_synced" });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      manualProduct: TYPED,
+    });
+
+    expect(result.blocked).toMatchObject({ reason: "MANUAL_PRODUCT_CONFLICT" });
+    expect(result.content).toBeNull();
+  });
+
+  it("throws INVALID_INPUT on a typed field the whitelist never approved", async () => {
+    const { compose, calls } = manualHarness();
+
+    await expect(
+      compose({
+        tenantId: TENANT,
+        productCode: "MGKVX6310",
+        channel: CHANNEL,
+        manualProduct: { ...TYPED, price: "1.450.000" } as never,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(calls.saveManual).toEqual([]);
+  });
+
+  it("refuses loudly when the process cannot persist a manual product", async () => {
+    const { compose, calls } = manualHarness({ withSaveManual: false });
+
+    await expect(
+      compose({
+        tenantId: TENANT,
+        productCode: "MGKVX6310",
+        channel: CHANNEL,
+        manualProduct: TYPED,
+      }),
+    ).rejects.toMatchObject({
+      code: "INTERNAL",
+      context: { reason: "MANUAL_PRODUCT_NOT_SUPPORTED" },
+    });
+    expect(calls.listMedia).toBe(0);
+  });
+
+  it("still blocks on missing media — the typed product skips no gate", async () => {
+    const { compose, calls } = manualHarness({ media: [] });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "MGKVX6310",
+      channel: CHANNEL,
+      manualProduct: TYPED,
+    });
+
+    expect(result.blocked).toMatchObject({ code: "MEDIA_NOT_FOUND" });
+    expect(calls.saveManual).toEqual([]);
   });
 });

@@ -45,6 +45,15 @@ const GATED_SURFACES = [
   // panels that write (see PROP_FED below).
   { screen: "Kênh", file: "channels/ChannelsHub.tsx", writes: "bật/tắt, gỡ, nhập token" },
   { screen: "Đồng bộ", file: "sync/SyncScreen.tsx", writes: "chạy đồng bộ" },
+  // Onboarding phase 1: saving a field map rewrites how the WHOLE catalog is
+  // read, and turning the stock gate off suspends business rule 3 for the
+  // tenant. Neither may be offered to somebody reading over the owner's
+  // shoulder in a support session.
+  {
+    screen: "Kết nối dữ liệu",
+    file: "onboarding/DataMappingScreen.tsx",
+    writes: "lưu ánh xạ cột + chế độ kiểm tồn (bảng nhận qua prop)",
+  },
 ] as const;
 
 /**
@@ -64,6 +73,11 @@ const PROP_FED_TABLES = [
     component: "ChannelConnectPanel",
     file: "channels/ChannelConnectPanel.tsx",
     token: "areWritesBlocked",
+  },
+  {
+    component: "FieldMapForm",
+    file: "onboarding/FieldMapForm.tsx",
+    token: "readOnlyReason",
   },
 ] as const;
 
@@ -93,8 +107,8 @@ describe("support mode: every write surface consults the read-only reason", () =
 });
 
 describe("the sweep's scope is written down", () => {
-  it("covers the six screens of the ticket plus the two already done", () => {
-    expect(GATED_SURFACES).toHaveLength(8);
+  it("covers the six screens of the ticket, the two already done, and onboarding", () => {
+    expect(GATED_SURFACES).toHaveLength(9);
     // Soạn bài is deliberately absent: another agent is rebuilding
     // `components/compose/**` and this sweep must not touch it.
     expect(GATED_SURFACES.map((surface) => surface.file).join(" ")).not.toContain("compose/");

@@ -1,3 +1,4 @@
+import type { CatalogRow, CatalogSnapshot } from "@/core/domain/catalog-snapshot";
 import type { TenantId } from "@/core/domain/tenant-context";
 /**
  * Google Sheets port (E2). Core declares the need; adapters/google implements it.
@@ -13,20 +14,16 @@ import type { TenantId } from "@/core/domain/tenant-context";
  *   `spreadsheet_id` + `sheet_name` in the context.
  */
 
-export interface SheetRow {
-  /** 1-based row number in the spreadsheet (the header is row 1). */
-  readonly rowNumber: number;
-  /** Column name -> trimmed cell text. Missing cells are absent, not null. */
-  readonly values: Readonly<Record<string, string>>;
-}
-
-export interface SheetSnapshot {
-  /** Header names in sheet order, blanks removed. */
-  readonly columns: readonly string[];
-  /** Headers that appeared more than once — reported, never guessed. */
-  readonly duplicateColumns: readonly string[];
-  readonly rows: readonly SheetRow[];
-}
+/**
+ * Aliases of the format-agnostic snapshot types (core/domain/catalog-snapshot).
+ * They are the SAME types, not copies: since onboarding phase 3 a snapshot can
+ * also come from an uploaded CSV, and the field map / parser must not be able
+ * to tell the two apart. Kept under these names so every existing import keeps
+ * working — a sheet-specific alias is still the clearest name at a call site
+ * that really does read a sheet.
+ */
+export type SheetRow = CatalogRow;
+export type SheetSnapshot = CatalogSnapshot;
 
 export interface ReadSheetInput {
   readonly tenantId: TenantId;

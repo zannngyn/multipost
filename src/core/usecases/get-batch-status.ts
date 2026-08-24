@@ -1,6 +1,7 @@
 import { AppError } from "@/core/domain/errors";
 import {
   postJobOperatorMessage,
+  postJobProductOrigin,
   type PostBatchStatus,
   type PostFormat,
   type PostJobStatus,
@@ -13,6 +14,7 @@ import {
   type PostJobProgress,
   type PostJobStage,
 } from "@/core/domain/post-job-progress";
+import type { ProductOrigin } from "@/core/domain/product";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Logger } from "@/core/ports/infra";
 import type { JobProgressStore } from "@/core/ports/job-progress";
@@ -55,6 +57,13 @@ export interface BatchChannelStatus {
   readonly channelId: string;
   readonly postJobId: string;
   readonly status: PostJobStatus;
+  /**
+   * Where the product text of THIS post came from, as stamped when the job was
+   * created. On the line, not only on the batch: it is the answer to "bài này
+   * lấy dữ liệu từ đâu" and it must be readable next to the row that failed,
+   * without a trip to the database.
+   */
+  readonly productOrigin: ProductOrigin;
   readonly attemptCount: number;
   readonly publishedPostId: string | null;
   /** Link to the live post — the operator's proof (brief §6). */
@@ -96,6 +105,12 @@ export interface GetBatchStatusResult {
   readonly tenantId: TenantId;
   readonly batchId: string;
   readonly productCode: string;
+  /**
+   * Origin of the whole batch: every job of a batch is built from the same
+   * product, so this is the first job's stamp. Empty batch = `sheet`, the same
+   * historical default the domain helper applies.
+   */
+  readonly productOrigin: ProductOrigin;
   readonly color: string;
   readonly format: PostFormat;
   readonly status: PostBatchStatus;
@@ -191,6 +206,7 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
       channelId: job.channelId,
       postJobId: job.id,
       status: job.status,
+      productOrigin: postJobProductOrigin(job),
       attemptCount: job.attemptCount,
       publishedPostId: job.publishedPostId,
       publishedUrl: job.publishedUrl,
@@ -206,6 +222,7 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
       tenantId,
       batchId: summary.batchId,
       productCode: summary.productCode,
+      productOrigin: postJobProductOrigin(first),
       color: first?.color ?? "",
       format: first?.format ?? "image_post",
       status: summary.status,
@@ -224,12 +241,14 @@ export function makeGetBatchStatus(deps: GetBatchStatusDeps) {
       tenant_id: tenantId,
       batch_id: summary.batchId,
       product_code: summary.productCode,
+      product_origin: result.productOrigin,
       batch_status: summary.status,
       totals,
       // Enough to answer "why is this post not live?" straight from the log.
       channels: channels.map((channel) => ({
         channel: channel.channelId,
         status: channel.status,
+        product_origin: channel.productOrigin,
         attempts: channel.attemptCount,
         error_code: channel.lastErrorCode,
         published_post_id: channel.publishedPostId,

@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import type { PostFormat } from "./post-batch.schema";
+// `ProductOrigin` lives in its own leaf module, not here: `post-batch.schema`
+// needs it too and already points at this file, so owning it here would be an
+// import cycle (see product-origin.schema for the full reasoning).
+import { ProductOriginSchema } from "./product-origin.schema";
 
 /**
  * Contracts of the "Soạn bài" wizard (E3 compose + E4 captions).
@@ -43,7 +47,8 @@ export const MEDIA_SOURCE_LABELS: Record<MediaSource, string> = {
 
 export const MEDIA_SOURCE_HINTS: Record<MediaSource, string> = {
   drive: "Hệ thống tự tìm ảnh/video trên Drive theo mã sản phẩm và màu.",
-  upload: "Dùng khi file chưa có trên Drive, hoặc muốn dùng file khác. Vẫn cần mã sản phẩm để tra Sheet và viết caption.",
+  upload:
+    "Dùng khi file chưa có trên Drive, hoặc muốn dùng file khác. Vẫn cần mã sản phẩm để tra dữ liệu sản phẩm và viết caption.",
 };
 
 /** Mirrors MAX_UPLOADS_PER_POST / MAX_UPLOAD_BYTES in core/domain/uploaded-media. */
@@ -189,6 +194,16 @@ export const InventoryDecisionSchema = z.object({
   reason: z.string().nullable(),
   stock: z.number().nullable(),
   operatorMessage: z.string().nullable(),
+  /**
+   * TRUE means NOBODY checked the stock (`stockPolicy.mode = "disabled"`).
+   * `status` stays `"in_stock"` in that mode by design, so reading `status`
+   * alone would print "Còn hàng" for a code nobody counted. Same contract, same
+   * single formatter as the catalog screen — see
+   * `ui/components/inventory/stock-check.ts`.
+   */
+  stockCheckSkipped: z.boolean(),
+  /** The reason the tenant wrote when turning the check off. Null otherwise. */
+  stockCheckSkippedReason: z.string().nullable(),
 });
 export type InventoryDecision = z.infer<typeof InventoryDecisionSchema>;
 
@@ -225,6 +240,16 @@ export const ComposeResponseSchema = z.object({
   tenantId: z.string().min(1),
   productCode: z.string().min(1),
   channel: z.string().min(1),
+  /**
+   * Where this post's product text came from (see `product-origin.schema`).
+   *
+   * Required, NOT defaulted — unlike the same field on the tracking payloads.
+   * `composePost` puts one on every answer (it is part of `base`, so even a
+   * blocked compose carries it) and the browser is served by the very server
+   * that produced it, so there is no version skew to tolerate here. A default
+   * would quietly relabel a typed product as synced.
+   */
+  productOrigin: ProductOriginSchema,
   content: ProductContentSchema,
   inventory: InventoryDecisionSchema.nullable(),
   media: z.array(MediaAssetSchema).min(1),
@@ -234,12 +259,6 @@ export const ComposeResponseSchema = z.object({
   video: ComposeVideoSchema.nullable(),
 });
 export type ComposeResponse = z.infer<typeof ComposeResponseSchema>;
-
-export const INVENTORY_STATUS_LABELS: Record<InventoryDecision["status"], string> = {
-  in_stock: "Còn hàng",
-  low_stock: "Sắp hết",
-  blocked: "Bị chặn",
-};
 
 // --- Reading a video spec out loud (operator area only) ---------------------
 

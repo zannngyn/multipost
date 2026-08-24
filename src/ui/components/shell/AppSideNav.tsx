@@ -24,6 +24,7 @@ import {
   Radio,
   ScrollText,
   Sparkles,
+  TableProperties,
   Users,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -59,6 +60,7 @@ export const NAV_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> =
   "/posts": ScrollText,
   "/products": ListChecks,
   "/sync": FolderSync,
+  "/data-mapping": TableProperties,
   "/channels": Radio,
   "/prompts": Sparkles,
   "/members": Users,

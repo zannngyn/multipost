@@ -43,7 +43,7 @@ describe("isNavItemActive", () => {
 });
 
 describe("NAV_SECTIONS", () => {
-  it("has the wave-1 IA: 5 visible groups, 10 destinations, platform gated", () => {
+  it("has the wave-1 IA plus onboarding: 5 visible groups, 11 destinations, platform gated", () => {
     const sections = visibleNavSections({ hasPlatformRole: true });
     expect(sections.map((s) => s.title)).toEqual([
       "Bàn làm việc",
@@ -60,6 +60,10 @@ describe("NAV_SECTIONS", () => {
       "/posts",
       "/products",
       "/sync",
+      // Onboarding phase 1: teaching MYSP the shape of a customer's own
+      // spreadsheet is a "Dữ liệu" job, and it is a destination of its own
+      // rather than a tab of /sync — a salesperson opens it during a call.
+      "/data-mapping",
       "/channels",
       "/prompts",
       "/members",

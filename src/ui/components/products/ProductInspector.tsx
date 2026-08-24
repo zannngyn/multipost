@@ -15,13 +15,14 @@ import {
 } from "@astryxdesign/core";
 import { useRouter } from "next/navigation";
 
+import { StockCheckSkippedBanner } from "@/ui/components/inventory/StockCheckSkippedBanner";
+import { stockLabel } from "@/ui/components/inventory/stock-check";
 import type {
   InspectorRecoveryAction,
   ProductInspectorState,
 } from "@/ui/components/products/product-inspector-state";
 import { productStatus } from "@/ui/components/products/product-status";
 import {
-  INVENTORY_STATUS_LABELS,
   formatCount,
   formatMediaCounts,
   type CatalogProduct,
@@ -135,6 +136,7 @@ export function ProductInspector({
   const { product } = state;
   const status = productStatus(product);
   const { inventory } = product;
+  const stock = stockLabel(inventory);
 
   // The domain often writes the SAME sentence into both fields ("… đã hết hàng
   // — không đăng"). The block banner below is the louder of the two, so the
@@ -165,14 +167,25 @@ export function ProductInspector({
       >
         <MetadataListItem label="Chủng loại">{product.category ?? "—"}</MetadataListItem>
         <MetadataListItem label="Mùa vụ">{product.season ?? "—"}</MetadataListItem>
+        {/* `stockLabel` reads `stockCheckSkipped` BEFORE `status`: a tenant with
+            the stock gate off keeps `status: "in_stock"`, and printing "Còn
+            hàng" for a code nobody counted is a business-rule failure, not a
+            wording one. The raw number stays visible next to it — it is what is
+            written on the Sheet, and the label says what it is worth. */}
         <MetadataListItem label="Tồn kho">
-          {INVENTORY_STATUS_LABELS[inventory.status]}
+          {stock.label}
           {inventory.stock !== null ? ` · ${formatCount(inventory.stock)}` : ""}
         </MetadataListItem>
         <MetadataListItem label="Ảnh / video">
           {formatMediaCounts(product.mediaImageCount, product.mediaVideoCount)}
         </MetadataListItem>
       </MetadataList>
+
+      {/* Above the numbers, not under them: an operator who reads "62" first has
+          already drawn the wrong conclusion. */}
+      {stock.isSkipped ? (
+        <StockCheckSkippedBanner reason={inventory.stockCheckSkippedReason} />
+      ) : null}
 
       {inventory.stock === null ? (
         <Text type="supporting" color="secondary">

@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { makeFakeLogger } from "@/core/ai/testing";
+import {
+  DEFAULT_STOCK_POLICY,
+  makeFieldMap,
+  MYSP_FIELD_MAP,
+  type CatalogFieldMap,
+} from "@/core/domain/catalog-field-map";
 import { AppError } from "@/core/domain/errors";
+import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { ContentEngine, ContentGenerationRequest } from "@/core/ports/content-engine";
 import { makeGenerateCaptions, type GenerateCaptionsInput } from "@/core/usecases/generate-captions";
 import { testTenantId } from "@/core/domain/tenant-context.testing";
@@ -275,5 +282,113 @@ describe("generateCaptions — happy path", () => {
 
     expect(engine.requests[0].task).toBe("facebook_content");
     expect(JSON.stringify(engine.requests[0])).not.toContain("gemini");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-tenant column mapping (onboarding phase 1)
+// ---------------------------------------------------------------------------
+
+/** Config repo answering only the hot-path read this usecase performs. */
+function configRepo(answer: CatalogFieldMap | Error): CatalogConfigRepo & { calls: number } {
+  const repo = {
+    calls: 0,
+    findCatalogConfig: async () => null,
+    findCatalogSource: async () => null,
+    findStockPolicy: async () => DEFAULT_STOCK_POLICY,
+    findFieldMap: async () => {
+      repo.calls += 1;
+      if (answer instanceof Error) throw answer;
+      return answer;
+    },
+    saveCatalogSource: async () => ({ previous: null }),
+  };
+  return repo as CatalogConfigRepo & { calls: number };
+}
+
+const outsideMap = makeFieldMap({
+  code: "SKU",
+  name: "Tên hàng",
+  description: "Chi tiết",
+  category: "Nhóm hàng",
+  season: "Season",
+  stock: "Số lượng",
+});
+
+describe("generateCaptions — tenant field map", () => {
+  it("sends no map when no config repo is wired — stage 3 keeps the preset", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+    await makeGenerateCaptions({ contentEngine: engine, logger: makeFakeLogger() })(makeInput());
+
+    expect(engine.requests[0].fieldMap).toBeUndefined();
+    expect(engine.requests).toHaveLength(2);
+  });
+
+  it("forwards the tenant's own map to every channel", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+    const repo = configRepo(outsideMap);
+    await makeGenerateCaptions({
+      contentEngine: engine,
+      logger: makeFakeLogger(),
+      catalogConfig: repo,
+    })(makeInput());
+
+    expect(engine.requests.map((request) => request.fieldMap)).toEqual([outsideMap, outsideMap]);
+  });
+
+  it("reads the map ONCE per call, not once per channel", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+    const repo = configRepo(outsideMap);
+    await makeGenerateCaptions({
+      contentEngine: engine,
+      logger: makeFakeLogger(),
+      catalogConfig: repo,
+    })(makeInput());
+
+    expect(repo.calls).toBe(1);
+  });
+
+  it("forwards the preset a tenant without an integration row gets back", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+    await makeGenerateCaptions({
+      contentEngine: engine,
+      logger: makeFakeLogger(),
+      catalogConfig: configRepo(MYSP_FIELD_MAP),
+    })(makeInput());
+
+    expect(engine.requests[0].fieldMap).toEqual(MYSP_FIELD_MAP);
+  });
+
+  it("stops the whole run when the STORED map is unusable — no silent preset", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+    const logger = makeFakeLogger();
+    const broken = new AppError("SYNC_FAILED", {
+      message: "tenant_integration.config has an invalid fieldMap",
+      context: { reason: "MAPPING_INVALID" },
+    });
+
+    await expect(
+      makeGenerateCaptions({ contentEngine: engine, logger, catalogConfig: configRepo(broken) })(
+        makeInput(),
+      ),
+    ).rejects.toMatchObject({ code: "SYNC_FAILED", context: { reason: "MAPPING_INVALID" } });
+
+    // Not one token spent, and the reason is in the log with tenant context.
+    expect(engine.requests).toHaveLength(0);
+    const errors = logger.entries.filter((entry) => entry.level === "error");
+    expect(errors.map((entry) => entry.context?.error_code)).toContain("SYNC_FAILED");
+    expect(errors[0].context?.tenant_id).toBe("tenant-1");
+  });
+
+  it("wraps a non-AppError repo failure instead of swallowing it", async () => {
+    const engine = stubEngine(async () => okResult("gen-1"));
+    await expect(
+      makeGenerateCaptions({
+        contentEngine: engine,
+        logger: makeFakeLogger(),
+        catalogConfig: configRepo(new Error("connection terminated")),
+      })(makeInput()),
+    ).rejects.toMatchObject({ code: "SYNC_FAILED" });
+    expect(engine.requests).toHaveLength(0);
   });
 });

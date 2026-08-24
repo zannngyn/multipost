@@ -24,6 +24,7 @@ import {
   POST_JOB_STATUSES,
   postJobDuplicateKey,
   postJobOperatorMessage,
+  postJobProductOrigin,
   postJobQueueId,
   PUBLISH_UNCONFIRMED_ERROR_CODE,
   SCHEDULE_UNCONFIRMED_ERROR_CODE,
@@ -789,5 +790,27 @@ describe("mayHoldUnconfirmedScheduledPost / canOperatorRetryPostJob", () => {
     "published",
   ] as PostJobStatus[])("refuses %s", (status) => {
     expect(canOperatorRetryPostJob(makeJob({ status }))).toBe(false);
+  });
+});
+
+/**
+ * Onboarding phase 3. The default is a historical fact, not a shrug: no post
+ * could be built from typed data before the feature existed, and the column is
+ * NOT NULL DEFAULT 'sheet', so an absent value only ever means "old row".
+ */
+describe("postJobProductOrigin", () => {
+  it("answers sheet for a job with no stamp, and for no job at all", () => {
+    expect(postJobProductOrigin(makeJob())).toBe("sheet");
+    expect(postJobProductOrigin(null)).toBe("sheet");
+    expect(postJobProductOrigin(undefined)).toBe("sheet");
+  });
+
+  it("answers manual ONLY for the exact stamp", () => {
+    expect(postJobProductOrigin(makeJob({ productOrigin: "manual" }))).toBe("manual");
+    expect(postJobProductOrigin(makeJob({ productOrigin: "sheet" }))).toBe("sheet");
+    // Anything the enum does not know is not silently promoted to "manual".
+    expect(
+      postJobProductOrigin({ productOrigin: "csv" as unknown as "manual" }),
+    ).toBe("sheet");
   });
 });

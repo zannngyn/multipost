@@ -5,6 +5,7 @@
  */
 
 import type { CaptionContent, CaptionInput, CaptionCoverImage } from "@/core/domain/caption";
+import type { CatalogFieldMap } from "@/core/domain/catalog-field-map";
 import type { AIProviderName, AITask, AITier } from "@/core/ports/ai";
 import type { TenantId } from "@/core/domain/tenant-context";
 import type { CaptionTone } from "@/shared/caption-tone";
@@ -33,6 +34,12 @@ export interface ContentGenerationRequest {
   task: AITask;
   /** Whitelisted product facts only — the type makes leaking impossible. */
   product: CaptionInput;
+  /**
+   * The tenant's sheet headers, for validation stage 3 (claim grounding + the
+   * operator messages). Absent = the MYSP preset, i.e. today's behaviour.
+   * It is NOT prompt data: no column name is rendered into a prompt from here.
+   */
+  fieldMap?: CatalogFieldMap;
   platform: ContentPlatform;
   contentType: ContentType;
   vision: VisionInput;
