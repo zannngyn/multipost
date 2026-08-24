@@ -92,10 +92,16 @@ export function FirstRunStepRow({ step }: { step: StepView }) {
               BƯỚC {ordinalFormatted}
             </span>
 
-            {step.isOptional ? (
-              <Eyebrow className="text-[10px] text-muted-foreground">Tùy chọn</Eyebrow>
+            {/* Three labels, not two. "Đăng bài đầu tiên" is neither optional
+                nor one of the five the header counts — calling it "Bắt buộc"
+                beside "x/5 bước bắt buộc" says two different things about the
+                same row. */}
+            {step.isGoal ? (
+              <Eyebrow className="text-primary text-[10px]">Đích</Eyebrow>
+            ) : step.isOptional ? (
+              <Eyebrow className="text-muted-foreground text-[10px]">Tùy chọn</Eyebrow>
             ) : (
-              <Eyebrow className="text-[10px] text-foreground-subtle">Bắt buộc</Eyebrow>
+              <Eyebrow className="text-foreground-subtle text-[10px]">Bắt buộc</Eyebrow>
             )}
           </Stack>
 

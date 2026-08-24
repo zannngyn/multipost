@@ -28,6 +28,12 @@ export interface SetupStepPresentation {
   readonly requires: readonly SetupStepId[];
   /** Shown when `requires` is not satisfied. Null when nothing can lock it. */
   readonly lockedReason: string | null;
+  /**
+   * The goal the other five unlock — true for `firstPost` alone. It is NOT
+   * counted by `requiredCount`, so it must not wear the "Bắt buộc" label the
+   * other rows do (see `StepView.isGoal`).
+   */
+  readonly isGoal?: boolean;
 }
 
 export const SETUP_STEP_PRESENTATION: readonly SetupStepPresentation[] = [
@@ -90,6 +96,7 @@ export const SETUP_STEP_PRESENTATION: readonly SetupStepPresentation[] = [
     href: "/compose",
     requires: ["source", "facebook"],
     lockedReason: "Cần nối Google Sheet sản phẩm và kết nối trang Facebook trước.",
+    isGoal: true,
   },
 ];
 
@@ -119,6 +126,7 @@ export function buildStepViews(progress: SetupProgress): readonly StepView[] {
       state,
       detail: isDone ? "Đã xong" : (reason ?? `${step.minutes} ph`),
       isOptional: false,
+      isGoal: step.isGoal ?? false,
       action: {
         label: isDone ? "Xem lại" : "Mở bước này",
         onAction: () => {},

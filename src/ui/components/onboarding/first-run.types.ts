@@ -35,6 +35,16 @@ export interface StepView {
   /** Câu phụ đổi theo state: "Đã nối shop@gmail.com" · lý do khoá · câu lỗi. */
   readonly detail: string | null;
   readonly isOptional: boolean;
+  /**
+   * The GOAL the setup steps unlock, not a setup step itself — true for
+   * "Đăng bài đầu tiên" and nothing else.
+   *
+   * It exists because `isOptional` cannot express it and neither value is
+   * honest: the row is not optional, but it is not one of the five counted by
+   * "x/5 bước bắt buộc" either. Labelling it "Bắt buộc" beside a header that
+   * excludes it is the same two-denominators contradiction the dock had.
+   */
+  readonly isGoal: boolean;
   readonly action: StepAction | null;
 }
 

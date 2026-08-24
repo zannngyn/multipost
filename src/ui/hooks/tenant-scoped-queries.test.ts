@@ -33,10 +33,6 @@ const EXEMPT = new Map<string, string>([
     "useMe.ts",
     "It IS the source: useActiveTenant reads its result, so it cannot wait on itself.",
   ],
-  [
-    "useSetupProgress.ts",
-    "Contains a useQuery WITH enabled plus a plain invalidation helper; the helper has no query to gate.",
-  ],
 ]);
 
 function hookFiles(): readonly string[] {

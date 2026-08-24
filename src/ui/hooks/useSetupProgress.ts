@@ -1,7 +1,6 @@
 "use client";
 
-import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { useActiveTenant } from "@/ui/hooks/useMe";
 import type { SetupProgress } from "@/ui/schemas/setup-progress.schema";
@@ -37,18 +36,20 @@ export function useSetupProgress(): UseQueryResult<SetupProgress, ApiError> {
 }
 
 /**
- * Re-read the six flags after an action that could have finished a step.
+ * NOTE for whoever finishes a setup step from another screen.
  *
- * Setup state is changed from screens that know nothing about the dock (the
- * sync screen connects Google, the channels screen adds a Fanpage). Those
- * screens invalidate their OWN keys; this is the one line they add so the dock
- * does not keep pointing at a step the operator just completed.
+ * There is deliberately no `useInvalidateSetupProgress` here. One was written
+ * and removed before merge: nothing called it, while its own comment claimed
+ * other screens "add one line" — a helper that documents a convention nobody
+ * follows is worse than no helper, because the next reader believes the wiring
+ * exists.
+ *
+ * Until a screen actually needs it, the 30s `staleTime` is the whole story: a
+ * step finished elsewhere shows up on the dock within half a minute, or at once
+ * if the operator navigates (which they do — every step lives on another
+ * screen). The gap that WOULD matter is a step completed by a pure client-side
+ * mutation on a screen the operator then stays on. When you add that, add the
+ * invalidation with it:
+ *
+ *   queryClient.invalidateQueries({ queryKey: setupKeys.progress(tenantKey) })
  */
-export function useInvalidateSetupProgress(): () => void {
-  const queryClient = useQueryClient();
-  const { tenantKey } = useActiveTenant();
-
-  return useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: setupKeys.progress(tenantKey) });
-  }, [queryClient, tenantKey]);
-}

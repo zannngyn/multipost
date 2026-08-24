@@ -112,4 +112,17 @@ describe("buildStepViews — what the operator reads", () => {
       expect(view.isOptional).toBe(false);
     }
   });
+
+  it("marks ONLY the first post as the goal", () => {
+    const views = buildStepViews(progressOf({}));
+    expect(views.filter((view) => view.isGoal).map((view) => view.id)).toEqual(["firstPost"]);
+  });
+
+  it("keeps the goal out of the required count it is labelled against", () => {
+    // The row renders "Đích" instead of "Bắt buộc" precisely because
+    // `requiredCount` excludes it. If the two ever disagree the label lies.
+    const progress = progressOf({});
+    const goals = buildStepViews(progress).filter((view) => view.isGoal);
+    expect(progress.requiredCount).toBe(progress.steps.length - goals.length);
+  });
 });
