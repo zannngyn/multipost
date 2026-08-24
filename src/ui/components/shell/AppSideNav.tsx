@@ -20,6 +20,7 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  Palette,
   PenLine,
   Radio,
   ScrollText,
@@ -63,6 +64,7 @@ export const NAV_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> =
   "/prompts": Sparkles,
   "/members": Users,
   "/platform": Building2,
+  "/platform/appearance": Palette,
 };
 
 export function AppSideNav({

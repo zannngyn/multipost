@@ -127,6 +127,13 @@
       "when": 1787542183169,
       "tag": "0017_same_pestilence",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787585456603,
+      "tag": "0018_chubby_molly_hayes",
+      "breakpoints": true
     }
   ]
 }

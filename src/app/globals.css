@@ -18,6 +18,13 @@
    the neutral stylesheet stopped matching anything. Regenerate with
    `pnpm exec astryx theme build src/ui/theme/mysp-theme.ts`. */
 @import "../ui/theme/mysp.css";
+/* Platform-admin colour presets (M3.4). Each block re-values ONLY the variables
+   cut from the dye, scoped to `[data-theme-preset]` on <html>. It sits up here
+   with the other imports because CSS demands every @import precede the rules —
+   position is irrelevant anyway: `:root[data-theme-preset=…]` outranks the bare
+   `:root` below on specificity, and `:root.dark[data-theme-preset=…]` outranks
+   both. Regenerate with `pnpm run theme:presets`. */
+@import "../ui/theme/presets.css";
 
 @custom-variant dark (&:is(.dark *));
 

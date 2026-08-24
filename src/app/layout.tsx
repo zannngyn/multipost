@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Be_Vietnam_Pro, JetBrains_Mono } from "next/font/google";
 
+import { readAppearancePreset } from "@/app/_lib/appearance";
+import { APPEARANCE_PRESET_ATTRIBUTE } from "@/shared/appearance-presets";
+
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -29,9 +32,26 @@ export const metadata: Metadata = {
   description: "Công cụ đăng bài tự động cho Facebook và TikTok",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+/**
+ * Session-independent, but NOT static: the appearance preset (M3.4) is read
+ * here so the first paint already carries the right dye. The gate behind
+ * `readAppearancePreset` caches it, so this costs one query a minute per
+ * process rather than one per page view.
+ */
+export const dynamic = "force-dynamic";
+
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const themePreset = await readAppearancePreset();
+
   return (
-    <html lang="vi" className={`${appSans.variable} ${appMono.variable} h-full antialiased`}>
+    <html
+      lang="vi"
+      /* The preset's stylesheet is already in the <head> (globals.css imports
+         it), and it is scoped to this attribute — so the colour arrives with
+         the markup and never flips after hydration. */
+      {...{ [APPEARANCE_PRESET_ATTRIBUTE]: themePreset }}
+      className={`${appSans.variable} ${appMono.variable} h-full antialiased`}
+    >
       <body className="bg-background text-foreground flex min-h-full flex-col">
         {/* Direction contract (new-work §5): the approved "Sổ mẫu vải" brief travels
             with the markup, so any later change can be checked against it. Written
