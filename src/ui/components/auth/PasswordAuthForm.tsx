@@ -1,10 +1,11 @@
 "use client";
 
-import { Banner, Button, HStack, Icon, Stack, Text, TextInput } from "@astryxdesign/core";
+import { Banner, Button, Stack, Text, TextInput } from "@astryxdesign/core";
 import type { TextInputProps } from "@astryxdesign/core";
 import { useActionState, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { PasswordHint } from "@/ui/components/auth/PasswordHint";
+import { PasswordInput } from "@/ui/components/auth/PasswordInput";
 import { PASSWORD_MAX_LENGTH } from "@/shared/password-policy";
 import {
   authFailureHint,
@@ -234,13 +235,11 @@ export function PasswordAuthForm({
         ) : null}
 
         <Stack direction="vertical" gap={2}>
-          <TextInput
+          <PasswordInput
             ref={passwordRef}
             label="Mật khẩu"
-            /* The SAME input, only its `type` changes. Swapping in a second
-               element would drop the value being typed and break autofill
-               (web-auth-flows rule 2). */
-            type={isPasswordVisible ? "text" : "password"}
+            isVisible={isPasswordVisible}
+            onToggleVisibility={() => setIsPasswordVisible((visible) => !visible)}
             /* No description here in register mode: the one line under the box
                already says what the password needs, and saying it twice is how
                a field speaks in two voices (web-form-architecture rule 5). */
@@ -261,24 +260,11 @@ export function PasswordAuthForm({
             })}
           />
 
-          <HStack gap={2} align="center" wrap="wrap">
-            {/* A labelled button, not a bare icon — and `type="button"`, or it
-                would submit the form (web-form-architecture rule 6). */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              icon={<Icon icon="eyeSlash" size="sm" />}
-              label={isPasswordVisible ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
-              isDisabled={isPending}
-              onClick={() => setIsPasswordVisible((visible) => !visible)}
-            />
-            {/* Caps Lock is the single most common cause of "mật khẩu đúng mà
-                vẫn sai". Announced politely, never as an error. */}
-            <Text type="supporting" role="status" aria-live="polite">
-              {isCapsLockOn ? "Caps Lock đang bật." : ""}
-            </Text>
-          </HStack>
+          {/* Caps Lock is the single most common cause of "mật khẩu đúng mà
+              vẫn sai". Announced politely, never as an error. */}
+          <Text type="supporting" role="status" aria-live="polite">
+            {isCapsLockOn ? "Caps Lock đang bật." : ""}
+          </Text>
 
           {isRegister ? <PasswordHint value={password} /> : null}
         </Stack>
@@ -288,9 +274,10 @@ export function PasswordAuthForm({
              the one core-auth-flows forbids — this is a password nobody can
              reset without an admin, so a typo is worth catching here.
              No `htmlName`: it never leaves the browser. */
-          <TextInput
+          <PasswordInput
             label="Nhập lại mật khẩu"
-            type={isPasswordVisible ? "text" : "password"}
+            isVisible={isPasswordVisible}
+            onToggleVisibility={() => setIsPasswordVisible((visible) => !visible)}
             isRequired
             value={confirmation}
             onChange={setConfirmation}
