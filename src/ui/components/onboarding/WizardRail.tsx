@@ -50,7 +50,16 @@ export function WizardRail({
   return (
     <aside className="bg-foreground text-background flex flex-col gap-6 p-6 md:w-[19rem] md:shrink-0">
       <div>
-        <p className="font-mono text-sm font-semibold tracking-[0.14em]">MYSP</p>
+        {/*
+          Every piece of text on this dark panel states its own colour; none of
+          them may rely on inheriting from the `aside`. Astryx's `Theme` scopes
+          `--color-text-primary` (= `--foreground`) onto text elements inside
+          the app shell, which is the very near-black this panel uses as its
+          BACKGROUND — so an unclassed <p> here is invisible in the real app
+          while looking perfectly fine on the dev preview page, which renders
+          outside that scope. That is exactly how this line was first shipped.
+        */}
+        <p className="text-background font-mono text-sm font-semibold tracking-[0.14em]">MYSP</p>
         <p className="text-background/65 mt-4 text-[13px] leading-relaxed">
           Dữ liệu trong MYSP luôn thuộc về một công ty. Tạo công ty rồi mời người vào là xong phần
           khung — hai phút.
@@ -99,23 +108,28 @@ export function WizardRail({
         })}
       </ol>
 
-      {/* Escape 1 — the invited employee. `mt-auto` on wide viewports only:
-          stacked on a phone this sits directly under the milestones instead of
-          being pushed to the bottom of a column that no longer exists. */}
-      <div className="border-background/15 bg-background/[0.06] rounded-lg border p-3.5 md:mt-auto">
-        <p className="text-[13px] font-semibold">Đã có người mời bạn?</p>
-        <p className="text-background/55 mt-1 mb-2.5 text-xs leading-relaxed">
-          Dán link mời để vào công ty của họ.
+      {/*
+        Escape 1 — the invited employee.
+
+        A LIGHT card inside the dark rail, deliberately. The first attempt kept
+        it dark and re-pointed the form's colours with descendant selectors;
+        Astryx's `secondary` button does not take its fill from any token this
+        file can reach, so the one control that matters rendered dark-on-dark
+        and effectively vanished. Rather than reach into another component's
+        internals — or fork a form that is shared with the join screen — the
+        surface goes back to the one the form was designed on, and every control
+        inside it is correct by construction.
+
+        `mt-auto` on wide viewports only: stacked on a phone this sits directly
+        under the milestones instead of being pushed to the bottom of a column
+        that no longer exists.
+      */}
+      <div className="bg-card text-card-foreground rounded-lg p-3.5 md:mt-auto">
+        <p className="text-foreground text-[13px] font-semibold">Đã có người mời bạn?</p>
+        <p className="text-muted-foreground mt-1 mb-2.5 text-xs leading-relaxed">
+          Dán link mời để vào công ty của họ — bạn không cần tạo công ty mới.
         </p>
-        {/* The dark surface is a local inversion, so the form's own tokens are
-            re-pointed here rather than the component being forked. */}
-        <div className="[&_input]:bg-background/10 [&_input]:border-background/25 [&_input]:text-background [&_input]:placeholder:text-background/40 [&_label]:text-background/70 [&_p]:text-background/50">
-          <JoinInviteForm
-            onSubmit={join.onSubmit}
-            isPending={join.isPending}
-            error={join.error}
-          />
-        </div>
+        <JoinInviteForm onSubmit={join.onSubmit} isPending={join.isPending} error={join.error} />
       </div>
 
       {/* Escape 2 — the way out of a dialog that blocks the top bar. */}

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronRight, X } from "lucide-react";
+import { Check, ChevronRight, Lock, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -10,7 +10,7 @@ import { useSetupProgress } from "@/ui/hooks/useSetupProgress";
 import { useActiveTenant } from "@/ui/hooks/useMe";
 import { isSetupFinished, type SetupProgress } from "@/ui/schemas/setup-progress.schema";
 
-import { buildStepViews } from "./setup-steps";
+import { buildStepViews, SETUP_STEP_PRESENTATION } from "./setup-steps";
 
 /**
  * "Còn mấy bước nữa?" — the standing pointer in the bottom-right corner.
@@ -82,9 +82,38 @@ function DockAnchor({ children, isInline }: { children: React.ReactNode; isInlin
   );
 }
 
-function remainingOf(progress: SetupProgress): number {
-  return Math.max(0, progress.requiredCount - progress.doneCount);
+/**
+ * The dock counts the rows it SHOWS — all six, the goal included.
+ *
+ * `progress.requiredCount` is five (the goal is not a setup step) and the
+ * checklist on the overview is right to use it: it says "x/5 bước bắt buộc"
+ * beside a progress bar that is about being configured. But the dock displays
+ * six rows and prints a fraction over them, so counting the remainder against
+ * five made it say "01 / 06" and "Còn 4 bước nữa" in the same breath — two
+ * numbers, two denominators, one visible contradiction.
+ */
+function tallyOf(progress: SetupProgress): {
+  done: number;
+  total: number;
+  remaining: number;
+  percent: number;
+} {
+  const total = progress.steps.length;
+  const done = progress.steps.filter((step) => step.isDone).length;
+  return {
+    done,
+    total,
+    remaining: Math.max(0, total - done),
+    // `total || 1`: a payload with no steps must not divide by zero. The schema
+    // makes it unlikely; a NaN width in the DOM is not worth the risk.
+    percent: Math.min(100, Math.round((done / (total || 1)) * 100)),
+  };
 }
+
+/** Estimate per step, keyed by id — the dock's right-hand slot. */
+const MINUTES_BY_STEP = new Map(
+  SETUP_STEP_PRESENTATION.map((step) => [step.id, step.minutes] as const),
+);
 
 // --- Collapsed ---------------------------------------------------------------
 
@@ -101,8 +130,7 @@ export function DockPill({
   onExpand: () => void;
   isInline?: boolean;
 }) {
-  const remaining = remainingOf(progress);
-  const percent = Math.round((progress.doneCount / progress.requiredCount) * 100);
+  const { done, remaining, percent } = tallyOf(progress);
 
   return (
     <DockAnchor isInline={isInline}>
@@ -124,7 +152,7 @@ export function DockPill({
           }}
         >
           <span className="bg-foreground text-background grid size-5 place-items-center rounded-full font-mono text-[10px] font-semibold">
-            {progress.doneCount}
+            {done}
           </span>
         </span>
         <span className="text-xs font-medium whitespace-nowrap">
@@ -148,8 +176,7 @@ export function DockPanel({
   isInline?: boolean;
 }) {
   const steps = buildStepViews(progress);
-  const remaining = remainingOf(progress);
-  const percent = Math.min(100, Math.round((progress.doneCount / progress.requiredCount) * 100));
+  const { done, total, remaining, percent } = tallyOf(progress);
 
   /**
    * Which rows JUST turned done. Derived by comparing against the previous
@@ -192,13 +219,21 @@ export function DockPanel({
             <p className="text-background/55 font-mono text-[10px] tracking-[0.18em] uppercase">
               Thiết lập
             </p>
-            <h2 className="mt-1 truncate text-sm font-semibold">
+            {/*
+              `text-background` stated, not inherited. Astryx's `Theme` scopes
+              `--color-text-primary` (= `--foreground`) onto text elements
+              inside the app shell — the same warm near-black this panel uses as
+              its BACKGROUND — so this heading was invisible in the real app
+              while looking fine on the dev preview page, which renders outside
+              that scope. Nothing on a dark surface here may inherit its colour.
+            */}
+            <h2 className="text-background mt-1 truncate text-sm font-semibold">
               {remaining > 0 ? `Còn ${remaining} bước nữa` : "Đăng bài đầu tiên"}
             </h2>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span className="text-background/55 font-mono text-[11px] tabular-nums">
-              {String(progress.doneCount).padStart(2, "0")} / {String(steps.length).padStart(2, "0")}
+              {String(done).padStart(2, "0")} / {String(total).padStart(2, "0")}
             </span>
             <button
               type="button"
@@ -218,9 +253,9 @@ export function DockPanel({
           <div
             role="progressbar"
             aria-valuemin={0}
-            aria-valuemax={progress.requiredCount}
-            aria-valuenow={progress.doneCount}
-            aria-valuetext={`${progress.doneCount} trên ${progress.requiredCount} bước bắt buộc đã xong`}
+            aria-valuemax={total}
+            aria-valuenow={done}
+            aria-valuetext={`${done} trên ${total} bước đã xong`}
             className="bg-background/15 h-1 w-full overflow-hidden rounded-full"
           >
             <div
@@ -280,10 +315,13 @@ export function DockPanel({
                   </span>
 
                   {/*
-                    Named Status Rule: a row that cannot be acted on yet says so
-                    in words. `sr-only` for the locked reason keeps the corner
-                    quiet while still answering "why not?" to a screen reader —
-                    the full sentence is on the checklist behind "Mở đầy đủ".
+                    Named Status Rule, sized for the corner. `step.detail` is the
+                    FULL lock sentence — printing it in this slot pushed the
+                    title out of a 21rem card and spilled the text past the
+                    edge. So the visible slot takes a tick, an estimate, or a
+                    padlock, and the sentence itself is announced instead: it is
+                    written out in full on the checklist behind "Mở đầy đủ",
+                    which has the room for it.
                   */}
                   {isLocked ? (
                     <span id={`${step.id}-reason`} className="sr-only">
@@ -297,7 +335,13 @@ export function DockPanel({
                       isDone ? "text-warning" : "text-background/40",
                     )}
                   >
-                    {isDone ? "✓" : step.detail}
+                    {isDone ? (
+                      "✓"
+                    ) : isLocked ? (
+                      <Lock className="size-3" aria-hidden="true" />
+                    ) : (
+                      `${MINUTES_BY_STEP.get(step.id) ?? 1} ph`
+                    )}
                   </span>
                 </Link>
               </li>
