@@ -1,5 +1,6 @@
 # The verification gate, in one place so CI and Deploy cannot drift apart.
-# Called by ci.yml (pull requests) and by deploy.yml (before anything is built).
+# Called by ci.yml (pull requests) and by deploy.yml (in parallel with the
+# image build; the deploy job waits for both).
 #
 # `pnpm build` is deliberately NOT here: the Docker image build runs it, so
 # duplicating it would double the slowest step to catch the same failure twice.
@@ -48,6 +49,14 @@ jobs:
       # an architecture break, not a style nit.
       - name: Dependency rules
         run: pnpm depcruise
+
+      # `src/ui/theme/mysp.css` is generated from `mysp-theme.ts` and committed.
+      # A theme edited without re-running the build ships a stylesheet that is
+      # not the theme anybody wrote — the app runs on the STALE file, and no
+      # typecheck, lint or test can see it. `--check` builds and compares
+      # without writing, so it fails the PR instead of the palette.
+      - name: Theme artifacts up to date
+        run: pnpm theme:check
 
       - name: Unit tests
         run: pnpm test

@@ -69,7 +69,7 @@ export function SegmentedField({
             key={option.value}
             htmlFor={`${name}-${option.value}`}
             className={cn(
-              "text-muted-foreground has-checked:bg-card has-checked:text-primary has-focus-visible:ring-ring/50 flex h-9.5 cursor-pointer items-center rounded-[9px] px-5 text-sm whitespace-nowrap transition-colors has-checked:font-semibold has-checked:shadow-sm has-focus-visible:ring-3",
+              "text-muted-foreground has-checked:bg-card has-checked:text-primary has-focus-visible:ring-ring/50 flex h-9.5 cursor-pointer items-center rounded-md px-5 text-sm whitespace-nowrap transition-colors has-checked:font-semibold has-checked:shadow-sm has-focus-visible:ring-3",
               disabled && "cursor-not-allowed opacity-60",
             )}
           >

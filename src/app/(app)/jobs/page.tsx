@@ -1,56 +1,29 @@
-import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { Suspense } from "react";
 
-import { getOperatorSession } from "@/app/_auth/session";
-import { JobLogScreen } from "@/ui/components/jobs/JobLogScreen";
-import { JobLogSkeleton } from "@/ui/components/jobs/JobLogSkeleton";
+import {
+  legacyRedirectQuery,
+  legacyRedirectTarget,
+} from "@/ui/components/posts/legacy-routes";
 
 /**
- * "Nhật ký đăng bài" (E11.1). Server Component guard, client screen.
+ * `/jobs` moved into the "Bài đăng" hub (wave-1 IA). It stays as a redirect,
+ * not a 404: `/jobs?batchId=…` and `/jobs?status=failed` are the two links
+ * pasted into support threads, and the query string must survive the move.
  *
- * The screen reads its filter from the query string, so it must sit under a
- * <Suspense> boundary — `useSearchParams()` suspends until the request's search
- * params are known.
+ * No session guard of its own: the redirect leaks nothing, and `/posts` runs
+ * the guard the moment the browser lands there.
  */
 
-export const metadata: Metadata = {
-  title: "Nhật ký đăng bài — MYSP",
-  robots: { index: false, follow: false },
-};
-
-/** Session-dependent: never prerendered, never cached by a proxy. */
 export const dynamic = "force-dynamic";
 
-export default async function JobsPage() {
-  const session = await getOperatorSession("page:/jobs");
-
-  // Defence in depth: middleware already blocks this route, but a Server
-  // Component must not trust that it was reached through the guard.
-  if (!session) redirect("/signin?returnUrl=%2Fjobs");
-
-  return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <Suspense fallback={<JobsFallback />}>
-        <JobLogScreen />
-      </Suspense>
-    </div>
-  );
-}
-
-/** Same header + filter bar + table heights as the real screen (CLS = 0). */
-function JobsFallback() {
-  return (
-    <div aria-hidden="true" className="space-y-6 motion-safe:animate-pulse">
-      <div className="space-y-2">
-        <div className="bg-muted h-8 w-56 rounded" />
-        <div className="bg-muted h-4 w-full max-w-xl rounded" />
-      </div>
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="bg-muted h-9 w-64 rounded-lg" />
-        <div className="bg-muted h-8 w-24 rounded-lg" />
-      </div>
-      <JobLogSkeleton />
-    </div>
-  );
+export default async function JobsRedirect({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // Repeated parameters are kept, not dropped — same as the edge redirect does
+  // (`legacyRedirectQuery`).
+  const query = legacyRedirectQuery(await searchParams);
+  // redirect() throws NEXT_REDIRECT — it must stay outside try/catch.
+  redirect(legacyRedirectTarget("/jobs", query) ?? "/posts");
 }

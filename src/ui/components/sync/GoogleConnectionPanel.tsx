@@ -7,7 +7,7 @@ import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { Badge } from "@/ui/components/ui/badge";
 import { Button } from "@/ui/components/ui/button";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
-import { useDisconnectGoogle, type GoogleConnectionQuery } from "@/ui/hooks/useGoogleDrive";
+import type { useDisconnectGoogle, GoogleConnectionQuery } from "@/ui/hooks/useGoogleDrive";
 import {
   formatConnectedAt,
   googleConnectErrorMessage,
@@ -17,6 +17,9 @@ import {
   type SourceAccessWarning,
 } from "@/ui/schemas/google-drive.schema";
 import { googleConnectHref } from "@/ui/services/google-drive.api";
+
+/** The card owns the mutation; this panel only drives and reports it. */
+export type DisconnectGoogleMutation = ReturnType<typeof useDisconnectGoogle>;
 
 /**
  * The Google Drive connection, at the top of "Nguồn đang đọc" — the primary way
@@ -42,12 +45,19 @@ import { googleConnectHref } from "@/ui/services/google-drive.api";
  */
 export function GoogleConnectionPanel({
   connection,
+  disconnect,
   outcome,
   onDismissOutcome,
   onPickSource,
   isPicking,
 }: {
   connection: GoogleConnectionQuery;
+  /**
+   * Owned by the CARD, not by this panel. A failed disconnect leaves a live
+   * token stored, and this panel is unmounted the moment the card folds — so
+   * both the mutation state and the notice reporting it have to outlive it.
+   */
+  disconnect: DisconnectGoogleMutation;
   /** Result of the OAuth round trip, read once from the URL by the screen. */
   outcome: GoogleConnectOutcome | null;
   onDismissOutcome: () => void;
@@ -55,7 +65,6 @@ export function GoogleConnectionPanel({
   onPickSource: () => void;
   isPicking: boolean;
 }) {
-  const disconnect = useDisconnectGoogle();
   const confirmRef = useRef<HTMLButtonElement>(null);
   const [isConfirmingDisconnect, setIsConfirmingDisconnect] = useState(false);
 
@@ -147,9 +156,6 @@ export function GoogleConnectionPanel({
             ? "Đang đọc trạng thái kết nối Google"
             : ""}
       </p>
-
-      {/* A failed disconnect is never swallowed — the token is still stored. */}
-      {disconnect.isError ? <ApiErrorNotice error={disconnect.error} /> : null}
     </div>
   );
 }
@@ -288,6 +294,13 @@ function ConnectionFacts({
  * `role="status"` (polite), not `alert`: it is part of the status this panel
  * renders when it loads, not something that interrupts mid-task. Assertive
  * would cut across whatever a screen reader is reading (web-feedback-states §4).
+ *
+ * Same callout shape as every other tinted notice in the app — 10% tint + a 1px
+ * hairline all the way round. It used to carry a 4px `border-l`, which is a
+ * side-tab from a different design system: on a surface whose whole depth model
+ * is "flat + hairline" a thick coloured edge reads as a foreign object, and it
+ * made this one warning louder than the `expired` warning right above it
+ * without meaning anything more.
  */
 function SourceAccessNotice({
   warning,
@@ -301,7 +314,7 @@ function SourceAccessNotice({
   return (
     <div
       role="status"
-      className="border-warning/40 bg-warning/10 text-warning-foreground space-y-2.5 rounded-xl border border-l-4 p-3.5"
+      className="border-warning/40 bg-warning/10 text-warning-foreground space-y-2.5 rounded-xl border p-3.5"
     >
       <p className="text-sm font-semibold">{warning.title}</p>
       <p className="max-w-prose text-sm">{warning.message}</p>

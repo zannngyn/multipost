@@ -1,9 +1,13 @@
 "use client";
 
-import { useCallback, useId, useState } from "react";
+import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { useWatch } from "react-hook-form";
 
-import { cn } from "@/shared/utils";
+import {
+  channelLabelIndex,
+  channelNameOf,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
 import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
 import { activeCaptionChannel } from "@/ui/components/compose/caption-targets";
 import { ChannelChoice } from "@/ui/components/compose/ChannelChoice";
@@ -12,11 +16,6 @@ import { publishableChannels } from "@/ui/components/compose/channel-picker";
 import { ColorChips } from "@/ui/components/compose/ColorChips";
 import { describeAction } from "@/ui/components/compose/compose-action";
 import { ComposeActionBar } from "@/ui/components/compose/ComposeActionBar";
-import {
-  COMPOSE_CARD_SHADOW,
-  COMPOSE_PALETTE,
-  COMPOSE_RULE,
-} from "@/ui/components/compose/compose-theme";
 import { DraftStatusBar } from "@/ui/components/compose/DraftStatusBar";
 import { FacebookPreview } from "@/ui/components/compose/FacebookPreview";
 import { PhotoStrip } from "@/ui/components/compose/PhotoStrip";
@@ -26,6 +25,8 @@ import { SegmentedField } from "@/ui/components/compose/SegmentedField";
 import { UploadPanel } from "@/ui/components/compose/UploadPanel";
 import { VideoSpecCard } from "@/ui/components/compose/VideoSpecCard";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+import { SchedulePicker } from "@/ui/components/scheduled/SchedulePicker";
+import { Eyebrow } from "@/ui/components/ui/eyebrow";
 import { useChannels } from "@/ui/hooks/useChannels";
 import { useComposeDraft } from "@/ui/hooks/useComposeDraft";
 import { useComposeWizard } from "@/ui/hooks/useComposeWizard";
@@ -42,13 +43,23 @@ import {
 } from "@/ui/schemas/compose.schema";
 
 /**
- * "Soạn bài" — ONE screen (design: `templates 2/compose-focus/ComposeFocus.dc.html`).
+ * "Soạn bài" — ONE screen.
  *
  * The whole post lives on one card: type a code, and the colours, the album,
  * the caption and the channels appear beneath it, with the Facebook preview
  * pinned beside them the entire time. There is no stepper, no "Tiếp / Quay
  * lại", and no step in the URL — the operator never has to hold in their head
  * which screen they are on.
+ *
+ * What the card DOES carry is a numbered rail down its left edge (`Step`), four
+ * stops in the order the business runs. A card this tall with nothing but blank
+ * space between blocks left an operator scrolling with no idea how much was
+ * left; the numbers are a map, not a gate — nothing is disabled by them and the
+ * order never changes.
+ *
+ * The one action lives in a sticky tray at the foot of the column, together
+ * with the schedule fields and the sentence saying why it is refusing. It is
+ * the only place on this screen where "đăng ngay hay hẹn giờ" is answered.
  *
  * The BUSINESS order is untouched (CLAUDE.md rule 1): compose runs the Sheet
  * lookup and the stock gate BEFORE any album or caption exists, the AI is only
@@ -60,7 +71,10 @@ import {
  * caption block and outside it, so selecting and copying the caption can never
  * pick one up. The caption block holds the post and nothing but the post.
  *
- * Palette: `compose-theme.ts`, the one place a hex value exists on this screen.
+ * Palette: the app's own semantic tokens (`globals.css`) and nothing else. The
+ * bespoke skin this screen used to carry is gone: it re-pointed
+ * `--background`, `--primary` and a dozen more on a wrapper, which made compose
+ * the one screen in the product that did not change when the design did.
  */
 export function ComposeFocus() {
   const wizard = useComposeWizard();
@@ -173,26 +187,33 @@ export function ComposeFocus() {
     ? channelName(channels.data?.channels, previewChannelId)
     : PREVIEW_PAGE_NAME;
 
+  /**
+   * ONE index for the whole missing-caption list, resolved before the map:
+   * `channelNameOf` rebuilds a Map of every channel per call, and naming a list
+   * row by row is the O(rows × channels) shape `channelLabelIndex` exists to
+   * stop (its own docblock asks callers not to do it).
+   */
+  const missingCaptionNames = useMemo(() => {
+    const index = channelLabelIndex(publish.missingCaptionIds, channels.data?.channels);
+    return publish.missingCaptionIds.map((id) => channelSentenceName(id, index));
+  }, [publish.missingCaptionIds, channels.data]);
+
   const action = describeAction({
     readOnlyReason,
     hasChannels: publishableChannels(channels.data?.channels ?? []).length > 0,
     hasComposed: Boolean(composed),
     // NAMED, not counted: "Camilla chưa có caption" is actionable, "1 kênh
     // thiếu caption" sends the operator hunting through tabs.
-    missingCaptionChannels: publish.missingCaptionIds.map((id) =>
-      channelName(channels.data?.channels, id),
-    ),
+    missingCaptionChannels: missingCaptionNames,
     channels: publish.selectedIds.length,
     canSubmit: publish.canSubmit,
   });
 
   return (
-    // The palette wrapper. Everything below reads its colours from here, so the
-    // screen can be re-skinned in one file (compose-theme.ts).
-    <div
-      style={COMPOSE_PALETTE}
-      className="h-full min-h-0 overflow-y-auto bg-[var(--background)] text-[var(--foreground)]"
-    >
+    // `relative` is load-bearing: without it the absolutely positioned `sr-only`
+    // nodes anchor to the AppShell row instead of this scroll area and stretch
+    // the document, adding a phantom second scrollbar.
+    <div className="bg-background text-foreground relative h-full min-h-0 overflow-y-auto">
       <div className="@container mx-auto flex w-full max-w-[1440px] flex-col gap-4 p-5">
         <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <h1 className="text-xl font-semibold tracking-tight">Soạn bài</h1>
@@ -208,15 +229,13 @@ export function ComposeFocus() {
 
         <div className="flex flex-col items-start gap-6 @5xl:flex-row">
           {/* ---------------------------------------------------------------
-              Left card — the post being made (template lines 37–132).
+              Left card — the post being made, in four numbered stops.
               --------------------------------------------------------------- */}
           <section
             aria-label="Nội dung bài đăng"
-            className={cn(
-              "flex w-full min-w-0 flex-col gap-4.5 rounded-[var(--compose-radius-card)] bg-[var(--card)] p-6 @5xl:w-190 @5xl:shrink-0",
-              COMPOSE_CARD_SHADOW,
-            )}
+            className="border-border bg-card flex w-full min-w-0 flex-col gap-7 rounded-xl border p-6 shadow-sm @5xl:w-190 @5xl:shrink-0"
           >
+            <Step n={1} label="Sản phẩm">
             {/* --- The one field that starts a post (38–57) --------------- */}
             <form
               noValidate
@@ -242,7 +261,7 @@ export function ComposeFocus() {
                 invalid={Boolean(errors.productCode)}
                 describedBy={errors.productCode ? `${codeErrorId} ${codeHintId}` : codeHintId}
                 placeholder="Nhập mã hoặc tên sản phẩm…"
-                inputClassName="h-13 rounded-[var(--compose-radius-control)] border-0 bg-[var(--card)] px-4.5 text-lg font-medium shadow-[inset_0_0_0_1.5px_var(--input)]"
+                inputClassName="h-13 rounded-lg border-0 bg-[var(--card)] px-4.5 text-lg font-medium shadow-[inset_0_0_0_1.5px_var(--input)]"
               />
 
               {errors.productCode ? (
@@ -277,7 +296,7 @@ export function ComposeFocus() {
                   <button
                     type="submit"
                     disabled={compose.isPending}
-                    className="focus-visible:ring-ring h-9.5 shrink-0 cursor-pointer rounded-[10px] bg-[var(--card)] px-4 text-[13px] font-medium shadow-[inset_0_0_0_1px_var(--compose-hairline-strong)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="focus-visible:ring-ring h-9.5 shrink-0 cursor-pointer rounded-lg bg-[var(--card)] px-4 text-[13px] font-medium shadow-[inset_0_0_0_1px_var(--input)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {compose.isPending ? "Đang tra…" : "Tra dữ liệu"}
                   </button>
@@ -310,16 +329,16 @@ export function ComposeFocus() {
                 {composed.warnings.map((warning) => (
                   <li
                     key={warning}
-                    className="rounded-lg bg-[var(--warning)]/15 px-3 py-2 text-xs leading-relaxed text-[var(--warning-foreground)]"
+                    className="bg-warning/15 text-warning-foreground rounded-lg px-3 py-2 text-xs leading-relaxed"
                   >
                     {warning}
                   </li>
                 ))}
               </ul>
             ) : null}
+            </Step>
 
-            <span aria-hidden="true" className={COMPOSE_RULE} />
-
+            <Step n={2} label="Ảnh & màu">
             {/* --- Kiểu bài (59–64) + nguồn ảnh --------------------------- */}
             <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
               <SegmentedField
@@ -399,61 +418,91 @@ export function ComposeFocus() {
                 {composed.video ? (
                   <VideoSpecCard video={composed.video} clip={composed.media[0]} />
                 ) : null}
-
-                <span aria-hidden="true" className={COMPOSE_RULE} />
-
-                {/* KÊNH ĐĂNG BEFORE CAPTION (PM, 21/08/2026): a caption is
-                    written per Fanpage, so "đăng lên đâu" has to be answered
-                    before there is anything to write. The caption block below
-                    says so in words when nothing is ticked yet. */}
-                <ChannelChoice
-                  publish={publish}
-                  onOpenPicker={() => setPickerOpen(true)}
-                  readOnlyReason={readOnlyReason}
-                />
-
-                <span aria-hidden="true" className={COMPOSE_RULE} />
-
-                <CaptionBlock
-                  wizard={wizard}
-                  publish={publish}
-                  activeChannelId={activeChannelId}
-                  onActiveChannelChange={setActiveChannelId}
-                  onOpenPicker={() => setPickerOpen(true)}
-                  readOnlyReason={readOnlyReason}
-                />
               </>
             ) : compose.isError ? null : (
               <EmptyLookup mediaKind={mediaKind} restoring={draft.isRestoring} />
             )}
+            </Step>
 
-            <span aria-hidden="true" className={COMPOSE_RULE} />
+            {/* KÊNH ĐĂNG BEFORE CAPTION (PM, 21/08/2026): a caption is written
+                per Page, so "đăng lên đâu" has to be answered before there is
+                anything to write. The caption block below says so in words when
+                nothing is ticked yet. The two stops appear together, under the
+                same condition the colours and the album do — a composed post. */}
+            {!compose.isPending && composed ? (
+              <>
+                <Step n={3} label="Kênh & lịch">
+                  <ChannelChoice publish={publish} onOpenPicker={() => setPickerOpen(true)} />
+                </Step>
 
-            {publish.formError ? (
-              <p role="alert" className="text-[13px] text-[var(--destructive)]">
-                {publish.formError}
-              </p>
+                <Step n={4} label="Caption">
+                  <CaptionBlock
+                    wizard={wizard}
+                    publish={publish}
+                    activeChannelId={activeChannelId}
+                    onActiveChannelChange={setActiveChannelId}
+                    onOpenPicker={() => setPickerOpen(true)}
+                    readOnlyReason={readOnlyReason}
+                  />
+                </Step>
+              </>
             ) : null}
 
-            {publish.createBatch.isError ? (
-              <ApiErrorNotice error={publish.createBatch.error} />
-            ) : null}
+            {/* ---------------------------------------------------------------
+                The tray. One action, always reachable: the card is several
+                viewports tall on a real post, and a button that scrolled away
+                with the bottom of it meant scrolling back past everything to
+                publish. It carries what belongs to the press and nothing else —
+                the time the post goes out, why the button is refusing, and the
+                failure of the last press (a notice further up the card would
+                land off screen while the tray stayed visible).
 
-            <ComposeActionBar
-              primaryLabel={publish.submitLabel}
-              onPrimary={publish.submit}
-              primaryDisabled={!action.enabled}
-              busy={publish.isPending}
-              scheduling={publish.schedule.mode === "scheduled"}
-              onToggleSchedule={() =>
-                publish.schedule.setMode(
-                  publish.schedule.mode === "scheduled" ? "now" : "scheduled",
-                )
-              }
-              onPickChannels={() => setPickerOpen(true)}
-              note={action.note}
-              readOnlyReason={readOnlyReason}
-            />
+                It is NOT a second schedule control: the fields open here, in
+                place, the moment "Hẹn lịch" is pressed, and nowhere else on the
+                screen.
+                --------------------------------------------------------------- */}
+            {/* A plane of its own, not a pane of glass: `bg-background/95` +
+                `backdrop-blur` let the rows underneath print through the
+                buttons on a phone, where the tray covers a third of the
+                screen. Opaque card surface, one hairline to say where the card
+                ends and the press begins. */}
+            <div className="border-border bg-card sticky bottom-0 z-10 -mx-6 -mb-6 flex flex-col gap-3.5 rounded-b-xl border-t px-6 py-4">
+              {publish.formError ? (
+                <p role="alert" className="text-destructive text-[13px]">
+                  {publish.formError}
+                </p>
+              ) : null}
+
+              {publish.createBatch.isError ? (
+                <ApiErrorNotice error={publish.createBatch.error} />
+              ) : null}
+
+              {publish.schedule.mode === "scheduled" ? (
+                <SchedulePicker
+                  choice={publish.schedule}
+                  disabled={publish.isPending || Boolean(readOnlyReason)}
+                  disabledReason={readOnlyReason ?? undefined}
+                  hideModeChoice
+                  scopeNote="Áp dụng cho mọi kênh đã chọn. Bấm “Hẹn lịch” lần nữa để quay lại đăng ngay."
+                />
+              ) : null}
+
+              <ComposeActionBar
+                primaryLabel={publish.submitLabel}
+                onPrimary={publish.submit}
+                primaryDisabled={!action.enabled}
+                busy={publish.isPending}
+                scheduling={publish.schedule.mode === "scheduled"}
+                onToggleSchedule={() =>
+                  publish.schedule.setMode(
+                    publish.schedule.mode === "scheduled" ? "now" : "scheduled",
+                  )
+                }
+                onPickChannels={() => setPickerOpen(true)}
+                note={action.note}
+                readOnlyReason={readOnlyReason}
+              />
+            </div>
           </section>
 
           {/* ---------------------------------------------------------------
@@ -487,7 +536,7 @@ export function ComposeFocus() {
               used is exactly the sentence somebody needs to finish reading. */}
           <p
             role="status"
-            className="pointer-events-auto rounded-xl bg-[var(--compose-ink)] px-5 py-3 text-[13px] text-[var(--card)] shadow-[0_14px_30px_rgba(34,31,28,0.28)]"
+            className="pointer-events-auto rounded-xl bg-foreground text-background px-5 py-3 text-[13px] shadow-lg"
           >
             {flash}{" "}
             <button
@@ -504,18 +553,57 @@ export function ComposeFocus() {
   );
 }
 
+/**
+ * One numbered stop of the compose card.
+ *
+ * The number sits in a fixed 2.5rem rail down the left edge, so the four stops
+ * read as one column an operator can find their place in, and every block keeps
+ * the same left edge whether or not a number is beside it.
+ *
+ * It is NOT a stepper. Every stop is on screen at once and nothing here gates
+ * anything: the numbers name the ORDER THE BUSINESS RUNS IN — tra mã và kiểm
+ * tồn, gom ảnh, chọn kênh, viết caption (CLAUDE.md rule 1) — which is the one
+ * sequence on this screen that a reader genuinely needs. That is also why the
+ * order never changes with the state of the form.
+ */
+function Step({ n, label, children }: { n: number; label: string; children: ReactNode }) {
+  const labelId = useId();
+
+  return (
+    <section
+      aria-labelledby={labelId}
+      className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-x-2"
+    >
+      <span
+        aria-hidden="true"
+        className="border-border text-foreground-subtle flex size-7 items-center justify-center rounded-full border font-mono text-[13px]"
+      >
+        {n}
+      </span>
+      <Eyebrow id={labelId} className="self-center">{`Bước ${n} — ${label}`}</Eyebrow>
+      <div className="col-start-2 flex flex-col gap-4.5 pt-3">{children}</div>
+    </section>
+  );
+}
+
 /** The form field holding the shared caption. Phase 1 publishes to Facebook. */
 const PREVIEW_CHANNEL = "facebook";
 
-/** A Page's name, or its id when the list has not arrived (or it is gone). */
+/**
+ * A Page's name, said the way the whole app says it (spec §3.1). ONE id only —
+ * the preview header; a list resolves once with `channelLabelIndex` instead.
+ *
+ * Delegates rather than re-deriving: the id alone is printed only when there is
+ * genuinely no name to print — the channel list has not arrived — and a Page
+ * that is off or gone is labelled as such instead of appearing as a bare id in
+ * "Camilla chưa có caption".
+ */
 function channelName(channels: readonly Channel[] | undefined, channelId: string): string {
-  const found = channels?.find((item) => item.channelId === channelId);
-  const name = found?.name?.trim();
-  return name && name.length > 0 ? name : channelId;
+  return channelNameOf(channelId, channels);
 }
 
 /** Stand-in until a channel is ticked — naming a Page nobody chose would lie. */
-const PREVIEW_PAGE_NAME = "Trang Facebook của bạn";
+const PREVIEW_PAGE_NAME = "Page Facebook của bạn";
 
 /**
  * "Kiểu bài" as the design draws it — one track — over the two fields the API
@@ -534,7 +622,7 @@ const POST_KINDS = [
   {
     value: "video",
     label: "Video",
-    hint: "Một clip, đăng lên dòng thời gian của Trang. Tỷ lệ 9:16 đến 16:9.",
+    hint: "Một clip, đăng lên dòng thời gian của Page. Tỷ lệ 9:16 đến 16:9.",
     mediaKind: "video" as MediaKind,
     videoTarget: "facebook_video" as VideoTarget,
   },
@@ -556,7 +644,7 @@ function postKindOf(mediaKind: MediaKind, videoTarget: VideoTarget): string {
 /** Idle: nothing has been looked up yet. Not an error, and not empty data. */
 function EmptyLookup({ mediaKind, restoring }: { mediaKind: MediaKind; restoring: boolean }) {
   return (
-    <div className="flex flex-col gap-1.5 rounded-[var(--compose-radius-block)] bg-[var(--compose-well)] px-4 py-8 text-center shadow-[inset_0_0_0_1px_var(--compose-hairline)]">
+    <div className="flex flex-col gap-1.5 rounded-lg bg-[var(--muted)] px-4 py-8 text-center shadow-[inset_0_0_0_1px_var(--border)]">
       <p className="text-sm font-medium">
         {restoring ? "Đang mở lại nháp…" : "Chưa tra mã nào"}
       </p>
@@ -579,7 +667,7 @@ function ComposeSkeleton() {
         {[0, 1, 2].map((chip) => (
           <div
             key={chip}
-            className="h-11.5 w-32 rounded-[var(--compose-radius-control)] bg-[var(--compose-track)]"
+            className="h-11.5 w-32 rounded-lg bg-[var(--muted)]"
           />
         ))}
       </div>
@@ -587,11 +675,11 @@ function ComposeSkeleton() {
         {[0, 1, 2, 3, 4].map((tile) => (
           <div
             key={tile}
-            className="h-32 w-24 rounded-[var(--compose-radius-tile)] bg-[var(--media-empty)]"
+            className="h-32 w-24 rounded-md bg-[var(--media-empty)]"
           />
         ))}
       </div>
-      <div className="h-64 rounded-[var(--compose-radius-block)] bg-[var(--compose-well)]" />
+      <div className="h-64 rounded-lg bg-[var(--muted)]" />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
@@ -6,6 +6,7 @@ import { readActiveTenantLabel } from "@/app/(app)/tenant-name";
 import { signOut } from "@/app/_auth/auth";
 import { getOperatorSession } from "@/app/_auth/session";
 import { AppFrame } from "@/ui/components/shell/AppFrame";
+import { NAV_COLLAPSED_COOKIE, isNavCollapsedCookie } from "@/ui/components/shell/nav-collapse";
 import { TenantBoundary } from "@/ui/components/tenant/TenantBoundary";
 
 /**
@@ -45,10 +46,16 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const cookieHeader = (await headers()).get("cookie");
   const tenant = await readActiveTenantLabel(session, cookieHeader);
 
+  // The nav's collapsed state has to be known HERE, before the shell renders:
+  // read after hydration instead and every reload paints the wide nav and then
+  // snaps it shut. Absent or unreadable cookie = expanded, the default state.
+  const navCookie = (await cookies()).get(NAV_COLLAPSED_COOKIE)?.value;
+
   return (
     <AppFrame
       operatorLabel={session.name ?? session.email}
       tenantName={tenant.name}
+      navDefaultCollapsed={isNavCollapsedCookie(navCookie)}
       signOutAction={session.isDevFake ? undefined : signOutOperator}
     >
       {/* Blocks the screens below until a company is established — the picker

@@ -1,5 +1,6 @@
 "use client";
 
+import { X } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "@/shared/utils";
@@ -89,11 +90,11 @@ export function PhotoStrip({
           <div
             key={asset.driveFileId}
             className={cn(
-              "relative h-32 w-24 shrink-0 overflow-hidden rounded-[var(--compose-radius-tile)] bg-[var(--media-empty)]",
+              "relative h-32 w-24 shrink-0 overflow-hidden rounded-md bg-[var(--media-empty)]",
               "shadow-[inset_0_0_0_1px_var(--border)]",
               index === 0 &&
                 !isVideo &&
-                "shadow-[inset_0_0_0_2.5px_var(--compose-cover-ring)]",
+                "shadow-[inset_0_0_0_2.5px_var(--primary)]",
             )}
           >
             <button
@@ -131,14 +132,14 @@ export function PhotoStrip({
                 onClick={() => drop(index)}
                 disabled={disabled}
                 aria-label={`Bỏ ${asset.fileName} khỏi bài`}
-                className="focus-visible:ring-ring absolute top-1.5 right-1.5 z-1 flex size-5.5 cursor-pointer items-center justify-center rounded-full bg-[var(--compose-scrim)] text-[11px] leading-none text-white outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
+                className="focus-visible:ring-ring bg-foreground/65 text-background absolute top-1.5 right-1.5 z-1 flex size-5.5 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                ✕
+                <X aria-hidden="true" className="size-3" strokeWidth={2.5} />
               </button>
             ) : null}
 
             {index === 0 && !isVideo ? (
-              <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-1 rounded-[7px] bg-[var(--card)] px-2 py-0.5 text-[10px] font-semibold text-[var(--primary)]">
+              <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-1 rounded-sm bg-[var(--card)] px-2 py-0.5 text-[10px] font-semibold text-[var(--primary)]">
                 Bìa
               </span>
             ) : null}

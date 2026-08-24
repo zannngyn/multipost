@@ -29,7 +29,7 @@ function validPayload(overrides: Partial<ComposeDraftPayload> = {}): ComposeDraf
     captions: { facebook: "Áo dài trắng — mã MGKVX6310" },
     captionOverrides: { facebook: "Áo dài trắng, hàng mới về" },
     albumOrder: ["drive-file-1", "drive-file-2"],
-    selectedChannelIds: ["fanpage-a", "fanpage-b"],
+    selectedChannelIds: ["page-a", "page-b"],
     shareCaption: true,
     schedule: { mode: "scheduled", value: "2026-08-20T09:30" },
     savedAt: "2026-08-17T03:04:05.000Z",

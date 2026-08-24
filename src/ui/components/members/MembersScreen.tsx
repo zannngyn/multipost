@@ -7,9 +7,6 @@ import {
   EmptyState,
   HStack,
   Heading,
-  Layout,
-  LayoutContent,
-  LayoutHeader,
   Stack,
   StackItem,
   Text,
@@ -28,11 +25,16 @@ import { MEMBERSHIP_ROLE_LABELS, type MembershipRole } from "@/ui/schemas/me.sch
 import { canManageMembers, memberDisplayName, type Member } from "@/ui/schemas/member.schema";
 
 /**
- * "Thành viên" (M2.3): who is in this company, what they may do, and the links
- * that let new people in.
+ * "Danh sách thành viên" (M2.3): who is in this company and what they may do.
  *
- * Frame (`astryx docs layout`, tracker archetype): header carries the title,
- * the content region carries the invite block and then the rows edge-to-edge.
+ * Since the wave-1 IA this is a PANEL of the "Thành viên" hub
+ * (`/members?tab=members`), not a page of its own: the hub owns the frame, the
+ * page's h1 and the tab strip, so this panel starts at h2 and its empty/error
+ * boxes at h3 (core-accessibility §1 — one h1 per page, no level skipped).
+ *
+ * `showInvites` keeps the invite block where it has always been for any caller
+ * that still wants one screen with both; the hub passes `false` because it
+ * gives "Link mời" a tab of its own.
  *
  * The four mandatory states live in `MemberListBody`:
  *   loading — skeleton with the real columns, delayed 300ms
@@ -45,7 +47,14 @@ import { canManageMembers, memberDisplayName, type Member } from "@/ui/schemas/m
  * row; the server still decides, and its 403/409 lands in the notice above the
  * table (core-auth-session: quyền ở client là UX, không phải bảo mật).
  */
-export function MembersScreen() {
+export function MembersScreen({
+  /**
+   * Whether this panel also renders the invite block. Default `true` so the
+   * screen keeps working as one whole; the hub sets `false` and renders
+   * `InvitePanel` in its own tab instead — the panel must never appear twice.
+   */
+  showInvites = true,
+}: { showInvites?: boolean } = {}) {
   const { role: actorRole, tenant, isResolved } = useActiveTenant();
   const members = useMembers();
   const updateRole = useUpdateMemberRole();
@@ -101,112 +110,91 @@ export function MembersScreen() {
   }
 
   return (
-    <Layout
-      height="fill"
-      header={
-        <LayoutHeader hasDivider>
-          <Stack direction="vertical" gap={3} padding={4}>
-            <Stack direction="vertical" gap={1}>
-              <Heading level={1}>Thành viên</Heading>
-              <Text type="supporting">
-                Ai đang làm việc trong {tenant?.name ?? "công ty này"} và với quyền gì. Mỗi công ty
-                có danh sách thành viên riêng — đổi công ty ở thanh trên cùng để xem công ty khác.
-              </Text>
-            </Stack>
+    <Stack direction="vertical" height="100%">
+      {/* The live region is ALWAYS mounted, empty most of the time: a region
+          that appears together with its text is announced unreliably
+          (web-feedback-states §4). */}
+      <Stack
+        direction="vertical"
+        role="status"
+        aria-live="polite"
+        paddingInline={4}
+        paddingBlock={outcome ? 3 : 0}
+      >
+        {outcome ? (
+          <Banner
+            status="success"
+            isDismissable
+            onDismiss={() => setOutcome(null)}
+            title="Đã lưu thay đổi"
+            description={outcome}
+          />
+        ) : null}
+      </Stack>
 
-            <HStack gap={3} align="center" wrap="wrap">
-              <Button
-                variant="secondary"
-                size="sm"
-                label={members.isFetching ? "Đang tải…" : "Tải lại"}
-                isDisabled={members.isFetching}
-                onClick={() => void members.refetch()}
-              />
-              {/* Said once, at the top: it explains every disabled button below
-                  before the operator hovers one to find out. */}
-              {isResolved && !canManageMembers(actorRole) ? (
-                <Text type="supporting">
-                  Vai trò của bạn ({actorRole ? MEMBERSHIP_ROLE_LABELS[actorRole] : "không rõ"}) chỉ
-                  xem được danh sách.
-                </Text>
-              ) : null}
-            </HStack>
-          </Stack>
-        </LayoutHeader>
-      }
-      content={
-        <LayoutContent padding={0} isScrollable>
-          <Stack direction="vertical" height="100%">
-            {/* The live region is ALWAYS mounted, empty most of the time: a
-                region that appears together with its text is announced
-                unreliably (web-feedback-states §4). */}
-            <Stack
-              direction="vertical"
-              role="status"
-              aria-live="polite"
-              paddingInline={4}
-              paddingBlock={outcome ? 3 : 0}
-            >
-              {outcome ? (
-                <Banner
-                  status="success"
-                  isDismissable
-                  onDismiss={() => setOutcome(null)}
-                  title="Đã lưu thay đổi"
-                  description={outcome}
-                />
-              ) : null}
-            </Stack>
+      {/* A refused write belongs next to the table it was aimed at — 403 (thiếu
+          quyền) and 409 LAST_OWNER both land here, never as a toast that
+          disappears before it is read. */}
+      {updateRole.isError ? (
+        <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+          <ApiErrorNotice error={updateRole.error} />
+        </Stack>
+      ) : null}
+      {remove.isError ? (
+        <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
+          <ApiErrorNotice error={remove.error} />
+        </Stack>
+      ) : null}
 
-            {/* A refused write belongs next to the table it was aimed at — 403
-                (thiếu quyền) and 409 LAST_OWNER both land here, never as a
-                toast that disappears before it is read. */}
-            {updateRole.isError ? (
-              <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
-                <ApiErrorNotice error={updateRole.error} />
-              </Stack>
-            ) : null}
-            {remove.isError ? (
-              <Stack direction="vertical" paddingInline={4} paddingBlock={3}>
-                <ApiErrorNotice error={remove.error} />
-              </Stack>
-            ) : null}
+      {showInvites ? (
+        <Stack direction="vertical" padding={4}>
+          <InvitePanel actorRole={actorRole} />
+        </Stack>
+      ) : null}
+      {showInvites ? <Divider /> : null}
 
-            <Stack direction="vertical" padding={4}>
-              <InvitePanel actorRole={actorRole} />
-            </Stack>
+      <HStack gap={3} paddingInline={4} paddingBlock={3} align="center" wrap="wrap">
+        {/* h2: the hub above owns the page's h1 (core-accessibility §1). */}
+        <Heading level={2}>Danh sách thành viên</Heading>
+        {/* Only once the list is real: "0 thành viên" while loading reads as an
+            answer, and an admin would act on it. */}
+        {members.data ? (
+          <Text type="supporting" role="status" aria-live="polite">
+            {items.length} thành viên
+          </Text>
+        ) : null}
+        <Button
+          variant="secondary"
+          size="sm"
+          label={members.isFetching ? "Đang tải…" : "Tải lại"}
+          isDisabled={members.isFetching}
+          onClick={() => void members.refetch()}
+        />
+        {/* Said once, above the rows: it explains every disabled button below
+            before the operator hovers one to find out. */}
+        {isResolved && !canManageMembers(actorRole) ? (
+          <Text type="supporting">
+            Vai trò của bạn ({actorRole ? MEMBERSHIP_ROLE_LABELS[actorRole] : "không rõ"}) chỉ xem
+            được danh sách {tenant?.name ?? "công ty này"}.
+          </Text>
+        ) : null}
+      </HStack>
 
-            <Divider />
-
-            <HStack gap={3} paddingInline={4} paddingBlock={3} align="center" wrap="wrap">
-              <Heading level={2}>Danh sách thành viên</Heading>
-              {/* Only once the list is real: "0 thành viên" while loading reads
-                  as an answer, and an admin would act on it. */}
-              {members.data ? (
-                <Text type="supporting" role="status" aria-live="polite">
-                  {items.length} thành viên
-                </Text>
-              ) : null}
-            </HStack>
-
-            <StackItem size="fill">
-              <MemberListBody
-                isFirstLoad={isFirstLoad}
-                showSkeleton={showSkeleton}
-                isError={members.isError}
-                error={members.error}
-                onRetry={() => void members.refetch()}
-                items={items}
-                actorRole={actorRole}
-                busyMembershipId={busyMembershipId}
-                onChangeRole={handleChangeRole}
-                onRemove={handleRemove}
-              />
-            </StackItem>
-          </Stack>
-        </LayoutContent>
-      }
-    />
+      <StackItem size="fill">
+        <MemberListBody
+          isFirstLoad={isFirstLoad}
+          showSkeleton={showSkeleton}
+          isError={members.isError}
+          error={members.error}
+          onRetry={() => void members.refetch()}
+          items={items}
+          actorRole={actorRole}
+          busyMembershipId={busyMembershipId}
+          onChangeRole={handleChangeRole}
+          onRemove={handleRemove}
+        />
+      </StackItem>
+    </Stack>
   );
 }
 

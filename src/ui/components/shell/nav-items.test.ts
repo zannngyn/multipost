@@ -23,7 +23,7 @@ describe("isNavItemActive", () => {
   });
 
   it("does not match a path that merely shares a prefix", () => {
-    expect(isNavItemActive("/jobsomething", "/jobs")).toBe(false);
+    expect(isNavItemActive("/productsomething", "/products")).toBe(false);
   });
 
   it("ignores a trailing slash", () => {
@@ -31,66 +31,59 @@ describe("isNavItemActive", () => {
   });
 
   it("stops matching sub-paths when the entry is exact", () => {
-    // "/channels" owns the connected Pages; "/channels/groups" is its own entry.
-    expect(isNavItemActive("/channels/groups", "/channels", { exact: true })).toBe(false);
-    expect(isNavItemActive("/channels", "/channels", { exact: true })).toBe(true);
-    expect(isNavItemActive("/channels/groups", "/channels/groups")).toBe(true);
+    // No nav entry sets `exact` since the wave-1 IA (no entry owns another's
+    // prefix any more), but the option is what keeps that possible — a nested
+    // destination would light two rows at once without it. The paths here are
+    // deliberately made up: pinning the option's behaviour to a route that was
+    // later retired is how a test starts asserting the shape of a 404.
+    expect(isNavItemActive("/parent/child", "/parent", { exact: true })).toBe(false);
+    expect(isNavItemActive("/parent", "/parent", { exact: true })).toBe(true);
+    expect(isNavItemActive("/parent/child", "/parent/child")).toBe(true);
   });
 });
 
 describe("NAV_SECTIONS", () => {
-  it("covers every operator destination exactly once", () => {
-    const hrefs = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.href));
-    expect(hrefs).toEqual([
+  it("has the wave-1 IA: 5 visible groups, 10 destinations, platform gated", () => {
+    const sections = visibleNavSections({ hasPlatformRole: true });
+    expect(sections.map((s) => s.title)).toEqual([
+      "Bàn làm việc",
+      "Đăng bài",
+      "Theo dõi",
+      "Dữ liệu",
+      "Cài đặt",
+      "Nền tảng",
+    ]);
+    expect(sections.flatMap((s) => s.items.map((i) => i.href))).toEqual([
       "/",
       "/compose",
       "/bulk",
-      "/scheduled",
-      "/jobs",
+      "/posts",
       "/products",
       "/sync",
       "/channels",
-      "/channels/groups",
       "/prompts",
       "/members",
-      "/access",
       "/platform",
     ]);
-    expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 
-  it("keeps the people screens in their own section, apart from settings", () => {
-    const section = NAV_SECTIONS.find((candidate) => candidate.title === "Tổ chức");
-
-    expect(section?.items.map((item) => item.href)).toEqual(["/members", "/access"]);
-    expect(
-      NAV_SECTIONS.find((candidate) => candidate.title === "Cấu hình")?.items.map(
-        (item) => item.href,
-      ),
-    ).toEqual(["/channels", "/channels/groups", "/prompts"]);
+  it("no longer routes retired destinations", () => {
+    const hrefs = flattenNavItems().map((i) => i.href);
+    for (const legacy of ["/scheduled", "/jobs", "/channels/groups", "/access"]) {
+      expect(hrefs).not.toContain(legacy);
+    }
   });
 
   it("flattens to one searchable entry per destination, keeping its section", () => {
     const flat = flattenNavItems();
     const hrefs = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.href));
 
+    // One destination, one entry: a duplicate href would light two rows at once
+    // and show the same result twice in the command palette.
+    expect(new Set(hrefs).size).toBe(hrefs.length);
     expect(flat).toHaveLength(hrefs.length);
     expect(flat.map((item) => item.href)).toEqual(hrefs);
     expect(flat).toContainEqual({ href: "/sync", label: "Đồng bộ dữ liệu", section: "Dữ liệu" });
-  });
-
-  it("marks every entry that owns another entry's prefix as exact", () => {
-    const hrefs = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.href));
-
-    for (const section of NAV_SECTIONS) {
-      for (const item of section.items) {
-        if (item.href === "/") continue;
-        const ownsAnother = hrefs.some((href) => href.startsWith(`${item.href}/`));
-        // Without this flag two nav entries light up at once and the operator
-        // cannot tell which screen they are on.
-        expect(ownsAnother ? item.isExact === true : true).toBe(true);
-      }
-    }
   });
 });
 
@@ -128,8 +121,8 @@ describe("visibleNavSections", () => {
     const titles = visibleNavSections({ hasPlatformRole: false }).map((section) => section.title);
     expect(titles).not.toContain("Nền tảng");
     // …and nothing else disappears with it.
-    expect(titles).toContain("Cấu hình");
-    expect(titles).toContain("Vận hành");
+    expect(titles).toContain("Cài đặt");
+    expect(titles).toContain("Bàn làm việc");
   });
 
   it("shows it to an account that holds a platform role", () => {

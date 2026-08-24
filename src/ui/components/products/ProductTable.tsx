@@ -3,13 +3,8 @@
 import { Button, HStack, Stack, StatusDot, Table, Text, pixel, proportional } from "@astryxdesign/core";
 import type { TableColumn } from "@astryxdesign/core";
 
-import {
-  INVENTORY_STATUS_LABELS,
-  blockedReasonLabel,
-  formatCount,
-  formatMediaCounts,
-  type CatalogProduct,
-} from "@/ui/schemas/catalog.schema";
+import { productStatus } from "@/ui/components/products/product-status";
+import { formatCount, formatMediaCounts, type CatalogProduct } from "@/ui/schemas/catalog.schema";
 
 /**
  * The catalog as the operator sees it: which codes can be posted, and for the
@@ -33,27 +28,6 @@ import {
 /** Table's generic needs an index signature; the fields stay CatalogProduct's. */
 type ProductRow = CatalogProduct & Record<string, unknown>;
 
-interface StatusView {
-  variant: "success" | "warning" | "error";
-  label: string;
-}
-
-/** One dot answers "can I post this?" before any text is read. */
-export function productStatus(product: CatalogProduct): StatusView {
-  if (!product.composable) {
-    return {
-      variant: "error",
-      label: product.blockedReason
-        ? blockedReasonLabel(product.blockedReason.code)
-        : "Không đăng được",
-    };
-  }
-  if (product.inventory.status === "low_stock") {
-    return { variant: "warning", label: INVENTORY_STATUS_LABELS.low_stock };
-  }
-  return { variant: "success", label: "Đăng được" };
-}
-
 export function ProductTable({
   items,
   selectedCode,
@@ -73,6 +47,10 @@ export function ProductTable({
         const isSelected = selectedCode === product.code;
         return (
           <HStack gap={2} align="center">
+            {/* The dot's colour is decoded by ProductStatusLegend above the
+                table — words that are always on screen, not only on hover
+                (Named Status Rule). The label/tooltip here name THIS row's own
+                reason ("Hết hàng", "Thiếu ảnh"), which the legend cannot. */}
             <StatusDot variant={status.variant} label={status.label} tooltip={status.label} />
             {/* The code is the row's interactive element: one tab stop per row,
                 and a real button rather than a click handler on the <tr>.

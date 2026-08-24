@@ -6,6 +6,11 @@ import { BulkRunScreen } from "@/ui/components/bulk/BulkRunScreen";
 
 /**
  * "Chạy hàng loạt" (E10.5). Server Component guard, client screen.
+ *
+ * The screen owns its own frame (Layout + header), so this page adds no
+ * container — same split as the `/channels` and `/members` hubs. The wrapper it
+ * used to add sat INSIDE that frame and bounded the header as well, so the
+ * screen could never draw a full-width header band.
  */
 
 export const metadata: Metadata = {
@@ -23,9 +28,5 @@ export default async function BulkPage() {
   // Component must not trust that it was reached through the guard.
   if (!session) redirect("/signin?returnUrl=%2Fbulk");
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-6 py-8">
-      <BulkRunScreen />
-    </div>
-  );
+  return <BulkRunScreen />;
 }

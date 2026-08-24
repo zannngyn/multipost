@@ -50,7 +50,7 @@ export function ResolvedProductLine({
     >
       <span
         aria-hidden="true"
-        className="flex size-5.5 shrink-0 items-center justify-center rounded-full bg-[var(--compose-ok-bg)] text-[11px] text-[var(--compose-ok-fg)]"
+        className="flex size-5.5 shrink-0 items-center justify-center rounded-full bg-success/20 text-success-foreground text-[11px]"
       >
         ✓
       </span>

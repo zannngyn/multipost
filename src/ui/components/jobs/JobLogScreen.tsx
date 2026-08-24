@@ -8,10 +8,13 @@ import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { JobLogSkeleton } from "@/ui/components/jobs/JobLogSkeleton";
 import { JobLogTable } from "@/ui/components/jobs/JobLogTable";
+import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
+import { RulesDisclosure } from "@/ui/components/posts/RulesDisclosure";
 import { WorkerHealthBanner } from "@/ui/components/jobs/WorkerHealthBanner";
 import { presentWorkerHealth } from "@/ui/components/jobs/present-worker-health";
 import { Button } from "@/ui/components/ui/button";
 import { Select } from "@/ui/components/ui/select";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { usePostJobLog, useRetryPostJob } from "@/ui/hooks/usePostJobs";
@@ -25,7 +28,7 @@ import {
 } from "@/ui/schemas/post-batch.schema";
 
 /**
- * "Nhật ký đăng bài" (E11.1): component -> hook -> service -> internal API.
+ * "Nhật ký đăng" (E11.1): component -> hook -> service -> internal API.
  *
  * The filter lives in the URL, not in `useState` (core-data-list-query rule 1):
  * `/jobs?status=blocked` is shareable, survives F5 and makes Back behave. One
@@ -59,6 +62,12 @@ export function JobLogScreen() {
 
   const log = usePostJobLog(filter);
   const retry = useRetryPostJob();
+  /**
+   * Names for the "Kênh" column. A THIRD independent query: if it fails, the
+   * log still renders — the column falls back to the raw ids, which is exactly
+   * what it showed before this query existed (core-feedback-states §Partial).
+   */
+  const channels = useChannels();
   // Support mode is read-only (M3.3): re-queueing a job posts to the customer's
   // Page. The table shows the button disabled with this sentence beside it.
   const readOnlyReason = useReadOnlyReason();
@@ -84,13 +93,18 @@ export function JobLogScreen() {
       ? (next as PostJobStatus)
       : null;
     const params = jobLogSearchParams({ ...filter, status });
-    const query = params.toString();
+    // This screen rewrites the WHOLE query, so it has to carry the hub's
+    // `?tab=` across — without it, changing a filter drops the tab and the next
+    // server render sends the operator back to "Bài đã hẹn" mid-filter.
+    const query = withTabParam(params.toString(), searchParams.get(POSTS_TAB_PARAM));
     // `replace`: changing a filter is not a navigation step to walk back to.
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   function clearFilters() {
-    router.replace(pathname, { scroll: false });
+    // Clearing drops the filter, not the tab.
+    const query = withTabParam("", searchParams.get(POSTS_TAB_PARAM));
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   function handleRetry(postJobId: string) {
@@ -109,15 +123,33 @@ export function JobLogScreen() {
   return (
     <section className="space-y-6" aria-labelledby="jobs-heading">
       <header className="space-y-1">
-        <h1 id="jobs-heading" className="text-2xl font-semibold tracking-tight">
-          Nhật ký đăng bài
-        </h1>
+        {/* h2: since the wave-1 IA this screen is a TAB inside /posts, and the
+            hub above it owns the page's h1 (core-accessibility §1). */}
+        {/* One name for one thing (spec §3.5): the tab above says "Nhật ký
+            đăng", so this heading does too. */}
+        <h2 id="jobs-heading" className="text-2xl font-semibold tracking-tight">
+          Nhật ký đăng
+        </h2>
+        {/* Two sentences (spec §3.4); the rules are one click below. */}
         <p className="text-muted-foreground max-w-prose text-sm">
-          Mỗi dòng là một bài trên một kênh. Bài lỗi hoặc bị chặn có thể chạy lại — tồn kho vẫn được
-          kiểm tra lại ngay trước khi đăng. Bài ở trạng thái “Facebook giữ lịch” đã nằm trên Facebook
-          và Facebook sẽ tự đăng vào giờ đã hẹn, hệ thống chỉ theo dõi và cập nhật lại kết quả.
+          Mỗi dòng là một bài trên một kênh. Bài lỗi hoặc bị chặn có thể chạy lại.
         </p>
       </header>
+
+      <RulesDisclosure>
+        <p>
+          Tồn kho được kiểm tra lại ngay trước khi đăng, kể cả khi chạy lại — một mã vừa hết hàng sẽ
+          bị chặn thay vì lên bài.
+        </p>
+        <p>
+          Bài ở trạng thái “Facebook giữ lịch” đã nằm trên Facebook và Facebook sẽ tự đăng vào giờ
+          đã hẹn; hệ thống chỉ theo dõi và cập nhật lại kết quả.
+        </p>
+        <p>
+          Một bài đăng lên nhiều kênh với cùng kết quả gộp thành một dòng “× N kênh”. Mở dòng đó để
+          xem từng kênh, mở bài trên Facebook và chạy lại riêng từng kênh.
+        </p>
+      </RulesDisclosure>
 
       <WorkerHealthBanner
         notice={healthNotice}
@@ -230,10 +262,19 @@ export function JobLogScreen() {
             {log.hasNextPage ? " (còn nữa)" : ""}.
           </p>
 
+          {/* Said once, above the table, instead of eight identical ids
+              explaining themselves row by row. */}
+          {channels.isError ? (
+            <p className="text-muted-foreground text-sm">
+              Không tải được danh sách Page nên cột “Kênh” đang hiện mã kênh thay vì tên Page.
+            </p>
+          ) : null}
+
           <JobLogTable
             items={items}
             onRetry={handleRetry}
             retryingJobId={retry.isPending ? (retry.variables?.postJobId ?? null) : null}
+            channels={channels.data?.channels}
             readOnlyReason={readOnlyReason}
           />
 

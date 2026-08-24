@@ -9,6 +9,7 @@ import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { Button } from "@/ui/components/ui/button";
 import { useBatchStatus } from "@/ui/hooks/usePostBatch";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
 
@@ -28,6 +29,9 @@ import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
  */
 export function BatchStatusScreen({ batchId }: { batchId: string }) {
   const batch = useBatchStatus(batchId);
+  // Names for the "Kênh" column. Its own query, its own failure: losing the
+  // names must not cost the batch report itself.
+  const channels = useChannels();
 
   const isFirstLoad = batch.isPending && batch.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
@@ -38,6 +42,14 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
   return (
     <section className="space-y-6" aria-labelledby="batch-heading">
       <header className="space-y-1">
+        {/* Way back up: a batch is opened from the hub (or from a link in a
+            support thread) and had no exit but the browser's Back button. */}
+        <Link
+          href="/posts?tab=log"
+          className="text-muted-foreground hover:text-foreground inline-block text-sm"
+        >
+          <span aria-hidden="true">← </span>Bài đăng
+        </Link>
         <h1 id="batch-heading" className="text-2xl font-semibold tracking-tight">
           Theo dõi lô đăng
         </h1>
@@ -68,7 +80,7 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
           onRetry={() => void batch.refetch()}
           extraAction={
             <Button asChild variant="outline">
-              <Link href="/jobs">Mở nhật ký đăng bài</Link>
+              <Link href="/posts?tab=log">Mở nhật ký đăng bài</Link>
             </Button>
           }
         />
@@ -101,7 +113,21 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
               }
             />
           ) : (
-            <BatchChannelTable channels={data.channels} progressSteps={data.progressSteps} />
+            <>
+              {/* Said out loud, like /posts and /bulk: without it the "Kênh"
+                  column quietly falls back to mã kênh and nobody knows why. */}
+              {channels.isError ? (
+                <p className="text-muted-foreground text-sm">
+                  Không tải được tên Page nên cột Kênh đang hiện mã kênh. Kết quả của từng kênh
+                  vẫn đúng.
+                </p>
+              ) : null}
+              <BatchChannelTable
+                channels={data.channels}
+                progressSteps={data.progressSteps}
+                tenantChannels={channels.data?.channels}
+              />
+            </>
           )}
 
           <div className="flex flex-wrap gap-2 border-t pt-4">
@@ -109,7 +135,7 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
               Tải lại
             </Button>
             <Button asChild variant="ghost">
-              <Link href={`/jobs?batchId=${encodeURIComponent(data.batchId)}`}>
+              <Link href={`/posts?tab=log&batchId=${encodeURIComponent(data.batchId)}`}>
                 Xem nhật ký của lô này
               </Link>
             </Button>
