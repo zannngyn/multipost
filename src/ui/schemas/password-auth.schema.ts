@@ -2,6 +2,7 @@ import {
   CredentialEmailSchema,
   EMAIL_MAX_LENGTH,
   PASSWORD_MAX_LENGTH,
+  describePasswordProblems,
   describePasswordRequirement,
   passwordProblems,
   type PasswordRequirement,
@@ -181,52 +182,35 @@ export function emailShapeProblem(value: string): string | null {
   return null;
 }
 
-// --- The password checklist --------------------------------------------------
+// --- The password hint -------------------------------------------------------
 
-export interface PasswordChecklistItem {
-  readonly rule: PasswordRequirement;
-  /** Vietnamese wording of the one rule — from `shared/password-policy`. */
-  readonly label: string;
-  readonly isMet: boolean;
+export interface PasswordHint {
+  /** ONE Vietnamese sentence. Never empty — the box always has something to say. */
+  readonly message: string;
+  /** True once every rule is satisfied. */
+  readonly isReady: boolean;
 }
 
 /**
- * The four rules a new password must satisfy, in a fixed order, each already
- * ticked or not for the value typed so far.
+ * What to say under the new-password box, as a SINGLE sentence.
  *
- * `too_long` is NOT one of the four: it is not something to aim for, so it only
- * joins the list once it is actually broken — a checklist that opens with
- * "tối đa 128 ký tự" unticked reads as a rule the person has failed before
- * typing anything.
+ * This replaced a four-line tick list. Whatever the value breaks — one rule or
+ * all four — the person reads one message, and it names everything still
+ * missing at once; four lines that each said "Chưa đạt" made them assemble the
+ * answer themselves, and on a phone the list pushed the submit button off the
+ * fold. The wording comes from `shared/password-policy`, the same table the
+ * server's refusal is built from, so the sentence the form shows while typing
+ * and the sentence that comes back from a rejected submit are the same words.
+ *
+ * NOT AN ERROR while it is unmet: the caller renders it in the ordinary
+ * supporting colour and nothing turns red before blur (core-auth-flows: thanh
+ * đo cập nhật khi gõ nhưng không báo đỏ trước khi rời ô). The refusal that DOES
+ * turn red is the server's, and it lands in the input's own status.
  */
-const CHECKLIST_RULES: readonly PasswordRequirement[] = [
-  "length",
-  "uppercase",
-  "digit",
-  "symbol",
-] as const;
-
-export function passwordChecklist(value: string): readonly PasswordChecklistItem[] {
+export function passwordHint(value: string): PasswordHint {
   const problems = passwordProblems(value);
-  const items = CHECKLIST_RULES.map((rule) => ({
-    rule,
-    label: describePasswordRequirement(rule),
-    isMet: !problems.includes(rule),
-  }));
-
-  if (problems.includes("too_long")) {
-    items.push({
-      rule: "too_long",
-      label: describePasswordRequirement("too_long"),
-      isMet: false,
-    });
-  }
-  return items;
-}
-
-/** True when every rule is ticked — used for the summary line, not to disable. */
-export function isPasswordReady(value: string): boolean {
-  return passwordProblems(value).length === 0;
+  if (problems.length === 0) return { message: "Mật khẩu đã đạt đủ yêu cầu.", isReady: true };
+  return { message: describePasswordProblems(problems), isReady: false };
 }
 
 /**

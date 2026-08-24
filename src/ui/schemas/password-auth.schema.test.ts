@@ -8,17 +8,17 @@ import {
   emailShapeProblem,
   fieldErrorMessage,
   formErrorMessage,
-  isPasswordReady,
   newPasswordProblem,
   parseAuthMode,
-  passwordChecklist,
+  passwordHint,
   resetPasswordBlockReason,
   type PasswordAuthFailure,
 } from "@/ui/schemas/password-auth.schema";
+import { describePasswordProblems, passwordProblems } from "@/shared/password-policy";
 
 /**
  * The decisions the sign-in screen makes BEFORE anything is rendered: which box
- * a refusal lands in, which rules are ticked, and which tab is open.
+ * a refusal lands in, what the password hint says, and which tab is open.
  *
  * These are unit tests over pure functions rather than render tests: the repo
  * has no @testing-library/react and no jsdom environment (vitest.config.ts runs
@@ -94,51 +94,56 @@ describe("authFailureHint — every blocked state has a way out", () => {
   });
 });
 
-describe("passwordChecklist — the rules tick as you type", () => {
+describe("passwordHint — everything missing, in ONE sentence", () => {
   // --- Edge cases first -----------------------------------------------------
-  it("opens with four unticked rules for an empty box, and never mentions the ceiling", () => {
-    const items = passwordChecklist("");
-    expect(items).toHaveLength(4);
-    expect(items.every((item) => item.isMet)).toBe(false);
-    expect(items.map((item) => item.rule)).toEqual(["length", "uppercase", "digit", "symbol"]);
-    expect(isPasswordReady("")).toBe(false);
+  it("names all four rules for an empty box, and never mentions the ceiling", () => {
+    const { message, isReady } = passwordHint("");
+    expect(isReady).toBe(false);
+    expect(message).toContain("ít nhất 8 ký tự");
+    expect(message).toContain("chữ in hoa");
+    expect(message).toContain("chữ số");
+    expect(message).toContain("ký tự đặc biệt");
+    expect(message).not.toContain("tối đa");
   });
 
-  it("ticks only what the value satisfies", () => {
-    const byRule = Object.fromEntries(
-      passwordChecklist("abcdefgh").map((item) => [item.rule, item.isMet]),
-    );
-    expect(byRule.length).toBe(true);
-    expect(byRule.uppercase).toBe(false);
-    expect(byRule.digit).toBe(false);
-    expect(byRule.symbol).toBe(false);
+  it("is ONE sentence — one full stop, however many rules are broken", () => {
+    expect(passwordHint("").message.match(/\./g)).toHaveLength(1);
+    expect(passwordHint("abcdefgh").message.match(/\./g)).toHaveLength(1);
   });
 
-  it("ticks everything for a password that passes the policy", () => {
-    const items = passwordChecklist("Mysp2026!");
-    expect(items.every((item) => item.isMet)).toBe(true);
-    expect(isPasswordReady("Mysp2026!")).toBe(true);
+  it("drops a rule from the sentence as soon as the value satisfies it", () => {
+    const message = passwordHint("abcdefgh").message;
+    expect(message).not.toContain("ít nhất 8 ký tự");
+    expect(message).toContain("chữ in hoa");
+    expect(message).toContain("chữ số");
+    expect(message).toContain("ký tự đặc biệt");
+  });
+
+  it("says so, once, for a password that passes the policy", () => {
+    expect(passwordHint("Mysp2026!")).toEqual({
+      message: "Mật khẩu đã đạt đủ yêu cầu.",
+      isReady: true,
+    });
   });
 
   it("counts a space as neither a symbol nor a reason to fail the others", () => {
-    const byRule = Object.fromEntries(
-      passwordChecklist("Mat khau 1").map((item) => [item.rule, item.isMet]),
-    );
-    expect(byRule.symbol).toBe(false);
-    expect(byRule.digit).toBe(true);
-    expect(byRule.uppercase).toBe(true);
+    const message = passwordHint("Mat khau 1").message;
+    expect(message).toContain("ký tự đặc biệt");
+    expect(message).not.toContain("chữ số");
+    expect(message).not.toContain("chữ in hoa");
   });
 
-  it("adds the ceiling rule ONLY once it is broken", () => {
-    const items = passwordChecklist(`A1!${"a".repeat(200)}`);
-    const ceiling = items.find((item) => item.rule === "too_long");
-    expect(ceiling?.isMet).toBe(false);
-    expect(isPasswordReady(`A1!${"a".repeat(200)}`)).toBe(false);
+  it("names the ceiling ONLY once it is broken", () => {
+    const { message, isReady } = passwordHint(`A1!${"a".repeat(200)}`);
+    expect(isReady).toBe(false);
+    expect(message).toContain("tối đa 128 ký tự");
   });
 
   it("carries the wording of the shared policy, not its own copy", () => {
-    const length = passwordChecklist("").find((item) => item.rule === "length");
-    expect(length?.label).toBe("ít nhất 8 ký tự");
+    expect(passwordHint("")).toEqual({
+      message: describePasswordProblems(passwordProblems("")),
+      isReady: false,
+    });
   });
 });
 

@@ -44,9 +44,9 @@ const SYMBOL_PATTERN = /[^A-Za-z0-9\s]/;
 const REQUIREMENT_MESSAGES_VI: Record<PasswordRequirement, string> = {
   length: `ít nhất ${PASSWORD_MIN_LENGTH} ký tự`,
   too_long: `tối đa ${PASSWORD_MAX_LENGTH} ký tự`,
-  uppercase: "ít nhất 1 chữ in hoa (A–Z)",
-  digit: "ít nhất 1 chữ số (0–9)",
-  symbol: "ít nhất 1 ký tự đặc biệt (không phải chữ hoặc số)",
+  uppercase: "1 chữ in hoa (A–Z)",
+  digit: "1 chữ số (0–9)",
+  symbol: "1 ký tự đặc biệt (không phải chữ hoặc số)",
 };
 
 /**
@@ -70,11 +70,25 @@ export function passwordProblems(value: unknown): readonly PasswordRequirement[]
   return problems;
 }
 
-/** One Vietnamese sentence listing exactly what is missing. Never empty-handed. */
+/**
+ * ONE Vietnamese sentence listing exactly what is missing. Never empty-handed.
+ *
+ * One sentence, not a list of them: whatever a password breaks, the person is
+ * told once, in a single message — a screen that shows one complaint per rule
+ * makes them read four things to learn one ("gộp thành 1 thông báo"). The
+ * clauses are joined the way Vietnamese joins them, "a, b và c", so the whole
+ * thing still reads as a sentence when four rules are broken at once.
+ */
 export function describePasswordProblems(problems: readonly PasswordRequirement[]): string {
   if (problems.length === 0) return "Mật khẩu hợp lệ.";
   const parts = problems.map((rule) => REQUIREMENT_MESSAGES_VI[rule]);
-  return `Mật khẩu phải có ${parts.join("; ")}.`;
+  return `Mật khẩu phải có ${joinVi(parts)}.`;
+}
+
+/** `["a"] -> "a"`, `["a","b"] -> "a và b"`, `["a","b","c"] -> "a, b và c"`. */
+function joinVi(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} và ${parts[parts.length - 1]}`;
 }
 
 /** The wording of ONE rule — for a checklist next to the field. */

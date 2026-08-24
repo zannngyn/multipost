@@ -3,6 +3,7 @@
 import {
   Banner,
   Button,
+  Card,
   Divider,
   Grid,
   Heading,
@@ -141,18 +142,47 @@ export function SignInScreen({
           >
       <BrandColumn />
 
-      <Section variant="transparent" padding={8}>
-        <Stack direction="vertical" vAlign="center" height="100%">
+      {/* THE AUTH COLUMN — one island card floating on an otherwise empty half.
+          A Card here is deliberate even though the layout doc keeps cards out of
+          page structure: this is a single discrete widget with a hard boundary
+          (the whole point of the island), not a wrapper around page sections. */}
+      <Section variant="transparent" padding={8} className="relative overflow-hidden">
+        {/* Decoration only. The halo is mixed from the same accent token the
+            brand column's gradient uses, so it re-values itself with the theme;
+            aria-hidden because it says nothing. */}
+        <Stack
+          aria-hidden
+          className="pointer-events-none absolute start-0 bottom-10 size-72 rounded-full bg-accent/40 blur-3xl"
+        />
+
+        <Stack
+          direction="vertical"
+          vAlign="center"
+          height="100%"
+          gap={4}
+          className="relative"
+        >
+          <Card
+            elevation="med"
+            padding={8}
+            width="100%"
+            maxWidth={480}
+            className="mx-auto"
+          >
           <Stack
             direction="vertical"
             gap={4}
-            width="100%"
-            maxWidth={420}
-            className="mx-auto"
             as="section"
             aria-label="Tự động hóa cùng MYSP ngay"
           >
-            <Heading level={2}>Tự động hóa cùng MYSP ngay</Heading>
+            <Stack direction="vertical" gap={1}>
+              <Heading level={2}>Tự động hóa cùng MYSP ngay</Heading>
+              <Text type="supporting">
+                {mode === "register"
+                  ? "Tạo tài khoản để bắt đầu dùng MYSP."
+                  : "Chào mừng bạn trở lại. Đăng nhập để tiếp tục soạn và đăng bài."}
+              </Text>
+            </Stack>
 
             {/* Neither banner is decoration: they are the only explanation an
                 operator gets for a round trip that ended back here. */}
@@ -221,7 +251,7 @@ export function SignInScreen({
               onEmailChange={setEmail}
             />
 
-            <Divider label="Hoặc" />
+            <Divider label="Hoặc tiếp tục với" />
 
             {/* Two independent forms, not one with two buttons: each carries its
                 own Server Action, and a failure of one must not touch the other.
@@ -269,12 +299,20 @@ export function SignInScreen({
             <Text type="supporting">
               Khi tiếp tục, bạn đồng ý với quy định sử dụng nội bộ của MYSP.
             </Text>
+          </Stack>
+          </Card>
 
-            <Divider />
-
-            <Stack direction="vertical" as="footer">
-              <Text type="supporting">© MYSP 2026. All rights reserved.</Text>
-            </Stack>
+          {/* OUTSIDE the card, the way the template puts it under the island:
+              the copyright is about the product, not about signing in, and one
+              more divider inside the card only made the card longer. */}
+          <Stack
+            direction="vertical"
+            as="footer"
+            width="100%"
+            maxWidth={480}
+            className="mx-auto"
+          >
+            <Text type="supporting">© MYSP 2026. All rights reserved.</Text>
           </Stack>
         </Stack>
       </Section>
@@ -306,6 +344,25 @@ function BrandColumn() {
             MYSP
           </Text>
           <Text type="supporting">Đăng bài tự động</Text>
+        </Stack>
+
+        {/* The template's floating collage, as GEOMETRY rather than photographs.
+            The template fills it with stock portraits; the only pictures this
+            product owns are customer product photos and none of them belong on
+            a public sign-in page, so the shapes carry the motion instead.
+            Purely decorative — aria-hidden — and dropped below `sm`, where it
+            would only push the form down a phone screen. */}
+        <Stack
+          aria-hidden
+          width="100%"
+          maxWidth={360}
+          height={160}
+          className="relative hidden sm:flex"
+        >
+          <Stack className="absolute start-0 top-0 size-20 rounded-full bg-card/80 ring-1 ring-border" />
+          <Stack className="absolute end-0 top-4 h-12 w-32 rounded-full bg-accent/70" />
+          <Stack className="absolute end-16 bottom-0 size-24 rounded-full bg-card/70 ring-1 ring-border" />
+          <Stack className="absolute start-20 bottom-5 size-8 rounded-full bg-card/60" />
         </Stack>
 
         <Stack direction="vertical" gap={2}>
