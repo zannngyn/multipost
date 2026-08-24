@@ -4,7 +4,7 @@ import { Banner, Button, HStack, Icon, Stack, Text, TextInput } from "@astryxdes
 import type { TextInputProps } from "@astryxdesign/core";
 import { useActionState, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
-import { PasswordChecklist } from "@/ui/components/auth/PasswordChecklist";
+import { PasswordHint } from "@/ui/components/auth/PasswordHint";
 import { PASSWORD_MAX_LENGTH } from "@/shared/password-policy";
 import {
   authFailureHint,
@@ -34,7 +34,7 @@ import {
  *   - mixing RHF with `<form action>` gives one form two submit paths
  *     (web-form-architecture rule 3).
  * The inputs are still controlled: Astryx's `TextInput` has no uncontrolled
- * mode, and the checklist needs the value on every keystroke. Before hydration
+ * mode, and the hint line needs the value on every keystroke. Before hydration
  * the rendered `value` is just the initial attribute, so typing and submitting
  * work without React.
  *
@@ -178,7 +178,7 @@ export function PasswordAuthForm({
   return (
     /* A real <form action>: Enter submits, the browser offers to save the
        credentials, and the request goes out before hydration. `noValidate` —
-       the wording comes from the server and from the checklist, and two sources
+       the wording comes from the server and from the hint line, and two sources
        for one error is how a field says two different things
        (web-form-architecture rule 5). */
     <form action={formAction} noValidate onSubmit={() => setWasSubmitted(true)}>
@@ -241,9 +241,9 @@ export function PasswordAuthForm({
                element would drop the value being typed and break autofill
                (web-auth-flows rule 2). */
             type={isPasswordVisible ? "text" : "password"}
-            description={
-              isRegister ? "Cần đủ 4 yêu cầu liệt kê ngay bên dưới ô này." : undefined
-            }
+            /* No description here in register mode: the one line under the box
+               already says what the password needs, and saying it twice is how
+               a field speaks in two voices (web-form-architecture rule 5). */
             isRequired
             value={password}
             onChange={setPassword}
@@ -280,7 +280,7 @@ export function PasswordAuthForm({
             </Text>
           </HStack>
 
-          {isRegister ? <PasswordChecklist value={password} /> : null}
+          {isRegister ? <PasswordHint value={password} /> : null}
         </Stack>
 
         {isRegister ? (

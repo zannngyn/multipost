@@ -59,6 +59,24 @@ describe("describePasswordProblems", () => {
     expect(message).toContain("chữ số");
     expect(message).toContain("ký tự đặc biệt");
   });
+
+  it("is ONE sentence — the clauses are joined, never split into several", () => {
+    const message = describePasswordProblems(passwordProblems("abc"));
+    expect(message.match(/\./g)).toHaveLength(1);
+    expect(message).toContain(" và ");
+    expect(message).not.toContain(";");
+  });
+
+  it("joins two clauses with `và` alone, and one with nothing at all", () => {
+    expect(describePasswordProblems(["uppercase", "digit"])).toBe(
+      "Mật khẩu phải có 1 chữ in hoa (A–Z) và 1 chữ số (0–9).",
+    );
+    expect(describePasswordProblems(["digit"])).toBe("Mật khẩu phải có 1 chữ số (0–9).");
+  });
+
+  it("says the password is fine when nothing is broken", () => {
+    expect(describePasswordProblems([])).toBe("Mật khẩu hợp lệ.");
+  });
 });
 
 describe("PasswordSchema", () => {

@@ -14,7 +14,7 @@ import {
 import type { TextInputProps } from "@astryxdesign/core";
 import { useActionState, useEffect, useRef, useState } from "react";
 
-import { PasswordChecklist } from "@/ui/components/auth/PasswordChecklist";
+import { PasswordHint } from "@/ui/components/auth/PasswordHint";
 import { PASSWORD_MAX_LENGTH } from "@/shared/password-policy";
 import {
   authFailureHint,
@@ -168,7 +168,9 @@ export function ResetPasswordDialog({
               <TextInput
                 ref={passwordRef}
                 label="Mật khẩu mới"
-                description="Cần đủ 4 yêu cầu bên dưới. Nên dùng mật khẩu do trình quản lý mật khẩu sinh ra."
+                /* The rules themselves are the one line under the box; this
+                   description only says what it alone can say. */
+                description="Nên dùng mật khẩu do trình quản lý mật khẩu sinh ra."
                 type={isVisible ? "text" : "password"}
                 isRequired
                 hasAutoFocus
@@ -200,7 +202,7 @@ export function ResetPasswordDialog({
                 />
               </HStack>
 
-              <PasswordChecklist value={password} />
+              <PasswordHint value={password} />
 
               {/* Never submitted — the confirmation exists to catch a typo in a
                   password nobody else can read back. */}
