@@ -265,14 +265,21 @@ function MemberListBody({
         </Stack>
       ) : null}
 
+      {/* `paddingInline={4}` — the column every other block on this screen
+          stands in, the "Danh sách thành viên" heading included. Measured at
+          1440 in the T11 inspect round: the table started at x=256 against a
+          heading at x=272 and ran off the right edge of the window. Same shape
+          of miss, same fix, as the company table on /platform. */}
       <StackItem size="fill">
-        <MemberTable
-          members={items}
-          actorRole={actorRole}
-          busyMembershipId={busyMembershipId}
-          onChangeRole={onChangeRole}
-          onRemove={onRemove}
-        />
+        <Stack direction="vertical" height="100%" paddingInline={4}>
+          <MemberTable
+            members={items}
+            actorRole={actorRole}
+            busyMembershipId={busyMembershipId}
+            onChangeRole={onChangeRole}
+            onRemove={onRemove}
+          />
+        </Stack>
       </StackItem>
     </Stack>
   );
