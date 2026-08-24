@@ -59,8 +59,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       signOutAction={session.isDevFake ? undefined : signOutOperator}
     >
       {/* Blocks the screens below until a company is established — the picker
-          and the "chưa thuộc công ty nào" state live there. */}
-      <TenantBoundary>{children}</TenantBoundary>
+          and the first-run wizard live there. The sign-out action goes with it:
+          that wizard is a required dialog, so it covers the top bar's own
+          sign-out and has to carry one of its own. */}
+      <TenantBoundary signOutAction={session.isDevFake ? undefined : signOutOperator}>
+        {children}
+      </TenantBoundary>
     </AppFrame>
   );
 }

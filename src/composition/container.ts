@@ -137,6 +137,7 @@ import {
   type ReschedulePostJob,
 } from "@/core/usecases/reschedule-post-job";
 import { makeGetCatalogSource, type GetCatalogSource } from "@/core/usecases/get-catalog-source";
+import { makeGetSetupProgress, type GetSetupProgress } from "@/core/usecases/get-setup-progress";
 import {
   makeListCatalogProducts,
   type ListCatalogProducts,
@@ -203,6 +204,11 @@ export interface Usecases {
   getCatalogSource: GetCatalogSource;
   /** E2 — point the tenant at another folder/sheet. Does NOT trigger a sync. */
   updateCatalogSource: UpdateCatalogSource;
+  /**
+   * First-run — the six setup flags behind the checklist and the dock, read in
+   * ONE request so the dock can ride in the shell without costing five.
+   */
+  getSetupProgress: GetSetupProgress;
   /** E2/E3 — catalog screen: products with their composable/blocked verdict. */
   listCatalogProducts: ListCatalogProducts;
   composePost: ComposePost;
@@ -912,6 +918,14 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       oauth: googleOAuth,
       browser: google.browser,
       clock: deps.clock,
+    }),
+    getSetupProgress: makeGetSetupProgress({
+      google: googleOAuth,
+      catalogConfig,
+      channels,
+      groups: channelGroups,
+      postJobs,
+      logger: deps.logger,
     }),
     listCatalogProducts: makeListCatalogProducts({ catalog: products, logger: deps.logger }),
     composePost: makeComposePost({

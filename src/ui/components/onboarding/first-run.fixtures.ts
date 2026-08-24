@@ -1,226 +1,93 @@
-import type {
-  FirstRunChecklistProps,
-  OperatorWaitingProps,
-  StepView,
-} from "./first-run.types";
+import type { SetupProgress, SetupStepId } from "@/ui/schemas/setup-progress.schema";
+
+import type { FirstRunChecklistProps, OperatorWaitingProps, StepView } from "./first-run.types";
+import { buildStepViews } from "./setup-steps";
 
 /**
- * Fixture 1: Kịch bản Đang thiết lập dở dang (Bước 1 xong, Bước 2 xong, Bước 3 đang chạy, Bước 4 khóa, Bước 5 tùy chọn)
+ * Visual fixtures for the dev preview page — its ONLY consumer.
+ *
+ * Built from `buildStepViews` rather than hand-written rows: a fixture that
+ * invents its own labels and lock reasons stops matching the screen the moment
+ * either changes, and then the preview quietly lies about what the operator
+ * sees. Only the two states the real mapper cannot produce — `running` and
+ * `error`, which come from a live sync rather than from the six flags — are
+ * patched in by hand below.
  */
-export const stepsInProgressFixture: readonly StepView[] = [
+
+const ALL_STEP_IDS: readonly SetupStepId[] = [
+  "tenant",
+  "google",
+  "source",
+  "facebook",
+  "group",
+  "firstPost",
+];
+
+const REQUIRED_STEP_IDS: readonly SetupStepId[] = ALL_STEP_IDS.filter((id) => id !== "firstPost");
+
+const REQUIRED_COUNT = REQUIRED_STEP_IDS.length;
+
+function progressOf(done: Partial<Record<SetupStepId, boolean>>): SetupProgress {
+  return {
+    tenantId: "00000000-0000-0000-0000-000000000001",
+    steps: ALL_STEP_IDS.map((id) => ({ id, isDone: done[id] ?? false })),
+    doneCount: REQUIRED_STEP_IDS.filter((id) => done[id]).length,
+    requiredCount: REQUIRED_COUNT,
+    isReady: Boolean(done.source && done.facebook),
+  };
+}
+
+/** Patch ONE row, leaving every other row exactly as the real mapper made it. */
+function patchStep(
+  steps: readonly StepView[],
+  id: SetupStepId,
+  patch: Partial<StepView>,
+): readonly StepView[] {
+  return steps.map((step) => (step.id === id ? { ...step, ...patch } : step));
+}
+
+/** 1 — mid-setup: Drive connected, the sheet sync is running, the group still locked. */
+export const stepsInProgressFixture: readonly StepView[] = patchStep(
+  buildStepViews(progressOf({ tenant: true, google: true })),
+  "source",
   {
-    id: "google",
-    ordinal: 1,
-    title: "Nối tài khoản Google Drive",
-    description: "Cho phép hệ thống đọc thư mục ảnh mẫu và bảng tính Google Sheet quản lý sản phẩm.",
-    state: "done",
-    detail: "Đã kết nối tài khoản: xuongananh.fashion@gmail.com",
-    isOptional: false,
-    action: {
-      label: "Đổi tài khoản",
-      onAction: () => console.log("Action: đổi tài khoản Google"),
-      isBusy: false,
-      disabledReason: null,
-    },
-  },
-  {
-    id: "source",
-    ordinal: 2,
-    title: "Chọn thư mục ảnh & bảng Sheet",
-    description: "Chỉ định thư mục 'Ảnh AI' trên Drive và bảng Sheet 'Hàng thiết kế 2026' (tab Mẫu 2026).",
-    state: "done",
-    detail: "Nguồn: Thư mục 'Ảnh AI 2026' / Tab 'Mẫu 2026'",
-    isOptional: false,
-    action: {
-      label: "Đổi nguồn",
-      onAction: () => console.log("Action: đổi nguồn dữ liệu"),
-      isBusy: false,
-      disabledReason: null,
-    },
-  },
-  {
-    id: "sync",
-    ordinal: 3,
-    title: "Đồng bộ sản phẩm lần đầu",
-    description: "Hệ thống quét ảnh từ Drive, đối chiếu mã màu trên Sheet và kiểm tra tồn kho ban đầu.",
     state: "running",
-    detail: "Đang quét 5.500 file ảnh trên Drive và đọc bảng tính... Bạn có thể rời trang, tiến trình vẫn chạy ngầm.",
-    isOptional: false,
+    detail: "Đang quét 5.500 file ảnh trên Drive và đọc bảng tính... Bạn có thể rời trang.",
     action: {
       label: "Đang đồng bộ...",
-      onAction: () => console.log("Action: sync"),
+      onAction: () => {},
       isBusy: true,
       disabledReason: null,
     },
   },
-  {
-    id: "channels",
-    ordinal: 4,
-    title: "Kết nối Fanpage Facebook",
-    description: "Chọn các Trang Facebook bạn muốn đăng bài bán hàng tự động qua AI.",
-    state: "locked",
-    detail: "Cần hoàn thành đồng bộ sản phẩm ở Bước 3 trước khi kết nối kênh đăng.",
-    isOptional: false,
-    action: {
-      label: "Kết nối Facebook",
-      onAction: () => console.log("Action: connect fb"),
-      isBusy: false,
-      disabledReason: "Đang đợi đồng bộ sản phẩm hoàn tất",
-    },
-  },
-  {
-    id: "invites",
-    ordinal: 5,
-    title: "Mời thành viên cùng làm việc",
-    description: "Tạo link mời để nhân viên biên tập (editor) có thể vào soạn và duyệt bài cùng bạn.",
-    state: "locked",
-    detail: "Tùy chọn: có thể tạo link mời bất kỳ lúc nào sau khi hoàn tất.",
-    isOptional: true,
-    action: {
-      label: "Tạo link mời",
-      onAction: () => console.log("Action: invite"),
-      isBusy: false,
-      disabledReason: null,
-    },
-  },
-];
+);
 
-/**
- * Fixture 2: Kịch bản Có bước bị Lỗi (Bước 3 bị lỗi format Sheet, Bước 4 bị khóa)
- */
-export const stepsWithErrorFixture: readonly StepView[] = [
+/** 2 — the sheet step failed; the Facebook step below it is untouched and open. */
+export const stepsWithErrorFixture: readonly StepView[] = patchStep(
+  buildStepViews(progressOf({ tenant: true, google: true })),
+  "source",
   {
-    id: "google",
-    ordinal: 1,
-    title: "Nối tài khoản Google Drive",
-    description: "Cho phép hệ thống đọc thư mục ảnh mẫu và bảng tính Google Sheet quản lý sản phẩm.",
-    state: "done",
-    detail: "Đã kết nối tài khoản: xuongananh.fashion@gmail.com",
-    isOptional: false,
-    action: null,
-  },
-  {
-    id: "source",
-    ordinal: 2,
-    title: "Chọn thư mục ảnh & bảng Sheet",
-    description: "Chỉ định thư mục 'Ảnh AI' trên Drive và bảng Sheet 'Hàng thiết kế 2026' (tab Mẫu 2026).",
-    state: "done",
-    detail: "Nguồn: Thư mục 'Ảnh AI' / Tab 'Mẫu 2026'",
-    isOptional: false,
-    action: null,
-  },
-  {
-    id: "sync",
-    ordinal: 3,
-    title: "Đồng bộ sản phẩm lần đầu",
-    description: "Hệ thống quét ảnh từ Drive, đối chiếu mã màu trên Sheet và kiểm tra tồn kho ban đầu.",
     state: "error",
-    detail: "Lỗi đồng bộ (SHEET_ERROR): Tab 'Mẫu 2026' thiếu cột bắt buộc 'Mã sản phẩm'. Vui lòng kiểm tra lại cấu trúc Sheet.",
-    isOptional: false,
+    detail:
+      "Lỗi đồng bộ (SHEET_ERROR): tab 'Mẫu 2026' thiếu cột bắt buộc 'Mã sản phẩm'. Kiểm tra lại cấu trúc Sheet.",
     action: {
       label: "Thử đồng bộ lại",
-      onAction: () => console.log("Action: retry sync"),
+      onAction: () => {},
       isBusy: false,
       disabledReason: null,
     },
   },
-  {
-    id: "channels",
-    ordinal: 4,
-    title: "Kết nối Fanpage Facebook",
-    description: "Chọn các Trang Facebook bạn muốn đăng bài bán hàng tự động qua AI.",
-    state: "current",
-    detail: null,
-    isOptional: false,
-    action: {
-      label: "Kết nối Facebook",
-      onAction: () => console.log("Action: connect fb"),
-      isBusy: false,
-      disabledReason: null,
-    },
-  },
-  {
-    id: "invites",
-    ordinal: 5,
-    title: "Mời thành viên cùng làm việc",
-    description: "Tạo link mời để nhân viên biên tập (editor) có thể vào soạn và duyệt bài cùng bạn.",
-    state: "locked",
-    detail: null,
-    isOptional: true,
-    action: {
-      label: "Tạo link mời",
-      onAction: () => console.log("Action: invite"),
-      isBusy: false,
-      disabledReason: null,
-    },
-  },
-];
+);
 
-/**
- * Fixture 3: Kịch bản Hoàn thành 100% (Đủ điều kiện soạn bài ngay)
- */
-export const stepsCompletedFixture: readonly StepView[] = [
-  {
-    id: "google",
-    ordinal: 1,
-    title: "Nối tài khoản Google Drive",
-    description: "Cho phép hệ thống đọc thư mục ảnh mẫu và bảng tính Google Sheet quản lý sản phẩm.",
-    state: "done",
-    detail: "Đã kết nối tài khoản: xuongananh.fashion@gmail.com",
-    isOptional: false,
-    action: null,
-  },
-  {
-    id: "source",
-    ordinal: 2,
-    title: "Chọn thư mục ảnh & bảng Sheet",
-    description: "Chỉ định thư mục 'Ảnh AI' trên Drive và bảng Sheet 'Hàng thiết kế 2026' (tab Mẫu 2026).",
-    state: "done",
-    detail: "Nguồn: Thư mục 'Ảnh AI 2026' / Tab 'Mẫu 2026'",
-    isOptional: false,
-    action: null,
-  },
-  {
-    id: "sync",
-    ordinal: 3,
-    title: "Đồng bộ sản phẩm lần đầu",
-    description: "Hệ thống quét ảnh từ Drive, đối chiếu mã màu trên Sheet và kiểm tra tồn kho ban đầu.",
-    state: "done",
-    detail: "Đồng bộ thành công: 248 mã sản phẩm hợp lệ sẵn sàng soạn bài.",
-    isOptional: false,
-    action: null,
-  },
-  {
-    id: "channels",
-    ordinal: 4,
-    title: "Kết nối Fanpage Facebook",
-    description: "Chọn các Trang Facebook bạn muốn đăng bài bán hàng tự động qua AI.",
-    state: "done",
-    detail: "Đã kết nối 3 Fanpage hoạt động (An Anh Boutique, Xưởng May An Anh, Thời Trang Thiết Kế).",
-    isOptional: false,
-    action: null,
-  },
-  {
-    id: "invites",
-    ordinal: 5,
-    title: "Mời thành viên cùng làm việc",
-    description: "Tạo link mời để nhân viên biên tập (editor) có thể vào soạn và duyệt bài cùng bạn.",
-    state: "done",
-    detail: "Đã tạo 1 link mời nhân viên biên tập.",
-    isOptional: true,
-    action: {
-      label: "Tạo thêm link mời",
-      onAction: () => console.log("Action: create more invite"),
-      isBusy: false,
-      disabledReason: null,
-    },
-  },
-];
+/** 3 — every setup step done; only the first post is still ahead. */
+export const stepsCompletedFixture: readonly StepView[] = buildStepViews(
+  progressOf({ tenant: true, google: true, source: true, facebook: true, group: true }),
+);
 
 export const checklistInProgressProps: FirstRunChecklistProps = {
   steps: stepsInProgressFixture,
   doneCount: 2,
-  requiredCount: 4,
+  requiredCount: REQUIRED_COUNT,
   isReady: false,
   onCompose: () => alert("Điều hướng tới /compose"),
   blockError: null,
@@ -230,7 +97,7 @@ export const checklistInProgressProps: FirstRunChecklistProps = {
 export const checklistErrorProps: FirstRunChecklistProps = {
   steps: stepsWithErrorFixture,
   doneCount: 2,
-  requiredCount: 4,
+  requiredCount: REQUIRED_COUNT,
   isReady: false,
   onCompose: () => alert("Điều hướng tới /compose"),
   blockError: null,
@@ -239,8 +106,8 @@ export const checklistErrorProps: FirstRunChecklistProps = {
 
 export const checklistReadyProps: FirstRunChecklistProps = {
   steps: stepsCompletedFixture,
-  doneCount: 4,
-  requiredCount: 4,
+  doneCount: REQUIRED_COUNT,
+  requiredCount: REQUIRED_COUNT,
   isReady: true,
   onCompose: () => alert("Điều hướng tới /compose"),
   blockError: null,
@@ -250,7 +117,7 @@ export const checklistReadyProps: FirstRunChecklistProps = {
 export const checklistLoadingProps: FirstRunChecklistProps = {
   steps: [],
   doneCount: 0,
-  requiredCount: 4,
+  requiredCount: REQUIRED_COUNT,
   isReady: false,
   onCompose: () => {},
   blockError: null,
@@ -260,7 +127,7 @@ export const checklistLoadingProps: FirstRunChecklistProps = {
 export const checklistBlockErrorRetryProps: FirstRunChecklistProps = {
   steps: [],
   doneCount: 0,
-  requiredCount: 4,
+  requiredCount: REQUIRED_COUNT,
   isReady: false,
   onCompose: () => {},
   blockError: {
@@ -273,7 +140,7 @@ export const checklistBlockErrorRetryProps: FirstRunChecklistProps = {
 export const checklistBlockErrorNoRetryProps: FirstRunChecklistProps = {
   steps: [],
   doneCount: 0,
-  requiredCount: 4,
+  requiredCount: REQUIRED_COUNT,
   isReady: false,
   onCompose: () => {},
   blockError: {

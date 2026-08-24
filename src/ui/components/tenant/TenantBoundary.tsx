@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { OnboardingPanel } from "@/ui/components/tenant/OnboardingPanel";
+import { FirstRunGate } from "@/ui/components/onboarding/FirstRunGate";
 import { isTenantIndependentPath } from "@/ui/components/tenant/tenant-independent-paths";
 import { TenantPicker } from "@/ui/components/tenant/TenantPicker";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
@@ -27,10 +27,21 @@ import { useActiveTenant, useMe } from "@/ui/hooks/useMe";
  *   empty   — signed in, member of nothing → "chờ được mời" (M2.1 adds "tạo")
  * Anything else renders the screen.
  */
-export function TenantBoundary({ children }: { children: ReactNode }) {
+export function TenantBoundary({
+  children,
+  signOutAction,
+}: {
+  children: ReactNode;
+  /**
+   * Passed straight through to the first-run wizard, whose dialog blocks the
+   * top bar — sign-out included. Without it an account with no company has no
+   * way back to the sign-in screen (spec §8).
+   */
+  signOutAction?: () => Promise<void>;
+}) {
   const me = useMe();
   const pathname = usePathname();
-  const { hasNoMembership, mustPickTenant, tenants } = useActiveTenant();
+  const { mustPickTenant, tenants } = useActiveTenant();
 
   const isFirstLoad = me.isPending && me.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
@@ -70,16 +81,6 @@ export function TenantBoundary({ children }: { children: ReactNode }) {
     );
   }
 
-  // --- Empty: signed in, but a member of no company -------------------------
-  // Not a dead end any more (M2.1): create one, or use an invite.
-  if (hasNoMembership) {
-    return (
-      <Stack direction="vertical" padding={4} maxWidth={720}>
-        <OnboardingPanel />
-      </Stack>
-    );
-  }
-
   // --- Fork in the road: several companies, none chosen ---------------------
   if (mustPickTenant) {
     return (
@@ -96,5 +97,13 @@ export function TenantBoundary({ children }: { children: ReactNode }) {
     );
   }
 
-  return <>{children}</>;
+  /**
+   * Signed in and a member of nothing is no longer a state that REPLACES the
+   * app (M2.4). The gate renders the screen and puts the first-run wizard over
+   * it — see `FirstRunGate` for why it, not this boundary, owns when the
+   * dialog closes.
+   *
+   * Anyone who already has a company falls straight through it.
+   */
+  return <FirstRunGate signOutAction={signOutAction}>{children}</FirstRunGate>;
 }

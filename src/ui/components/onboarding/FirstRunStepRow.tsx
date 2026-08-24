@@ -1,7 +1,9 @@
-import { Button, Card, Stack, StatusDot, Text } from "@astryxdesign/core";
+import { Card, Stack, StatusDot, Text } from "@astryxdesign/core";
+import Link from "next/link";
 
 import { cn } from "@/shared/utils";
 import { Badge, type BadgeTone } from "@/ui/components/ui/badge";
+import { Button } from "@/ui/components/ui/button";
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
 import type { StepState, StepView } from "./first-run.types";
 
@@ -140,13 +142,27 @@ export function FirstRunStepRow({ step }: { step: StepView }) {
         {step.action ? (
           <Stack direction="vertical" gap={1} className="pt-1">
             <Stack direction="horizontal" gap={2} align="center" wrap="wrap">
-              <Button
-                label={step.action.label}
-                variant={isCurrent ? "primary" : isError ? "destructive" : "secondary"}
-                isLoading={step.action.isBusy}
-                isDisabled={step.action.disabledReason !== null || step.action.isBusy}
-                onClick={step.action.onAction}
-              />
+              {/*
+                An OPEN step is a real link to the screen that owns it: it
+                middle-clicks into a new tab and shows its destination on hover,
+                like every other navigation in the app. A LOCKED one is a
+                disabled button — there is nowhere useful to go yet, and a link
+                the operator can follow into a screen that refuses them is worse
+                than one they can see is not their turn.
+              */}
+              {step.action.disabledReason === null ? (
+                <Button
+                  asChild
+                  variant={isCurrent ? "default" : isError ? "destructive" : "secondary"}
+                  size="sm"
+                >
+                  <Link href={step.href}>{step.action.label}</Link>
+                </Button>
+              ) : (
+                <Button type="button" variant="secondary" size="sm" disabled>
+                  {step.action.label}
+                </Button>
+              )}
 
               {/* The Named Status Rule: Nút mờ BẮT BUỘC có câu giải thích bên cạnh */}
               {step.action.disabledReason ? (

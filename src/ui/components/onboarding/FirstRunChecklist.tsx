@@ -12,6 +12,7 @@ import {
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
 import type { FirstRunChecklistProps } from "./first-run.types";
 import { FirstRunStepRow } from "./FirstRunStepRow";
+import { SETUP_STEP_PRESENTATION } from "./setup-steps";
 
 export function FirstRunChecklist({
   steps,
@@ -34,12 +35,12 @@ export function FirstRunChecklist({
           </Stack>
           <Skeleton width="100%" height={12} />
           <Divider orientation="horizontal" />
+          {/* Six rows, matching the six real ones — a skeleton that is shorter
+              than what replaces it makes the page jump when data lands. */}
           <Stack direction="vertical" gap={2}>
-            <Skeleton width="100%" height={76} />
-            <Skeleton width="100%" height={76} />
-            <Skeleton width="100%" height={76} />
-            <Skeleton width="100%" height={76} />
-            <Skeleton width="100%" height={76} />
+            {SETUP_STEP_PRESENTATION.map((step) => (
+              <Skeleton key={step.id} width="100%" height={76} />
+            ))}
           </Stack>
         </Stack>
       </Card>

@@ -22,6 +22,7 @@ import {
   type RunningBatch,
   type StatValue,
 } from "@/ui/components/overview/overview-model";
+import { SetupChecklistSection } from "@/ui/components/onboarding/SetupChecklistSection";
 import { TenantHealthPanel } from "@/ui/components/tenant/TenantHealthPanel";
 import { Button } from "@/ui/components/ui/button";
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
@@ -293,6 +294,12 @@ export function OverviewScreen() {
             <p className="sr-only" role="status" aria-live="polite">
               {isUserRefreshing ? "Đang tải số liệu tổng quan" : ""}
             </p>
+
+            {/* Above the numbers, and only while there are steps left: a
+                company that cannot publish yet has nothing to count, and the
+                tape below would report three zeroes as if that were news.
+                `#thiet-lap` is where the dock's "Mở đầy đủ" lands. */}
+            <SetupChecklistSection />
 
             <StatTape
               scheduled={statValue({
