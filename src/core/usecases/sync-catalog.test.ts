@@ -1,8 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  DEFAULT_STOCK_POLICY,
+  makeFieldMap,
+  MYSP_FIELD_MAP,
+  type StockPolicy,
+} from "@/core/domain/catalog-field-map";
 import { AppError } from "@/core/domain/errors";
 import type { MediaAsset, Product } from "@/core/domain/product";
-import type { CatalogConfigRepo, DriveFile, DriveSource } from "@/core/ports/drive-source";
+import type {
+  CatalogConfigRepo,
+  CatalogSourceConfig,
+  DriveFile,
+  DriveSource,
+} from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type {
   FinishSyncRunInput,
@@ -84,7 +95,8 @@ interface Harness {
 function makeHarness(options: {
   files?: DriveFile[];
   snapshot?: SheetSnapshot;
-  config?: { driveFolderId: string; spreadsheetId: string; sheetName: string } | null;
+  /** Widened to the port type so a test can pass a fieldMap / stockPolicy. */
+  config?: CatalogSourceConfig | null;
   driveError?: unknown;
   sheetError?: unknown;
   /** Rows the tenant already has — what an empty source would delete. */
@@ -120,6 +132,8 @@ function makeHarness(options: {
         : options.config,
     // Not used by the sync; present because the port is one interface.
     findCatalogSource: async () => null,
+    findStockPolicy: async () => options.config?.stockPolicy ?? DEFAULT_STOCK_POLICY,
+    findFieldMap: async () => options.config?.fieldMap ?? MYSP_FIELD_MAP,
     saveCatalogSource: async () => ({ previous: null }),
   };
   const products: ProductRepo = {
@@ -760,5 +774,164 @@ describe("syncCatalog — an empty source must never delete a full catalog", () 
       status: "failed",
       errorCode: "GOOGLE_AUTH_EXPIRED",
     });
+  });
+});
+
+/**
+ * Onboarding phase 1: the same sync driven by a TENANT field map instead of the
+ * internal preset. The sheet below shares no column name with ours.
+ */
+describe("syncCatalog — tenant field map", () => {
+  const CUSTOMER_MAP = makeFieldMap({
+    code: "SKU",
+    name: "Product name",
+    description: "Chi tiết",
+    stock: "Qty",
+    note: "Ghi chú",
+    colors: "Color",
+  });
+
+  const customerSnapshot = (rows: Array<Record<string, string>>): SheetSnapshot => ({
+    columns: ["SKU", "Product name", "Chi tiết", "Qty", "Ghi chú", "Color", "Giá bán"],
+    duplicateColumns: [],
+    rows: rows.map((values, index) => ({ rowNumber: index + 2, values })),
+  });
+
+  const customerRow = (overrides: Record<string, string> = {}) => ({
+    SKU: "MGKVX6310",
+    "Product name": "Giannal",
+    "Chi tiết": "Váy dáng xoè",
+    Qty: "104",
+    "Ghi chú": "Không nhận sx 1c",
+    Color: "KEM, HỒNG",
+    "Giá bán": "890.000",
+    ...overrides,
+  });
+
+  const customerConfig = (extra: Partial<CatalogSourceConfig> = {}): CatalogSourceConfig => ({
+    driveFolderId: "folder",
+    spreadsheetId: "sheet",
+    sheetName: "Danh mục",
+    fieldMap: CUSTOMER_MAP,
+    ...extra,
+  });
+
+  it("stops the run when the map has no code column (never an empty catalog)", async () => {
+    const harness = makeHarness({
+      config: customerConfig({ fieldMap: makeFieldMap({ name: "Product name" }) }),
+      snapshot: customerSnapshot([customerRow()]),
+      files: [driveFile("MGKVX6310-KEM (1).png")],
+      existingProducts: 40,
+    });
+
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({ code: "SHEET_ERROR" });
+    expect(harness.deletedStale).toEqual([]);
+    expect(harness.finished[0]).toMatchObject({ status: "failed", errorCode: "SHEET_ERROR" });
+  });
+
+  it("stops the run when two fields claim the same column", async () => {
+    const harness = makeHarness({
+      config: customerConfig({ fieldMap: makeFieldMap({ code: "SKU", name: "SKU" }) }),
+      snapshot: customerSnapshot([customerRow()]),
+    });
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({ code: "SHEET_ERROR" });
+  });
+
+  it("stops the run when the stock policy is unusable", async () => {
+    const harness = makeHarness({
+      config: customerConfig({ stockPolicy: { mode: "disabled", reason: "" } as StockPolicy }),
+      snapshot: customerSnapshot([customerRow()]),
+    });
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({ code: "SHEET_ERROR" });
+  });
+
+  it("reports drift against the TENANT's columns, not ours", async () => {
+    const harness = makeHarness({
+      config: customerConfig(),
+      snapshot: {
+        columns: ["SKU", "Product name", "Qty"],
+        duplicateColumns: [],
+        rows: [{ rowNumber: 2, values: customerRow() }],
+      },
+      files: [driveFile("MGKVX6310-KEM (1).png")],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    expect(result.schemaDrift).toContain("Chi tiết");
+    expect(result.schemaDrift).not.toContain("Mã sản phẩm");
+    const drift = result.issues.find((issue) => issue.reason === "COLUMN_MISSING");
+    expect(drift?.detail).toContain("Danh mục");
+  });
+
+  it("fails with the tenant's column name when a required column is gone", async () => {
+    const harness = makeHarness({
+      config: customerConfig(),
+      snapshot: {
+        columns: ["SKU", "Qty"],
+        duplicateColumns: [],
+        rows: [{ rowNumber: 2, values: customerRow() }],
+      },
+    });
+
+    await expect(harness.run({ tenantId: TENANT })).rejects.toMatchObject({ code: "SHEET_ERROR" });
+    expect(harness.finished[0]?.errorMessage).toContain("Product name");
+  });
+
+  it("warns when a caption field points at a price-looking column, without stopping", async () => {
+    const harness = makeHarness({
+      config: customerConfig({
+        fieldMap: makeFieldMap({ code: "SKU", name: "Product name", description: "Giá bán" }),
+      }),
+      snapshot: customerSnapshot([customerRow()]),
+      files: [driveFile("MGKVX6310-KEM (1).png")],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    expect(
+      result.issues.find((issue) => issue.errorCode === "FIELD_MAP_WARNING"),
+    ).toMatchObject({ reason: "FIELD_MAP_PRICE_LIKE_COLUMN" });
+    expect(harness.writtenProducts).toHaveLength(1);
+  });
+
+  it("persists products read through the tenant's columns and leaves prices out", async () => {
+    const harness = makeHarness({
+      config: customerConfig(),
+      snapshot: customerSnapshot([customerRow()]),
+      files: [driveFile("MGKVX6310-KEM (1).png")],
+    });
+
+    const result = await harness.run({ tenantId: TENANT });
+    expect(result.status).toBe("succeeded");
+    expect(harness.writtenProducts[0]).toMatchObject({
+      content: { code: "MGKVX6310", name: "Giannal", description: "Váy dáng xoè" },
+      operational: { stockRaw: "104", noteRaw: "Không nhận sx 1c", colorsRaw: "KEM, HỒNG" },
+    });
+    expect(JSON.stringify(harness.writtenProducts[0])).not.toContain("890.000");
+  });
+
+  it("logs that the stock check is disabled for this tenant", async () => {
+    const harness = makeHarness({
+      config: customerConfig({
+        stockPolicy: { mode: "disabled", reason: "Khách quản lý tồn ở phần mềm khác" },
+      }),
+      snapshot: customerSnapshot([customerRow()]),
+      files: [driveFile("MGKVX6310-KEM (1).png")],
+    });
+
+    await harness.run({ tenantId: TENANT });
+    expect(harness.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Stock check is DISABLED"),
+      expect.objectContaining({ error_code: "STOCK_CHECK_DISABLED" }),
+    );
+  });
+
+  it("still syncs the internal sheet when no field map is configured", async () => {
+    const harness = makeHarness({
+      snapshot: sheet([productRow()]),
+      files: [driveFile("MGKVX6310-KEM (1).png")],
+    });
+    const result = await harness.run({ tenantId: TENANT });
+    expect(result.status).toBe("succeeded");
+    expect(harness.writtenProducts[0]?.content.name).toBe("Giannal");
   });
 });

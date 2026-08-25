@@ -1,3 +1,4 @@
+import { DEFAULT_STOCK_POLICY, type StockPolicy } from "@/core/domain/catalog-field-map";
 import { AppError } from "@/core/domain/errors";
 import { evaluateProductInventory } from "@/core/domain/inventory";
 import {
@@ -27,6 +28,7 @@ import {
   type PostJobProgress,
   type PostJobStage,
 } from "@/core/domain/post-job-progress";
+import { resolveSpacingMs, type ResolvedSpacing } from "@/core/domain/publish-spacing";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobProgressStore } from "@/core/ports/job-progress";
@@ -34,7 +36,7 @@ import type { JobQueue } from "@/core/ports/job-queue";
 import type { PostJobRepo } from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
 import type { TenantRepo } from "@/core/ports/tenant-repo";
-import type { MediaAssetLookup } from "@/core/ports/drive-source";
+import type { CatalogConfigRepo, MediaAssetLookup } from "@/core/ports/drive-source";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import type {
@@ -63,6 +65,7 @@ import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
  *   1c. handoff window (E8.6) — a scheduled post outside its window goes back to
  *                              the queue; nothing is claimed and nothing is sent
  *   2. spacing gate          — too soon on this channel? re-enqueue, stay queued
+ *                              (the gap of THIS run, else the tenant's)
  *   3. CLAIM queued->publishing (optimistic, WHERE status='queued')
  *   4. STOCK RECHECK         — the last gate before the API call, ALWAYS
  *   5. channel config        — token/page id from tenant_integration
@@ -253,6 +256,17 @@ export interface PublishPostDeps {
    * fallback to "let Facebook fetch the URL" is the bug this replaces.
    */
   readMediaBytes: ReadMediaBytes;
+  /**
+   * Per-tenant stock policy (onboarding phase 1). Optional so a process that is
+   * not wired yet keeps the `numeric` behaviour — the SAFE default, which still
+   * checks stock. A tenant on `textual`/`disabled` needs this wired, otherwise
+   * their written stock cells would all read as "not a number" and every post
+   * would be blocked here.
+   *
+   * It never weakens the recheck: an unreadable policy stops the job (see
+   * `resolveStockPolicy`), it never turns into "đăng đại".
+   */
+  catalogConfig?: CatalogConfigRepo;
 }
 
 export function makePublishPost(deps: PublishPostDeps) {
@@ -421,8 +435,12 @@ export function makePublishPost(deps: PublishPostDeps) {
     }
 
     // --- 2. Spacing gate (brief §6, PENDING(E1): per channel) ----------------
+    // The NUMBER comes from this run when it picked one, otherwise from the
+    // tenant configuration. Everything else about the gate is unchanged: same
+    // per-channel measurement, same SPACING_GATE deferral, same real deadline.
+    const spacing = await resolveJobSpacing(deps, job, settings, log);
     const lastPublishedAt = await deps.postJobs.findLastPublishedAt(tenantId, job.channelId);
-    const waitMs = spacingWaitMs(lastPublishedAt, deps.clock.nowMs(), settings.spacingMs);
+    const waitMs = spacingWaitMs(lastPublishedAt, deps.clock.nowMs(), spacing.ms);
     if (waitMs > 0) {
       // The spacing gate computed this wait; it is a fact, not an estimate.
       await progress.stage(
@@ -431,7 +449,7 @@ export function makePublishPost(deps: PublishPostDeps) {
           waitUntil: new Date(deps.clock.nowMs() + waitMs),
           now: deps.clock.now(),
         }),
-        { wait_ms: waitMs, spacing_ms: settings.spacingMs },
+        { wait_ms: waitMs, spacing_ms: spacing.ms, spacing_source: spacing.source },
       );
       return await deferQueuedJob(deps, log, job, {
         delayMs: waitMs,
@@ -441,11 +459,22 @@ export function makePublishPost(deps: PublishPostDeps) {
         attempt,
         logMessage: "Publish deferred by the spacing gate",
         extraLog: {
-          spacing_ms: settings.spacingMs,
+          spacing_ms: spacing.ms,
+          // "batch" or "tenant" — the first question anyone asks when a post
+          // waits longer than they expected.
+          spacing_source: spacing.source,
+          tenant_spacing_ms: settings.spacingMs,
           last_published_at: lastPublishedAt?.toISOString() ?? null,
         },
       });
     }
+
+    // --- 2b. Tenant stock policy, read BEFORE the claim ---------------------
+    // Deliberately not next to the recheck below: this read can throw (a stored
+    // policy that no longer parses), and a throw AFTER the claim would strand
+    // the row in `publishing`, which nothing auto-recovers (see the guard on
+    // step 1). Here the job is still `queued`, so the queue simply retries it.
+    const stockPolicy = await resolveStockPolicy(deps, tenantId, log);
 
     // --- 3. Claim: queued -> publishing (optimistic) -------------------------
     const claimed = await move(deps, job, "publishing", { reason: "WORKER_CLAIMED" });
@@ -462,7 +491,7 @@ export function makePublishPost(deps: PublishPostDeps) {
     await progress.stage(workingProgress("checking_stock", { attempt, now: deps.clock.now() }));
     const product = await deps.products.findByCode(tenantId, claimed.productCode);
     if (!product) {
-      const userMessage = `Không tìm thấy mã ${claimed.productCode} trên Sheet — không đăng`;
+      const userMessage = `Không tìm thấy mã ${claimed.productCode} trong dữ liệu sản phẩm — không đăng`;
       const blocked = await block(deps, claimed, "PRODUCT_NOT_FOUND", userMessage, "PRODUCT_GONE");
       log.warn("Publish blocked: product disappeared from the snapshot", {
         outcome: "blocked",
@@ -476,7 +505,7 @@ export function makePublishPost(deps: PublishPostDeps) {
       });
     }
 
-    const inventory = evaluateProductInventory(product);
+    const inventory = evaluateProductInventory(product, stockPolicy);
     if (inventory.blocked) {
       const userMessage =
         inventory.operatorMessage ?? `Mã ${claimed.productCode} đã hết hàng — không đăng`;
@@ -502,6 +531,8 @@ export function makePublishPost(deps: PublishPostDeps) {
           error_code: "OUT_OF_STOCK",
           reason: inventory.reason,
           stock: inventory.stock,
+          stock_policy_mode: inventory.policyMode,
+          stock_check_skipped: inventory.stockCheckSkipped,
           attempt,
           auto_cancelled: wasScheduled,
           scheduled_at: claimed.scheduledAt?.toISOString() ?? null,
@@ -515,10 +546,25 @@ export function makePublishPost(deps: PublishPostDeps) {
         userMessage,
       });
     }
+    // The tenant turned the stock gate OFF: this post goes out WITHOUT a stock
+    // check (business rule 3 suspended by an explicit, written decision). Logged
+    // at warn on its own line so "vì sao bài này lên dù hết hàng" is answerable
+    // from the trail of THIS publish, not from the tenant config months later.
+    if (inventory.stockCheckSkipped) {
+      log.warn("Publishing WITHOUT a stock check — the tenant disabled the stock gate", {
+        stock_policy_mode: inventory.policyMode,
+        stock_check_skipped: true,
+        stock_check_skipped_reason: inventory.stockCheckSkippedReason,
+        attempt,
+        alert: "OPERATOR_ATTENTION",
+      });
+    }
     if (inventory.operatorMessage) {
       // Internal warning only — brief §3 forbids it in the caption.
       log.info("Low stock warning (internal only)", {
         stock: inventory.stock,
+        stock_policy_mode: inventory.policyMode,
+        stock_check_skipped: inventory.stockCheckSkipped,
         operator_message: inventory.operatorMessage,
       });
     }
@@ -802,6 +848,10 @@ export function makePublishPost(deps: PublishPostDeps) {
         media_count: done.media.length,
         scheduled_at: claimed.scheduledAt?.toISOString() ?? null,
         late_by_ms: lateByMs,
+        // Carried onto the success line too: a published post must say whether
+        // anybody checked the stock before it went out.
+        stock_policy_mode: inventory.policyMode,
+        stock_check_skipped: inventory.stockCheckSkipped,
         ...(publishedLate
           ? { audit_action: LATE_PUBLISH_AUDIT_ACTION, alert: "OPERATOR_ATTENTION" }
           : {}),
@@ -814,6 +864,95 @@ export function makePublishPost(deps: PublishPostDeps) {
 export type PublishPost = ReturnType<typeof makePublishPost>;
 
 // --- helpers ----------------------------------------------------------------
+
+/**
+ * The tenant's stock policy for THIS publish.
+ *
+ * No repo wired -> `numeric`: what every tenant had before onboarding, and the
+ * safe answer (stock IS still checked). A FAILURE is rethrown, never downgraded:
+ * the repo only throws when the STORED policy cannot be parsed or the database
+ * is down, and turning either into "đăng luôn đi" would delete the second stock
+ * check (business rule 3) exactly where it matters most — the line before the
+ * platform call.
+ */
+async function resolveStockPolicy(
+  deps: PublishPostDeps,
+  tenantId: TenantId,
+  log: Logger,
+): Promise<StockPolicy> {
+  if (!deps.catalogConfig) return DEFAULT_STOCK_POLICY;
+
+  try {
+    return await deps.catalogConfig.findStockPolicy(tenantId);
+  } catch (error) {
+    const appError = AppError.from(error, "SYNC_FAILED", { tenant_id: tenantId });
+    log.error("Publish stopped: the tenant stock policy could not be read", {
+      outcome: "failed",
+      reason: "STOCK_POLICY_UNREADABLE",
+      error_code: appError.code,
+      err: appError,
+      ...appError.toLogObject(),
+      alert: "OPERATOR_ATTENTION",
+    });
+    throw appError;
+  }
+}
+
+/**
+ * The gap this job must keep from the previous post ON ITS CHANNEL.
+ *
+ * Two levels, one winner: the RUN (post_batch.spacing_ms, chosen for one run by
+ * the operator) beats the TENANT setting; a run that picked nothing keeps the
+ * tenant value, which is what every batch did before the column existed.
+ *
+ * A read FAILURE is rethrown, never downgraded to "no gap": the job is still
+ * `queued` at this point (nothing claimed, nothing sent), so the queue simply
+ * retries it — whereas guessing here would post to a real Page at a pace nobody
+ * asked for.
+ *
+ * PENDING(E1): still measured between posts of the SAME CHANNEL.
+ */
+async function resolveJobSpacing(
+  deps: PublishPostDeps,
+  job: PostJob,
+  settings: PublishSettings,
+  log: Logger,
+): Promise<ResolvedSpacing> {
+  let stored: number | null;
+  try {
+    stored = await deps.postJobs.findBatchSpacingMs(job.tenantId, job.batchId);
+  } catch (error) {
+    const appError = AppError.from(error, "DB_ERROR", {
+      tenant_id: job.tenantId,
+      job_id: job.id,
+      batch_id: job.batchId,
+      channel: job.channelId,
+      operation: "publishPost.findBatchSpacingMs",
+    });
+    log.error("Publish stopped: the spacing of this run could not be read", {
+      outcome: "failed",
+      reason: "BATCH_SPACING_UNREADABLE",
+      error_code: appError.code,
+      err: appError,
+      ...appError.toLogObject(),
+      alert: "OPERATOR_ATTENTION",
+    });
+    throw appError;
+  }
+
+  const spacing = resolveSpacingMs(stored, settings.spacingMs);
+  if (spacing.ignoredBatchSpacingMs !== null) {
+    // Only reachable by a row that bypassed the HTTP schema, the usecase guard
+    // AND the CHECK constraint. Loud, and never silently in force.
+    log.warn("Ignored an out-of-range spacing stored on this run — using the tenant setting", {
+      reason: "BATCH_SPACING_OUT_OF_RANGE",
+      batch_spacing_ms: spacing.ignoredBatchSpacingMs,
+      tenant_spacing_ms: settings.spacingMs,
+      alert: "OPERATOR_ATTENTION",
+    });
+  }
+  return spacing;
+}
 
 /**
  * Which publisher handles this channel. Null when the platform has none wired —

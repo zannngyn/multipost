@@ -20,10 +20,12 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  Palette,
   PenLine,
   Radio,
   ScrollText,
   Sparkles,
+  TableProperties,
   Users,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -59,10 +61,12 @@ export const NAV_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> =
   "/posts": ScrollText,
   "/products": ListChecks,
   "/sync": FolderSync,
+  "/data-mapping": TableProperties,
   "/channels": Radio,
   "/prompts": Sparkles,
   "/members": Users,
   "/platform": Building2,
+  "/platform/appearance": Palette,
 };
 
 export function AppSideNav({

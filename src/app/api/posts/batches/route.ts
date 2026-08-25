@@ -6,6 +6,7 @@ import { uuidField } from "@/app/api/_lib/ids";
 import { readJsonBody } from "@/app/api/_lib/read-json-body";
 import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer } from "@/composition/container";
+import { spacingMsField } from "@/shared/publish-spacing";
 
 /**
  * E7.2 — the wizard's final action: fan one approved post out to N channels.
@@ -89,6 +90,19 @@ const BodySchema = z.object({
    * reason, not reject the whole lô (business rule 6).
    */
   scheduledAt: z.iso.datetime({ error: "Giờ hẹn đăng không hợp lệ." }).optional(),
+  /**
+   * E7 — the gap the spacing gate keeps between two posts of THIS run, in
+   * MILLISECONDS (the screen collects minutes and multiplies by 60000).
+   *
+   * Absent OR null = this run picks nothing, so the tenant's configured spacing
+   * applies — exactly what every batch did before this field existed.
+   *
+   * NOT coerced: a string body value is refused rather than read as
+   * milliseconds, because "5" means five MINUTES to whoever typed it. 0 is a
+   * legal value (đăng liên tục). The 5-minute recommendation is advice the UI
+   * shows, never a floor enforced here.
+   */
+  spacingMs: spacingMsField(),
   /** E8.1 — per-channel override; wins over `scheduledAt` where it is set. */
   scheduledAtByChannel: z
     .record(
@@ -142,6 +156,9 @@ export async function POST(request: Request): Promise<Response> {
       channelIds: body.channelIds,
       captionByChannel: body.captionByChannel,
       media: body.media,
+      // `undefined` and `null` mean the same thing downstream ("no gap for this
+      // run"), so the key is only forwarded when the caller actually sent one.
+      ...(body.spacingMs === undefined ? {} : { spacingMs: body.spacingMs }),
       ...(body.scheduledAt ? { scheduledAt: new Date(body.scheduledAt) } : {}),
       ...(scheduledAtByChannel ? { scheduledAtByChannel } : {}),
     });

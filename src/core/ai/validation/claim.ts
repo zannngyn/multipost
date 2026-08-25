@@ -12,7 +12,11 @@ import {
   type CaptionContent,
   type CaptionInput,
 } from "@/core/domain/caption";
-import { SHEET_COLUMNS } from "@/core/domain/product";
+import {
+  contentColumns,
+  MYSP_FIELD_MAP,
+  type CatalogFieldMap,
+} from "@/core/domain/catalog-field-map";
 import { failure, type ValidationContext, type ValidationFailure } from "@/core/ai/validation/types";
 
 /** Vietnamese fashion materials seen in the real sheet + common variants. */
@@ -60,27 +64,85 @@ function sourceTextOf(product: CaptionInput): string {
  * source text here holds only the value. That mismatch is our own formatting
  * artefact, not a hallucination, and it used to block real captions.
  *
- * The stripped prefix is pinned to the EXACT labels the prompt prints, not to
- * "anything before a colon": a loose rule would turn `sourceText` into a free
- * text field, where "Giá chỉ 350.000: Đầm" would pass review as a grounded
- * claim. Everything after the label still has to be found in the source.
+ * The stripped prefix is pinned to EXACT labels, not to "anything before a
+ * colon": a loose rule would turn `sourceText` into a free text field, where
+ * "Giá chỉ 350.000: Đầm" would pass review as a grounded claim. Everything
+ * after the label still has to be found in the source.
+ *
+ * WHICH labels count is per tenant, and both sets are accepted because both can
+ * reach a prompt: the shipped template prints the preset's Vietnamese labels
+ * for EVERY tenant, while a tenant-authored template normally prints the
+ * headers of its own sheet ("Nhóm hàng", "Product name"). A header the tenant
+ * never mapped onto a caption field is not a label — it cannot be in a prompt.
  */
-const PROMPT_LABELS = [
-  SHEET_COLUMNS.name,
-  SHEET_COLUMNS.category,
-  SHEET_COLUMNS.season,
-  SHEET_COLUMNS.description,
-] as const;
+const DEFAULT_PROMPT_LABELS: readonly string[] = contentColumns(MYSP_FIELD_MAP);
+
+function promptLabelsFor(map: CatalogFieldMap | null | undefined): readonly string[] {
+  const tenantColumns = map ? contentColumns(map) : [];
+  const labels: string[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of [...DEFAULT_PROMPT_LABELS, ...tenantColumns]) {
+    const label = typeof raw === "string" ? raw.trim() : "";
+    if (label.length === 0) continue;
+    const key = normalizeForCompare(label);
+    // A punctuation-only header normalises to "" and would match every
+    // "anything: value" — precisely the loose rule this guard rules out.
+    if (key.length === 0 || seen.has(key)) continue;
+    seen.add(key);
+    labels.push(label);
+  }
+
+  // Longest first: alternation order decides how a line is read, and "Mô tả"
+  // must not shadow a tenant's "Mô tả sản phẩm chi tiết".
+  return labels.sort((a, b) => b.length - a.length);
+}
 
 /** A label is data, not a pattern: "Nguyên Giá (bắt buộc)" must not become a group. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-const LABEL_PREFIX = new RegExp(
-  `^\\s*[-*•]?\\s*(?:${PROMPT_LABELS.map((label) => escapeRegExp(normalizeForCompare(label))).join("|")})\\s*:[ \\t]*`,
-  "iu",
-);
+/**
+ * One compiled matcher per label set. Cached because the set is stable per
+ * tenant while `validateClaims` runs once per attempt, and bounded so a
+ * pathological number of distinct maps cannot grow it without limit.
+ */
+const LABEL_PREFIX_CACHE = new Map<string, RegExp>();
+const LABEL_PREFIX_CACHE_MAX = 64;
+
+function labelPrefixPattern(labels: readonly string[]): RegExp {
+  const key = labels.join("\x00");
+  const cached = LABEL_PREFIX_CACHE.get(key);
+  if (cached) return cached;
+
+  const alternation = labels.map((label) => escapeRegExp(normalizeForCompare(label))).join("|");
+  const pattern = new RegExp(`^\\s*[-*•]?\\s*(?:${alternation})\\s*:[ \\t]*`, "iu");
+  if (LABEL_PREFIX_CACHE.size >= LABEL_PREFIX_CACHE_MAX) LABEL_PREFIX_CACHE.clear();
+  LABEL_PREFIX_CACHE.set(key, pattern);
+  return pattern;
+}
+
+/** Operator-facing column name: the tenant's header, the preset's when unmapped. */
+function columnLabel(
+  map: CatalogFieldMap | null | undefined,
+  field: "description" | "category" | "season",
+): string {
+  const column = map?.[field];
+  if (typeof column !== "string") return MYSP_FIELD_MAP[field];
+  const trimmed = column.trim();
+  return trimmed.length > 0 ? trimmed : MYSP_FIELD_MAP[field];
+}
+
+/** The three columns stage 3 checks against, named the way the operator sees them. */
+function sourceColumnsLabel(map: CatalogFieldMap | null | undefined): string {
+  const labels: string[] = [];
+  for (const field of ["description", "category", "season"] as const) {
+    const label = columnLabel(map, field);
+    if (!labels.includes(label)) labels.push(label);
+  }
+  return labels.join("/");
+}
 
 /**
  * Shortest source worth trusting. One character passes almost any containment
@@ -89,9 +151,9 @@ const LABEL_PREFIX = new RegExp(
 const MIN_SOURCE_CHARS = 2;
 
 /** Forms of a declared source worth checking, most literal first. */
-function sourceCandidates(rawSourceText: string): string[] {
+function sourceCandidates(rawSourceText: string, labelPrefix: RegExp): string[] {
   const literal = normalizeLoose(rawSourceText);
-  const unlabelled = normalizeLoose(rawSourceText.replace(LABEL_PREFIX, ""));
+  const unlabelled = normalizeLoose(rawSourceText.replace(labelPrefix, ""));
   const forms = unlabelled.length > 0 && unlabelled !== literal ? [literal, unlabelled] : [literal];
   return forms.filter((form) => form.length >= MIN_SOURCE_CHARS);
 }
@@ -113,10 +175,14 @@ export function validateClaims(
   const failures: ValidationFailure[] = [];
   const source = sourceTextOf(context.product);
   const body = content.body;
+  // No map = the MYSP preset, so an internal generation behaves as before.
+  const fieldMap = context.fieldMap ?? null;
+  const labelPrefix = labelPrefixPattern(promptLabelsFor(fieldMap));
+  const sourceColumns = sourceColumnsLabel(fieldMap);
 
   // --- (a) declared claims must be grounded -------------------------------
   for (const claim of content.claims) {
-    const candidates = sourceCandidates(claim.sourceText);
+    const candidates = sourceCandidates(claim.sourceText, labelPrefix);
     if (candidates.length === 0) {
       const blank = claim.sourceText.trim().length === 0;
       failures.push(
@@ -144,7 +210,7 @@ export function validateClaims(
       failure(
         3,
         "claim.source_not_found",
-        `Khẳng định "${claim.statement}" trích nguồn "${claim.sourceText}" không có trong Mô tả sản phẩm/Chủng loại/Mùa vụ.`,
+        `Khẳng định "${claim.statement}" trích nguồn "${claim.sourceText}" không có trong ${sourceColumns}.`,
         { statement: claim.statement, source_text: claim.sourceText },
       ),
     );
@@ -177,7 +243,7 @@ export function validateClaims(
       failure(
         3,
         "claim.invented_material",
-        `Nội dung nhắc chất liệu không có trong Mô tả sản phẩm: ${invented.join(", ")}.`,
+        `Nội dung nhắc chất liệu không có trong ${columnLabel(fieldMap, "description")}: ${invented.join(", ")}.`,
         { tokens: invented },
       ),
     );

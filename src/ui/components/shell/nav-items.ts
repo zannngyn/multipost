@@ -11,9 +11,8 @@ export interface NavItem {
    * light both at once and the operator could not tell which screen they are
    * on.
    *
-   * No entry needs it since the wave-1 IA — every destination is one segment
-   * deep — but the mechanism stays, because the day a nested destination is
-   * added is the day two rows light up together.
+   * `/platform` is the first entry to need it (M3.4 put "Màu giao diện" at
+   * `/platform/appearance`) — the case the mechanism was kept for.
    */
   readonly isExact?: boolean;
 }
@@ -59,6 +58,7 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     items: [
       { href: "/products", label: "Sản phẩm" },
       { href: "/sync", label: "Đồng bộ dữ liệu" },
+      { href: "/data-mapping", label: "Kết nối dữ liệu" },
     ],
   },
   {
@@ -72,7 +72,14 @@ export const NAV_SECTIONS: readonly NavSection[] = [
   {
     title: "Nền tảng",
     requiresPlatformRole: true,
-    items: [{ href: "/platform", label: "Công ty khách" }],
+    items: [
+      // `isExact` earns its keep here: "/platform/appearance" lives UNDER
+      // "/platform", so prefix matching would light both rows at once and the
+      // operator could not tell which screen they are on. This is the nested
+      // destination the mechanism was built for (M3.4).
+      { href: "/platform", label: "Công ty khách", isExact: true },
+      { href: "/platform/appearance", label: "Màu giao diện" },
+    ],
   },
 ] as const;
 

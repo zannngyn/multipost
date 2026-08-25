@@ -19,6 +19,6 @@ export function hashParts(parts: Readonly<Record<string, string | number | undef
   const serialised = Object.keys(parts)
     .sort()
     .map((key) => `${key}=${parts[key] ?? ""}`)
-    .join("");
+    .join("\x01");
   return stableHash(serialised);
 }

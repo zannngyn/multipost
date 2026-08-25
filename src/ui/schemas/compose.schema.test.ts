@@ -26,6 +26,8 @@ const VALID_COMPOSE = {
   tenantId: RESPONSE_TENANT_ID,
   productCode: "MGKVX6310",
   channel: "facebook",
+  /** Onboarding phase 3: every compose answer says where its text came from. */
+  productOrigin: "sheet",
   content: {
     code: "MGKVX6310",
     name: "Giannal",
@@ -39,6 +41,8 @@ const VALID_COMPOSE = {
     reason: null,
     stock: 104,
     operatorMessage: null,
+    stockCheckSkipped: false,
+    stockCheckSkippedReason: null,
   },
   media: [
     {
@@ -126,6 +130,24 @@ describe("ComposeResponseSchema", () => {
 
   it("refuses a post with no media — an album of zero photos is never valid", () => {
     expect(ComposeResponseSchema.safeParse({ ...VALID_COMPOSE, media: [] }).success).toBe(false);
+  });
+
+  /**
+   * Provenance is the whole point of onboarding phase 3: a manual post must be
+   * recognisable as one, months later. Guessing a default would relabel it.
+   */
+  it("keeps a typed product marked as typed", () => {
+    const result = ComposeResponseSchema.safeParse({ ...VALID_COMPOSE, productOrigin: "manual" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.productOrigin).toBe("manual");
+  });
+
+  it("refuses a compose answer with no origin rather than assuming 'sheet'", () => {
+    const { productOrigin: _dropped, ...withoutOrigin } = VALID_COMPOSE;
+    expect(ComposeResponseSchema.safeParse(withoutOrigin).success).toBe(false);
+    expect(
+      ComposeResponseSchema.safeParse({ ...VALID_COMPOSE, productOrigin: "csv" }).success,
+    ).toBe(false);
   });
 
   it("accepts a null inventory (product not evaluated)", () => {

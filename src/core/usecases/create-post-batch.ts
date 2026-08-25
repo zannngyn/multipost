@@ -1,3 +1,4 @@
+import { DEFAULT_STOCK_POLICY, type StockPolicy } from "@/core/domain/catalog-field-map";
 import { AppError } from "@/core/domain/errors";
 import { evaluateProductInventory } from "@/core/domain/inventory";
 import { normalizeColorName } from "@/core/domain/media-file-name";
@@ -20,7 +21,15 @@ import {
   type ScheduleRejection,
   type TransitionMeta,
 } from "@/core/domain/post-job";
+import { productOrigin } from "@/core/domain/product";
+import {
+  parseBatchSpacingMs,
+  spacingRejectionMessage,
+  MAX_SPACING_MS,
+  MIN_SPACING_MS,
+} from "@/core/domain/publish-spacing";
 import { isTenantId } from "@/core/domain/tenant";
+import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobQueue } from "@/core/ports/job-queue";
 import type { NewPostJob, PostJobRepo } from "@/core/ports/post-job-repo";
@@ -92,6 +101,20 @@ export interface CreatePostBatchInput {
    * khung giờ vàng khác nhau"). A bad time blocks ONLY that channel.
    */
   readonly scheduledAtByChannel?: Readonly<Record<string, Date | null | undefined>>;
+  /**
+   * E7 — gap the spacing gate keeps between two posts of THIS run, in
+   * MILLISECONDS. Absent/null = keep using the tenant's configured spacing
+   * (`PublishSettings.spacingMs`), which is what every batch did before this
+   * field existed.
+   *
+   * Range [0, 24h]. 0 is a real choice ("đăng liên tục"), not an absence. The
+   * UI advises at least 5 minutes but nothing here refuses a smaller number —
+   * that is advice, not a rule.
+   *
+   * PENDING(E1): the gap is between posts of the SAME CHANNEL; the channels of
+   * one batch still do not wait for each other.
+   */
+  readonly spacingMs?: number | null;
   /** `app_user.id` when the caller already knows it; wins over `actorEmail`. */
   readonly createdBy?: string | null;
   /**
@@ -124,6 +147,12 @@ export interface CreatePostBatchResult {
   readonly color: string;
   readonly format: PostFormat;
   readonly batchStatus: PostBatchStatus;
+  /**
+   * The gap STORED on this run, in milliseconds. Null = nothing was stored, so
+   * the tenant's configured spacing applies at publish time. Echoed back so a
+   * screen can show what it actually got instead of what it hoped it sent.
+   */
+  readonly spacingMs: number | null;
   readonly channels: readonly CreatePostBatchChannelResult[];
   /** Internal operator notes (low stock...). Never part of a caption. */
   readonly warnings: readonly string[];
@@ -154,6 +183,12 @@ export interface CreatePostBatchDeps {
   mediaBaseUrl: () => string;
   /** Optional override; the signer clamps it to [1min, 24h]. */
   mediaUrlTtlMs?: number;
+  /**
+   * Per-tenant stock policy (onboarding phase 1). Optional so a caller that is
+   * not wired yet keeps the `numeric` behaviour — the SAFE default, which still
+   * checks stock. A tenant on `textual`/`disabled` needs this wired.
+   */
+  catalogConfig?: CatalogConfigRepo;
 }
 
 export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
@@ -209,6 +244,27 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
       });
     }
 
+    // A spacing this usecase cannot store must stop the batch HERE, before a
+    // single row exists: a run created with the wrong gap would publish to real
+    // Pages at the wrong pace, and there is no undo for that.
+    const spacing = parseBatchSpacingMs(input?.spacingMs);
+    if (!spacing.ok) {
+      throw new AppError("INVALID_INPUT", {
+        message: `createPostBatch received an invalid spacingMs (${spacing.reason})`,
+        userMessage: spacingRejectionMessage(spacing.reason),
+        context: {
+          tenant_id: tenantId,
+          product_code: productCode,
+          field: "spacingMs",
+          reason: `SPACING_MS_${spacing.reason}`,
+          received: spacing.received,
+          min_ms: MIN_SPACING_MS,
+          max_ms: MAX_SPACING_MS,
+        },
+      });
+    }
+    const spacingMs = spacing.ms;
+
     const batchId = str(input?.batchId) || deps.newId();
     const color = normaliseColor(input?.color);
     const log = deps.logger.child({
@@ -229,12 +285,15 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
     const product = await deps.products.findByCode(tenantId, productCode);
     if (!product) {
       throw new AppError("PRODUCT_NOT_FOUND", {
-        message: `Product ${productCode} is not in the sheet snapshot`,
-        userMessage: `Không tìm thấy mã ${productCode} trên Sheet — chưa đăng được`,
+        message: `Product ${productCode} is not in the product catalog`,
+        userMessage: `Không tìm thấy mã ${productCode} trong dữ liệu sản phẩm — đồng bộ lại bảng dữ liệu, hoặc nhập tay thông tin sản phẩm cho bài này`,
         context: { tenant_id: tenantId, product_code: productCode, batch_id: batchId },
       });
     }
-    const inventory = evaluateProductInventory(product);
+    // Read BEFORE the batch/jobs are written: an unreadable policy must stop
+    // here, with nothing created, rather than leave a batch nobody can explain.
+    const stockPolicy = await resolveStockPolicy(deps, tenantId, log);
+    const inventory = evaluateProductInventory(product, stockPolicy);
     const warnings: string[] = [];
     if (inventory.operatorMessage) warnings.push(inventory.operatorMessage);
 
@@ -250,11 +309,17 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
     const schedules = resolveSchedules(input, channelIds, deps.clock.nowMs());
 
     // --- Create batch + jobs in ONE transaction (the lock) ------------------
+    // Stamped from the product this batch was actually built on — the row is
+    // already in hand (the guard above threw without it), so no extra read. It
+    // is a historical fact from here on: a later sync deleting or replacing the
+    // product cannot rewrite what this post was made from.
+    const origin = productOrigin(product);
     const newJobs: NewPostJob[] = channelIds.map((channelId) => ({
       id: deps.newId(),
       tenantId,
       batchId,
       productCode,
+      productOrigin: origin,
       color,
       channelId,
       format,
@@ -271,6 +336,8 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
         color,
         format,
         note: str(input?.note) || null,
+        // null = "this run picked nothing"; the worker then reads the tenant's.
+        spacingMs,
         // Bug B6: an explicit id wins, otherwise the session e-mail is looked
         // up. `post_batch.created_by` is a FK to `app_user.id`, so an e-mail
         // must never be written into it raw.
@@ -286,14 +353,35 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
 
     log.info("Post batch created", {
       channels: channelIds,
+      // Answers "vì sao lô này đăng nhanh/chậm thế" without reading the row.
+      spacing_ms: spacingMs,
+      spacing_source: spacingMs === null ? "tenant" : "batch",
+      product_origin: origin,
       job_count: created.jobs.length,
       media_count: media.length,
       // Expiry only — a signed URL carries a MAC and never belongs in a log.
       media_url_expires_at: new Date(signed.expiresAtMs).toISOString(),
       stock: inventory.stock,
       inventory_status: inventory.status,
+      stock_policy_mode: inventory.policyMode,
+      stock_check_skipped: inventory.stockCheckSkipped,
+      stock_check_skipped_reason: inventory.stockCheckSkippedReason,
       duplicate_keys: created.jobs.map((job) => postJobDuplicateKey(job)),
     });
+
+    // The tenant turned the stock gate OFF: no job of this batch passed a stock
+    // check (business rule 3 suspended by a written decision).
+    // Its own warn line so the batch trail answers "vì sao bài này lên dù hết
+    // hàng" without reading the tenant config months later.
+    if (inventory.stockCheckSkipped) {
+      log.warn("Post batch created WITHOUT a stock check — the tenant disabled the stock gate", {
+        stock_policy_mode: inventory.policyMode,
+        stock_check_skipped: true,
+        stock_check_skipped_reason: inventory.stockCheckSkippedReason,
+        channels: channelIds,
+        alert: "OPERATOR_ATTENTION",
+      });
+    }
 
     if (inventory.blocked) {
       const userMessage =
@@ -322,6 +410,8 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
         error_code: "OUT_OF_STOCK",
         reason: inventory.reason,
         stock: inventory.stock,
+        stock_policy_mode: inventory.policyMode,
+        stock_check_skipped: inventory.stockCheckSkipped,
         alert: "OPERATOR_ATTENTION",
       });
       return {
@@ -331,6 +421,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
         color,
         format,
         batchStatus: summary.status,
+        spacingMs,
         channels,
         warnings,
       };
@@ -497,6 +588,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
       color,
       format,
       batchStatus: summary.status,
+      spacingMs,
       channels,
       warnings,
     };
@@ -506,6 +598,37 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
 export type CreatePostBatch = ReturnType<typeof makeCreatePostBatch>;
 
 // --- helpers ----------------------------------------------------------------
+
+/**
+ * The tenant's stock policy for this batch.
+ *
+ * No repo wired -> `numeric`: what every tenant had before onboarding, and the
+ * safe answer (stock IS still checked). A FAILURE is rethrown, never downgraded:
+ * the repo only throws on a STORED policy that cannot be parsed or on a database
+ * failure, and queueing a whole batch on a config we could not read is the
+ * silent fallback this feature is not allowed to have.
+ */
+async function resolveStockPolicy(
+  deps: CreatePostBatchDeps,
+  tenantId: TenantId,
+  log: Logger,
+): Promise<StockPolicy> {
+  if (!deps.catalogConfig) return DEFAULT_STOCK_POLICY;
+
+  try {
+    return await deps.catalogConfig.findStockPolicy(tenantId);
+  } catch (error) {
+    const appError = AppError.from(error, "SYNC_FAILED", { tenant_id: tenantId });
+    log.error("Post batch stopped: the tenant stock policy could not be read", {
+      reason: "STOCK_POLICY_UNREADABLE",
+      error_code: appError.code,
+      err: appError,
+      ...appError.toLogObject(),
+      alert: "OPERATOR_ATTENTION",
+    });
+    throw appError;
+  }
+}
 
 async function moveJob(
   deps: CreatePostBatchDeps,

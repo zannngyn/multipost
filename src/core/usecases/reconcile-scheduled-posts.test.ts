@@ -130,6 +130,10 @@ function makeRepo(jobs: PostJob[], options: { rejectTransition?: boolean } = {})
     async findLastPublishedAt() {
       return null;
     },
+    async findBatchSpacingMs() {
+      // No per-run gap: the tenant setting applies, as it always did.
+      return null;
+    },
     async refreshBatchStatus() {
       return {
         batchId: "batch-1",

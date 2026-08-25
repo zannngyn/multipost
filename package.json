@@ -12,13 +12,15 @@
     "test": "vitest run",
     "test:integration": "vitest run src/adapters/db/db-errors.integration.test.ts",
     "theme:check": "astryx theme build --check src/ui/theme/mysp-theme.ts",
-    "verify": "pnpm typecheck && pnpm lint && pnpm depcruise && pnpm theme:check && pnpm test && pnpm build",
+    "verify": "pnpm typecheck && pnpm lint && pnpm depcruise && pnpm theme:check && pnpm theme:presets:check && pnpm test && pnpm build",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx --env-file-if-exists=.env src/adapters/db/seed.ts",
     "worker": "tsx --env-file-if-exists=.env src/worker/index.ts",
     "worker:dev": "tsx watch --env-file-if-exists=.env src/worker/index.ts",
-    "queue:demo": "tsx --env-file-if-exists=.env src/worker/enqueue-demo.ts"
+    "queue:demo": "tsx --env-file-if-exists=.env src/worker/enqueue-demo.ts",
+    "theme:presets": "tsx scripts/build-theme-presets.ts",
+    "theme:presets:check": "tsx scripts/build-theme-presets.ts --check"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.4.0",

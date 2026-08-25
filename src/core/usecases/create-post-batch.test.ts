@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { MYSP_FIELD_MAP, type StockPolicy } from "@/core/domain/catalog-field-map";
 import { AppError } from "@/core/domain/errors";
 import {
   deriveBatchStatus,
@@ -7,9 +8,15 @@ import {
   type PostJob,
 } from "@/core/domain/post-job";
 import type { Product } from "@/core/domain/product";
+import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
-import type { NewPostJob, PostBatchSummary, PostJobRepo } from "@/core/ports/post-job-repo";
+import type {
+  NewPostBatch,
+  NewPostJob,
+  PostBatchSummary,
+  PostJobRepo,
+} from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
 import type {
   ChannelConfig,
@@ -65,6 +72,23 @@ function fakeSigner(nowMs = CLOCK.nowMs()) {
   return { sign, calls };
 }
 
+/**
+ * Config repo answering only the hot-path read this usecase makes. Full port
+ * shape so the fake cannot drift away from `CatalogConfigRepo`.
+ */
+function makeCatalogConfig(policy: StockPolicy | Error): CatalogConfigRepo {
+  return {
+    findCatalogConfig: async () => null,
+    findCatalogSource: async () => null,
+    findFieldMap: async () => MYSP_FIELD_MAP,
+    findStockPolicy: async () => {
+      if (policy instanceof Error) throw policy;
+      return policy;
+    },
+    saveCatalogSource: async () => ({ previous: null }),
+  };
+}
+
 function makeProduct(stockRaw = "104", noteRaw = ""): Product {
   return {
     content: { code: "MGKVX6310", name: "Giannal", description: null, category: null, season: null },
@@ -88,9 +112,13 @@ function channel(channelId: string, status: "active" | "disabled" = "active"): C
 
 function makeRepo(options: { failCreate?: AppError } = {}) {
   const store = new Map<string, PostJob>();
-  const repo: PostJobRepo & { store: typeof store } = {
+  /** Every batch row this repo was asked to write — the write-side contract. */
+  const batches: NewPostBatch[] = [];
+  const repo: PostJobRepo & { store: typeof store; batches: NewPostBatch[] } = {
     store,
-    async createBatchWithJobs(input: { batch: { id: string }; jobs: readonly NewPostJob[] }) {
+    batches,
+    async createBatchWithJobs(input: { batch: NewPostBatch; jobs: readonly NewPostJob[] }) {
+      batches.push(input.batch);
       if (options.failCreate) throw options.failCreate;
       const jobs = input.jobs.map((job) => {
         const created: PostJob = {
@@ -98,6 +126,7 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
           tenantId: job.tenantId,
           batchId: job.batchId,
           productCode: job.productCode,
+          productOrigin: job.productOrigin,
           color: job.color,
           channelId: job.channelId,
           format: job.format,
@@ -154,6 +183,10 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
       return [];
     },
     async findLastPublishedAt() {
+      return null;
+    },
+    async findBatchSpacingMs() {
+      // No per-run gap: the tenant setting applies, as it always did.
       return null;
     },
     async refreshBatchStatus(_tenantId, batchId): Promise<PostBatchSummary> {
@@ -221,6 +254,8 @@ function harness(options: {
   queue?: ReturnType<typeof makeQueue>;
   signMediaUrl?: SignMediaUrlFn;
   mediaBaseUrl?: () => string;
+  /** Onboarding phase 1 — the tenant's stock policy, or the read that fails. */
+  stockPolicy?: StockPolicy | Error;
 } = {}) {
   const lines: LogLine[] = [];
   const repo = options.repo ?? makeRepo();
@@ -251,6 +286,9 @@ function harness(options: {
     newId: () => `id-${++counter}`,
     signMediaUrl: options.signMediaUrl ?? signer.sign,
     mediaBaseUrl: options.mediaBaseUrl ?? (() => MEDIA_BASE_URL),
+    ...(options.stockPolicy === undefined
+      ? {}
+      : { catalogConfig: makeCatalogConfig(options.stockPolicy) }),
   });
   return { createPostBatch, repo, queue, lines, signer };
 }
@@ -401,6 +439,157 @@ describe("createPostBatch — stock gate runs first (business rule 1)", () => {
     const result = await createPostBatch(BASE_INPUT);
     expect(result.warnings.join(" ")).toContain("Tồn thấp 3c");
     expect(queue.enqueued).toHaveLength(2);
+  });
+});
+
+/**
+ * Onboarding phase 1 — the tenant's StockPolicy reaching the FIRST stock check
+ * (the one that decides whether a batch is queued at all). Edge cases first.
+ */
+const TEXTUAL_POLICY: StockPolicy = {
+  mode: "textual",
+  inStockValues: ["Còn hàng", "Sẵn hàng"],
+  outOfStockValues: ["Hết hàng"],
+};
+const DISABLED_POLICY: StockPolicy = {
+  mode: "disabled",
+  reason: "Khách quản lý tồn kho trên phần mềm riêng",
+};
+
+describe("createPostBatch — tenant stock policy (onboarding phase 1)", () => {
+  it("creates and queues NOTHING when the stored policy cannot be read", async () => {
+    const { createPostBatch, repo, queue, lines } = harness({
+      stockPolicy: new AppError("SYNC_FAILED", { message: "invalid stockPolicy" }),
+    });
+
+    await expect(createPostBatch(BASE_INPUT)).rejects.toMatchObject({ code: "SYNC_FAILED" });
+    // Read before the insert: no half-created batch to explain afterwards.
+    expect(repo.store.size).toBe(0);
+    expect(queue.enqueued).toHaveLength(0);
+    expect(
+      lines.some(
+        (line) => line.level === "error" && line.context?.reason === "STOCK_POLICY_UNREADABLE",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the numeric behaviour when no config repo is wired", async () => {
+    const { createPostBatch, queue } = harness({ product: makeProduct("0") });
+    const result = await createPostBatch(BASE_INPUT);
+    expect(result.batchStatus).toBe("blocked");
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("numeric mode is unchanged when the repo answers the default", async () => {
+    const { createPostBatch, queue } = harness({
+      product: makeProduct("0"),
+      stockPolicy: { mode: "numeric" },
+    });
+    const result = await createPostBatch(BASE_INPUT);
+    expect(result.batchStatus).toBe("blocked");
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("textual: queues a declared in-stock wording that numeric mode would block", async () => {
+    const { createPostBatch, queue } = harness({
+      product: makeProduct("Còn hàng"),
+      stockPolicy: TEXTUAL_POLICY,
+    });
+    const result = await createPostBatch(BASE_INPUT);
+    expect(result.channels.map((entry) => entry.status)).toEqual(["queued", "queued"]);
+    expect(queue.enqueued).toHaveLength(2);
+  });
+
+  it("textual: blocks a declared out-of-stock wording", async () => {
+    const { createPostBatch, queue } = harness({
+      product: makeProduct("Hết hàng"),
+      stockPolicy: TEXTUAL_POLICY,
+    });
+    const result = await createPostBatch(BASE_INPUT);
+    expect(result.batchStatus).toBe("blocked");
+    expect(result.channels.map((entry) => entry.errorCode)).toEqual([
+      "OUT_OF_STOCK",
+      "OUT_OF_STOCK",
+    ]);
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("textual: blocks a wording the tenant never declared — no guessing", async () => {
+    const { createPostBatch, queue, lines } = harness({
+      product: makeProduct("sắp về"),
+      stockPolicy: TEXTUAL_POLICY,
+    });
+    const result = await createPostBatch(BASE_INPUT);
+    expect(result.batchStatus).toBe("blocked");
+    expect(queue.enqueued).toHaveLength(0);
+    expect(
+      lines.some(
+        (line) =>
+          line.context?.reason === "STOCK_TEXT_UNKNOWN" &&
+          line.context?.stock_policy_mode === "textual",
+      ),
+    ).toBe(true);
+  });
+
+  it("disabled: queues an empty stock cell and says NOBODY checked", async () => {
+    const { createPostBatch, queue, lines } = harness({
+      product: makeProduct(""),
+      stockPolicy: DISABLED_POLICY,
+    });
+
+    const result = await createPostBatch(BASE_INPUT);
+
+    expect(result.channels.map((entry) => entry.status)).toEqual(["queued", "queued"]);
+    expect(queue.enqueued).toHaveLength(2);
+    // The operator sees it on the screen...
+    expect(result.warnings.join(" ")).toContain("tắt kiểm tồn kho");
+    // ...the batch record carries it...
+    expect(lines.find((line) => line.message === "Post batch created")?.context).toMatchObject({
+      stock_policy_mode: "disabled",
+      stock_check_skipped: true,
+    });
+    // ...and a WARN line answers "vì sao bài này lên dù hết hàng" on its own.
+    const skipped = lines.find(
+      (line) => line.level === "warn" && line.context?.stock_check_skipped === true,
+    );
+    expect(skipped).toBeDefined();
+    expect(skipped?.context).toMatchObject({
+      stock_policy_mode: "disabled",
+      stock_check_skipped_reason: "Khách quản lý tồn kho trên phần mềm riêng",
+    });
+  });
+
+  it("disabled: 'HẾT HÀNG' in the note still blocks the whole batch", async () => {
+    const { createPostBatch, repo, queue } = harness({
+      product: makeProduct("50", "HẾT HÀNG"),
+      stockPolicy: DISABLED_POLICY,
+    });
+    const result = await createPostBatch(BASE_INPUT);
+    expect(result.batchStatus).toBe("blocked");
+    expect(queue.enqueued).toHaveLength(0);
+    for (const job of repo.store.values()) expect(job.lastErrorCode).toBe("OUT_OF_STOCK");
+  });
+
+  it("disabled: conflicting sheet rows still block", async () => {
+    const conflicting: Product = { ...makeProduct("104"), hasConflict: true };
+    const { createPostBatch, queue } = harness({
+      product: conflicting,
+      stockPolicy: DISABLED_POLICY,
+    });
+    const result = await createPostBatch(BASE_INPUT);
+    expect(result.batchStatus).toBe("blocked");
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("a policy that itself is invalid blocks instead of queueing unchecked", async () => {
+    // Hand-edited row shape: `disabled` without the required written reason.
+    const { createPostBatch, queue } = harness({
+      product: makeProduct("104"),
+      stockPolicy: { mode: "disabled", reason: "" } as StockPolicy,
+    });
+    const result = await createPostBatch(BASE_INPUT);
+    expect(result.batchStatus).toBe("blocked");
+    expect(queue.enqueued).toHaveLength(0);
   });
 });
 
@@ -770,5 +959,207 @@ describe("createPostBatch — video formats (Phase 2)", () => {
     await expect(
       createPostBatch({ ...BASE_INPUT, format: "story" as unknown as "image_post" }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+});
+
+/**
+ * Onboarding phase 3: the product text may have been typed on the compose
+ * screen. Where it came from is stamped on every job HERE, from the product the
+ * batch was actually built on — a later sync deleting or replacing that row must
+ * not be able to rewrite the answer to "bài này lấy dữ liệu từ đâu".
+ */
+describe("createPostBatch — product origin stamp", () => {
+  it("stamps sheet for a synced product, on every channel of the batch", async () => {
+    const { createPostBatch, repo } = harness();
+
+    await createPostBatch(BASE_INPUT);
+
+    const jobs = [...repo.store.values()];
+    expect(jobs).toHaveLength(2);
+    expect(jobs.map((job) => job.productOrigin)).toEqual(["sheet", "sheet"]);
+  });
+
+  it("stamps manual when the batch is built on a typed product", async () => {
+    const typed: Product = { ...makeProduct(), origin: "manual" };
+    const { createPostBatch, repo, lines } = harness({ product: typed });
+
+    await createPostBatch(BASE_INPUT);
+
+    expect([...repo.store.values()].map((job) => job.productOrigin)).toEqual([
+      "manual",
+      "manual",
+    ]);
+    const created = lines.find((entry) => entry.message === "Post batch created");
+    expect(created?.context).toMatchObject({ product_origin: "manual" });
+  });
+
+  it("never invents an origin: the value handed to the repo is always explicit", async () => {
+    const captured: NewPostJob[] = [];
+    const repo = makeRepo();
+    const create = repo.createBatchWithJobs.bind(repo);
+    repo.createBatchWithJobs = async (input: Parameters<PostJobRepo["createBatchWithJobs"]>[0]) => {
+      captured.push(...input.jobs);
+      return create(input);
+    };
+    const { createPostBatch } = harness({
+      repo,
+      product: { ...makeProduct(), origin: "manual" },
+    });
+
+    await createPostBatch(BASE_INPUT);
+
+    expect(captured).toHaveLength(2);
+    for (const job of captured) expect(job.productOrigin).toBe("manual");
+  });
+});
+
+/**
+ * Onboarding phase 3 — the FIRST of the two stock checks, on a product an
+ * operator typed on the compose screen. This half is what the publish-time half
+ * (publish-post.test.ts, "stock recheck on a MANUAL product") assumes: a typed
+ * row in stock gets queued exactly like a synced one, so a post blocked later
+ * really is the SECOND check earning its keep, not the first one having been
+ * skipped for typed data.
+ */
+describe("createPostBatch — stock gate on a MANUAL product (phase 3)", () => {
+  const manual = (stockRaw: string, noteRaw = ""): Product => ({
+    ...makeProduct(stockRaw, noteRaw),
+    origin: "manual",
+  });
+
+  it("queues a typed product that is in stock, exactly like a synced one", async () => {
+    const { createPostBatch, repo, queue } = harness({ product: manual("104") });
+
+    const result = await createPostBatch(BASE_INPUT);
+
+    expect(result.batchStatus).not.toBe("blocked");
+    expect(queue.enqueued).toHaveLength(2);
+    for (const job of repo.store.values()) {
+      expect(job.status).toBe("queued");
+      expect(job.productOrigin).toBe("manual");
+    }
+  });
+
+  it.each([
+    ["a typed zero", "0", ""],
+    ["an empty stock field", "", ""],
+    ["the sold-out note", "50", "HẾT HÀNG"],
+  ])("blocks %s before anything is queued", async (_case, stockRaw, noteRaw) => {
+    const { createPostBatch, repo, queue } = harness({ product: manual(stockRaw, noteRaw) });
+
+    const result = await createPostBatch(BASE_INPUT);
+
+    expect(queue.enqueued).toHaveLength(0);
+    expect(result.batchStatus).toBe("blocked");
+    for (const job of repo.store.values()) {
+      expect(job.status).toBe("blocked");
+      expect(job.lastErrorCode).toBe("OUT_OF_STOCK");
+    }
+  });
+});
+
+/**
+ * Per-RUN spacing (post_batch.spacing_ms). The gate itself lives in
+ * publish-post; this file owns the WRITE contract: what is accepted, what is
+ * refused before a row exists, and what an absent value means.
+ */
+describe("createPostBatch — spacing of this run", () => {
+  // --- Edge cases first: nothing may be created with a gap we cannot store ---
+  it.each([
+    ["a negative gap", -1],
+    ["a gap above the 24h ceiling", 24 * 60 * 60_000 + 1],
+    ["a fractional millisecond", 1.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["a numeric string (never coerced)", "300000"],
+    ["a boolean", true],
+  ])("refuses %s and creates NOTHING", async (_case, spacingMs) => {
+    const { createPostBatch, repo, queue } = harness();
+
+    await expect(
+      createPostBatch({ ...BASE_INPUT, spacingMs } as never),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    expect(repo.batches).toHaveLength(0);
+    expect(repo.store.size).toBe(0);
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("names the field and the reason so a form can show it inline", async () => {
+    const { createPostBatch } = harness();
+
+    let error: AppError | null = null;
+    try {
+      await createPostBatch({ ...BASE_INPUT, spacingMs: -1 });
+    } catch (caught) {
+      error = caught as AppError;
+    }
+
+    expect(error).toBeInstanceOf(AppError);
+    if (!error) throw new Error("createPostBatch must refuse a negative gap");
+    expect(error.code).toBe("INVALID_INPUT");
+    expect(error.context).toMatchObject({
+      field: "spacingMs",
+      reason: "SPACING_MS_BELOW_MIN",
+      received: -1,
+      min_ms: 0,
+      max_ms: 24 * 60 * 60_000,
+    });
+    expect(error.userMessage.length).toBeGreaterThan(10);
+  });
+
+  it("stores NULL when the caller says nothing — the tenant setting keeps applying", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch(BASE_INPUT);
+
+    expect(result.spacingMs).toBeNull();
+    expect(repo.batches[0]?.spacingMs ?? null).toBeNull();
+  });
+
+  it("stores NULL for an explicit null (same meaning as absent)", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: null });
+
+    expect(result.spacingMs).toBeNull();
+    expect(repo.batches[0]?.spacingMs ?? null).toBeNull();
+  });
+
+  it("stores 0 as a real choice, not as an absence", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: 0 });
+
+    expect(result.spacingMs).toBe(0);
+    expect(repo.batches[0]?.spacingMs).toBe(0);
+  });
+
+  it("stores a free-form gap BELOW the 5-minute recommendation (advice, not a rule)", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: 90_000 });
+
+    expect(result.spacingMs).toBe(90_000);
+    expect(repo.batches[0]?.spacingMs).toBe(90_000);
+  });
+
+  it("stores the 24h ceiling", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: 24 * 60 * 60_000 });
+
+    expect(repo.batches[0]?.spacingMs).toBe(24 * 60 * 60_000);
+    expect(result.spacingMs).toBe(24 * 60 * 60_000);
+  });
+
+  it("keeps the gap on a batch the stock gate blocked, so a re-run reads the same one", async () => {
+    const { createPostBatch, repo } = harness({ product: makeProduct("0") });
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: 300_000 });
+
+    expect(result.batchStatus).toBe("blocked");
+    expect(result.spacingMs).toBe(300_000);
+    expect(repo.batches[0]?.spacingMs).toBe(300_000);
   });
 });

@@ -14,7 +14,7 @@ function product(code: string): CatalogProduct {
     name: `Áo ${code}`,
     category: null,
     season: null,
-    inventory: { status: "in_stock", stock: 10, reason: null, operatorMessage: null },
+    inventory: { status: "in_stock", stock: 10, reason: null, operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
     mediaImageCount: 3,
     mediaVideoCount: 0,
     hasConflict: false,

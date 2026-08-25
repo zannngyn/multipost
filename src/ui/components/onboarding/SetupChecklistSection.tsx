@@ -10,13 +10,13 @@ import { FirstRunChecklist } from "./FirstRunChecklist";
 import { buildStepViews } from "./setup-steps";
 
 /**
- * The full checklist, on the overview — what the corner dock links to under
- * "Mở đầy đủ".
+ * The setup strip on the overview — one line, not a list.
  *
- * Same six steps, same `buildStepViews`; the difference is room. The dock has
- * space for a title and a tick, this has space for the sentence that says WHY a
- * step is locked and what the operator gets for finishing it — which is the
- * thing somebody stuck on step three actually needs.
+ * The corner dock (SetupDock) owns the step-by-step list: it follows the
+ * operator across screens, which is where that list is actually needed. So this
+ * block does NOT repeat the six rows; it answers two questions for somebody who
+ * just landed on the overview — how far along the company is, and which step is
+ * next — and hands off to the dock for the rest.
  *
  * It disappears for good once every step is done. Nobody needs a permanent
  * monument to having finished setting up.

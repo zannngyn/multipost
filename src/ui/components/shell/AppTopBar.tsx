@@ -3,6 +3,7 @@
 import { TopNav, TopNavHeading } from "@astryxdesign/core";
 
 import { AppSearch } from "@/ui/components/shell/AppSearch";
+import { ColorSchemeToggle } from "@/ui/components/shell/ColorSchemeToggle";
 import { OutOfTenantBadge } from "@/ui/components/shell/OutOfTenantBadge";
 import { TenantSwitcher } from "@/ui/components/shell/TenantSwitcher";
 
@@ -41,7 +42,17 @@ export function AppTopBar({
           <OutOfTenantBadge />
         </>
       }
-      endContent={<AppSearch />}
+      // Sáng / tối, immediately left of the search (M3.4). A per-VIEWER
+      // preference, not the platform appearance setting — so it belongs on
+      // the chrome every operator has, not on an admin screen most of them
+      // cannot open. The slot is already a spaced row, so the two travel as
+      // a fragment, the same way `startContent` does above.
+      endContent={
+        <>
+          <ColorSchemeToggle />
+          <AppSearch />
+        </>
+      }
     />
   );
 }

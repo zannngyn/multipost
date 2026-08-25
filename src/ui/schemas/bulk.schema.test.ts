@@ -112,7 +112,9 @@ describe("BulkRunFormSchema", () => {
     tenantId: "00000000-0000-0000-0000-000000000001",
     codesText: "MGK01\nMGK02",
     captionMode: "ai" as const,
+    captionTone: "mac-dinh" as const,
     captionTemplate: "",
+    spacingMinutes: "",
   };
 
   it("accepts a valid AI run with no template", () => {
@@ -140,6 +142,49 @@ describe("BulkRunFormSchema", () => {
     });
     expect(result.success).toBe(false);
     expect(result.error?.issues[0].path).toEqual(["captionTemplate"]);
+  });
+
+  it("refuses a tone outside the closed vocabulary", () => {
+    // Rule: the client sends a KEY, never prompt text. Anything not in
+    // CAPTION_TONES must not reach the writer.
+    const result = BulkRunFormSchema.safeParse({ ...base, captionTone: "giọng tự chế" });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((issue) => issue.path[0] === "captionTone")).toBe(true);
+  });
+
+  it("refuses a run with no tone at all", () => {
+    const { captionTone: _omitted, ...withoutTone } = base;
+    expect(BulkRunFormSchema.safeParse(withoutTone).success).toBe(false);
+  });
+
+  it("treats an empty spacing as 'dùng cấu hình công ty', not as an error", () => {
+    expect(BulkRunFormSchema.safeParse({ ...base, spacingMinutes: "  " }).success).toBe(true);
+  });
+
+  it("accepts 0 minutes — 'đăng liên tục' is a real choice, not a blank", () => {
+    expect(BulkRunFormSchema.safeParse({ ...base, spacingMinutes: "0" }).success).toBe(true);
+  });
+
+  it("accepts a gap below the recommended 5 minutes — advice, not a floor", () => {
+    expect(BulkRunFormSchema.safeParse({ ...base, spacingMinutes: "2" }).success).toBe(true);
+  });
+
+  it("refuses a negative gap", () => {
+    const result = BulkRunFormSchema.safeParse({ ...base, spacingMinutes: "-1" });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((issue) => issue.path[0] === "spacingMinutes")).toBe(true);
+  });
+
+  it("refuses a gap past the 24h ceiling", () => {
+    const result = BulkRunFormSchema.safeParse({ ...base, spacingMinutes: "1441" });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0].message).toContain("1440");
+  });
+
+  it.each(["abc", "5.5", "1e3000"])("refuses a spacing that is not a whole number: %s", (raw) => {
+    const result = BulkRunFormSchema.safeParse({ ...base, spacingMinutes: raw });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((issue) => issue.path[0] === "spacingMinutes")).toBe(true);
   });
 
   it("accepts template mode with a template", () => {

@@ -49,7 +49,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // The nav's collapsed state has to be known HERE, before the shell renders:
   // read after hydration instead and every reload paints the wide nav and then
   // snaps it shut. Absent or unreadable cookie = expanded, the default state.
-  const navCookie = (await cookies()).get(NAV_COLLAPSED_COOKIE)?.value;
+  const cookieStore = await cookies();
+  const navCookie = cookieStore.get(NAV_COLLAPSED_COOKIE)?.value;
 
   return (
     <AppFrame

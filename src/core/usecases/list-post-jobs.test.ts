@@ -269,3 +269,52 @@ describe("listPostJobs — entries", () => {
     expect(result.items[0].updatedAt).toEqual(new Date("2026-08-13T02:03:00.000Z"));
   });
 });
+
+/**
+ * Onboarding phase 3. The job log is the screen that answers "bài này lấy dữ
+ * liệu từ đâu", so the origin is read off the row itself: joining `product`
+ * would return nothing for exactly the posts worth asking about (a code that
+ * was deleted or re-synced since).
+ */
+describe("listPostJobs — product origin", () => {
+  it("defaults to sheet for a row created before the stamp existed", async () => {
+    const { listPostJobs } = harness([item()]);
+
+    const result = await listPostJobs({ tenantId: TENANT });
+
+    expect(result.items[0].productOrigin).toBe("sheet");
+  });
+
+  it("reports each row's own origin, never the page's first one", async () => {
+    const { listPostJobs } = harness([
+      item({ id: "job-1", productOrigin: "manual" }),
+      item({ id: "job-2", productOrigin: "sheet" }),
+    ]);
+
+    const result = await listPostJobs({ tenantId: TENANT });
+
+    expect(result.items.map((entry) => entry.productOrigin)).toEqual(["manual", "sheet"]);
+  });
+
+  it("counts the typed-data rows of the page in the log line", async () => {
+    const lines: { message: string; context?: LogContext }[] = [];
+    const recording: Logger = {
+      child: (_bindings: LogBindings) => recording,
+      debug: (message: string, context?: LogContext) => lines.push({ message, context }),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    };
+    const items = [item({ id: "job-1", productOrigin: "manual" }), item({ id: "job-2" })];
+    const postJobs = {
+      async listJobs() {
+        return { items, nextCursor: null };
+      },
+    } as unknown as PostJobRepo;
+
+    await makeListPostJobs({ postJobs, logger: recording })({ tenantId: TENANT });
+
+    const line = lines.find((entry) => entry.message === "Post job log read");
+    expect(line?.context).toMatchObject({ returned: 2, manual_origin_count: 1 });
+  });
+});

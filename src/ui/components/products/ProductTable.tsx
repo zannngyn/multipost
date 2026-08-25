@@ -3,8 +3,9 @@
 import { Button, HStack, Stack, StatusDot, Table, Text, pixel, proportional } from "@astryxdesign/core";
 import type { TableColumn } from "@astryxdesign/core";
 
+import { stockCellText } from "@/ui/components/inventory/stock-check";
 import { productStatus } from "@/ui/components/products/product-status";
-import { formatCount, formatMediaCounts, type CatalogProduct } from "@/ui/schemas/catalog.schema";
+import { formatMediaCounts, type CatalogProduct } from "@/ui/schemas/catalog.schema";
 
 /**
  * The catalog as the operator sees it: which codes can be posted, and for the
@@ -89,11 +90,23 @@ export function ProductTable({
       header: "Tồn kho",
       width: pixel(120),
       align: "end",
+      /*
+       * `stockCellText` reads `stockCheckSkipped` FIRST. A tenant with the stock
+       * gate off still gets `status: "in_stock"` and a number from the Sheet, and
+       * a bare "62" in this column would be read as a count somebody made.
+       *
+       * The cell carries the WORD, not the alarm: with the gate off every row
+       * says the same thing, and a red pill repeated down 300 rows stops being
+       * read (Badge §"Don't repeat the same badge in every row"). The red banner
+       * above the table is where the warning lives, once, with the reason.
+       */
       renderCell: (product) =>
-        product.inventory.stock === null ? (
+        product.inventory.stockCheckSkipped ? (
+          <Text>{stockCellText(product.inventory)}</Text>
+        ) : product.inventory.stock === null ? (
           <Text color="placeholder">—</Text>
         ) : (
-          <Text>{formatCount(product.inventory.stock)}</Text>
+          <Text>{stockCellText(product.inventory)}</Text>
         ),
     },
     {

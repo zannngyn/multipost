@@ -11,6 +11,7 @@ import {
   type UploadResponse,
   type VideoTarget,
 } from "@/ui/schemas/compose.schema";
+import type { ManualProductPayload } from "@/ui/schemas/manual-product.schema";
 import {
   BatchStatusResponseSchema,
   CreateBatchResponseSchema,
@@ -60,6 +61,16 @@ export interface ComposeParams {
   videoTarget?: VideoTarget;
   /** Absent = Drive (chế độ A). "upload" composes from the files just sent. */
   source?: MediaSource;
+  /**
+   * Onboarding phase 3 — the product typed on the compose screen, for a tenant
+   * with no importable catalog.
+   *
+   * ABSENT and present-but-empty are different requests: absent means "tra mã
+   * trong dữ liệu đã đồng bộ". Sending it does NOT skip the stock gate — the
+   * server judges `stockRaw` with the same decision table it applies to a synced
+   * row, so an empty stock box comes back as a 409, by design.
+   */
+  manualProduct?: ManualProductPayload | null;
 }
 
 export async function composePost(
@@ -91,6 +102,9 @@ export async function composePost(
       // would let a stale radio value travel with an album.
       ...(mediaKind === "video" && params.videoTarget ? { videoTarget: params.videoTarget } : {}),
       ...(params.source === "upload" ? { source: "upload" as const } : {}),
+      // Only when there is one: a `manualProduct: null` on the wire would be a
+      // request to type a product with no fields, not a request to look one up.
+      ...(params.manualProduct ? { manualProduct: params.manualProduct } : {}),
     },
     schema: ComposeResponseSchema,
     signal,
@@ -284,6 +298,12 @@ export interface CreatePostBatchParams {
    * by the domain: a bad time blocks ONE channel with a reason, never the lô.
    */
   scheduledAt?: string | null;
+  /**
+   * Khoảng giãn cách RIÊNG của lô này, tính bằng MILI-GIÂY. Bỏ trống/null =
+   * dùng cấu hình của công ty như trước nay; `0` là một lựa chọn thật ("đăng
+   * liên tục"), không phải "chưa chọn" — nên đừng rút gọn bằng `||`.
+   */
+  spacingMs?: number | null;
 }
 
 /**
@@ -343,6 +363,7 @@ export async function createPostBatch(
       ...(color ? { color } : {}),
       ...(params.format ? { format: params.format } : {}),
       ...(scheduledAt ? { scheduledAt } : {}),
+      ...(typeof params.spacingMs === "number" ? { spacingMs: params.spacingMs } : {}),
       channelIds: [...params.channelIds],
       captionByChannel: params.captionByChannel,
       // Explicit field list: no URL, no stock, no price travels with a post.

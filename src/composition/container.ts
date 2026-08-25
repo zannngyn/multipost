@@ -8,6 +8,7 @@ import { DrizzleAccessRequestRepo } from "@/adapters/db/access-request-repo.driz
 import { DrizzleAccountRepo } from "@/adapters/db/account-repo.drizzle";
 import { DrizzleInviteRepo } from "@/adapters/db/invite-repo.drizzle";
 import { DrizzleMemberRepo } from "@/adapters/db/member-repo.drizzle";
+import { DrizzleAppearanceSettingRepo } from "@/adapters/db/appearance-setting-repo.drizzle";
 import { DrizzlePlatformTenantRepo } from "@/adapters/db/platform-tenant-repo.drizzle";
 import { DrizzleSupportSessionRepo } from "@/adapters/db/support-session-repo.drizzle";
 import { DrizzleOAuthStateStore } from "@/adapters/db/oauth-state-store.drizzle";
@@ -29,6 +30,9 @@ import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
 import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
+import { makeCsvCatalogTextSource } from "@/adapters/catalog/csv-text-source";
+import { makeSheetCatalogTextSource } from "@/adapters/catalog/sheet-text-source";
+import { makeLocalCatalogFileStore } from "@/adapters/catalog/local-catalog-file-store";
 import { makeLocalMediaCache } from "@/adapters/media/local-media-cache";
 import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
 import { makeFacebookOAuthClient } from "@/adapters/meta/facebook-oauth";
@@ -75,6 +79,7 @@ import {
 } from "@/core/usecases/join-with-invite";
 import { makeManageInvites, type ManageInvites } from "@/core/usecases/manage-invites";
 import { makeManageMembers, type ManageMembers } from "@/core/usecases/manage-members";
+import { makePlatformAppearance } from "@/core/usecases/platform-appearance";
 import { makePlatformTenants, type PlatformTenants } from "@/core/usecases/platform-tenants";
 import {
   makeManageSupportSessions,
@@ -139,6 +144,14 @@ import {
 import { makeGetCatalogSource, type GetCatalogSource } from "@/core/usecases/get-catalog-source";
 import { makeGetSetupProgress, type GetSetupProgress } from "@/core/usecases/get-setup-progress";
 import {
+  makeProfileCatalogSource,
+  type ProfileCatalogSource,
+} from "@/core/usecases/profile-catalog-source";
+import {
+  makeUploadCatalogFile,
+  type UploadCatalogFile,
+} from "@/core/usecases/upload-catalog-file";
+import {
   makeListCatalogProducts,
   type ListCatalogProducts,
 } from "@/core/usecases/list-catalog-products";
@@ -165,6 +178,7 @@ import {
   loadConfig,
   loadMediaConfig,
   loadMediaCacheConfig,
+  loadCatalogFileConfig,
   loadUploadConfig,
   loadMetaConfig,
   loadMetaOAuthConfig,
@@ -182,6 +196,7 @@ import {
   type AuthRateLimiter,
 } from "./auth-rate-limiter";
 import { makeOperatorAccountGate, type OperatorAccountGate } from "./operator-account-gate";
+import { makeAppearanceGate, type AppearanceGate } from "./appearance-gate";
 import { makeRequirePlatformAdmin, type RequirePlatformAdmin } from "./require-platform-admin";
 import { makeRequireTenant, type RequireTenant } from "./require-tenant";
 
@@ -202,6 +217,17 @@ export interface Usecases {
   getSyncStatus: GetSyncStatus;
   /** E2 — "nguồn dữ liệu" panel: which Drive folder / Sheet this tenant reads. */
   getCatalogSource: GetCatalogSource;
+  /**
+   * E2 — onboarding: dry-run a tenant's Sheet/Drive and report how much of it
+   * this tool can actually use, BEFORE anything is configured.
+   */
+  profileCatalogSource: ProfileCatalogSource;
+  /**
+   * E2/phase 3 — the tenant hands us a CSV instead of connecting a Sheet. Reads
+   * it BEFORE storing the bytes, so an unreadable file is refused while the
+   * operator is still looking at the screen.
+   */
+  uploadCatalogFile: UploadCatalogFile;
   /** E2 — point the tenant at another folder/sheet. Does NOT trigger a sync. */
   updateCatalogSource: UpdateCatalogSource;
   /**
@@ -300,6 +326,12 @@ export interface Usecases {
   requirePlatformAdmin: RequirePlatformAdmin;
   /** M3.2 — platform tenant administration: list / provision / (un)suspend. */
   platformTenants: PlatformTenants;
+  /**
+   * M3.4 — the colour of the product, one value for every company. Exposed as
+   * the GATE, not the bare usecase: the root layout reads it on the way to
+   * every page, so the cache is not optional and must not be bypassable.
+   */
+  platformAppearance: AppearanceGate;
   /** M3.3 — support mode: audited visits into customer tenants, read-only. */
   supportSessions: ManageSupportSessions;
   /**
@@ -743,6 +775,20 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
   // Google sources it needs no lazy wrapper.
   const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
+
+  // Phase 3 — a tenant may hand us a CSV instead of connecting a Google Sheet.
+  // Its own root, never the upload root: these bytes ARE the product catalog,
+  // so the orphan sweep that owns UPLOAD_STORAGE_ROOT must not reach them.
+  const catalogFiles = makeLocalCatalogFileStore({
+    root: loadCatalogFileConfig().CATALOG_STORAGE_ROOT,
+  });
+  // Order is not a priority list — the run picks by the tenant's own
+  // `textSource` ref via canRead(); both are always offered.
+  const csvCatalogSource = makeCsvCatalogTextSource({ logger: deps.logger });
+  const catalogSources = [
+    csvCatalogSource,
+    makeSheetCatalogTextSource({ sheet: overrides.sheet ?? google.sheet, logger: deps.logger }),
+  ];
   // E3.6 — read-through cache in front of Drive. Cheap to build (a path and a
   // TTL, no connection), so like the blob store it needs no lazy wrapper; both
   // of its variables have working defaults, so no deployment must set them.
@@ -870,6 +916,19 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     randomSuffix: () => randomBytes(2).toString("hex"),
   });
   /**
+   * M3.4 — the appearance setting, behind its own short cache (see
+   * `appearance-gate.ts`): the root layout asks for it on the way to EVERY
+   * page, so an uncached read would be a query per page view.
+   */
+  const platformAppearance = makeAppearanceGate({
+    appearance: makePlatformAppearance({
+      settings: new DrizzleAppearanceSettingRepo(deps.db, { logger: deps.logger }),
+      logger: deps.logger,
+    }),
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  /**
    * The cache is dropped the instant a decision is written — wired HERE rather
    * than inside the usecase so core stays free of caching, and so nobody can
    * call `decide` through a path that forgets it. Without this the operator we
@@ -900,6 +959,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     syncCatalog: makeSyncCatalog({
       drive,
       sheet: overrides.sheet ?? google.sheet,
+      catalogSources,
+      catalogFiles,
       catalogConfig,
       products,
       media,
@@ -909,6 +970,25 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     }),
     getSyncStatus: makeGetSyncStatus({ syncRuns, logger: deps.logger }),
     getCatalogSource: makeGetCatalogSource({ catalogConfig, logger: deps.logger }),
+    profileCatalogSource: makeProfileCatalogSource({
+      sheet: overrides.sheet ?? google.sheet,
+      drive,
+      // Without these the compatibility report cannot read an uploaded file, so
+      // a CSV tenant would see a report describing a source they do not use.
+      catalogSources,
+      catalogFiles,
+      logger: deps.logger,
+    }),
+    uploadCatalogFile: makeUploadCatalogFile({
+      // The SAME reader the later sync uses — a file that previews here and
+      // fails at sync time would be the worst possible outcome.
+      catalogSource: csvCatalogSource,
+      catalogFiles,
+      catalogConfig,
+      users,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
     updateCatalogSource: makeUpdateCatalogSource({
       catalogConfig,
       logger: deps.logger,
@@ -927,10 +1007,18 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       postJobs,
       logger: deps.logger,
     }),
-    listCatalogProducts: makeListCatalogProducts({ catalog: products, logger: deps.logger }),
+    listCatalogProducts: makeListCatalogProducts({
+      catalog: products,
+      // Without this the stock verdict always runs in `numeric` mode, so a
+      // tenant on a textual/disabled policy would read a stock badge that does
+      // not match the gate their posts actually go through.
+      catalogConfig,
+      logger: deps.logger,
+    }),
     composePost: makeComposePost({
       products,
       media,
+      catalogConfig,
       logger: deps.logger,
       videoProbe: overrides.videoProbe ?? makeLazyVideoProbe(drive, deps.logger),
     }),
@@ -960,6 +1048,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       clock: deps.clock,
       db: deps.db,
       redisUrl: deps.config.REDIS_URL,
+      // Claim validation compares a caption against the labels of THIS tenant's
+      // sheet; without it an external tenant is judged by MYSP's column names.
+      catalogConfig,
     }),
     promptTemplates: makeLazyPromptTemplates({
       logger: deps.logger,
@@ -971,6 +1062,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       products,
       channels,
       queue,
+      // Same stock policy the compose screen used; without it a tenant whose
+      // sheet spells stock in words has every code rejected as NaN.
+      catalogConfig,
       // Bug B6 — turns the session e-mail into the `app_user.id` stored in
       // `post_batch.created_by`; without it every batch is unattributed.
       users,
@@ -985,6 +1079,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       products,
       channels,
       publishers,
+      // Runs in the worker: the second stock check (business rule 3) must read
+      // the SAME policy the compose step did, or a post clears the gate at
+      // compose time and dies here.
+      catalogConfig,
       // Doc 10 §5.2 — a suspended tenant must not publish, and the worker has
       // no session to check it for us.
       tenants,
@@ -1098,6 +1196,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
         return result;
       },
     },
+    platformAppearance,
     supportSessions: makeManageSupportSessions({
       sessions: supportSessionRepo,
       clock: deps.clock,

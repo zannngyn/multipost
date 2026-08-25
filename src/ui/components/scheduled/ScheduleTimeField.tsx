@@ -1,7 +1,6 @@
 "use client";
 
-import { DateTimeInput, Text, VStack, type ISODateTimeString } from "@astryxdesign/core";
-
+import { Input } from "@/ui/components/ui/input";
 import {
   MAX_SCHEDULE_AHEAD_DAYS,
   formatCountdown,
@@ -16,22 +15,34 @@ import {
  * and the "đổi giờ" dialog (core-component-reuse: three copies of a date field
  * is three places to get the timezone wrong).
  *
- * Astryx `DateTimeInput`, and the VALUE CONTRACT IS UNCHANGED: it is still local
- * wall time, "YYYY-MM-DDTHH:mm" — exactly what `<input type="datetime-local">`
- * produced and exactly what `validateScheduleInput` and the dialogs already
- * expect. Nothing downstream of this file had to move. What the swap buys is a
- * calendar the operator can pick from, a time field that steps with the arrow
- * keys, and one label/description/error wiring instead of three hand-rolled
- * `aria-describedby` strings.
+ * Native `<input type="datetime-local">` on purpose (web-form-inputs rule 5):
+ * the operator can TYPE the time, the mobile keyboard is the right one, and the
+ * value is local wall time — which is exactly what "đăng lúc 20h" means.
  *
- * `hourFormat="24h"` and `weekStartsOn="mon"`: "đăng lúc 20h" is how the hour is
- * said here, and a Vietnamese wall calendar starts on Thứ Hai. Neither is a
- * default we can inherit.
+ * WHY NOT A COMPONENT-LIBRARY PICKER. This field was briefly swapped to Astryx
+ * `DateTimeInput`, which parses a typed date string instead of using segments.
+ * Measured against that parser (`utils/dateParser.ts`), two defects land
+ * squarely on Vietnamese operators:
+ *
+ *   1. It picks day-vs-month order by HEURISTIC — the number above 12 wins —
+ *      and falls back to the CLIENT's locale when both are ≤ 12. On a machine
+ *      left at en-US, "1/9/2026" is read as 9 January: no error, no red field,
+ *      just a batch scheduled eight months early. Roughly 40% of the days in a
+ *      year are ambiguous that way, and business rule 5 forbids exactly this
+ *      kind of silent wrong answer.
+ *   2. On a machine set to Vietnamese it renders the chosen value as
+ *      "15 tháng 9, 2026" and then cannot re-parse its own output, so editing
+ *      the field by keyboard marks it invalid and silently reverts on blur.
+ *
+ * `DateTimeInput` exposes no `format`/`locale`/`parse` prop to correct either.
+ * The native control has neither problem: the browser renders segments in the
+ * OS locale (dd/mm/yyyy on a Vietnamese machine), typing digits advances
+ * between segments, and no free-text date string is ever parsed.
  *
  * The window is stated BEFORE a choice is made (core-booking-scheduling rule 5):
- * `min`/`max` on the field, and the same sentence in the description for anyone
- * whose browser ignores them. The client check is a courtesy — the server
- * re-validates and has the final say.
+ * `min`/`max` on the field, and the same sentence in the hint for anyone whose
+ * browser ignores them. The client check is a courtesy — the server re-validates
+ * and has the final say.
  */
 export function ScheduleTimeField({
   id,
@@ -49,10 +60,9 @@ export function ScheduleTimeField({
   onChange: (value: string) => void;
   disabled?: boolean;
   /**
-   * WHY the field is locked. Disabled always comes with a reason
-   * (core-auth-session): with this set Astryx keeps the field focusable via
-   * `aria-disabled` and surfaces the sentence on hover AND on keyboard focus,
-   * so the explanation is not mouse-only.
+   * WHY the field is locked. Rendered as VISIBLE text beside the field, not as
+   * a tooltip: a disabled native control swallows hover, so a tooltip would be
+   * mouse-only — and invisible to the keyboard user who most needs the reason.
    */
   disabledReason?: string;
   /** Message from the last submit attempt or from the server. */
@@ -63,39 +73,65 @@ export function ScheduleTimeField({
   const zone = timeZoneLabel();
   const bounds = nowMs > 0 ? scheduleInputBounds(nowMs) : null;
   // One trim, reused: a value of "   " is not a value, and must not be handed
-  // to the field as if it were an ISO datetime.
+  // to the validator as if it were a datetime.
   const trimmed = typeof value === "string" ? value.trim() : "";
   const verdict = nowMs > 0 && trimmed.length > 0 ? validateScheduleInput(trimmed, nowMs) : null;
 
+  const hintId = `${id}-hint`;
+  const previewId = `${id}-preview`;
+  const errorId = `${id}-error`;
+  const lockedId = `${id}-locked`;
+  const showLocked = Boolean(disabled && disabledReason);
+
   return (
-    <VStack gap={1.5} maxWidth={340}>
-      <DateTimeInput
+    <div className="max-w-xs space-y-1.5">
+      <label htmlFor={id} className="text-sm font-medium">
+        {label}
+      </label>
+
+      <Input
         id={id}
-        label={label}
-        // Local wall time in, local wall time out — the branded type is Astryx's
-        // way of saying "ISO datetime", which is the shape this value already has.
-        value={trimmed.length > 0 ? (trimmed as ISODateTimeString) : undefined}
-        onChange={(next) => onChange(next ?? "")}
-        min={bounds ? (bounds.min as ISODateTimeString) : undefined}
-        max={bounds ? (bounds.max as ISODateTimeString) : undefined}
-        isDisabled={disabled}
-        disabledMessage={disabled ? disabledReason : undefined}
-        hourFormat="24h"
-        timeIncrement={15}
-        weekStartsOn="mon"
-        placeholder="dd/mm/yyyy"
-        timePlaceholder="hh:mm"
-        description={`Giờ tính theo múi giờ máy bạn (${zone}). Hẹn được trong vòng ${MAX_SCHEDULE_AHEAD_DAYS} ngày, và phải là thời điểm trong tương lai.`}
-        status={error ? { type: "error", message: error } : undefined}
+        type="datetime-local"
+        value={value}
+        step={60}
+        min={bounds?.min}
+        max={bounds?.max}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={
+          `${hintId}` +
+          `${showLocked ? ` ${lockedId}` : ""}` +
+          `${verdict?.ok ? ` ${previewId}` : ""}` +
+          `${error ? ` ${errorId}` : ""}`
+        }
       />
+
+      {showLocked ? (
+        <p id={lockedId} className="text-muted-foreground text-xs">
+          {disabledReason}
+        </p>
+      ) : null}
+
+      <p id={hintId} className="text-muted-foreground text-xs">
+        Giờ tính theo múi giờ máy bạn ({zone}). Hẹn được trong vòng {MAX_SCHEDULE_AHEAD_DAYS} ngày,
+        và phải là thời điểm trong tương lai.
+      </p>
 
       {verdict?.ok ? (
         // `role="status"`: the sentence changes as the operator picks, and a
         // screen-reader user should hear the result of their own choice.
-        <Text type="supporting" role="status" aria-live="polite">
-          Sẽ đăng lúc {formatScheduledAt(verdict.iso)} ({zone}) — {formatCountdown(verdict.delayMs)}.
-        </Text>
+        <p id={previewId} role="status" aria-live="polite" className="text-sm">
+          Sẽ đăng lúc <span className="font-medium">{formatScheduledAt(verdict.iso)}</span> ({zone}){" "}
+          — {formatCountdown(verdict.delayMs)}.
+        </p>
       ) : null}
-    </VStack>
+
+      {error ? (
+        <p id={errorId} role="alert" className="text-destructive text-sm">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }

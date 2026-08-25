@@ -15,39 +15,46 @@
  * door from one to the other.
  */
 
+import {
+  FIELD_LABELS,
+  MYSP_FIELD_MAP,
+  MYSP_PRICE_COLUMNS,
+  type CatalogFieldMap,
+} from "./catalog-field-map";
 import { normalizeProductCode, type MediaKind, type MediaVariantFlags } from "./media-file-name";
 
 // --- Sheet columns ----------------------------------------------------------
 
 /**
- * Exact column headers of tab "Mẫu 2026" (docs/05 section 2.1). Columns are read
- * BY NAME, never by position — a reordered sheet must not shift the data, and a
- * renamed column must raise schema drift instead of being guessed.
+ * Exact column headers of tab "Mẫu 2026" (docs/05 section 2.1) — the INTERNAL
+ * company's sheet. Columns are read BY NAME, never by position.
+ *
+ * Since the onboarding work this is no longer the source of truth: it is a view
+ * of `MYSP_FIELD_MAP`, the default field map. A tenant with a different sheet
+ * carries its own map in `tenant_integration.config` (see catalog-field-map).
  */
 export const SHEET_COLUMNS = {
-  code: "Mã sản phẩm",
-  name: "Tên sản phẩm",
-  description: "Mô tả sản phẩm",
-  category: "Chủng loại",
-  season: "Mùa vụ",
-  stock: "Tồn",
-  note: "Lưu ý nhận sx 1c / sx hết tồn",
-  colors: "Màu sắc",
+  code: MYSP_FIELD_MAP.code,
+  name: MYSP_FIELD_MAP.name,
+  description: MYSP_FIELD_MAP.description,
+  category: MYSP_FIELD_MAP.category,
+  season: MYSP_FIELD_MAP.season,
+  stock: MYSP_FIELD_MAP.stock,
+  note: MYSP_FIELD_MAP.note,
+  colors: MYSP_FIELD_MAP.colors,
 } as const;
 
-/** Without these the row cannot be used at all. */
+/** Without these the row cannot be used at all — for the MYSP preset. */
 export const REQUIRED_SHEET_COLUMNS: readonly string[] = [SHEET_COLUMNS.code, SHEET_COLUMNS.name];
 
 /**
- * Columns that must never be read into a Product, let alone a prompt. Listed so
- * the guard is explicit and testable rather than a convention someone forgets.
+ * @deprecated Renamed to `MYSP_PRICE_COLUMNS` and demoted to an onboarding
+ * HINT. It never was a general guard: it lists four headers of one sheet, so it
+ * could not protect a customer sheet nobody has seen. The real guarantee is the
+ * opt-in map — `parseSheetRow` reads only mapped columns, so an unmapped price
+ * column cannot reach `ProductContent`. Kept as an alias for existing callers.
  */
-export const FORBIDDEN_SHEET_COLUMNS: readonly string[] = [
-  "Nguyên Giá (bắt buộc)",
-  "Giá TMĐT",
-  "Giá TMĐT làm tròn",
-  "Giá KM",
-];
+export const FORBIDDEN_SHEET_COLUMNS: readonly string[] = MYSP_PRICE_COLUMNS;
 
 // --- Product ----------------------------------------------------------------
 
@@ -76,9 +83,27 @@ export interface ProductOperational {
   readonly prices?: Readonly<Record<string, string>>;
 }
 
+/**
+ * Where a product's TEXT came from. Mirrors the `product_origin` DB enum.
+ *
+ * `sheet` = a synced catalog row (Google tab or uploaded CSV — both arrive as
+ * the same snapshot). `manual` = typed by an operator on the compose screen
+ * (onboarding phase 3), for a tenant who has no importable catalog at all.
+ *
+ * It is stored, not derived: months later "vì sao bài này có dữ liệu như vậy"
+ * must be answerable, and a sync must know which rows it may sweep.
+ */
+export const PRODUCT_ORIGINS = ["sheet", "manual"] as const;
+export type ProductOrigin = (typeof PRODUCT_ORIGINS)[number];
+
 export interface Product {
   readonly content: ProductContent;
   readonly operational: ProductOperational;
+  /**
+   * Absent = `sheet`. Optional so every existing snapshot/fixture keeps its
+   * meaning unchanged; read it through `productOrigin()` rather than directly.
+   */
+  readonly origin?: ProductOrigin;
   /**
    * True when the code appears on several sheet rows with conflicting data
    * (docs/05 section 2.5, MGKSQ6031). Posting is blocked until a human fixes it.
@@ -86,6 +111,11 @@ export interface Product {
   readonly hasConflict: boolean;
   /** 1-based sheet row numbers this product was built from. */
   readonly sourceRows: readonly number[];
+}
+
+/** Origin of a product, with the historical default for rows without one. */
+export function productOrigin(product: Product | null | undefined): ProductOrigin {
+  return product?.origin === "manual" ? "manual" : "sheet";
 }
 
 /**
@@ -170,7 +200,13 @@ function pickNewer(a: MediaAsset, b: MediaAsset): MediaAsset {
 
 // --- Sheet row -> Product ---------------------------------------------------
 
-export const SHEET_ROW_ISSUES = ["MISSING_CODE", "MALFORMED_CODE", "MISSING_NAME"] as const;
+export const SHEET_ROW_ISSUES = [
+  "MISSING_CODE",
+  "MALFORMED_CODE",
+  "MISSING_NAME",
+  /** The tenant's field map has no column for `code`/`name` (defence in depth). */
+  "FIELD_MAP_INCOMPLETE",
+] as const;
 export type SheetRowIssue = (typeof SHEET_ROW_ISSUES)[number];
 
 export type ParsedSheetRow =
@@ -182,7 +218,13 @@ export type ParsedSheetRow =
       readonly detail: string;
     };
 
-function cell(values: Readonly<Record<string, string>>, column: string): string {
+/**
+ * Reads ONE mapped column. A null column (field not mapped by this tenant) is
+ * an empty value — never a lookup by position, never a guess. This is what
+ * makes the whitelist opt-in: an unmapped column is invisible to the parser.
+ */
+function cell(values: Readonly<Record<string, string>>, column: string | null): string {
+  if (typeof column !== "string" || column.length === 0) return "";
   const value = values[column];
   return typeof value === "string" ? value.trim() : "";
 }
@@ -190,13 +232,35 @@ function cell(values: Readonly<Record<string, string>>, column: string): string 
 /**
  * Maps one already-validated sheet row onto a Product. Returns a value on
  * failure — a broken row must not abort the whole sync (business rule 5).
+ *
+ * `fieldMap` is optional: without it the row is read with the internal
+ * company's headers (`MYSP_FIELD_MAP`), exactly as before this parameter
+ * existed. Operator messages always name the CALLER's column, never ours.
  */
 export function parseSheetRow(
   rowNumber: number,
   values: Readonly<Record<string, string>>,
+  fieldMap: CatalogFieldMap = MYSP_FIELD_MAP,
 ): ParsedSheetRow {
   // --- Edge cases first ----------------------------------------------------
-  const rawCode = cell(values, SHEET_COLUMNS.code);
+  const map = fieldMap ?? MYSP_FIELD_MAP;
+  const codeColumn = typeof map.code === "string" && map.code.length > 0 ? map.code : null;
+  const nameColumn = typeof map.name === "string" && map.name.length > 0 ? map.name : null;
+  if (codeColumn === null || nameColumn === null) {
+    // sync-catalog refuses such a map before it gets here; this branch exists so
+    // a hand-edited config can never be read as "every row is empty".
+    const missing = [codeColumn === null ? FIELD_LABELS.code : null, nameColumn === null ? FIELD_LABELS.name : null]
+      .filter((label): label is string => label !== null)
+      .join(", ");
+    return {
+      ok: false,
+      issue: "FIELD_MAP_INCOMPLETE",
+      rowNumber,
+      detail: `Chưa khai báo cột nguồn cho: ${missing}. Vào phần cấu hình nguồn dữ liệu để chọn cột tương ứng trên bảng tính.`,
+    };
+  }
+
+  const rawCode = cell(values, codeColumn);
   if (rawCode.length === 0) {
     return {
       ok: false,
@@ -204,7 +268,7 @@ export function parseSheetRow(
       rowNumber,
       // Operator-facing sentence (CLAUDE.md rule 6): Vietnamese, keeps the row
       // number and the column name so the fix can be found on the Sheet.
-      detail: `Dòng ${rowNumber}: ô '${SHEET_COLUMNS.code}' đang trống — điền mã sản phẩm rồi đồng bộ lại.`,
+      detail: `Dòng ${rowNumber}: ô '${codeColumn}' đang trống — điền mã sản phẩm rồi đồng bộ lại.`,
     };
   }
 
@@ -214,24 +278,26 @@ export function parseSheetRow(
       ok: false,
       issue: "MALFORMED_CODE",
       rowNumber,
-      detail: `Dòng ${rowNumber}: mã sản phẩm '${rawCode}' không dùng được (chỉ chấp nhận 4-20 ký tự chữ HOA, số hoặc '-') — sửa lại mã trên Sheet.`,
+      detail: `Dòng ${rowNumber}: mã sản phẩm '${rawCode}' không dùng được (chỉ chấp nhận 4-20 ký tự chữ HOA, số hoặc '-') — sửa lại mã trong bảng dữ liệu.`,
     };
   }
 
-  const name = cell(values, SHEET_COLUMNS.name);
+  const name = cell(values, nameColumn);
   if (name.length === 0) {
     // The name opens every caption (brief 7.3) — a row without one is unusable.
     return {
       ok: false,
       issue: "MISSING_NAME",
       rowNumber,
-      detail: `Dòng ${rowNumber} (${code}): ô '${SHEET_COLUMNS.name}' đang trống — caption mở đầu bằng tên sản phẩm nên dòng này chưa dùng được.`,
+      detail: `Dòng ${rowNumber} (${code}): ô '${nameColumn}' đang trống — caption mở đầu bằng tên sản phẩm nên dòng này chưa dùng được.`,
     };
   }
 
-  const description = cell(values, SHEET_COLUMNS.description);
-  const category = cell(values, SHEET_COLUMNS.category);
-  const season = cell(values, SHEET_COLUMNS.season);
+  // Only the four mapped content columns are read here — the operational half
+  // below is read from its own mapped columns and never crosses over.
+  const description = cell(values, map.description);
+  const category = cell(values, map.category);
+  const season = cell(values, map.season);
 
   return {
     ok: true,
@@ -244,9 +310,9 @@ export function parseSheetRow(
         season: season.length > 0 ? season : null,
       },
       operational: {
-        stockRaw: cell(values, SHEET_COLUMNS.stock),
-        noteRaw: cell(values, SHEET_COLUMNS.note),
-        colorsRaw: cell(values, SHEET_COLUMNS.colors),
+        stockRaw: cell(values, map.stock),
+        noteRaw: cell(values, map.note),
+        colorsRaw: cell(values, map.colors),
       },
       hasConflict: false,
       sourceRows: [rowNumber],

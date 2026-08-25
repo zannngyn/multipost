@@ -31,19 +31,35 @@ describe("isNavItemActive", () => {
   });
 
   it("stops matching sub-paths when the entry is exact", () => {
-    // No nav entry sets `exact` since the wave-1 IA (no entry owns another's
-    // prefix any more), but the option is what keeps that possible — a nested
-    // destination would light two rows at once without it. The paths here are
-    // deliberately made up: pinning the option's behaviour to a route that was
-    // later retired is how a test starts asserting the shape of a 404.
+    // Made-up paths on purpose: pinning the OPTION's behaviour to a real route
+    // is how a test starts asserting the shape of a 404 once that route moves.
+    // The real entry that uses it is covered below.
     expect(isNavItemActive("/parent/child", "/parent", { exact: true })).toBe(false);
     expect(isNavItemActive("/parent", "/parent", { exact: true })).toBe(true);
     expect(isNavItemActive("/parent/child", "/parent/child")).toBe(true);
   });
+
+  it("lights exactly one row inside the platform group (M3.4)", () => {
+    const platform = NAV_SECTIONS.find((section) => section.title === "Nền tảng");
+    const items = platform?.items ?? [];
+    expect(items).toHaveLength(2);
+
+    // The whole point of `isExact` on "/platform": standing on the appearance
+    // screen must not light "Công ty khách" too.
+    const litOnAppearance = items.filter((item) =>
+      isNavItemActive("/platform/appearance", item.href, { exact: item.isExact }),
+    );
+    expect(litOnAppearance.map((item) => item.href)).toEqual(["/platform/appearance"]);
+
+    const litOnRoot = items.filter((item) =>
+      isNavItemActive("/platform", item.href, { exact: item.isExact }),
+    );
+    expect(litOnRoot.map((item) => item.href)).toEqual(["/platform"]);
+  });
 });
 
 describe("NAV_SECTIONS", () => {
-  it("has the wave-1 IA: 5 visible groups, 10 destinations, platform gated", () => {
+  it("has the wave-1 IA plus onboarding and appearance: 5 visible groups, 12 destinations, platform gated", () => {
     const sections = visibleNavSections({ hasPlatformRole: true });
     expect(sections.map((s) => s.title)).toEqual([
       "Bàn làm việc",
@@ -60,10 +76,15 @@ describe("NAV_SECTIONS", () => {
       "/posts",
       "/products",
       "/sync",
+      // Onboarding phase 1: teaching MYSP the shape of a customer's own
+      // spreadsheet is a "Dữ liệu" job, and it is a destination of its own
+      // rather than a tab of /sync — a salesperson opens it during a call.
+      "/data-mapping",
       "/channels",
       "/prompts",
       "/members",
       "/platform",
+      "/platform/appearance",
     ]);
   });
 
