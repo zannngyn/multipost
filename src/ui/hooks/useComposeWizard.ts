@@ -16,6 +16,14 @@ import {
   type UploadRejection,
   type UploadResponse,
 } from "@/ui/schemas/compose.schema";
+import {
+  manualProductCaptionKey,
+  manualProductEntry,
+  manualProductForCode,
+  toManualProductPayload,
+  type ManualProductEntry,
+  type ManualProductFormValues,
+} from "@/ui/schemas/manual-product.schema";
 import type { CaptionTarget } from "@/ui/components/compose/caption-targets";
 import { applyAlbumOrder, shouldClearCaptions } from "@/ui/components/compose/compose-draft";
 import type { QueuedFile } from "@/ui/components/compose/upload-queue";
@@ -78,14 +86,26 @@ export interface ComposeRestoreOutcome {
  */
 function composeKey(
   values: Pick<ComposeWizardValues, "productCode" | "color" | "mediaKind" | "videoTarget">,
+  /**
+   * Onboarding phase 3. A typed product keeps its code while its TEXT changes,
+   * so the four fields above cannot tell "same post" from "same code, product
+   * rewritten" — and a caption written for the old text would survive silently.
+   */
+  manual: ManualProductFormValues | null = null,
 ): string {
   const target = values.mediaKind === "video" ? values.videoTarget : "-";
-  return [
+  const base = [
     values.productCode.trim().toUpperCase(),
     (values.color ?? "").trim().toLowerCase(),
     values.mediaKind,
     target,
   ].join("|");
+
+  // APPENDED, never always-on: a synced post's key must stay byte-identical to
+  // what earlier builds produced, or every stored draft would come back looking
+  // like a different post and lose its captions on the first restore.
+  const manualKey = manualProductCaptionKey(manual);
+  return manualKey.length > 0 ? `${base}|manual:${manualKey}` : base;
 }
 
 function emptyCaptions(): Record<string, string> {
@@ -133,6 +153,38 @@ export function useComposeWizard() {
   /** Set when re-composing another code cleared captions typed for the old one. */
   const [captionsCleared, setCaptionsCleared] = useState(false);
 
+  /**
+   * ONBOARDING PHASE 3 — the product the operator typed, and the code they typed
+   * it for (`ManualProductEntry` explains why the two travel together).
+   *
+   * Held here rather than in the react-hook-form object on purpose:
+   *  - the compose DRAFT is a strict whitelist on both sides, and typed product
+   *    text is not on it. Putting these six fields in the wizard form would put
+   *    them one careless spread away from a payload the server answers 400 for;
+   *  - a ref beside the state because `submitProductStep` runs in the SAME tick
+   *    as "Dùng thông tin này": React has not re-rendered yet, so a mutation
+   *    reading state would send the previous value (or none at all).
+   *
+   * What it is NOT: a way past the stock gate. The values go to the server
+   * untouched and `composePost` judges `stockRaw` with the same decision table
+   * it applies to a synced row.
+   */
+  const manualProductRef = useRef<ManualProductEntry | null>(null);
+  const [manualProduct, setManualProductState] = useState<ManualProductEntry | null>(null);
+
+  /** Writes both, so the next request and the next render agree. */
+  const applyManualProduct = useCallback((productCode: string, values: ManualProductFormValues) => {
+    const entry = manualProductEntry(productCode, values);
+    manualProductRef.current = entry;
+    setManualProductState(entry);
+  }, []);
+
+  /** "Bỏ nhập tay" — back to looking the code up in the synced catalog. */
+  const clearManualProduct = useCallback(() => {
+    manualProductRef.current = null;
+    setManualProductState(null);
+  }, []);
+
   // --- E9 mode B ------------------------------------------------------------
   // The queue holds files chosen but not yet sent. It is NOT form state: a File
   // is not serialisable, and react-hook-form would try to clone it.
@@ -164,17 +216,24 @@ export function useComposeWizard() {
   const compose = useMutation<ComposeResponse, ApiError, void>({
     mutationFn: () => {
       const values = form.getValues();
+      // Bound to the code being looked up: typed data must not follow the
+      // operator onto the next product (see `manualProductForCode`).
+      const manual = manualProductForCode(manualProductRef.current, values.productCode);
       return composePost({
         productCode: values.productCode,
         color: values.color,
         mediaKind: values.mediaKind,
         videoTarget: values.videoTarget,
         source: values.source,
+        manualProduct: manual ? toManualProductPayload(manual) : null,
       });
     },
     retry: false,
     onSuccess: (result) => {
-      const nextKey = composeKey(form.getValues());
+      const nextKey = composeKey(
+        form.getValues(),
+        manualProductForCode(manualProductRef.current, form.getValues().productCode),
+      );
       const hadCaptions = Object.values(form.getValues().captions ?? {}).some(
         (text) => text.trim().length > 0,
       );
@@ -309,6 +368,14 @@ export function useComposeWizard() {
       setRestorePhase("restoring");
       const notices: string[] = [];
 
+      // A draft describes a LOOKUP: the compose draft whitelist has no room for
+      // typed product text (post-draft.schema), and inventing it here would put
+      // a product on screen that nothing on disk vouches for. So a restore always
+      // starts from "tra mã trong dữ liệu đã đồng bộ" — and when that code was a
+      // typed product, compose answers PRODUCT_NOT_FOUND and the screen offers to
+      // type it again, with the server's own sentence above the form.
+      clearManualProduct();
+
       const finish = (composedOk: boolean): ComposeRestoreOutcome => {
         setRestorePhase("done");
         return { composed: composedOk, notices };
@@ -361,7 +428,16 @@ export function useComposeWizard() {
         return finish(false);
       }
 
-      if (shouldClearCaptions(draft.composeKey, composeKey(form.getValues()), draftHadCaptions)) {
+      if (
+        shouldClearCaptions(
+          draft.composeKey,
+          composeKey(
+            form.getValues(),
+            manualProductForCode(manualProductRef.current, form.getValues().productCode),
+          ),
+          draftHadCaptions,
+        )
+      ) {
         notices.push(
           "Mã hoặc màu đã khác so với lúc lưu nháp nên caption cũ đã bị xoá — caption luôn gắn với đúng sản phẩm của nó.",
         );
@@ -373,7 +449,7 @@ export function useComposeWizard() {
 
       return finish(true);
     },
-    [form, submitProductStep],
+    [clearManualProduct, form, submitProductStep],
   );
 
   /** Called by the draft hook when no restore is coming (or none was possible). */
@@ -408,10 +484,13 @@ export function useComposeWizard() {
     setUploadQueue([]);
     setUploadedCount(0);
     setUploadRejections([]);
+    // "Xoá nháp" means an empty screen. Typed product text left behind would
+    // reattach itself the moment the same code is typed again.
+    clearManualProduct();
     compose.reset();
     captions.reset();
     upload.reset();
-  }, [captions, compose, form, upload]);
+  }, [captions, clearManualProduct, compose, form, upload]);
 
   /**
    * Deep link from the product list: `/compose?code=MGKVX6310&color=TRẮNG`
@@ -475,6 +554,16 @@ export function useComposeWizard() {
      */
     deepLinked: (searchParams.get("code") ?? "").trim().length > 0,
     captionsCleared,
+    /**
+     * Onboarding phase 3. `manualProduct` is what is on the typed form right now
+     * (with the code it belongs to); `composed.productOrigin` is what the SERVER
+     * says the post on screen was built from, and that is the one to render a
+     * badge from — a product typed last week and reused today comes back as
+     * `manual` with nothing in this state at all.
+     */
+    manualProduct,
+    applyManualProduct,
+    clearManualProduct,
     /** Tông giọng asked of the writer, and whether the server refused it. */
     tone,
     setTone,

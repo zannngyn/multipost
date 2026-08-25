@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { AppError } from "./errors";
 import {
   parseDriveFolderRef,
+  parseDriveMediaRefs,
   parseSpreadsheetRef,
   requireGoogleRef,
   type GoogleRefRejection,
@@ -146,6 +147,72 @@ describe("requireGoogleRef", () => {
   });
 
   it("names the spreadsheet field for a spreadsheet mistake", () => {
+    try {
+      requireGoogleRef("spreadsheet", "spreadsheet", "rac");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      const appError = error as AppError;
+      expect(appError.context.field).toBe("spreadsheet");
+      expect(appError.userMessage).toContain("Dán link Google Sheet hoặc ID của nó");
+    }
+  });
+});
+
+/**
+ * The LENIENT half (onboarding phase 2): the same links, but read out of a
+ * spreadsheet cell nobody will clean up for us. It returns values, never
+ * throws, and takes what it recognises.
+ */
+describe("parseDriveMediaRefs — a sheet cell, not a paste box", () => {
+  it("returns [] for everything unusable instead of throwing", () => {
+    for (const raw of ["", "   ", null, undefined, 42, "chưa có ảnh", "https://dropbox.com/x"]) {
+      expect(parseDriveMediaRefs(raw)).toEqual([]);
+    }
+  });
+
+  it("reads a file link, a folder link and the legacy open?id= form", () => {
+    expect(
+      parseDriveMediaRefs("https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view?usp=sharing"),
+    ).toEqual([{ id: "1AbCdEfGhIjKlMnOp", kind: "file" }]);
+    expect(parseDriveMediaRefs("https://drive.google.com/drive/folders/1FolderIdAbCdEfGh")).toEqual([
+      { id: "1FolderIdAbCdEfGh", kind: "folder" },
+    ]);
+    expect(parseDriveMediaRefs("https://drive.google.com/open?id=1OpenIdAbCdEfGhIj")).toEqual([
+      { id: "1OpenIdAbCdEfGhIj", kind: "unknown" },
+    ]);
+  });
+
+  it("takes a bare id, and ignores a string too short to be one", () => {
+    expect(parseDriveMediaRefs("1AbCdEfGhIjKlMnOp")).toEqual([
+      { id: "1AbCdEfGhIjKlMnOp", kind: "unknown" },
+    ]);
+    expect(parseDriveMediaRefs("abc")).toEqual([]);
+  });
+
+  it("reads several links from one cell, de-duplicated, order kept", () => {
+    const refs = parseDriveMediaRefs(
+      "https://drive.google.com/file/d/1AaaaaaaaaaaaaaaA/view\n" +
+        "https://drive.google.com/file/d/1BbbbbbbbbbbbbbbB/view ; " +
+        "https://drive.google.com/file/d/1AaaaaaaaaaaaaaaA/view",
+    );
+    expect(refs.map((ref) => ref.id)).toEqual(["1AaaaaaaaaaaaaaaA", "1BbbbbbbbbbbbbbbB"]);
+  });
+
+  it("ignores the noise around a link instead of failing the cell", () => {
+    expect(
+      parseDriveMediaRefs("ảnh: https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view (chụp 12/8)"),
+    ).toEqual([{ id: "1AbCdEfGhIjKlMnOp", kind: "file" }]);
+  });
+
+  it("does not mistake a published-sheet token for a media file", () => {
+    expect(
+      parseDriveMediaRefs("https://docs.google.com/spreadsheets/d/e/2PACX-1vTokenHere/pubhtml"),
+    ).toEqual([]);
+  });
+});
+
+describe("requireGoogleRef — unchanged", () => {
+  it("still names the spreadsheet field for a spreadsheet mistake", () => {
     try {
       requireGoogleRef("spreadsheet", "spreadsheet", "rac");
       expect.unreachable("should have thrown");

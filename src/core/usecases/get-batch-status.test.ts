@@ -505,3 +505,46 @@ describe("getBatchStatus — logging", () => {
     });
   });
 });
+
+/**
+ * Onboarding phase 3: a post can be built from data an operator typed, and the
+ * tracking screen is where "bài này lấy dữ liệu từ đâu" gets asked — months
+ * after the product row may have been re-synced or deleted. The answer must
+ * therefore come from the JOB, which is why nothing here joins a product.
+ */
+describe("getBatchStatus — product origin", () => {
+  it("defaults to sheet for a job created before the stamp existed", async () => {
+    const { getBatchStatus } = harness(summaryOf([job()]));
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.productOrigin).toBe("sheet");
+    expect(result.channels[0]?.productOrigin).toBe("sheet");
+  });
+
+  it("carries the manual stamp onto the batch and onto its channel line", async () => {
+    const { getBatchStatus } = harness(
+      summaryOf([
+        job({ productOrigin: "manual" }),
+        job({ id: "job-2", channelId: "fbpage-b", productOrigin: "manual" }),
+      ]),
+    );
+
+    const result = await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    expect(result.productOrigin).toBe("manual");
+    expect(result.channels.map((channel) => channel.productOrigin)).toEqual(["manual", "manual"]);
+  });
+
+  it("logs the origin on the batch line and on every channel", async () => {
+    const { getBatchStatus, lines } = harness(summaryOf([job({ productOrigin: "manual" })]));
+
+    await getBatchStatus({ tenantId: TENANT, batchId: BATCH });
+
+    const line = lines.find((entry) => entry.message === "Batch status read");
+    expect(line?.context).toMatchObject({
+      product_origin: "manual",
+      channels: [{ channel: "fbpage-a", product_origin: "manual" }],
+    });
+  });
+});

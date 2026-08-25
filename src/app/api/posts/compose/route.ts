@@ -22,12 +22,51 @@ import { AppError } from "@/core/domain/errors";
  * Whitelist (business rule 2): the response carries `content` (tên, mô tả,
  * chủng loại, mùa vụ) plus the internal `inventory`/`warnings` block. The
  * usecase never returns prices, and nothing here adds them.
+ *
+ * Onboarding phase 3: the body may carry `manualProduct`, the product typed on
+ * the compose screen by a tenant with no importable catalog. It is FORWARDED,
+ * not interpreted — see `ManualProductBodySchema` below for why this route does
+ * not own a second copy of the whitelist, and `core/usecases/compose-post.ts`
+ * for the guarantee that a typed product goes through the same stock gate.
  */
 
 const ROUTE = "POST /api/posts/compose";
 
 /** Phase 1 publishes to Facebook only; the field exists so E5 can widen it. */
 const DEFAULT_CHANNEL = "facebook";
+
+/**
+ * ONBOARDING PHASE 3 — the product typed on the compose screen, for a tenant
+ * with no importable catalog at all.
+ *
+ * `looseObject`, not `object` and not `strictObject`, and the choice is the
+ * whole point:
+ *  - `object` STRIPS unknown keys silently. A `price` sent by a future client
+ *    would vanish here and the whitelist (business rule 2) would look enforced
+ *    while nothing had enforced it;
+ *  - `strictObject` here would be a SECOND copy of the whitelist, in another
+ *    layer, free to drift from `ManualProductSchema` — and `app/` may not import
+ *    it (dependency-cruiser `interface-core-errors-only`), so the copy could
+ *    never be kept honest by the type system;
+ *  - `looseObject` types what we know and PASSES UNKNOWN KEYS THROUGH, so the
+ *    one strict schema in `core/domain/manual-product.ts` still gets to refuse
+ *    them loudly, with the offending path in its own Vietnamese message.
+ *
+ * The four content fields are the caption whitelist; `stockRaw`/`noteRaw` are
+ * operational and go through the same stock gate as a synced row — an empty
+ * `stockRaw` blocks (business rule 3). Nothing here decides any of that.
+ *
+ * `code` is deliberately absent: it comes from `productCode` below, which is
+ * also what the media lookup and the duplicate lock key on.
+ */
+const ManualProductBodySchema = z.looseObject({
+  name: z.string({ error: "Tên sản phẩm phải là chuỗi ký tự." }),
+  description: z.string({ error: "Mô tả phải là chuỗi ký tự." }).nullish(),
+  category: z.string({ error: "Chủng loại phải là chuỗi ký tự." }).nullish(),
+  season: z.string({ error: "Mùa vụ phải là chuỗi ký tự." }).nullish(),
+  stockRaw: z.string({ error: "Số tồn phải là chuỗi ký tự." }).nullish(),
+  noteRaw: z.string({ error: "Lưu ý phải là chuỗi ký tự." }).nullish(),
+});
 
 const BodySchema = z.object({
   productCode: z
@@ -57,6 +96,13 @@ const BodySchema = z.object({
       error: "Đích đăng video chỉ nhận Video thường hoặc Reels.",
     })
     .optional(),
+  /**
+   * Absent = today's behaviour: look `productCode` up in the synced catalog.
+   * Present = the operator typed the product here. It changes WHERE the product
+   * text comes from and nothing else — `composePost` runs the same stock gate,
+   * in the same order, on the value below.
+   */
+  manualProduct: ManualProductBodySchema.optional(),
 });
 
 /**
@@ -101,6 +147,9 @@ export async function POST(request: Request): Promise<Response> {
       mediaKind,
       ...(body.videoTarget ? { videoTarget: body.videoTarget } : {}),
       ...(body.source ? { source: body.source } : {}),
+      // Forwarded, never rebuilt: ABSENT and "present but empty" are different
+      // requests, and only `undefined` means "look the code up".
+      ...(body.manualProduct === undefined ? {} : { manualProduct: body.manualProduct }),
     });
 
     // --- Blocked first: nothing downstream may see a half-composed post -----
@@ -121,6 +170,9 @@ export async function POST(request: Request): Promise<Response> {
           available_colors: result.availableColors,
           media_kind: mediaKind,
           media_source: body.source ?? "drive",
+          // Where the product text came from. Without it a blocked manual post
+          // and a blocked synced one are indistinguishable in the log.
+          product_origin: result.productOrigin,
           video_target: result.video?.target ?? body.videoTarget ?? null,
         },
       });

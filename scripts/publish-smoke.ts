@@ -1709,6 +1709,9 @@ async function main(): Promise<void> {
         tenantId: DEMO_TENANT_ID,
         batchId: batch6,
         productCode: PRODUCT_A,
+        // Stated, not defaulted: this row is written straight through the repo,
+        // and PRODUCT_A is seeded with a sync run id — a synced catalog row.
+        productOrigin: "sheet",
         color: "TÍM",
         channelId: CHANNEL_A,
         format: "image_post",

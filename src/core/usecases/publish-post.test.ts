@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  MYSP_FIELD_MAP,
+  type StockPolicy,
+} from "@/core/domain/catalog-field-map";
 import { AppError } from "@/core/domain/errors";
 import { deriveBatchStatus, type PostJob, type PostJobStatus } from "@/core/domain/post-job";
 import type { MediaAsset, Product } from "@/core/domain/product";
 import type { VideoSpec } from "@/core/domain/video-spec";
-import type { MediaAssetLookup } from "@/core/ports/drive-source";
+import type { CatalogConfigRepo, MediaAssetLookup } from "@/core/ports/drive-source";
 import type { VideoAssetProbe } from "@/core/ports/media-probe";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { JobProgressStore } from "@/core/ports/job-progress";
@@ -56,6 +60,41 @@ function silentLogger(): Logger {
     error: () => {},
   };
   return logger;
+}
+
+interface LogLine {
+  level: string;
+  message: string;
+  context?: LogContext;
+}
+
+/** Same shape as silentLogger, but every line is kept for assertions. */
+function recordingLogger(lines: LogLine[]): Logger {
+  const make = (): Logger => ({
+    child: (_bindings: LogBindings) => make(),
+    debug: (message, context) => lines.push({ level: "debug", message, context }),
+    info: (message, context) => lines.push({ level: "info", message, context }),
+    warn: (message, context) => lines.push({ level: "warn", message, context }),
+    error: (message, context) => lines.push({ level: "error", message, context }),
+  });
+  return make();
+}
+
+/**
+ * Config repo answering only the hot-path read this usecase makes. Full port
+ * shape so the fake cannot drift away from `CatalogConfigRepo`.
+ */
+function makeCatalogConfig(policy: StockPolicy | Error): CatalogConfigRepo {
+  return {
+    findCatalogConfig: async () => null,
+    findCatalogSource: async () => null,
+    findFieldMap: async () => MYSP_FIELD_MAP,
+    findStockPolicy: async () => {
+      if (policy instanceof Error) throw policy;
+      return policy;
+    },
+    saveCatalogSource: async () => ({ previous: null }),
+  };
 }
 
 function fixedClock(startMs = Date.parse("2026-08-13T02:00:00.000Z")): Clock & { advance(ms: number): void } {
@@ -338,6 +377,16 @@ function harness(options: {
   progress?: JobProgressStore;
   /** Doc 10 §5.2 — `null` = tenant row gone, `suspended` = tenant locked. */
   tenant?: Tenant | null;
+  /** Onboarding phase 1 — the tenant's stock policy, or the read that fails. */
+  stockPolicy?: StockPolicy | Error;
+  /**
+   * Full product port, for the cases one fixed answer cannot express: the
+   * catalog CHANGING between compose time and publish time is the whole reason
+   * business rule 3 checks twice.
+   */
+  products?: ProductRepo;
+  /** Swap the silent logger for a recording one to assert on a log line. */
+  lines?: LogLine[];
 } = {}): Harness {
   const repo = makeMemoryRepo(options.jobs ?? [makeJob()]);
   const queue = makeQueue();
@@ -386,7 +435,9 @@ function harness(options: {
     progress: recorded,
     publish: makePublishPost({
       postJobs: repo,
-      products: makeProducts(options.product === undefined ? makeProduct("104") : options.product),
+      products:
+        options.products ??
+        makeProducts(options.product === undefined ? makeProduct("104") : options.product),
       channels: makeChannels(options.channel === undefined ? CHANNEL : options.channel, options.settings),
       tenants: makeTenants(options.tenant === undefined ? ACTIVE_TENANT : options.tenant),
       publisher,
@@ -394,7 +445,10 @@ function harness(options: {
       queue,
       progress,
       clock,
-      logger: silentLogger(),
+      logger: options.lines ? recordingLogger(options.lines) : silentLogger(),
+      ...(options.stockPolicy === undefined
+        ? {}
+        : { catalogConfig: makeCatalogConfig(options.stockPolicy) }),
       signMediaUrl: options.signMediaUrl ?? signer.sign,
       mediaBaseUrl: options.mediaBaseUrl ?? (() => MEDIA_BASE_URL),
       videoProbe: options.videoProbe,
@@ -585,6 +639,163 @@ describe("publishPost — stock recheck (business rule 3)", () => {
     expect(result.outcome).toBe("published");
     const caption = publisher.publishImagePost.mock.calls[0][0].caption as string;
     expect(caption).not.toContain("Tồn thấp");
+  });
+});
+
+/**
+ * Onboarding phase 1 — the tenant's StockPolicy reaching the SECOND stock check,
+ * the one that runs on the line before the platform call (business rule 3).
+ * Edge cases first: the unreadable config and the modes that must keep blocking.
+ */
+const TEXTUAL_POLICY: StockPolicy = {
+  mode: "textual",
+  inStockValues: ["Còn hàng", "Sẵn hàng"],
+  outOfStockValues: ["Hết hàng"],
+};
+const DISABLED_POLICY: StockPolicy = {
+  mode: "disabled",
+  reason: "Khách quản lý tồn kho trên phần mềm riêng",
+};
+
+describe("publishPost — tenant stock policy (onboarding phase 1)", () => {
+  it("fails loudly and publishes NOTHING when the stored policy cannot be read", async () => {
+    const lines: LogLine[] = [];
+    const { publish, publisher, repo } = harness({
+      product: makeProduct("104"),
+      stockPolicy: new AppError("SYNC_FAILED", { message: "invalid stockPolicy" }),
+      lines,
+    });
+
+    await expect(publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "SYNC_FAILED",
+    });
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    // Read BEFORE the claim: a broken config must never strand a row in
+    // `publishing`, which nothing auto-recovers.
+    expect(repo.get("job-1")?.status).toBe("queued");
+    expect(
+      lines.some(
+        (line) => line.level === "error" && line.context?.reason === "STOCK_POLICY_UNREADABLE",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the numeric behaviour when no config repo is wired", async () => {
+    const { publish, publisher } = harness({ product: makeProduct("0") });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("numeric mode is unchanged when the repo answers the default", async () => {
+    const { publish, publisher } = harness({
+      product: makeProduct("0"),
+      stockPolicy: { mode: "numeric" },
+    });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("textual: publishes a declared in-stock wording that numeric mode would block", async () => {
+    const { publish, publisher } = harness({
+      product: makeProduct("Còn hàng"),
+      stockPolicy: TEXTUAL_POLICY,
+    });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("textual: blocks a declared out-of-stock wording right before the API call", async () => {
+    const { publish, publisher, repo } = harness({
+      product: makeProduct("Hết hàng"),
+      stockPolicy: TEXTUAL_POLICY,
+    });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(repo.get("job-1")?.status).toBe("blocked");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("textual: blocks a wording the tenant never declared — no guessing", async () => {
+    const lines: LogLine[] = [];
+    const { publish, publisher } = harness({
+      product: makeProduct("sắp về"),
+      stockPolicy: TEXTUAL_POLICY,
+      lines,
+    });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(
+      lines.some(
+        (line) =>
+          line.context?.reason === "STOCK_TEXT_UNKNOWN" &&
+          line.context?.stock_policy_mode === "textual",
+      ),
+    ).toBe(true);
+  });
+
+  it("disabled: publishes an empty stock cell and says NOBODY checked", async () => {
+    const lines: LogLine[] = [];
+    const { publish, publisher } = harness({
+      product: makeProduct(""),
+      stockPolicy: DISABLED_POLICY,
+      lines,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    // This is the line that answers "vì sao bài này lên dù hết hàng".
+    const skipped = lines.find((line) => line.context?.stock_check_skipped === true);
+    expect(skipped).toBeDefined();
+    expect(skipped?.level).toBe("warn");
+    expect(skipped?.context).toMatchObject({
+      stock_policy_mode: "disabled",
+      stock_check_skipped_reason: "Khách quản lý tồn kho trên phần mềm riêng",
+    });
+    // ...and the published line carries it too, so the success record is honest.
+    const published = lines.find((line) => line.context?.outcome === "published");
+    expect(published?.context).toMatchObject({
+      stock_policy_mode: "disabled",
+      stock_check_skipped: true,
+    });
+  });
+
+  it("disabled: 'HẾT HÀNG' in the note still blocks", async () => {
+    const { publish, publisher, repo } = harness({
+      product: makeProduct("50", "HẾT HÀNG"),
+      stockPolicy: DISABLED_POLICY,
+    });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(repo.get("job-1")?.status).toBe("blocked");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("disabled: conflicting sheet rows still block", async () => {
+    const conflicting: Product = { ...makeProduct("104"), hasConflict: true };
+    const { publish, publisher } = harness({
+      product: conflicting,
+      stockPolicy: DISABLED_POLICY,
+    });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("a policy that itself is invalid blocks instead of publishing unchecked", async () => {
+    // Hand-edited row shape: `disabled` without the required written reason.
+    const { publish, publisher } = harness({
+      product: makeProduct("104"),
+      stockPolicy: { mode: "disabled", reason: "" } as StockPolicy,
+    });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
   });
 });
 
@@ -2384,5 +2595,195 @@ describe("publishPost — progress reporting (E7.5)", () => {
 
     expect(h.progress.reports[0]?.progress.attempt).toBe(2);
     expect(h.repo.events[0]?.attempt).toBe(2);
+  });
+});
+
+/**
+ * Onboarding phase 3 — the product text was TYPED by an operator on the compose
+ * screen (`product.origin = "manual"`), not synced from a catalog.
+ *
+ * The point of these cases is the SEAM, which is where CLAUDE.md says the bugs
+ * live: composing writes a manual row, publishing re-reads it by code, and
+ * business rule 3 must run on that row exactly as it does on a synced one. A
+ * manual product is not an exception to the stock gate, and nothing in
+ * `publishPost` may start filtering by origin — `findByCode` returning the
+ * typed row IS the contract (proven against Postgres in
+ * adapters/db/product-repo.manual.write.integration.test.ts).
+ */
+function manualProduct(stockRaw: string, noteRaw = ""): Product {
+  return { ...makeProduct(stockRaw, noteRaw), origin: "manual" };
+}
+
+/**
+ * A product port whose answer CHANGES between reads, plus the log of what was
+ * asked. One fixed answer cannot express "còn hàng lúc soạn, hết hàng lúc
+ * đăng", and that gap is the only reason the second check exists.
+ */
+function sequencedProducts(answers: readonly (Product | null)[]): ProductRepo & {
+  reads: Array<{ tenantId: string; code: string }>;
+} {
+  const reads: Array<{ tenantId: string; code: string }> = [];
+  return {
+    reads,
+    findByCode: async (tenantId: string, code: string) => {
+      reads.push({ tenantId, code });
+      // The last answer repeats: a test asserting on ONE read must not depend
+      // on how many times something else reads afterwards.
+      return answers[Math.min(reads.length - 1, answers.length - 1)] ?? null;
+    },
+    upsertMany: async () => 0,
+    deleteStale: async () => 0,
+    countAll: async () => 1,
+  };
+}
+
+describe("publishPost — stock recheck on a MANUAL product (phase 3, business rule 3)", () => {
+  it("re-reads the typed row by code and publishes when the operator's number allows it", async () => {
+    const products = sequencedProducts([manualProduct("2")]);
+    const { publish, publisher, repo } = harness({ products });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    // The recheck happened, on THIS tenant's row for THIS code — no origin
+    // filter, no second lookup path for typed data.
+    expect(products.reads).toEqual([{ tenantId: TENANT, code: "MGKVX6310" }]);
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(repo.get("job-1")?.status).toBe("published");
+  });
+
+  it("judges the typed number itself: 2 goes out, 0 does not, same product otherwise", async () => {
+    const inStock = harness({ products: sequencedProducts([manualProduct("2")]) });
+    const soldOut = harness({ products: sequencedProducts([manualProduct("0")]) });
+
+    const first = await inStock.publish({ tenantId: TENANT, postJobId: "job-1" });
+    const second = await soldOut.publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(first.outcome).toBe("published");
+    expect(second).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(soldOut.publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a typed zero", "0", ""],
+    ["an empty stock field", "", ""],
+    ["a stock field that is not a number", "chưa rõ", ""],
+    ["the sold-out note, whatever the number says", "50", "HẾT HÀNG"],
+  ])("blocks %s BEFORE the channel is called", async (_case, stockRaw, noteRaw) => {
+    const { publish, publisher, repo } = harness({
+      products: sequencedProducts([manualProduct(stockRaw, noteRaw)]),
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(publisher.publishVideoPost).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(repo.get("job-1")).toMatchObject({ status: "blocked", lastErrorCode: "OUT_OF_STOCK" });
+    expect(result.userMessage ?? "").not.toBe("");
+  });
+
+  it("blocks a typed row that disappeared before the publish call", async () => {
+    // The operator deleted it, or a later sync replaced the code with a synced
+    // row that was then swept: either way the post must not go out.
+    const { publish, publisher, repo } = harness({ products: sequencedProducts([null]) });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "PRODUCT_NOT_FOUND" });
+    expect(repo.get("job-1")?.status).toBe("blocked");
+  });
+
+  it("blocks when the typed stock ran out BETWEEN composing and publishing", async () => {
+    // Read 1 stands for the compose/create-batch gate: it saw 104 and the job
+    // was legitimately queued (create-post-batch.test.ts owns that half). Read 2
+    // is the publish-time recheck, and by then the operator has edited the row
+    // down to zero. Nothing about the job changed — only the catalog did.
+    const products = sequencedProducts([manualProduct("104"), manualProduct("0")]);
+    const composeTime = await products.findByCode(TENANT, "MGKVX6310");
+    expect(composeTime?.operational.stockRaw).toBe("104");
+
+    const lines: LogLine[] = [];
+    const { publish, publisher, repo } = harness({ products, lines });
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(products.reads).toHaveLength(2);
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(repo.get("job-1")).toMatchObject({ status: "blocked", lastErrorCode: "OUT_OF_STOCK" });
+    // The log must say which number blocked it — the compose-time one is gone,
+    // and "vì sao bài này không lên" has to be answerable from this line alone.
+    const blocked = lines.find((line) => line.context?.error_code === "OUT_OF_STOCK");
+    expect(blocked?.context).toMatchObject({ stock: 0, outcome: "blocked" });
+  });
+
+  it("keeps the SCHEDULED variant honest too: a typed row that sold out is auto-cancelled", async () => {
+    // E8.3 — same gate, different bookkeeping: an hours-old scheduled post that
+    // the recheck kills must show up as a withdrawal, not a silent no-op.
+    const scheduled = makeJob({ scheduledAt: new Date("2026-08-13T01:59:00.000Z") });
+    const { publish, publisher, repo } = harness({
+      jobs: [scheduled],
+      products: sequencedProducts([manualProduct("0")]),
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(repo.get("job-1")?.status).toBe("blocked");
+  });
+
+  it("the tenant's policy is what suspends the gate — being typed by hand never is", async () => {
+    // `disabled` lets an empty stock cell through, for a manual row exactly as
+    // for a synced one, and the run says out loud that NOBODY checked.
+    const lines: LogLine[] = [];
+    const { publish, publisher } = harness({
+      products: sequencedProducts([manualProduct("")]),
+      stockPolicy: DISABLED_POLICY,
+      lines,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(
+      lines.some(
+        (line) => line.level === "warn" && line.context?.stock_check_skipped === true,
+      ),
+    ).toBe(true);
+  });
+
+  it("but a disabled policy still blocks the sold-out NOTE on a typed row", async () => {
+    const { publish, publisher } = harness({
+      products: sequencedProducts([manualProduct("", "HẾT HÀNG")]),
+      stockPolicy: DISABLED_POLICY,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result).toMatchObject({ outcome: "blocked", errorCode: "OUT_OF_STOCK" });
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+  });
+
+  it("textual policy reads the operator's WORDING on a typed row", async () => {
+    const inStock = harness({
+      products: sequencedProducts([manualProduct("Còn hàng")]),
+      stockPolicy: TEXTUAL_POLICY,
+    });
+    const outOfStock = harness({
+      products: sequencedProducts([manualProduct("Hết hàng")]),
+      stockPolicy: TEXTUAL_POLICY,
+    });
+
+    expect((await inStock.publish({ tenantId: TENANT, postJobId: "job-1" })).outcome).toBe(
+      "published",
+    );
+    expect(await outOfStock.publish({ tenantId: TENANT, postJobId: "job-1" })).toMatchObject({
+      outcome: "blocked",
+      errorCode: "OUT_OF_STOCK",
+    });
+    expect(outOfStock.publisher.publishImagePost).not.toHaveBeenCalled();
   });
 });

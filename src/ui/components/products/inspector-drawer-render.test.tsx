@@ -30,7 +30,7 @@ function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
     name: "Giannal",
     category: "Áo cộc tay",
     season: "Xuân hè 2026",
-    inventory: { status: "in_stock", stock: 12, reason: null, operatorMessage: null },
+    inventory: { status: "in_stock", stock: 12, reason: null, operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
     mediaImageCount: 8,
     mediaVideoCount: 0,
     hasConflict: false,
@@ -83,7 +83,7 @@ describe("ProductInspectorDrawer", () => {
       kind: "product",
       product: product({
         composable: false,
-        inventory: { status: "blocked", stock: 0, reason: "NOTE_SOLD_OUT", operatorMessage: null },
+        inventory: { status: "blocked", stock: 0, reason: "NOTE_SOLD_OUT", operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
         blockedReason: {
           code: "OUT_OF_STOCK",
           userMessage: "Mã MGKVX6310 đã hết hàng — không đăng",

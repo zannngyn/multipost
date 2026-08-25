@@ -10,7 +10,7 @@ function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
     name: "Váy xoè hoa nhí",
     category: "Váy",
     season: "Hè",
-    inventory: { status: "in_stock", stock: 62, reason: null, operatorMessage: null },
+    inventory: { status: "in_stock", stock: 62, reason: null, operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
     mediaImageCount: 8,
     mediaVideoCount: 0,
     hasConflict: false,
@@ -24,7 +24,7 @@ describe("toProductSuggestion — refusals first", () => {
   it("blocks an out-of-stock code with the mandated sentence", () => {
     const suggestion = toProductSuggestion(
       product({
-        inventory: { status: "blocked", stock: 0, reason: "OUT_OF_STOCK", operatorMessage: null },
+        inventory: { status: "blocked", stock: 0, reason: "OUT_OF_STOCK", operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
         composable: false,
         blockedReason: { code: "OUT_OF_STOCK", userMessage: "Tồn kho bằng 0" },
       }),
@@ -38,7 +38,7 @@ describe("toProductSuggestion — refusals first", () => {
   it("says hết hàng even when the server forgot to fill blockedReason", () => {
     const suggestion = toProductSuggestion(
       product({
-        inventory: { status: "blocked", stock: null, reason: null, operatorMessage: null },
+        inventory: { status: "blocked", stock: null, reason: null, operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
         composable: false,
         blockedReason: null,
       }),
@@ -68,14 +68,16 @@ describe("toProductSuggestion — refusals first", () => {
   });
 
   it("does not present an empty name as a blank row", () => {
-    expect(toProductSuggestion(product({ name: "   " })).name).toBe("(chưa có tên trên Sheet)");
+    // Source-neutral since onboarding phase 3: the row behind a suggestion may
+    // be a Google tab, an uploaded CSV, or a product typed on the compose screen.
+    expect(toProductSuggestion(product({ name: "   " })).name).toBe("(chưa có tên trong dữ liệu)");
   });
 
   it("distinguishes 'no stock figure' from 'zero'", () => {
-    expect(toProductSuggestion(product({ inventory: { status: "low_stock", stock: null, reason: null, operatorMessage: null } })).meta).toContain(
+    expect(toProductSuggestion(product({ inventory: { status: "low_stock", stock: null, reason: null, operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null} })).meta).toContain(
       "chưa có số tồn",
     );
-    expect(toProductSuggestion(product({ inventory: { status: "low_stock", stock: 0, reason: null, operatorMessage: null } })).meta).toContain(
+    expect(toProductSuggestion(product({ inventory: { status: "low_stock", stock: 0, reason: null, operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null} })).meta).toContain(
       "tồn 0",
     );
   });
@@ -114,5 +116,47 @@ describe("nextHighlight", () => {
   it("moves one step in the middle", () => {
     expect(nextHighlight(0, 1, 3)).toBe(1);
     expect(nextHighlight(2, -1, 3)).toBe(1);
+  });
+});
+
+/*
+ * This module was the last place in the UI that read `inventory.status` to
+ * describe stock. With the gate off every row printed "chưa có số tồn" — not a
+ * lie, but it hid the fact that nobody counted, and it disagreed with the
+ * catalog table, the inspector and the compose line, which all say "không kiểm
+ * tồn". One vocabulary, from `stock-check.ts`.
+ */
+describe("tenant with the stock gate off", () => {
+  function skipped(overrides: Partial<CatalogProduct["inventory"]> = {}) {
+    return product({
+      inventory: {
+        status: "in_stock",
+        stock: 62,
+        reason: null,
+        operatorMessage: null,
+        stockCheckSkipped: true,
+        stockCheckSkippedReason: "Tồn kho ở phần mềm khác",
+        ...overrides,
+      },
+    });
+  }
+
+  it("says 'không kiểm tồn' instead of a count nobody made", () => {
+    const suggestion = toProductSuggestion(skipped());
+
+    expect(suggestion.meta).toContain("không kiểm tồn");
+    expect(suggestion.meta).not.toContain("tồn 62");
+    expect(suggestion.meta).not.toContain("chưa có số tồn");
+  });
+
+  it("does not blame the stock count for a row blocked by another rule", () => {
+    // `blocked` while the gate is off means the sold-out note or two sheet rows
+    // disagreeing — never a number. "đã hết hàng" would point at the wrong cell.
+    const suggestion = toProductSuggestion(
+      skipped({ status: "blocked", stock: null, reason: "NOTE_SOLD_OUT" }),
+    );
+
+    expect(suggestion.disabled).toBe(true);
+    expect(suggestion.blockedMessage).not.toContain("đã hết hàng");
   });
 });

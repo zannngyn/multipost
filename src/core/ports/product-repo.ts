@@ -14,12 +14,44 @@
 import type { MediaAsset, Product } from "@/core/domain/product";
 import type { TenantId } from "@/core/domain/tenant-context";
 
+/**
+ * Verdict of `saveManual`. `refused_synced` is not an error: it means the code
+ * exists in the synced catalog, so the typed data must NOT replace it.
+ */
+export type ManualProductSaveResult = "saved" | "refused_synced";
+
 export interface ProductRepo {
   findByCode(tenantId: TenantId, code: string): Promise<Product | null>;
   /** Insert or update by (tenant, code). Returns the number of rows written. */
   upsertMany(tenantId: TenantId, products: readonly Product[], syncRunId: string): Promise<number>;
-  /** Removes products not touched by `syncRunId`. Returns rows deleted. */
+  /**
+   * Removes products not touched by `syncRunId`. Returns rows deleted.
+   *
+   * MUST leave `origin: "manual"` rows alone — they belong to no sync run, so a
+   * sync deleting them would erase a product the operator typed (same rule as
+   * `MediaRepo.deleteStale` and uploaded assets).
+   */
   deleteStale(tenantId: TenantId, syncRunId: string): Promise<number>;
+
+  // --- Onboarding phase 3 (manual product) ---------------------------------
+
+  /**
+   * Stores ONE product an operator typed on the compose screen, so the publish
+   * step can re-check its stock (business rule 3 runs twice, and the second run
+   * reads the database).
+   *
+   * OPTIONAL on the port: a process wired before phase 3 keeps working, and
+   * `composePost` refuses a manual product loudly when it is missing rather
+   * than composing a post nothing downstream could publish.
+   *
+   * Implementers MUST:
+   *   - write `origin: "manual"` and NO sync run id, so the next sync cannot
+   *     sweep the row;
+   *   - refuse to overwrite a SYNCED row for the same code and answer
+   *     `"refused_synced"` — the real catalog wins over anything typed, and
+   *     that verdict must reach the caller instead of being silently skipped.
+   */
+  saveManual?(tenantId: TenantId, product: Product): Promise<ManualProductSaveResult>;
   /**
    * How many products this tenant currently has. Read by the sync BEFORE
    * `deleteStale`: a sheet that suddenly parses to zero rows while the catalog

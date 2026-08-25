@@ -15,6 +15,7 @@ import {
   type ScriptedProvider,
   type ScriptedStep,
 } from "@/core/ai/testing";
+import { makeFieldMap } from "@/core/domain/catalog-field-map";
 import { AppError } from "@/core/domain/errors";
 import type { ResolvedModelPolicy } from "@/core/ports/ai";
 import type { ContentGenerationRequest } from "@/core/ports/content-engine";
@@ -457,5 +458,76 @@ describe("ContentEngine — happy path", () => {
       makeRequest(),
     );
     expect(result.content.title).toBe(goodOutput.title);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The tenant's column mapping must reach validation stage 3
+// ---------------------------------------------------------------------------
+
+describe("ContentEngine — tenant field map", () => {
+  /** A source quoted with an OUTSIDE tenant's own column label. */
+  const outsideLabelOutput = {
+    ...goodOutput,
+    claims: [{ field: "other", statement: "kiểu dáng", sourceText: "- Nhóm hàng: Đầm" }],
+  };
+  const outsideMap = makeFieldMap({
+    code: "SKU",
+    name: "Tên hàng",
+    description: "Chi tiết",
+    category: "Nhóm hàng",
+    season: "Season",
+  });
+
+  it("passes a claim quoted with the tenant's label when the map is on the request", async () => {
+    const { deps, google } = makeHarness({ google: [{ kind: "ok", output: outsideLabelOutput }] });
+
+    const result = await makeContentEngine(deps).generate(makeRequest({ fieldMap: outsideMap }));
+
+    expect(result.content.claims[0].sourceText).toBe("- Nhóm hàng: Đầm");
+    expect(google.calls).toHaveLength(1); // no escalation was needed
+  });
+
+  it("rejects that same claim without a map — the map is doing the work", async () => {
+    const { deps } = makeHarness({ google: [{ kind: "ok", output: outsideLabelOutput }] });
+
+    await expect(makeContentEngine(deps).generate(makeRequest())).rejects.toMatchObject({
+      code: "CAPTION_VALIDATION_FAILED",
+    });
+  });
+
+  it("names the tenant's columns in the failure handed to the operator", async () => {
+    const ungrounded = {
+      ...goodOutput,
+      claims: [{ field: "material", statement: "bịa", sourceText: "vải dệt kim Nhật" }],
+    };
+    const { deps } = makeHarness({ google: [{ kind: "ok", output: ungrounded }] });
+
+    await expect(
+      makeContentEngine(deps).generate(makeRequest({ fieldMap: outsideMap })),
+    ).rejects.toMatchObject({
+      code: "CAPTION_VALIDATION_FAILED",
+      context: {
+        failures: [
+          expect.objectContaining({
+            rule: "claim.source_not_found",
+            message: expect.stringContaining("Chi tiết/Nhóm hàng/Season"),
+          }),
+        ],
+      },
+    });
+  });
+
+  it("never renders a tenant column name into the prompt", async () => {
+    const { deps, google } = makeHarness({ google: [{ kind: "ok", output: outsideLabelOutput }] });
+    await makeContentEngine(deps).generate(makeRequest({ fieldMap: outsideMap }));
+
+    const promptText = google.calls[0].messages[0].parts
+      .filter((part) => part.type === "text")
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("\n");
+    // The map is validation data, not prompt data: the template owns the labels.
+    expect(promptText).not.toContain("Nhóm hàng");
+    expect(promptText).not.toContain("SKU");
   });
 });

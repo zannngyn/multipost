@@ -1,5 +1,5 @@
 {
-  "id": "57dc6da9-1fac-4912-88be-3e6daee38c13",
+  "id": "44a63fb5-4d15-4e12-a9c5-7f8ecd7b929f",
   "prevId": "0062049d-7ae9-4f36-b589-e9664e777348",
   "version": "7",
   "dialect": "postgresql",
@@ -1570,6 +1570,14 @@
           "notNull": true,
           "default": "''"
         },
+        "origin": {
+          "name": "origin",
+          "type": "product_origin",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'sheet'"
+        },
         "has_conflict": {
           "name": "has_conflict",
           "type": "boolean",
@@ -1588,7 +1596,7 @@
           "name": "last_sync_run_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -1617,6 +1625,27 @@
             },
             {
               "expression": "last_sync_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "product_tenant_origin_idx": {
+          "name": "product_tenant_origin_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "origin",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2068,6 +2097,14 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "product_origin": {
+          "name": "product_origin",
+          "type": "product_origin",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'sheet'"
         },
         "color": {
           "name": "color",
@@ -3236,65 +3273,6 @@
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
-    },
-    "public.platform_setting": {
-      "name": "platform_setting",
-      "schema": "",
-      "columns": {
-        "key": {
-          "name": "key",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "value": {
-          "name": "value",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_by_account_id": {
-          "name": "updated_by_account_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "platform_setting_updated_by_account_id_account_id_fk": {
-          "name": "platform_setting_updated_by_account_id_account_id_fk",
-          "tableFrom": "platform_setting",
-          "tableTo": "account",
-          "columnsFrom": [
-            "updated_by_account_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
     }
   },
   "enums": {
@@ -3401,6 +3379,14 @@
         "succeeded",
         "partial",
         "failed"
+      ]
+    },
+    "public.product_origin": {
+      "name": "product_origin",
+      "schema": "public",
+      "values": [
+        "sheet",
+        "manual"
       ]
     },
     "public.media_kind": {

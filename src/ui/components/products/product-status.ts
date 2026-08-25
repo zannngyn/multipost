@@ -1,4 +1,4 @@
-import { INVENTORY_STATUS_LABELS, blockedReasonLabel } from "@/ui/schemas/catalog.schema";
+import { LOW_STOCK_LABEL, blockedReasonLabel } from "@/ui/schemas/catalog.schema";
 import type { CatalogProduct } from "@/ui/schemas/catalog.schema";
 
 /**
@@ -44,6 +44,6 @@ export function productStatus(product: CatalogProduct): ProductStatusView {
         : "Không đăng được",
     };
   }
-  if (variant === "warning") return { variant, label: INVENTORY_STATUS_LABELS.low_stock };
+  if (variant === "warning") return { variant, label: LOW_STOCK_LABEL };
   return { variant, label: "Đăng được" };
 }
