@@ -109,6 +109,41 @@ describe("presentApiError", () => {
     expect(view.canRetry).toBe(false);
   });
 
+  /**
+   * Onboarding phase 3 regression: the catalog is no longer always a Google
+   * tab. The server's PRODUCT_NOT_FOUND sentence already offers both ways out,
+   * so this layer must print it AS IS — no second sentence repeating "đồng bộ",
+   * and no mention of Sheet for a tenant on an uploaded CSV or a typed product.
+   */
+  it("prints the server's PRODUCT_NOT_FOUND sentence without gluing a source-specific one on", () => {
+    const userMessage =
+      "Không tìm thấy mã MGKVX6310 trong dữ liệu sản phẩm — đồng bộ lại bảng dữ liệu, hoặc nhập tay thông tin sản phẩm cho bài này";
+    const view = presentApiError(makeError({ code: "PRODUCT_NOT_FOUND", status: 404, userMessage }));
+
+    expect(view.description).toBe(userMessage);
+    expect(view.hint).toBeUndefined();
+    expect(`${view.description} ${view.hint ?? ""}`).not.toMatch(/Sheet/i);
+    // "đồng bộ" is said once, by the server — never twice.
+    expect(`${view.description} ${view.hint ?? ""}`.match(/đồng bộ/gi)?.length).toBe(1);
+  });
+
+  /**
+   * Same rule for the block that DOES have a hint: it may name the rule and the
+   * two fields, but not the file they live in — a CSV tenant has no Sheet to
+   * open, and a typed product is fixed on the compose screen.
+   */
+  it("points a blocked code at its stock data without assuming a Google Sheet", () => {
+    const view = presentApiError(
+      makeError({ code: "OUT_OF_STOCK", status: 409, userMessage: "Mã X đã hết hàng — không đăng" }),
+    );
+    expect(view.hint).toBeDefined();
+    expect(view.hint).not.toMatch(/Sheet/i);
+    // The rule and both fields still have to be named, or the hint is useless.
+    expect(view.hint).toMatch(/hết hàng thì không đăng/);
+    expect(view.hint).toMatch(/tồn/);
+    expect(view.hint).toMatch(/lưu ý/i);
+  });
+
   it("allows retrying server-side failures", () => {
     expect(presentApiError(makeError({ code: "DB_ERROR", status: 503 })).canRetry).toBe(true);
     expect(presentApiError(makeError({ code: "DRIVE_ERROR", status: 503 })).canRetry).toBe(true);

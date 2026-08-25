@@ -79,6 +79,7 @@ function toDomain(row: PostJobRow): PostJob {
     tenantId: row.tenantId,
     batchId: row.batchId,
     productCode: row.productCode,
+    productOrigin: row.productOrigin,
     color: row.color,
     channelId: row.channelId,
     // Unknown text in the column would corrupt the domain type silently.
@@ -170,6 +171,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
                 id: job.id,
                 batchId: job.batchId,
                 productCode: job.productCode,
+                productOrigin: job.productOrigin,
                 color: job.color,
                 channelId: job.channelId,
                 format: job.format,
@@ -192,6 +194,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
               payload: {
                 batch_id: row.batchId,
                 product_code: row.productCode,
+                product_origin: row.productOrigin,
                 color: row.color,
                 channel: row.channelId,
                 format: row.format,

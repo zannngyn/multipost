@@ -23,6 +23,7 @@ function entry(overrides: Partial<PostJobLogEntry> = {}): PostJobLogEntry {
     postJobId: "job-1",
     batchId: "batch-1",
     productCode: "MGKVX6310",
+    productOrigin: "sheet",
     color: "Tím",
     channelId: "fb-1",
     format: "image_post",
@@ -174,5 +175,45 @@ describe("JobLogTable folding", () => {
     const html = render([entry({ color: "MÀU LẠ 99" })]);
     expect(html).toContain("MÀU LẠ 99");
     expect(html).not.toContain("background:#");
+  });
+});
+
+/**
+ * Onboarding phase 3 — "bài này lấy dữ liệu từ đâu", answered on the row where
+ * the question actually gets asked.
+ */
+describe("JobLogTable provenance", () => {
+  it("marks a job built from a typed product", () => {
+    expect(render([entry({ productOrigin: "manual" })])).toContain("Nhập tay");
+  });
+
+  it("says nothing for a synced job — that is nearly every row", () => {
+    expect(render([entry()])).not.toContain("Nhập tay");
+  });
+
+  /**
+   * A folded row speaks for all its members, so a badge on its head must be
+   * true of all of them. It is: `jobLogFoldKey` includes `batchId`, and every
+   * job of a batch is built from the same product — so a fold can never mix
+   * origins. This locks that in from the outside, where a future change to the
+   * fold key would break it.
+   */
+  it("keeps a folded row's badge true of every job it stands for", () => {
+    const html = render([
+      entry({ postJobId: "job-1", channelId: "fb-1", productOrigin: "manual" }),
+      entry({ postJobId: "job-2", channelId: "fb-2", productOrigin: "manual" }),
+    ]);
+    expect(countRows(html)).toBe(1);
+    expect(html).toContain("Nhập tay");
+  });
+
+  it("does not fold a typed job together with a synced one", () => {
+    // Different batches, so they cannot fold anyway — but if they ever did, one
+    // badge would be a lie about the other row.
+    const html = render([
+      entry({ postJobId: "job-1", batchId: "batch-1", productOrigin: "manual" }),
+      entry({ postJobId: "job-2", batchId: "batch-2", productOrigin: "sheet" }),
+    ]);
+    expect(countRows(html)).toBe(2);
   });
 });

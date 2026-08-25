@@ -201,6 +201,20 @@ const SYNC_ISSUE_GUIDES: Record<string, SyncIssueGuide> = {
     severity: "error",
     action: "Cột trên Sheet bị thiếu hoặc lặp tên — sửa lại tiêu đề cột cho khớp mẫu rồi chạy lại.",
   },
+  /**
+   * Written by `sync-catalog` from `validateFieldMap` — the tenant's OWN column
+   * mapping is questionable (a mapped header disappeared, two fields share one
+   * column, a caption field points at something that looks like a price).
+   *
+   * Warning, not error: the run still wrote what it could read. But the fix is
+   * NOT on the Sheet — it is in the mapping screen — so the sentence has to send
+   * the operator to the right place, which the generic fallback never did.
+   */
+  FIELD_MAP_WARNING: {
+    severity: "warning",
+    action:
+      "Ánh xạ cột của đơn vị này đang có vấn đề (cột đã đổi tên, hai trường dùng chung một cột, hoặc một cột giá bị gán vào caption) — mở “Kết nối dữ liệu” › bước “Ánh xạ cột”, chọn lại cột cho đúng rồi chạy đồng bộ lại. Xem ví dụ bên dưới để biết cột nào.",
+  },
   PRODUCT_NOT_FOUND: {
     severity: "error",
     action:

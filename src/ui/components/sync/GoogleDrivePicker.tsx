@@ -169,7 +169,20 @@ export function GoogleDrivePicker({
     }
 
     setSaveIssue(null);
-    update.mutate(parsed.data, { onSuccess: onSaved });
+    update.mutate(
+      {
+        ...parsed.data,
+        /*
+         * Picking a folder and a tab IS choosing a Google source, so the save
+         * says so. Same reason as `CatalogSourceForm`: without this key the
+         * usecase keeps whatever kind is stored, and a tenant on an uploaded CSV
+         * would pick a spreadsheet here, see a success, and go on reading the
+         * old file (business rule 5 — no silent no-op).
+         */
+        textConfig: { kind: "google_sheet" as const },
+      },
+      { onSuccess: onSaved },
+    );
   }
 
   if (lostConnection) {

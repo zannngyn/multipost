@@ -9,7 +9,7 @@ function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
     name: "Áo sơ mi",
     category: null,
     season: null,
-    inventory: { status: "in_stock", stock: 10, reason: null, operatorMessage: null },
+    inventory: { status: "in_stock", stock: 10, reason: null, operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
     mediaImageCount: 3,
     mediaVideoCount: 0,
     hasConflict: false,
@@ -22,12 +22,12 @@ function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
 const OK = product();
 const LOW = product({
   code: "MGKVX6311",
-  inventory: { status: "low_stock", stock: 2, reason: null, operatorMessage: null },
+  inventory: { status: "low_stock", stock: 2, reason: null, operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
 });
 const BLOCKED = product({
   code: "MGKVX6312",
   composable: false,
-  inventory: { status: "blocked", stock: 0, reason: "OUT_OF_STOCK", operatorMessage: null },
+  inventory: { status: "blocked", stock: 0, reason: "OUT_OF_STOCK", operatorMessage: null , stockCheckSkipped: false, stockCheckSkippedReason: null},
   blockedReason: { code: "OUT_OF_STOCK", userMessage: "Mã này đã hết hàng — không đăng." },
 });
 

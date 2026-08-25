@@ -59,6 +59,7 @@ export const NAV_SECTIONS: readonly NavSection[] = [
     items: [
       { href: "/products", label: "Sản phẩm" },
       { href: "/sync", label: "Đồng bộ dữ liệu" },
+      { href: "/data-mapping", label: "Kết nối dữ liệu" },
     ],
   },
   {

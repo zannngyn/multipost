@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_STOCK_POLICY, MYSP_FIELD_MAP } from "@/core/domain/catalog-field-map";
+
 import type { CatalogConfigRepo, CatalogSourceConfig } from "@/core/ports/drive-source";
 import type {
   GoogleDriveBrowser,
@@ -65,6 +67,8 @@ const SOURCE: CatalogSourceConfig = {
 function makeCatalogConfig(source: CatalogSourceConfig | null = SOURCE): CatalogConfigRepo {
   return {
     findCatalogConfig: vi.fn(async () => source),
+    findStockPolicy: vi.fn(async () => DEFAULT_STOCK_POLICY),
+    findFieldMap: vi.fn(async () => MYSP_FIELD_MAP),
     findCatalogSource: vi.fn(async () => source),
     saveCatalogSource: vi.fn(async () => ({ previous: null })),
   };

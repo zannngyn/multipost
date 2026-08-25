@@ -82,6 +82,10 @@ services:
       # container rebuild, because a post referencing them can be scheduled for
       # tomorrow. Same path in web and worker — one writes, the other sweeps.
       UPLOAD_STORAGE_ROOT: /var/lib/mysp/uploads
+      # Phase 3 — a tenant may upload a CSV instead of connecting a Sheet.
+      # Its OWN volume, never the upload one: these bytes are the tenant's
+      # only product data, and the E9.4 orphan sweep must not reach them.
+      CATALOG_STORAGE_ROOT: /var/lib/mysp/catalog
       UPLOAD_ORPHAN_TTL_HOURS: ${UPLOAD_ORPHAN_TTL_HOURS:-24}
       # E3.6 — Drive byte cache. Same volume and same path in web and worker:
       # the web process writes it on a miss, the worker sweeps it hourly. A
@@ -121,6 +125,7 @@ services:
       # mount the bytes land in the container layer: gone on the next rebuild,
       # and invisible to the worker sweep that is supposed to reap them.
       - uploaddata:/var/lib/mysp/uploads
+      - catalogdata:/var/lib/mysp/catalog
       - mediacachedata:/var/lib/mysp/media-cache
     expose:
       - "3000"
@@ -160,6 +165,7 @@ services:
       - ./:/app
       - webdemo_node_modules:/app/node_modules
       - uploaddata:/var/lib/mysp/uploads
+      - catalogdata:/var/lib/mysp/catalog
     ports:
       - "${DEMO_WEB_PORT:-3001}:3000"
     depends_on:
@@ -191,6 +197,10 @@ services:
       # E9.4 — the cleanup sweep deletes the bytes, so it needs the same volume
       # mounted at the same path as the web process.
       UPLOAD_STORAGE_ROOT: /var/lib/mysp/uploads
+      # Phase 3 — a tenant may upload a CSV instead of connecting a Sheet.
+      # Its OWN volume, never the upload one: these bytes are the tenant's
+      # only product data, and the E9.4 orphan sweep must not reach them.
+      CATALOG_STORAGE_ROOT: /var/lib/mysp/catalog
       UPLOAD_ORPHAN_TTL_HOURS: ${UPLOAD_ORPHAN_TTL_HOURS:-24}
       # E3.6 — the hourly cache sweep deletes these bytes, so it needs the same
       # volume mounted at the same path as the web process.
@@ -221,6 +231,7 @@ services:
       MEDIA_PUBLIC_BASE_URL: ${MEDIA_PUBLIC_BASE_URL:-}
     volumes:
       - uploaddata:/var/lib/mysp/uploads
+      - catalogdata:/var/lib/mysp/catalog
       - mediacachedata:/var/lib/mysp/media-cache
     depends_on:
       postgres:
@@ -295,6 +306,10 @@ volumes:
   # Its own volume so `docker compose down -v` of the app data is a deliberate
   # decision about the operator's files, not a side effect.
   uploaddata:
+  # Phase 3 — uploaded catalog files (CSV). Separate from uploaddata because
+  # losing these loses the tenant's product data itself, not just media that
+  # still exists on Drive.
+  catalogdata:
   # E3.6 — cached Drive bytes. Shared by web (writes on a miss) and worker
   # (hourly TTL sweep). Losing it costs re-downloads, nothing else: it holds no
   # data that does not exist on Drive.

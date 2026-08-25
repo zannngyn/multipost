@@ -123,6 +123,83 @@ export function requireGoogleRef(kind: GoogleRefKind, field: string, raw: unknow
   });
 }
 
+// --- Media links inside a sheet cell (onboarding phase 2) -------------------
+
+/** What a Drive URL says about the thing it points at. */
+export const DRIVE_MEDIA_REF_KINDS = ["file", "folder", "unknown"] as const;
+export type DriveMediaRefKind = (typeof DRIVE_MEDIA_REF_KINDS)[number];
+
+export interface DriveMediaRef {
+  readonly id: string;
+  /** `unknown` for the `open?id=` / bare-id forms, which do not say. */
+  readonly kind: DriveMediaRefKind;
+}
+
+/** One cell may hold several links — operators paste them separated by anything. */
+const CELL_SEPARATOR = /[\s,;|]+/;
+
+/**
+ * LENIENT extraction of the Drive references inside ONE sheet cell — the
+ * `mediaLink` column of the `sheet-column` media profile.
+ *
+ * Deliberately the opposite of `parseDriveFolderRef` above, which is strict
+ * because it guards a paste box an operator is looking at. This one reads a
+ * spreadsheet nobody will fix for us: it takes what it recognises, silently
+ * ignores the rest of the cell (a note, a date, an empty string) and NEVER
+ * throws — an unreadable cell means "dòng này chưa có ảnh", reported by the
+ * caller as a visible issue, not as a failed sync.
+ *
+ * Returns [] for anything it cannot recognise, de-duplicated, order preserved.
+ */
+export function parseDriveMediaRefs(raw: unknown): readonly DriveMediaRef[] {
+  const value = str(raw);
+  if (value.length === 0) return [];
+
+  const refs: DriveMediaRef[] = [];
+  const seen = new Set<string>();
+  for (const token of value.split(CELL_SEPARATOR)) {
+    const ref = parseOneMediaRef(token);
+    if (!ref || seen.has(ref.id)) continue;
+    seen.add(ref.id);
+    refs.push(ref);
+  }
+  return refs;
+}
+
+function parseOneMediaRef(token: string): DriveMediaRef | null {
+  const value = str(token);
+  if (value.length === 0) return null;
+
+  if (!looksLikeUrl(value)) {
+    return ID_PATTERN.test(value) ? { id: value, kind: "unknown" } : null;
+  }
+
+  const url = toUrl(value);
+  if (!url) return null;
+  const host = url.hostname.toLowerCase();
+  // Google-hosted only: a Dropbox/Facebook link is not something we can fetch
+  // with the tenant's Google identity, and pretending otherwise fails later.
+  if (host !== "drive.google.com" && host !== "docs.google.com") return null;
+
+  const segments = pathSegments(url);
+  const folderIndex = segments.lastIndexOf("folders");
+  if (folderIndex >= 0) return idOf(segments[folderIndex + 1], "folder");
+
+  // `/file/d/<id>/view`, and the `/d/<id>` short form.
+  const dIndex = segments.indexOf("d");
+  if (dIndex >= 0 && segments[dIndex + 1] !== "e") return idOf(segments[dIndex + 1], "file");
+
+  const queryId = url.searchParams.get("id");
+  if (queryId) return idOf(queryId, "unknown");
+
+  return null;
+}
+
+function idOf(candidate: string | undefined, kind: DriveMediaRefKind): DriveMediaRef | null {
+  const id = str(candidate);
+  return id.length > 0 && ID_PATTERN.test(id) ? { id, kind } : null;
+}
+
 // --- helpers ----------------------------------------------------------------
 
 function bareId(candidate: string): GoogleRefResult {

@@ -123,6 +123,8 @@ async function generate(
     product,
     constraints: request.constraints,
     existingCaptions: request.existingCaptions ?? [],
+    // Stage 3 checks claims against the TENANT's columns; absent = MYSP preset.
+    fieldMap: request.fieldMap,
   };
 
   const ladder = tierLadder(policy);

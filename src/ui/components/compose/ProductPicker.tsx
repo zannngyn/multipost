@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { UseFormRegisterReturn } from "react-hook-form";
 
 import { cn } from "@/shared/utils";
@@ -20,7 +20,7 @@ import { presentApiError } from "@/ui/components/feedback/present-api-error";
  *
  * `<input>` + suggestion list, NOT a closed `<select>`-style combobox
  * (core-form-inputs §cây quyết định, row "vừa chọn gợi ý vừa nhập tự do"): a
- * code that was added to the Sheet since the last sync is not in the list yet,
+ * code added to the catalog since the last sync is not in the list yet,
  * and the operator must still be able to type it and let the server answer.
  *
  * [L6-New] No combobox primitive exists in this repo and Radix ships none;
@@ -47,6 +47,7 @@ export function ProductPicker({
   disabled = false,
   invalid = false,
   describedBy,
+  suppressSuggestions = false,
   placeholder = "Nhập mã sản phẩm, ví dụ MGKVX6310",
   inputClassName,
 }: {
@@ -61,6 +62,20 @@ export function ProductPicker({
   disabled?: boolean;
   invalid?: boolean;
   describedBy?: string;
+  /**
+   * Another panel now owns the space under this field — today the typed-product
+   * editor (onboarding phase 3). The suggestion list is FORCED SHUT while it is
+   * true and will not reopen on focus.
+   *
+   * It exists because closing on blur alone was not enough. The list is
+   * absolutely positioned over the card, so an open one covers the heading of
+   * whatever opened beneath it — and overlap is a CSS fact no DOM test sees.
+   * More to the point, the list would be lying: the editor is only ever open
+   * because the code is NOT in the synced catalog, so "Không có mã nào khớp" is
+   * the one sentence nobody needs repeated over the form that fixes it.
+   * Suppressing also disables the query — no request for an answer already known.
+   */
+  suppressSuggestions?: boolean;
   placeholder?: string;
   /**
    * Skin only — appended last, so the caller can restate size and radius. The
@@ -69,15 +84,24 @@ export function ProductPicker({
   inputClassName?: string;
 }) {
   const listId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
   /** Set when the operator picked a row the server will not compose. */
   const [refused, setRefused] = useState<string | null>(null);
 
+  /**
+   * The ONE answer to "is the list showing", derived rather than stored: a
+   * second piece of state kept in sync by an effect is how "closed" and
+   * "rendered" drift apart. Everything below reads this — the query, the markup
+   * and every ARIA attribute — so the three cannot disagree.
+   */
+  const isOpen = open && !suppressSuggestions;
+
   // Debounce the INPUT, never the list rendering: the dropdown must not blink
   // once per keystroke (core-feedback-states §ngưỡng thời gian).
   const query = useDebouncedValue(value, 300);
-  const suggestions = useProductSuggestions(query, open);
+  const suggestions = useProductSuggestions(query, isOpen);
 
   const items: ProductSuggestion[] = (suggestions.data?.items ?? []).map(toProductSuggestion);
   const total = suggestions.data?.totals.total ?? null;
@@ -87,6 +111,31 @@ export function ProductPicker({
     setOpen(false);
     setHighlight(-1);
   }
+
+  /**
+   * A pointer landing outside closes the list — the same rule Escape follows
+   * (core-form-architecture: chạm ngoài và ESC dùng chung một hàm xử lý).
+   *
+   * Blur used to be the whole mechanism, and it is not enough: a press that does
+   * not move focus never fires it, and the list then hangs over whatever the
+   * press opened. `pointerdown` rather than `click`, so the list is gone before
+   * the new panel paints; capture phase, so a handler that stops propagation
+   * cannot swallow it. It never swallows the press itself — the control
+   * underneath receives that very same interaction.
+   */
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && rootRef.current?.contains(target)) return;
+      setOpen(false);
+      setHighlight(-1);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [isOpen]);
 
   function pick(item: ProductSuggestion) {
     if (item.disabled) {
@@ -103,7 +152,7 @@ export function ProductPicker({
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
-      if (!open) return;
+      if (!isOpen) return;
       // Closes, keeps what was typed. Stopped so it does not also close a
       // surrounding dialog.
       event.preventDefault();
@@ -113,6 +162,9 @@ export function ProductPicker({
     }
 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      // Suppressed means another panel owns the space below the field; ↓ must
+      // not force a list back on top of it.
+      if (suppressSuggestions) return;
       event.preventDefault();
       setOpen(true);
       setHighlight((current) => nextHighlight(current, event.key === "ArrowDown" ? 1 : -1, items.length));
@@ -120,13 +172,13 @@ export function ProductPicker({
     }
 
     if (event.key === "Home" || event.key === "End") {
-      if (!open || items.length === 0) return;
+      if (!isOpen || items.length === 0) return;
       event.preventDefault();
       setHighlight(event.key === "Home" ? 0 : items.length - 1);
       return;
     }
 
-    if (event.key === "Enter" && open && highlight >= 0 && items[highlight]) {
+    if (event.key === "Enter" && isOpen && highlight >= 0 && items[highlight]) {
       // Consumed: the form's own submit must not fire on the same keystroke.
       event.preventDefault();
       pick(items[highlight]);
@@ -136,10 +188,10 @@ export function ProductPicker({
     if (event.key === "Tab") close();
   }
 
-  const activeId = open && highlight >= 0 ? `${listId}-option-${highlight}` : undefined;
+  const activeId = isOpen && highlight >= 0 ? `${listId}-option-${highlight}` : undefined;
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div ref={rootRef} className="flex flex-col gap-1.5">
       <div className="relative">
         {/* Deliberately uncontrolled: `register` owns the element through its
             ref, and `value` below is the WATCHED copy used to drive the query.
@@ -153,7 +205,10 @@ export function ProductPicker({
             setHighlight(-1);
             setRefused(null);
           }}
-          onFocus={() => setOpen(true)}
+          onFocus={() => {
+            if (suppressSuggestions) return;
+            setOpen(true);
+          }}
           onBlur={(event) => {
             void register.onBlur(event);
             close();
@@ -161,7 +216,7 @@ export function ProductPicker({
           onKeyDown={handleKeyDown}
           disabled={disabled}
           role="combobox"
-          aria-expanded={open}
+          aria-expanded={isOpen}
           aria-controls={listId}
           aria-autocomplete="list"
           aria-activedescendant={activeId}
@@ -173,7 +228,7 @@ export function ProductPicker({
           className={cn("h-12 font-mono text-base uppercase", inputClassName)}
         />
 
-        {open ? (
+        {isOpen ? (
           <div className="border-border bg-popover absolute inset-x-0 top-[calc(100%+0.375rem)] z-20 flex max-h-90 flex-col overflow-hidden rounded-xl border shadow-lg">
             <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
               {isLoading ? (
@@ -216,8 +271,8 @@ export function ProductPicker({
                   </p>
                   <p className="text-muted-foreground pt-1 text-xs leading-relaxed">
                     {query.trim().length === 0
-                      ? "Chạy đồng bộ Sheet/Drive ở màn Sản phẩm, hoặc gõ thẳng mã nếu bạn biết chắc."
-                      : "Mã vừa thêm vào Sheet chưa được đồng bộ vẫn gõ thẳng được — hệ thống sẽ tra lại khi bạn bấm nút."}
+                      ? "Chạy đồng bộ dữ liệu ở màn Sản phẩm, hoặc gõ thẳng mã nếu bạn biết chắc."
+                      : "Mã vừa thêm vào bảng dữ liệu mà chưa đồng bộ vẫn gõ thẳng được — hệ thống sẽ tra lại khi bạn bấm nút."}
                   </p>
                 </div>
               ) : (
@@ -293,12 +348,12 @@ export function ProductPicker({
 
       {/* Result count, announced without stealing focus (core-form-inputs). */}
       <p className="sr-only" role="status" aria-live="polite">
-        {open && !isLoading && !suggestions.isError ? `${items.length} kết quả` : ""}
+        {isOpen && !isLoading && !suggestions.isError ? `${items.length} kết quả` : ""}
       </p>
 
       {refused ? (
         <p role="alert" className="text-warning-foreground text-xs leading-relaxed">
-          {refused} Hãy chọn mã khác, hoặc cập nhật tồn trên Sheet rồi đồng bộ lại.
+          {refused} Hãy chọn mã khác, hoặc sửa dữ liệu tồn kho của mã này rồi đồng bộ lại.
         </p>
       ) : null}
     </div>

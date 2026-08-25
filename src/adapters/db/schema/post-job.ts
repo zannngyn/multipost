@@ -5,6 +5,7 @@ import type { PostJobMedia } from "@/core/domain/post-job";
 import { timestamps } from "./_columns";
 import { tenantIdColumn } from "./_tenant-column";
 import { postBatches } from "./post-batch";
+import { productOriginEnum } from "./product";
 
 /** Mirrors POST_JOB_STATUSES in core/domain/post-job.ts — keep both in sync. */
 export const postJobStatusEnum = pgEnum("post_job_status", [
@@ -41,6 +42,14 @@ export const postJobs = pgTable(
       .notNull()
       .references(() => postBatches.id, { onDelete: "cascade" }),
     productCode: text("product_code").notNull(),
+    /**
+     * Where the product text came from when this post was built. Stamped at
+     * creation, never joined at read time: the `product` row may be deleted or
+     * re-synced later, and this column must still answer "bài này lấy dữ liệu
+     * từ đâu". DEFAULT 'sheet' backfills existing rows truthfully — every post
+     * created before onboarding phase 3 came from a synced catalog.
+     */
+    productOrigin: productOriginEnum("product_origin").notNull().default("sheet"),
     /** "" = every colour of the code. See the note above on NOT NULL. */
     color: text("color").notNull().default(""),
     /** Tenant-side channel id (tenant_integration.config), e.g. "fbpage-a". */

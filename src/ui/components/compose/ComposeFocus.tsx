@@ -1,5 +1,6 @@
 "use client";
 
+import { Banner, Button } from "@astryxdesign/core";
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { useWatch } from "react-hook-form";
 
@@ -9,6 +10,8 @@ import {
   channelSentenceName,
 } from "@/ui/components/channels/channel-option-labels";
 import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
+import { StockCheckSkippedBanner } from "@/ui/components/inventory/StockCheckSkippedBanner";
+import { stockLabel } from "@/ui/components/inventory/stock-check";
 import { activeCaptionChannel } from "@/ui/components/compose/caption-targets";
 import { ChannelChoice } from "@/ui/components/compose/ChannelChoice";
 import { ChannelPickerDialog } from "@/ui/components/compose/ChannelPickerDialog";
@@ -18,6 +21,7 @@ import { describeAction } from "@/ui/components/compose/compose-action";
 import { ComposeActionBar } from "@/ui/components/compose/ComposeActionBar";
 import { DraftStatusBar } from "@/ui/components/compose/DraftStatusBar";
 import { FacebookPreview } from "@/ui/components/compose/FacebookPreview";
+import { ManualProductForm } from "@/ui/components/compose/ManualProductForm";
 import { PhotoStrip } from "@/ui/components/compose/PhotoStrip";
 import { ProductPicker } from "@/ui/components/compose/ProductPicker";
 import { ResolvedProductLine } from "@/ui/components/compose/ResolvedProductLine";
@@ -41,6 +45,11 @@ import {
   type MediaKind,
   type VideoTarget,
 } from "@/ui/schemas/compose.schema";
+import {
+  EMPTY_MANUAL_PRODUCT,
+  type ManualProductFormValues,
+} from "@/ui/schemas/manual-product.schema";
+import { ApiError } from "@/ui/services/api-error";
 
 /**
  * "Soạn bài" — ONE screen.
@@ -109,6 +118,15 @@ export function ComposeFocus() {
   const [lastColors, setLastColors] = useState<readonly string[]>([]);
   const [refusedColors, setRefusedColors] = useState<Record<string, string>>({});
   const [flash, setFlash] = useState<string | null>(null);
+  /**
+   * Whether the "nhập tay" editor is expanded (onboarding phase 3).
+   *
+   * Only the EDITOR's visibility lives here. Whether this post is a typed one at
+   * all is `composed.productOrigin`, which comes from the server — a screen that
+   * derived it from "is the form open" would call a reused typed product a
+   * synced one the moment the editor was collapsed.
+   */
+  const [isManualOpen, setIsManualOpen] = useState(false);
 
   const { form, compose, composed } = wizard;
   const errors = form.formState.errors;
@@ -129,7 +147,7 @@ export function ComposeFocus() {
    * becoming a banner with no owner.
    */
   const lookUp = useCallback(
-    async (requestedColor: string) => {
+    async (requestedColor: string): Promise<boolean> => {
       const key = requestedColor.trim().toLowerCase();
       const outcome = await wizard.submitProductStep();
 
@@ -142,7 +160,7 @@ export function ComposeFocus() {
           delete next[key];
           return next;
         });
-        return;
+        return true;
       }
 
       if (outcome.reason === "failed" && key.length > 0) {
@@ -153,9 +171,50 @@ export function ComposeFocus() {
             "Màu này chưa lấy được ảnh. Xem lý do ngay bên dưới ô mã.",
         }));
       }
+
+      return false;
     },
     [wizard],
   );
+
+  /**
+   * "Dùng thông tin này" — onboarding phase 3.
+   *
+   * The typed values are handed to the wizard FIRST, then the SAME lookup runs:
+   * same validation, same request, same stock gate. There is no separate
+   * "compose a manual product" path anywhere, which is what makes it impossible
+   * for typing a product to become a way round business rule 3.
+   *
+   * The editor only collapses when the lookup SUCCEEDED. A refusal — hết hàng,
+   * mã đã có trong dữ liệu đồng bộ, thiếu ảnh — leaves every field on screen
+   * with the reason beside it, because the next thing the operator does is fix
+   * one of those fields.
+   */
+  const submitManualProduct = useCallback(
+    async (values: ManualProductFormValues) => {
+      wizard.applyManualProduct(form.getValues().productCode, values);
+      const composedOk = await lookUp(form.getValues().color ?? "");
+      if (composedOk) setIsManualOpen(false);
+    },
+    [form, lookUp, wizard],
+  );
+
+  /** "Bỏ nhập tay" — forget the typed data and go back to a plain lookup. */
+  const cancelManualProduct = useCallback(() => {
+    setIsManualOpen(false);
+    wizard.clearManualProduct();
+  }, [wizard]);
+
+  /**
+   * The offer is made ONLY for "mã này không có trong dữ liệu sản phẩm". Any
+   * other refusal (hết hàng, thiếu ảnh, mất mạng) has its own fix, and offering
+   * to retype the product there would send the operator down a road that cannot
+   * help them.
+   */
+  const offersManualProduct =
+    ApiError.is(compose.error) && compose.error.code === "PRODUCT_NOT_FOUND";
+  /** What the SERVER says this post was built from — not what is on the form. */
+  const isManualComposed = composed?.productOrigin === "manual";
 
   // Same query key as the modal and the summary row: cached, not a second fetch.
   const channels = useChannels();
@@ -218,8 +277,11 @@ export function ComposeFocus() {
         <header className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <h1 className="text-xl font-semibold tracking-tight">Soạn bài</h1>
           <p className="text-[13px] text-[var(--muted-foreground)]">
-            Nhập mã sản phẩm — hệ thống tra Sheet, kiểm tồn kho rồi gom ảnh. Bài chỉ lên khi bạn
-            bấm đăng.
+            {/* "dữ liệu sản phẩm", not "Sheet": the catalog can be a Google tab,
+                an uploaded CSV, or a product typed on this very screen, and this
+                is the first line anybody reads. */}
+            Nhập mã sản phẩm — hệ thống tra dữ liệu sản phẩm, kiểm tồn kho rồi gom ảnh. Bài chỉ lên
+            khi bạn bấm đăng.
           </p>
           <span className="flex-1" />
           <div className="min-w-70">
@@ -257,6 +319,14 @@ export function ComposeFocus() {
                   form.setValue("productCode", code, { shouldDirty: true, shouldValidate: true })
                 }
                 onSubmit={() => void lookUp(color)}
+                /*
+                  The suggestion list is absolutely positioned over the card, so
+                  an open one lands on top of the typed-product editor and hides
+                  its heading. It would also be talking nonsense there: that
+                  editor is only open because this code is NOT in the catalog the
+                  list searches.
+                */
+                suppressSuggestions={isManualOpen}
                 disabled={compose.isPending}
                 invalid={Boolean(errors.productCode)}
                 describedBy={errors.productCode ? `${codeErrorId} ${codeHintId}` : codeHintId}
@@ -279,6 +349,10 @@ export function ComposeFocus() {
                     form.setValue("productCode", "", { shouldDirty: true });
                     form.setValue("color", "", { shouldDirty: true });
                     setRefusedColors({});
+                    // Another product means another product's data: typed values
+                    // left behind would travel to the next code and come back as
+                    // MANUAL_PRODUCT_CONFLICT about a form nobody meant to reuse.
+                    cancelManualProduct();
                     form.setFocus("productCode");
                   }}
                 />
@@ -308,8 +382,87 @@ export function ComposeFocus() {
               </p>
             </form>
 
-            {compose.isError ? (
-              <ApiErrorNotice error={compose.error} onRetry={() => void lookUp(color)} />
+            {/*
+              ONE refusal, ONE place. While the typed-product editor is open it
+              owns the message — that is where the operator is working and where
+              the fix is — and this notice steps aside rather than printing the
+              same sentence twice on the same card.
+            */}
+            {compose.isError && !isManualOpen ? (
+              <ApiErrorNotice
+                error={compose.error}
+                onRetry={() => void lookUp(color)}
+                /*
+                  ONBOARDING PHASE 3. The server's own sentence already ends with
+                  "…hoặc nhập tay thông tin sản phẩm cho bài này"; this is the
+                  button that sentence is talking about, so it belongs on the
+                  notice rather than somewhere further down the card.
+                */
+                extraAction={
+                  offersManualProduct ? (
+                    <Button
+                      variant="secondary"
+                      label="Nhập tay thông tin sản phẩm"
+                      isDisabled={compose.isPending || Boolean(readOnlyReason)}
+                      tooltip={readOnlyReason ?? undefined}
+                      onClick={() => setIsManualOpen(true)}
+                    />
+                  ) : undefined
+                }
+              />
+            ) : null}
+
+            {/*
+              The typed-product editor. OUTSIDE the lookup <form> above — HTML
+              forbids nesting forms, and a nested one would submit the wrong
+              thing. It stays mounted across a refusal so nothing typed is lost.
+            */}
+            {isManualOpen ? (
+              <ManualProductForm
+                /*
+                  NO `key` here, deliberately, and it took one to learn why: the
+                  obvious `key={productCode}` remounts the whole editor on every
+                  keystroke in the code box above it — six typed fields gone
+                  because somebody fixed a typo in the code. Switching product
+                  already resets this form the honest way: "Đổi sản phẩm" closes
+                  it (`cancelManualProduct`), so the next open is a fresh mount.
+                  The heading below tracks the live code so it never names a
+                  product other than the one "Dùng thông tin này" will compose.
+                */
+                productCode={productCode.trim().toUpperCase()}
+                defaultValues={wizard.manualProduct?.values ?? EMPTY_MANUAL_PRODUCT}
+                isEditing={isManualComposed}
+                isPending={compose.isPending}
+                error={compose.isError ? compose.error : null}
+                readOnlyReason={readOnlyReason}
+                onSubmit={(values) => void submitManualProduct(values)}
+                onCancel={cancelManualProduct}
+              />
+            ) : null}
+
+            {/*
+              Collapsed state of the same thing: the post IS built from typed
+              data, and the operator must be able to see that without the whole
+              form in the way. `status="info"`, not warning — nothing is wrong
+              here; it is a fact about where the data came from, and the stock
+              gate already ran on it like on any other product.
+            */}
+            {isManualComposed && !isManualOpen ? (
+              <Banner
+                status="info"
+                title="Sản phẩm này do bạn nhập tay"
+                description="Dữ liệu dùng để viết caption không lấy từ bảng dữ liệu đã đồng bộ. Hệ thống vẫn kiểm tồn kho như mọi mã khác."
+                endContent={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    label="Sửa thông tin nhập tay"
+                    isDisabled={compose.isPending || Boolean(readOnlyReason)}
+                    tooltip={readOnlyReason ?? undefined}
+                    onClick={() => setIsManualOpen(true)}
+                  />
+                }
+              />
             ) : null}
 
             {wizard.captionsCleared ? (
@@ -324,6 +477,20 @@ export function ComposeFocus() {
             {/* Operator-only notes. DELIBERATELY here, above and outside the
                 caption block: tồn kho và cảnh báo là thông tin nội bộ, không
                 bao giờ nằm trong khối caption (business rule 2). */}
+
+            {/* Nobody read the stock NUMBER for this tenant. `inventory.status`
+                is still `"in_stock"` in that mode, so this is read from the flag
+                — and it is the loudest thing on the step, because the numeric
+                half of the two-pass stock gate (business rule 3) is off for
+                every code composed and approved below. The sold-out note and the
+                row-conflict rule still block, in all three modes; the banner's
+                own text draws that line. */}
+            {composed && stockLabel(composed.inventory).isSkipped ? (
+              <StockCheckSkippedBanner
+                reason={composed.inventory?.stockCheckSkippedReason ?? null}
+              />
+            ) : null}
+
             {composed && composed.warnings.length > 0 ? (
               <ul aria-label="Cảnh báo nội bộ" className="flex flex-col gap-1.5">
                 {composed.warnings.map((warning) => (
@@ -650,7 +817,7 @@ function EmptyLookup({ mediaKind, restoring }: { mediaKind: MediaKind; restoring
       </p>
       <p className="mx-auto max-w-100 text-xs leading-relaxed text-[var(--muted-foreground)]">
         {restoring
-          ? "Nháp đang được tra lại từ đầu: Sheet và tồn kho được kiểm lại chứ không dùng kết quả cũ."
+          ? "Nháp đang được tra lại từ đầu: dữ liệu sản phẩm và tồn kho được kiểm lại chứ không dùng kết quả cũ."
           : mediaKind === "image"
             ? "Nhập mã sản phẩm ở trên. Hệ thống kiểm tra tồn kho trước, sau đó gom ảnh từ Drive."
             : "Nhập mã sản phẩm ở trên. Hệ thống kiểm tồn kho trước, sau đó lấy clip từ Drive và kiểm thông số theo đích đăng."}

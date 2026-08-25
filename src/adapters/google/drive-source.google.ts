@@ -6,7 +6,10 @@ import type {
   DownloadDriveFileInput,
   DriveFile,
   DriveFileContent,
+  DriveListing,
+  DriveListingLimit,
   DriveSource,
+  ListDriveFilesDeepInput,
   ListDriveFilesInput,
 } from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
@@ -33,6 +36,24 @@ const PAGE_SIZE = 1000;
 /** Guard against an accidental full-Drive crawl: the real folder holds ~5,500. */
 const DEFAULT_MAX_FILES = 20000;
 
+/**
+ * Caps of the RECURSIVE listing. They exist for one reason: Drive quota. A walk
+ * that asks per folder turns a 300-product catalog into 300+ queries per sync,
+ * and a folder tree nobody checked (someone shares "My Drive") into thousands.
+ * Every cap that bites is reported in `DriveListing.limitsHit`, never silent.
+ */
+export const DEFAULT_MAX_DEPTH = 2;
+/** Hard ceiling, whatever the caller asks for. */
+export const MAX_ALLOWED_DEPTH = 5;
+/** 1,000 folders = ~40 batched queries; a real catalog holds ~300 products. */
+export const DEFAULT_MAX_FOLDERS = 1000;
+/**
+ * Parents grouped into ONE `q`. Drive has no documented limit on the number of
+ * `in parents` clauses, but the query string does have one, and ids are ~33
+ * characters: 25 keeps it around 1 KB.
+ */
+export const PARENTS_PER_QUERY = 25;
+
 const DriveFileSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -40,6 +61,11 @@ const DriveFileSchema = z.object({
   /** Drive returns size as a decimal string, and omits it for some types. */
   size: z.string().nullish(),
   modifiedTime: z.string().nullish(),
+});
+
+/** Same entry plus the parent ids — only the recursive listing asks for them. */
+const DriveDeepFileSchema = DriveFileSchema.extend({
+  parents: z.array(z.string().min(1)).nullish(),
 });
 
 const DriveListResponseSchema = z.object({
@@ -161,6 +187,209 @@ export function makeGoogleDriveSource(deps: GoogleDriveSourceDeps): DriveSource 
       return files;
     },
 
+    /**
+     * Recursive listing for the `folder-per-code` / `sheet-column` profiles.
+     *
+     * Breadth-first, one query per BATCH of parents (not per folder), files and
+     * sub-folders discovered in the same pass. Stops at the first cap it hits
+     * and reports which one: the caller must be able to tell "the folder holds
+     * 40 files" from "I gave up after 20,000".
+     */
+    async listFilesDeep(input: ListDriveFilesDeepInput): Promise<DriveListing> {
+      // --- Edge cases first --------------------------------------------------
+      const folderId = typeof input?.folderId === "string" ? input.folderId.trim() : "";
+      const tenantId = normalizeTenantId(input.tenantId);
+      if (folderId.length === 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "listFilesDeep requires a Drive folder id",
+          userMessage: "Chưa khai báo thư mục Drive cho đơn vị này.",
+          context: { tenant_id: tenantId || null },
+        });
+      }
+
+      const log = deps.logger.child({ tenant_id: tenantId });
+      const drive = await driveFor(tenantId);
+      const maxFiles = positive(input?.maxFiles) ?? DEFAULT_MAX_FILES;
+      const maxFolders = positive(input?.maxFolders) ?? DEFAULT_MAX_FOLDERS;
+      const maxDepth = Math.min(
+        typeof input?.maxDepth === "number" && input.maxDepth >= 0
+          ? Math.floor(input.maxDepth)
+          : DEFAULT_MAX_DEPTH,
+        MAX_ALLOWED_DEPTH,
+      );
+
+      const files: DriveFile[] = [];
+      const seenFileIds = new Set<string>();
+      const seenFolderIds = new Set<string>([folderId]);
+      const limitsHit = new Set<DriveListingLimit>();
+      let foldersVisited = 0;
+      let depthReached = 0;
+      let malformed = 0;
+      let queries = 0;
+
+      let level: Array<{ id: string; path: readonly string[] }> = [{ id: folderId, path: [] }];
+
+      // Labelled so every cap can leave the whole walk at once — a `break`
+      // inside the page loop would only end the current batch.
+      walk: for (let depth = 0; depth <= maxDepth && level.length > 0; depth += 1) {
+        depthReached = depth;
+        const next: Array<{ id: string; path: readonly string[] }> = [];
+
+        for (let start = 0; start < level.length; start += PARENTS_PER_QUERY) {
+          const batch = level.slice(start, start + PARENTS_PER_QUERY);
+          const byId = new Map(batch.map((folder) => [folder.id, folder]));
+          const parentsClause = batch
+            .map((folder) => `'${escapeQueryValue(folder.id)}' in parents`)
+            .join(" or ");
+          let pageToken: string | undefined;
+
+          do {
+            let payload: unknown;
+            try {
+              const response = await drive.files.list({
+                // Folders are NOT excluded here: they are how the next level is
+                // discovered, and one query answering both halves is the whole
+                // point of the batching.
+                q: `(${parentsClause}) and trashed = false`,
+                fields:
+                  "nextPageToken, incompleteSearch, files(id, name, mimeType, size, modifiedTime, parents)",
+                pageSize: PAGE_SIZE,
+                pageToken,
+                supportsAllDrives: true,
+                includeItemsFromAllDrives: true,
+                orderBy: "name_natural",
+              });
+              payload = response.data;
+              queries += 1;
+            } catch (error) {
+              const authError = await deps.auth.reportAuthFailure(tenantId, error);
+              if (authError) throw authError;
+              throw AppError.from(error, "DRIVE_ERROR", {
+                tenant_id: tenantId || null,
+                folder_id: folderId,
+                operation: "drive.files.list",
+                depth,
+                parents: batch.length,
+                queries,
+              });
+            }
+
+            const parsedPage = DriveListResponseSchema.safeParse(payload);
+            if (!parsedPage.success) {
+              throw new AppError("DRIVE_ERROR", {
+                message: "Drive files.list returned an unexpected payload shape",
+                context: {
+                  tenant_id: tenantId || null,
+                  folder_id: folderId,
+                  depth,
+                  issues: parsedPage.error.issues.map((issue) => issue.path.join(".")),
+                },
+              });
+            }
+
+            if (parsedPage.data.incompleteSearch === true) {
+              log.warn("Drive reported an incomplete search — the listing may be partial", {
+                folder_id: folderId,
+                depth,
+              });
+            }
+
+            for (const entry of parsedPage.data.files ?? []) {
+              const parsedFile = DriveDeepFileSchema.safeParse(entry);
+              if (!parsedFile.success) {
+                malformed += 1;
+                continue;
+              }
+              const file = parsedFile.data;
+              // Which of the batched parents this entry came from. A file can
+              // have several; only the one we asked for is meaningful here.
+              const parent = (file.parents ?? []).find((id) => byId.has(id)) ?? null;
+              const owner = parent ? byId.get(parent) : undefined;
+              const path = owner?.path ?? [];
+
+              if (file.mimeType === FOLDER_MIME) {
+                if (depth >= maxDepth) {
+                  limitsHit.add("MAX_DEPTH");
+                  continue;
+                }
+                if (foldersVisited >= maxFolders) {
+                  limitsHit.add("MAX_FOLDERS");
+                  continue;
+                }
+                if (seenFolderIds.has(file.id)) continue;
+                seenFolderIds.add(file.id);
+                foldersVisited += 1;
+                next.push({ id: file.id, path: [...path, file.name] });
+                continue;
+              }
+
+              if (files.length >= maxFiles) {
+                limitsHit.add("MAX_FILES");
+                break walk;
+              }
+              // A file with two parents is returned once per parent.
+              if (seenFileIds.has(file.id)) continue;
+              seenFileIds.add(file.id);
+              files.push({
+                id: file.id,
+                name: file.name,
+                mimeType: file.mimeType ?? null,
+                sizeBytes: toBytes(file.size),
+                modifiedTime: file.modifiedTime ?? null,
+                parentFolderId: parent ?? (batch.length === 1 ? batch[0].id : null),
+                folderPath: path,
+              });
+            }
+
+            pageToken = parsedPage.data.nextPageToken ?? undefined;
+          } while (pageToken);
+        }
+
+        level = next;
+      }
+
+      if (malformed > 0) {
+        log.warn("Drive returned entries without an id or a name", {
+          folder_id: folderId,
+          malformed_entries: malformed,
+        });
+      }
+
+      const listing: DriveListing = {
+        files,
+        foldersVisited,
+        depthReached,
+        limitsHit: [...limitsHit],
+      };
+
+      if (listing.limitsHit.length > 0) {
+        // Loud: a truncated listing must never be mistaken for a complete one,
+        // because the sync deletes what a listing no longer contains.
+        log.warn("Recursive Drive listing stopped at a cap — the result is PARTIAL", {
+          error_code: "DRIVE_LISTING_TRUNCATED",
+          folder_id: folderId,
+          limits_hit: listing.limitsHit,
+          files: files.length,
+          folders_visited: foldersVisited,
+          depth_reached: depthReached,
+          max_files: maxFiles,
+          max_folders: maxFolders,
+          max_depth: maxDepth,
+          queries,
+        });
+      } else {
+        log.info("Recursive Drive listing complete", {
+          folder_id: folderId,
+          files: files.length,
+          folders_visited: foldersVisited,
+          depth_reached: depthReached,
+          queries,
+        });
+      }
+
+      return listing;
+    },
+
     async download(input: DownloadDriveFileInput): Promise<DriveFileContent> {
       // --- Edge cases first --------------------------------------------------
       const fileId = typeof input?.fileId === "string" ? input.fileId.trim() : "";
@@ -275,6 +504,11 @@ function httpStatusOf(error: unknown): number | null {
     if (typeof value === "string" && /^\d{3}$/.test(value)) return Number.parseInt(value, 10);
   }
   return null;
+}
+
+/** Null for anything that is not a usable positive cap. */
+function positive(value: number | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
 }
 
 function toBytes(size: string | null | undefined): number | null {

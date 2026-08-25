@@ -366,11 +366,23 @@ export function presentApiError(
         canRetry: false,
       };
 
+    /**
+     * 404. NOTHING is appended here, and that is the fix, not an omission.
+     *
+     * The server's own sentence already names both ways out ("đồng bộ lại bảng
+     * dữ liệu, hoặc nhập tay thông tin sản phẩm cho bài này" — compose-post,
+     * create-post-batch, publish-post all word it that way). The line that used
+     * to be glued on said "chạy đồng bộ dữ liệu nếu mã vừa được thêm vào Sheet",
+     * which repeated half of that and named GOOGLE SHEET as the source — wrong
+     * for a tenant reading an uploaded CSV and wrong for a product typed by
+     * hand. Two sentences saying the same thing badly is worse than one saying
+     * it once.
+     */
     case "PRODUCT_NOT_FOUND":
       return {
         kind: "business",
         title: "Không tìm thấy mã sản phẩm",
-        description: `${error.userMessage} Kiểm tra lại mã, hoặc chạy đồng bộ dữ liệu nếu mã vừa được thêm vào Sheet.`,
+        description: error.userMessage,
         canRetry: false,
       };
 
@@ -379,7 +391,23 @@ export function presentApiError(
         kind: "business",
         title: "Mã này bị chặn đăng",
         description: error.userMessage,
-        hint: "Quy tắc bắt buộc: hết hàng thì không đăng. Chọn mã khác hoặc cập nhật cột Tồn trên Sheet rồi đồng bộ lại.",
+        /*
+         * This hint has been wrong twice, in two different ways, and the current
+         * wording is what is left after removing both guesses.
+         *
+         * First it said "cập nhật cột Tồn" — wrong for a tenant running
+         * `stockPolicy.mode = "disabled"`, where the number is not read at all,
+         * so a block reaching here came from the sold-out note or from two rows
+         * disagreeing. Then it said "trên Sheet (cột Tồn, hoặc ô Lưu ý)" — wrong
+         * since onboarding phase 3, where the catalog may be an uploaded CSV or
+         * a product typed on the compose screen, and there is no Sheet to open.
+         *
+         * This layer knows neither the policy nor the source, so it names the
+         * rule and the two fields BY MEANING (tồn, lưu ý) and sends the operator
+         * to where their own data lives, whatever that is. The server's sentence
+         * above it is the one allowed to be specific.
+         */
+        hint: "Quy tắc bắt buộc: hết hàng thì không đăng. Chọn mã khác, hoặc sửa số tồn / ô lưu ý của mã này trong dữ liệu sản phẩm rồi đồng bộ lại. Mã nhập tay thì sửa ngay ở màn Soạn bài.",
         canRetry: false,
       };
 
