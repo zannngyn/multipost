@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { ExternalLink, RotateCcw } from "lucide-react";
 
 import {
   channelLabelIndex,
@@ -29,34 +30,6 @@ import {
   type PostJobLogEntry,
 } from "@/ui/schemas/post-batch.schema";
 
-/**
- * The job log table (E11.1) — the screen that answers "vì sao bài này không
- * lên?" without opening a log file (business rule 5).
- *
- * `canRetry` is decided by the SERVER (failed/blocked only). The UI never
- * derives it from the status itself: the day the state machine changes, a
- * client-side guess would offer a button that always 409s.
- *
- * Presentational: the retry call itself is handed up through `onRetry`.
- *
- * FOLDED ROWS (wave 2, spec §3.2): one post going to five Pages is five
- * post_jobs, and five rows that repeat the same code, the same colour and the
- * same failure sentence are what makes this log unreadable at 30 mã/sáng. Rows
- * whose every VISIBLE value matches fold into "MGKVX6310 × 5 kênh"; the channel
- * cell becomes the disclosure that lists them, each with its own hour, its own
- * permalink and its own "Chạy lại". Two jobs that failed differently never fold
- * — see `jobLogFoldKey` for what counts as "the same".
- *
- * WRAPPING (wave 1.5): the columns an operator SCANS never break mid-word any
- * more. `break-all` on a product code turned "MGKVX6310" into two lines at the
- * width the eight columns actually get, and a broken code is a code that can no
- * longer be compared down the column. The table now carries a `min-w` and lets
- * the region scroll instead — the row it protects is the one being read, and
- * `overflow-x-auto` with `tabIndex={0}` already makes that reachable by
- * keyboard. Channel ids truncate in the MIDDLE (`shortenId`), because the tail
- * of a Page id is what distinguishes two ids that share a prefix; the full
- * value stays in `title` and in the accessible name.
- */
 export function JobLogTable({
   items,
   onRetry,
@@ -66,38 +39,16 @@ export function JobLogTable({
 }: {
   items: readonly PostJobLogEntry[];
   onRetry: (postJobId: string) => void;
-  /** Job currently being re-queued — its button shows progress and is disabled. */
   retryingJobId: string | null;
-  /**
-   * The tenant's channels, for naming the "Kênh" column. `undefined` means the
-   * list is NOT KNOWN yet (loading, or the request failed) — the rows then show
-   * the bare id and accuse nothing (see `resolveGroupChannelLabels`). Handed in
-   * rather than fetched here: this table stays presentational, and the screen
-   * already owns every query on the page.
-   */
   channels?: readonly Channel[];
-  /**
-   * Set while the whole app is read-only (support mode, M3.3). "Chạy lại"
-   * publishes to the customer's Page, so it goes off — with the reason on the
-   * row, next to the button it explains.
-   */
   readOnlyReason?: string | null;
 }) {
-  // ONE call for the whole list, indexed by id, instead of one call per row:
-  // the rule rebuilds a Map of every channel each time it is asked, so calling
-  // it inside the map made naming a 200-row log O(rows × channels).
   const channelLabels = useMemo(
     () => channelLabelIndex(items.map((job) => job.channelId), channels),
     [items, channels],
   );
 
   const groups = useMemo(() => groupJobRows(items, jobLogFoldKey), [items]);
-
-  /**
-   * Which folded rows are open. Local state, not the URL: it is a reading aid
-   * on a list that is already filtered by the URL, and putting eight ids in the
-   * address bar would make "share this filter" unreadable.
-   */
   const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
 
   function toggle(key: string): void {
@@ -110,55 +61,37 @@ export function JobLogTable({
 
   return (
     <TableScrollRegion aria-label="Bảng nhật ký đăng, cuộn ngang được">
-      {/* `min-w-4xl` (56rem), measured rather than guessed: the content column
-          of this screen is ~975px at 1440, so a 64rem floor put the "Thao tác"
-          column past the edge on the everyday desktop — a horizontal scrollbar
-          that never had to exist. 56rem still holds a code, a Page name and a
-          wrapped failure sentence, and below it the region scrolls. */}
       <table className="w-full min-w-4xl border-collapse text-sm">
         <caption className="sr-only">
           Nhật ký đăng: thời gian, mã sản phẩm, màu, kênh, trạng thái, số lần thử và lý do lỗi. Bài
           đăng cùng lúc lên nhiều kênh gộp thành một dòng mở được.
         </caption>
-        <colgroup>
-          <col className="w-[13%]" />
-          <col className="w-[12%]" />
-          <col className="w-[9%]" />
-          <col className="w-[14%]" />
-          <col className="w-[11%]" />
-          <col className="w-[7%]" />
-          <col className="w-[24%]" />
-          <col className="w-[10%]" />
-        </colgroup>
-        <thead className="bg-muted/50">
+        <thead className="border-b border-border/80 bg-muted/40 text-xs text-muted-foreground">
           <tr className="text-left">
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-4 py-3 font-semibold w-36 whitespace-nowrap">
               Cập nhật lúc
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
-              Mã SP
+            <th scope="col" className="px-4 py-3 font-semibold w-40 whitespace-nowrap">
+              Sản phẩm
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-4 py-3 font-semibold w-28 whitespace-nowrap">
               Màu
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-4 py-3 font-semibold w-44 whitespace-nowrap">
               Kênh
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-4 py-3 font-semibold w-32 whitespace-nowrap">
               Trạng thái
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-4 py-3 font-semibold w-20 text-center whitespace-nowrap">
               Lần thử
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
-              Lý do / kết quả
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
-              Thao tác
+            <th scope="col" className="px-4 py-3 font-semibold">
+              Kết quả & Thao tác
             </th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-border/60">
           {groups.map((group) => (
             <JobLogRows
               key={group.key}
@@ -177,14 +110,6 @@ export function JobLogTable({
   );
 }
 
-/**
- * One row of the log — or one folded row plus, when it is open, the panel that
- * lists the channels it stands for.
- *
- * A fragment of `<tr>`s rather than a component per row so the detail stays a
- * real table row (`colSpan`), which is what keeps the header association and
- * the column alignment intact for a screen reader.
- */
 function JobLogRows({
   group,
   channelLabels,
@@ -205,59 +130,49 @@ function JobLogRows({
   const job = group.head;
   const isFolded = group.count > 1;
   const detailId = `job-fold-${group.head.postJobId}`;
-  // Same rule the channel-group cards use: a Page that left the list is "đã gỡ"
-  // there and must not be something else here.
   const channelName = channelSentenceName(job.channelId, channelLabels);
-  // The fold keeps the head's hour, which is the most recent of the group (the
-  // log arrives newest first). Said out loud when the members disagree, rather
-  // than passing one channel's minute off as all five.
-  //
-  // Compared on the FORMATTED stamp, not the raw ISO instant: the cell prints
-  // to the second, so five rows written 41 ms apart show the identical string,
-  // and "mới nhất" next to it would flag a disagreement the operator cannot see.
   const sameHour = isFoldUniform(group, (member) => formatDateTime(member.updatedAt));
 
   return (
     <>
-      <tr className="border-t align-top">
-        {/* No `whitespace-nowrap`: "20:04:37 20/8/26" is 16 characters, and
-            pinning it pushed the eight columns past the content width — the
-            date may wrap, the CODE may not (wave 1.5). */}
-        <td className="px-3 py-2 tabular-nums">
-          {formatDateTime(job.updatedAt)}
-          {isFolded && !sameHour ? (
-            <span className="text-muted-foreground block text-xs">mới nhất</span>
-          ) : null}
+      <tr data-row="job" className="align-top transition-colors hover:bg-accent/20">
+        {/* Timestamp */}
+        <td className="px-4 py-3.5 font-mono text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+          <div>{formatDateTime(job.updatedAt)}</div>
+          {isFolded && !sameHour && (
+            <span className="text-[10px] text-muted-foreground/70 block">
+              (mới nhất)
+            </span>
+          )}
         </td>
-        {/* The Mono Ledger Rule + no break: a product code is compared down the
-            column, and a code split over two lines cannot be. */}
-        <th scope="row" className="px-3 py-2 text-left font-medium">
-          <span className="whitespace-nowrap">{job.productCode}</span>
-          {/*
-            Onboarding phase 3 — provenance, on the row where "vì sao bài này
-            không lên" gets asked. Read from the stamp the job carries, never
-            joined from `product`: by the time somebody reads this log, that row
-            may have been swept by a sync.
 
-            Under the code rather than beside it: the code column is compared
-            straight down and a badge on the same line would break that scan. And
-            nothing at all for a synced job — that is nearly every row.
-          */}
-          {job.productOrigin === "manual" ? (
-            <span className="text-warning-foreground block text-xs font-normal">
-              {MANUAL_PRODUCT_BADGE}
+        {/* Product Code — the row's header: without `scope="row"` a status cell
+            read on its own does not say which post it belongs to. */}
+        <th scope="row" className="px-4 py-3.5 text-left">
+          <div className="flex flex-col gap-0.5">
+            <span className="font-mono text-xs font-bold text-foreground">
+              {job.productCode}
             </span>
-          ) : null}
-          {isFolded ? (
-            <span className="text-muted-foreground block text-xs font-normal">
-              {foldCountLabel(group)}
-            </span>
-          ) : null}
+            {job.productOrigin === "manual" && (
+              <span className="inline-block font-mono text-[10px] text-turmeric-deep">
+                {MANUAL_PRODUCT_BADGE}
+              </span>
+            )}
+            {isFolded && (
+              <span className="text-[11px] text-muted-foreground">
+                {foldCountLabel(group)}
+              </span>
+            )}
+          </div>
         </th>
-        <td className="px-3 py-2">
+
+        {/* Color */}
+        <td className="px-4 py-3.5">
           <ColorChip color={job.color} emptyLabel="—" />
         </td>
-        <td className="px-3 py-2">
+
+        {/* Channel / Fold Toggle */}
+        <td className="px-4 py-3.5">
           {isFolded ? (
             <FoldToggle
               isOpen={isOpen}
@@ -267,133 +182,167 @@ function JobLogRows({
               srSuffix={` của bài ${job.productCode}`}
             />
           ) : (
-            /* The Page NAME is what an operator recognises; the id is what they
-               quote to support. Name on top, id underneath in the ledger mono —
-               never the id alone when a name exists. */
-            <ChannelNameCell channelId={job.channelId} label={channelLabels.get(job.channelId)} />
+            <div className="font-medium text-foreground">
+              <ChannelNameCell channelId={job.channelId} label={channelLabels.get(job.channelId)} />
+            </div>
           )}
         </td>
-        <td className="px-3 py-2">
+
+        {/* Status Badge */}
+        <td className="px-4 py-3.5">
           <JobStatusBadge status={job.status} />
         </td>
-        <td className="px-3 py-2 tabular-nums">{job.attemptCount}</td>
-        <td className="px-3 py-2">
-          {/* `wrap-anywhere`: this sentence carries Facebook's own post ids
-              ("1121597217877301_1373618648258365"), one 33-character word that
-              set the MIN-CONTENT width of the widest column and pushed the
-              table past the page. It is prose — it may break; the product code
-              two columns left may not. */}
-          <p
-            className={`wrap-anywhere ${job.status === "published" ? "" : "text-muted-foreground"}`}
-          >
-            {job.userMessage}
-          </p>
-          {/* One permalink per channel, so a folded row does not offer the
-              head's link as if it were everybody's — the panel below carries
-              one per row instead. */}
-          {!isFolded ? <PublishedLink job={job} /> : null}
-          {job.lastErrorCode ? (
-            <p className="text-muted-foreground/80 mt-1 font-mono text-xs">{job.lastErrorCode}</p>
-          ) : null}
-          <p className="mt-1 text-xs">
-            <Link
-              href={`/batches/${encodeURIComponent(job.batchId)}`}
-              className="text-muted-foreground underline underline-offset-4"
-            >
-              Xem lô
-            </Link>
-          </p>
+
+        {/* Attempt count */}
+        <td className="px-4 py-3.5 text-center font-mono text-xs tabular-nums text-muted-foreground">
+          {job.attemptCount}
         </td>
-        <td className="px-3 py-2">
-          {isFolded ? (
-            // No single button can act on five jobs here: re-queueing is one
-            // call per post_job, and a "Chạy lại" that silently picked one of
-            // them would be the worst of both. The sentence says where the
-            // buttons are (The Named Status Rule).
-            <span className="text-muted-foreground text-xs">
-              {job.canRetry ? "Mở danh sách kênh để chạy lại" : "—"}
-            </span>
-          ) : (
-            <RetryAction
-              job={job}
-              channelName={channelName}
-              isRetrying={retryingJobId === job.postJobId}
-              onRetry={onRetry}
-              readOnlyReason={readOnlyReason}
-            />
-          )}
+
+        {/* Result & Actions */}
+        <td className="px-4 py-3.5">
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <p
+                className={`text-xs leading-relaxed max-w-xl ${
+                  job.status === "published"
+                    ? "font-medium text-foreground"
+                    : job.status === "failed" || job.status === "blocked"
+                      ? "text-madder"
+                      : "text-muted-foreground"
+                }`}
+              >
+                {job.userMessage}
+              </p>
+
+              {/* Retry acts on ONE post_job. A folded row stands for several,
+                  so it carries no button and says where the buttons are —
+                  same rule as `FoldedActionsNote` on the scheduled table. */}
+              {isFolded ? (
+                <FoldedRetryNote group={group} readOnlyReason={readOnlyReason} />
+              ) : (
+                <RetryAction
+                  job={job}
+                  channelName={channelName}
+                  isRetrying={retryingJobId === job.postJobId}
+                  onRetry={onRetry}
+                  readOnlyReason={readOnlyReason}
+                />
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-0.5">
+              {/* Direct Facebook Link */}
+              {!isFolded && <PublishedLink job={job} />}
+
+              {/* Batch link */}
+              <Link
+                href={`/batches/${encodeURIComponent(job.batchId)}`}
+                className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-muted/40 px-2 py-0.5 font-mono text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                title="Mở chi tiết lô đăng"
+              >
+                <span>Xem lô</span>
+              </Link>
+
+              {/* The error code is what an operator reads out to support, so it
+                  keeps the body text size and the full-strength muted ink rather
+                  than the 10px/80% it was shrunk to. */}
+              {job.lastErrorCode && (
+                <span className="font-mono text-xs text-muted-foreground">
+                  Mã lỗi: {job.lastErrorCode}
+                </span>
+              )}
+            </div>
+          </div>
         </td>
       </tr>
 
-      {/* Rendered even while closed, with `hidden`: `aria-controls` above must
-          point at something that exists, and the members were on screen anyway
-          before the fold — keeping them mounted costs no more than the
-          un-folded table did. */}
-      {isFolded ? (
-        <tr className="bg-muted/30 border-t" hidden={!isOpen}>
-          <td id={detailId} colSpan={8} className="px-3 py-2">
-            <ul className="space-y-1.5">
-              {group.members.map((member) => (
-                <li
-                  key={member.postJobId}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1"
-                >
-                  <span className="min-w-48">
-                    <ChannelNameCell
-                      channelId={member.channelId}
-                      label={channelLabels.get(member.channelId)}
-                    />
-                  </span>
-                  <span className="text-muted-foreground tabular-nums whitespace-nowrap">
-                    {formatDateTime(member.updatedAt)}
-                  </span>
-                  <PublishedLink job={member} inline />
-                  {/* `canRetry` is part of the fold key, so the whole group
-                      agrees on it: when nobody can be re-queued, the summary
-                      row already says so and three em-dashes down the panel
-                      would be noise. */}
-                  {member.canRetry ? (
-                    <RetryAction
-                      job={member}
-                      channelName={channelSentenceName(member.channelId, channelLabels)}
-                      isRetrying={retryingJobId === member.postJobId}
-                      onRetry={onRetry}
-                      readOnlyReason={readOnlyReason}
-                    />
-                  ) : null}
-                </li>
-              ))}
-            </ul>
+      {/* Expanded Folded Members */}
+      {isFolded && (
+        <tr className="bg-muted/20 border-t" hidden={!isOpen}>
+          <td id={detailId} colSpan={7} className="px-6 py-3">
+            <div className="flex flex-col gap-2.5 rounded-lg border border-border/80 bg-card p-3.5 shadow-xs">
+              <span className="font-mono text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Danh sách chi tiết {group.channelCount} kênh của bài này:
+              </span>
+              <ul className="divide-y divide-border/40">
+                {group.members.map((member) => (
+                  <li
+                    key={member.postJobId}
+                    className="flex flex-wrap items-center justify-between gap-3 py-2.5 first:pt-1 last:pb-1"
+                  >
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="min-w-44 font-medium text-xs text-foreground">
+                        <ChannelNameCell
+                          channelId={member.channelId}
+                          label={channelLabels.get(member.channelId)}
+                        />
+                      </div>
+                      <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                        {formatDateTime(member.updatedAt)}
+                      </span>
+                      <PublishedLink job={member} />
+                    </div>
+
+                    {member.canRetry && (
+                      <RetryAction
+                        job={member}
+                        channelName={channelSentenceName(member.channelId, channelLabels)}
+                        isRetrying={retryingJobId === member.postJobId}
+                        onRetry={onRetry}
+                        readOnlyReason={readOnlyReason}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
           </td>
         </tr>
-      ) : null}
+      )}
     </>
   );
 }
 
-/** The permalink of a published job, or nothing when there is no post to open. */
-function PublishedLink({ job, inline = false }: { job: PostJobLogEntry; inline?: boolean }) {
+function PublishedLink({ job }: { job: PostJobLogEntry }) {
   const link = job.publishedUrl ?? (job.publishedPostId ? facebookPostUrl(job.publishedPostId) : null);
   if (!link) return null;
 
-  const anchor = (
-    <>
-      <a
-        href={link}
-        target="_blank"
-        rel="noreferrer noopener"
-        className="text-primary underline underline-offset-4"
-      >
-        Mở bài trên Facebook
-      </a>
-      <span className="sr-only"> (mở tab mới)</span>
-    </>
+  return (
+    <a
+      href={link}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20 transition-colors"
+    >
+      <span>Mở trên Facebook</span>
+      <ExternalLink className="size-3" />
+    </a>
   );
-
-  return inline ? <span className="whitespace-nowrap">{anchor}</span> : <p className="mt-1">{anchor}</p>;
 }
 
-/** "Chạy lại" for ONE post_job, with whatever is currently blocking it said. */
+/**
+ * The action cell of a FOLDED row.
+ *
+ * It may only promise what the panel actually holds: a group where nothing can
+ * be retried must NOT point at "Mở danh sách kênh để chạy lại", or the operator
+ * opens it hunting for a button that is not there. Read-only wins over both,
+ * exactly as in `RetryAction`.
+ */
+function FoldedRetryNote({
+  group,
+  readOnlyReason,
+}: {
+  group: JobRowGroup<PostJobLogEntry>;
+  readOnlyReason: string | null;
+}) {
+  const anyRetry = group.members.some((member) => member.canRetry);
+  if (!anyRetry) return null;
+  if (readOnlyReason !== null) {
+    return <span className="text-muted-foreground text-xs">{readOnlyReason}</span>;
+  }
+  return <span className="text-muted-foreground text-xs">Mở danh sách kênh để chạy lại</span>;
+}
+
 function RetryAction({
   job,
   channelName,
@@ -408,19 +357,16 @@ function RetryAction({
   readOnlyReason: string | null;
 }) {
   if (job.canRetry && readOnlyReason) {
-    // Shown and disabled WITH the reason rather than hidden: this row IS
-    // retryable, and hiding the button would look like the job was never
-    // eligible.
     return (
-      <div className="space-y-1.5">
-        <Button type="button" size="sm" variant="outline" disabled>
+      <div className="flex items-center gap-1.5">
+        <Button type="button" size="sm" variant="outline" disabled className="text-xs h-7">
           Chạy lại
           <span className="sr-only">
             {" "}
             bài {job.productCode} trên kênh {channelName}
           </span>
         </Button>
-        <p className="text-muted-foreground text-xs">{readOnlyReason}</p>
+        <span className="text-xs text-muted-foreground">{readOnlyReason}</span>
       </div>
     );
   }
@@ -433,17 +379,14 @@ function RetryAction({
         variant="outline"
         disabled={isRetrying}
         onClick={() => onRetry(job.postJobId)}
+        className="gap-1 text-xs h-7"
       >
-        {isRetrying ? "Đang xếp hàng…" : "Chạy lại"}
-        <span className="sr-only">
-          {" "}
-          bài {job.productCode} trên kênh {channelName}
-        </span>
+        <RotateCcw className={`size-3 ${isRetrying ? "animate-spin" : ""}`} />
+        <span>{isRetrying ? "Đang xếp hàng…" : "Chạy lại"}</span>
+        <span className="sr-only"> bài {job.productCode} trên kênh {channelName}</span>
       </Button>
     );
   }
 
-  // No disabled button for a published/queued job: an action that can never
-  // succeed should not be on screen at all.
-  return <span className="text-muted-foreground text-xs">—</span>;
+  return null;
 }

@@ -1,3 +1,14 @@
+"use client";
+
+import { useId, useMemo, useState } from "react";
+import { ExternalLink, Search } from "lucide-react";
+
+import {
+  countChannelStatuses,
+  filterBatchChannels,
+  showsStatusPill,
+  type ChannelStatusFilter,
+} from "@/ui/components/batch/batch-channel-filter";
 import { ChannelProgress } from "@/ui/components/batch/ChannelProgress";
 import {
   channelLabelIndex,
@@ -12,21 +23,6 @@ import {
   type BatchChannelStatus,
 } from "@/ui/schemas/post-batch.schema";
 
-/**
- * Per-channel result table of one batch (E7.5, brief §6).
- *
- * Business rule 6 made visible: every channel is its own row with its own
- * status and its own reason — one Page failing says nothing about the others.
- * `userMessage` comes from the server already in Vietnamese; the UI never
- * invents a reason, and never hides one.
- *
- * Presentational only: no fetching, no retry logic (that lives on /jobs).
- *
- * A row that is still moving also carries its live progress block (design
- * §5.9). `progressSteps` comes down with the payload rather than being imported:
- * `ui/` may not reach into `core/` (docs/07 §2), and a second copy of the labels
- * would be the thing that drifts the day a stage is added.
- */
 export function BatchChannelTable({
   channels,
   progressSteps,
@@ -34,121 +30,239 @@ export function BatchChannelTable({
 }: {
   channels: readonly BatchChannelStatus[];
   progressSteps: readonly string[];
-  /**
-   * The tenant's Pages, for naming the "Kênh" column. `undefined` means the
-   * list is NOT KNOWN yet (loading, or the request failed): the rows then show
-   * the bare id and accuse nothing (see `resolveGroupChannelLabels`).
-   */
   tenantChannels?: readonly Channel[];
 }) {
-  // ONE resolve for the whole table, not one per row.
-  const labels = channelLabelIndex(
-    channels.map((channel) => channel.channelId),
-    tenantChannels,
+  const searchId = useId();
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<ChannelStatusFilter>("all");
+
+  // Memoised, because this Map is a dependency of the filter below: rebuilding
+  // it every render made that `useMemo` recompute every render too.
+  const labels = useMemo(
+    () => channelLabelIndex(channels.map((channel) => channel.channelId), tenantChannels),
+    [channels, tenantChannels],
   );
 
-  return (
-    <section aria-labelledby="batch-channels-heading" className="space-y-3">
-      <h2 id="batch-channels-heading" className="text-base font-semibold">
-        Kết quả theo từng kênh
-      </h2>
+  const filteredChannels = useMemo(
+    () => filterBatchChannels(channels, statusFilter, search, labels),
+    [channels, statusFilter, search, labels],
+  );
 
-      {/* tabindex + label: the horizontal scroller must be reachable by keyboard. */}
+  const counts = useMemo(() => countChannelStatuses(channels), [channels]);
+
+  return (
+    <section aria-labelledby="batch-channels-heading" className="flex flex-col gap-4">
+      {/* Header & Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h2 id="batch-channels-heading" className="text-base font-semibold text-foreground">
+            Kết quả theo từng kênh
+          </h2>
+          <span className="font-mono text-xs text-muted-foreground tabular-nums">
+            ({filteredChannels.length}/{channels.length} kênh)
+          </span>
+        </div>
+
+        {/* Filter Pills + Search */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Status Filter Buttons */}
+          <div className="flex items-center gap-1 rounded-lg border border-border/80 bg-muted/30 p-1">
+            <button
+              type="button"
+              onClick={() => setStatusFilter("all")}
+              className={`rounded-md px-2.5 py-1 font-mono text-xs transition-colors ${
+                statusFilter === "all"
+                  ? "bg-card text-foreground font-semibold shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Tất cả ({counts.all})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter("published")}
+              className={`rounded-md px-2.5 py-1 font-mono text-xs transition-colors ${
+                statusFilter === "published"
+                  ? "bg-card text-leaf-deep font-semibold shadow-xs"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Đã đăng ({counts.published})
+            </button>
+            {/* Kept while it is the ACTIVE filter even at zero: this screen polls,
+                so a retry that succeeds would otherwise remove the very pill that
+                is filtering, leaving an empty table and no way back. */}
+            {showsStatusPill(counts.active, "active", statusFilter) && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter("active")}
+                className={`rounded-md px-2.5 py-1 font-mono text-xs transition-colors ${
+                  statusFilter === "active"
+                    ? "bg-card text-primary font-semibold shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Đang chạy ({counts.active})
+              </button>
+            )}
+            {showsStatusPill(counts.issues, "issues", statusFilter) && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter("issues")}
+                className={`rounded-md px-2.5 py-1 font-mono text-xs transition-colors ${
+                  statusFilter === "issues"
+                    ? "bg-card text-madder font-semibold shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Lỗi/Chặn ({counts.issues})
+              </button>
+            )}
+          </div>
+
+          {/* Search Box */}
+          <div className="relative">
+            <label htmlFor={searchId} className="sr-only">
+              Tìm trong danh sách kênh của lô này
+            </label>
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              id={searchId}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Tìm tên kênh hoặc mã..."
+              className="h-8 w-44 rounded-lg border border-border/80 bg-card pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary md:w-56"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Table Container */}
       <div
-        className="overflow-x-auto rounded-xl border"
+        className="overflow-x-auto rounded-xl border border-border/80 bg-card shadow-xs"
         tabIndex={0}
         role="region"
-        aria-label="Bảng kết quả theo kênh, cuộn ngang được"
+        aria-label="Bảng kết quả theo kênh"
       >
         <table className="w-full border-collapse text-sm">
           <caption className="sr-only">
             Trạng thái đăng bài của từng kênh trong lô, kèm số lần thử và lý do lỗi
           </caption>
-          <colgroup>
-            <col className="w-[22%]" />
-            <col className="w-[14%]" />
-            <col className="w-[10%]" />
-            <col className="w-[54%]" />
-          </colgroup>
-          <thead className="bg-muted/50">
+          <thead className="border-b border-border/80 bg-muted/40 text-xs text-muted-foreground">
             <tr className="text-left">
-              <th scope="col" className="px-3 py-2 font-medium">
-                Kênh
+              <th scope="col" className="px-4 py-3 font-semibold">
+                Kênh Facebook
               </th>
-              <th scope="col" className="px-3 py-2 font-medium">
+              <th scope="col" className="px-4 py-3 font-semibold w-32">
                 Trạng thái
               </th>
-              <th scope="col" className="px-3 py-2 font-medium">
+              <th scope="col" className="px-4 py-3 font-semibold w-24 text-center">
                 Số lần thử
               </th>
-              <th scope="col" className="px-3 py-2 font-medium">
-                Kết quả
+              <th scope="col" className="px-4 py-3 font-semibold">
+                Kết quả chi tiết
               </th>
             </tr>
           </thead>
-          <tbody>
-            {channels.map((channel) => {
-              const link =
-                channel.publishedUrl ??
-                (channel.publishedPostId ? facebookPostUrl(channel.publishedPostId) : null);
+          <tbody className="divide-y divide-border/60">
+            {filteredChannels.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="py-8 text-center text-xs text-muted-foreground">
+                  Không tìm thấy kênh nào khớp với bộ lọc hiện tại.
+                </td>
+              </tr>
+            ) : (
+              filteredChannels.map((channel) => {
+                const link =
+                  channel.publishedUrl ??
+                  (channel.publishedPostId ? facebookPostUrl(channel.publishedPostId) : null);
 
-              return (
-                <tr key={channel.postJobId} className="border-t align-top">
-                  {/* Name first, id underneath — the same cell the job log and
-                      the schedule use. A batch report an operator cannot read
-                      is a report they cannot check against the Page. */}
-                  <th scope="row" className="px-3 py-2 text-left font-medium">
-                    <ChannelNameCell
-                      channelId={channel.channelId}
-                      label={labels.get(channel.channelId)}
-                    />
-                  </th>
-                  <td className="px-3 py-2">
-                    <JobStatusBadge status={channel.status} />
-                  </td>
-                  <td className="px-3 py-2 tabular-nums">{channel.attemptCount}</td>
-                  <td className="px-3 py-2">
-                    <p className={channel.status === "published" ? "" : "text-muted-foreground"}>
-                      {channel.userMessage}
-                    </p>
-                    {link ? (
-                      <p className="mt-1">
-                        <a
-                          href={link}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          className="text-primary underline underline-offset-4"
+                return (
+                  <tr
+                    key={channel.postJobId}
+                    className="align-top transition-colors hover:bg-accent/20"
+                  >
+                    {/* Channel info — the row's header, so a screen reader can
+                        name which channel a status cell belongs to. */}
+                    <th scope="row" className="px-4 py-3.5 text-left">
+                      <div className="font-medium text-foreground">
+                        <ChannelNameCell
+                          channelId={channel.channelId}
+                          label={labels.get(channel.channelId)}
+                        />
+                      </div>
+                    </th>
+
+                    {/* Status Badge */}
+                    <td className="px-4 py-3.5">
+                      <JobStatusBadge status={channel.status} />
+                    </td>
+
+                    {/* Attempt Count */}
+                    <td className="px-4 py-3.5 text-center font-mono text-xs tabular-nums text-muted-foreground">
+                      {channel.attemptCount}
+                    </td>
+
+                    {/* Result & Actions */}
+                    <td className="px-4 py-3.5">
+                      <div className="flex flex-col gap-1.5">
+                        <p
+                          className={`text-xs leading-relaxed ${
+                            channel.status === "published"
+                              ? "font-medium text-foreground"
+                              : channel.status === "failed" || channel.status === "blocked"
+                                ? "text-madder"
+                                : "text-muted-foreground"
+                          }`}
                         >
-                          Mở bài đã đăng trên Facebook
-                        </a>
-                        <span className="sr-only"> (mở tab mới)</span>
-                      </p>
-                    ) : null}
-                    {channel.publishedAt ? (
-                      <p className="text-muted-foreground mt-1 text-xs tabular-nums">
-                        Đăng lúc {formatDateTime(channel.publishedAt)}
-                      </p>
-                    ) : null}
-                    {channel.lastErrorCode ? (
-                      <p className="text-muted-foreground/80 mt-1 font-mono text-xs">
-                        Mã lỗi: {channel.lastErrorCode}
-                      </p>
-                    ) : null}
-                    {/* Present only while the job is queued/publishing — the
-                        server drops it for every other status (law 3.1), so
-                        this row never has to decide. */}
-                    {channel.progress ? (
-                      <ChannelProgress
-                        progress={channel.progress}
-                        steps={progressSteps}
-                        channelLabel={channelSentenceName(channel.channelId, labels)}
-                        statusMessage={channel.userMessage}
-                      />
-                    ) : null}
-                  </td>
-                </tr>
-              );
-            })}
+                          {channel.userMessage}
+                        </p>
+
+                        {/* Direct Facebook Post Link */}
+                        {link && (
+                          <div className="pt-0.5">
+                            <a
+                              href={link}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/20 transition-colors"
+                            >
+                              <span>Mở bài viết trên Facebook</span>
+                              <ExternalLink className="size-3" />
+                            </a>
+                          </div>
+                        )}
+
+                        {channel.publishedAt && (
+                          <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                            Đã đăng: {formatDateTime(channel.publishedAt)}
+                          </span>
+                        )}
+
+                        {channel.lastErrorCode && (
+                          <span className="font-mono text-[11px] text-muted-foreground/80">
+                            Mã lỗi: {channel.lastErrorCode}
+                          </span>
+                        )}
+
+                        {/* Live progress when running */}
+                        {channel.progress && (
+                          <div className="pt-1">
+                            <ChannelProgress
+                              progress={channel.progress}
+                              steps={progressSteps}
+                              channelLabel={channelSentenceName(channel.channelId, labels)}
+                              statusMessage={channel.userMessage}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>

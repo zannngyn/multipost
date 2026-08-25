@@ -1,25 +1,10 @@
 "use client";
 
-import {
-  Badge,
-  Banner,
-  Divider,
-  HStack,
-  Heading,
-  Item,
-  Section,
-  Stack,
-  Text,
-} from "@astryxdesign/core";
 import { Fragment } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
   FileSpreadsheet,
-  Image as ImageIcon,
-  Boxes,
-  HelpCircle,
-  Sparkles,
   ArrowDownRight,
   TrendingDown,
 } from "lucide-react";
@@ -39,6 +24,12 @@ export function CompatibilityReport({
   report: CatalogProfileReport;
   headingLevel?: 2 | 3;
 }) {
+  // The card titles below are the report's TOP heading level — it renders no
+  // heading of its own — so they follow what the host screen declares instead of
+  // being nailed to h3. Wrong nesting is invisible on screen and breaks heading
+  // navigation for a screen reader.
+  const CardHeading = headingLevel === 2 ? "h2" : "h3";
+
   const headline = headlineNumber(report);
   const stages = profileFunnel(report);
   const mapIssues = report.fieldMap.issues;
@@ -108,9 +99,9 @@ export function CompatibilityReport({
         <div className="flex items-center justify-between border-b border-border/60 pb-3">
           <div className="flex items-center gap-2">
             <TrendingDown className="size-4 text-primary" />
-            <h3 className="text-sm font-semibold text-foreground">
+            <CardHeading className="text-sm font-semibold text-foreground">
               Quy trình lọc dữ liệu (Vì sao chỉ ngần này mã)
-            </h3>
+            </CardHeading>
           </div>
           <span className="text-xs text-muted-foreground">Phân tích từng giai đoạn</span>
         </div>
@@ -171,7 +162,9 @@ export function CompatibilityReport({
       {/* 4. Top Issues To Fix */}
       <div className="flex flex-col gap-3 rounded-xl border border-border/80 bg-card p-5 shadow-xs">
         <div className="flex items-center justify-between border-b border-border/60 pb-3">
-          <h3 className="text-sm font-semibold text-foreground">Những việc cần xử lý nhất</h3>
+          <CardHeading className="text-sm font-semibold text-foreground">
+            Những việc cần xử lý nhất
+          </CardHeading>
           <span className="font-mono text-xs text-muted-foreground">
             {report.topIssues.length} nhóm vấn đề
           </span>
@@ -209,9 +202,9 @@ export function CompatibilityReport({
         <div className="flex items-center justify-between border-b border-border/60 pb-3">
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="size-4 text-primary" />
-            <h3 className="text-sm font-semibold text-foreground">
+            <CardHeading className="text-sm font-semibold text-foreground">
               Thông tin bảng tính đã quét
-            </h3>
+            </CardHeading>
           </div>
           <span className="font-mono text-xs text-muted-foreground">
             Tab “{report.sheetName}”

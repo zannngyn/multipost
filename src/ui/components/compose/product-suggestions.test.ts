@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { CatalogProduct } from "@/ui/schemas/catalog.schema";
 
-import { nextHighlight, outOfStockMessage, toProductSuggestion } from "./product-suggestions";
+import {
+  nextHighlight,
+  outOfStockMessage,
+  selectableSuggestions,
+  suggestionEmptyState,
+  suggestionFooterText,
+  toProductSuggestion,
+} from "./product-suggestions";
 
 function product(overrides: Partial<CatalogProduct> = {}): CatalogProduct {
   return {
@@ -158,5 +165,113 @@ describe("tenant with the stock gate off", () => {
 
     expect(suggestion.disabled).toBe(true);
     expect(suggestion.blockedMessage).not.toContain("đã hết hàng");
+  });
+});
+
+/**
+ * What the picker may OFFER, and what it says when it can offer nothing.
+ *
+ * The rule is business rule 1 read forwards: a code that cannot be posted is
+ * not shown greyed out, it is absent — and the count of what was left out is
+ * still stated, so "ẩn" never reads as "không tồn tại".
+ */
+describe("selectableSuggestions", () => {
+  // --- Edge cases first ------------------------------------------------------
+  it("answers an empty list for no products at all", () => {
+    expect(selectableSuggestions([])).toEqual([]);
+  });
+
+  it("drops a blocked row even when the server called it composable", () => {
+    // The two verdicts come from different code. They must not be able to put an
+    // un-postable code back into the picker by disagreeing.
+    const rows = selectableSuggestions([
+      product({
+        composable: true,
+        inventory: {
+          status: "blocked",
+          stock: 0,
+          reason: "STOCK_ZERO",
+          operatorMessage: null,
+          stockCheckSkipped: false,
+          stockCheckSkippedReason: null,
+        },
+      }),
+    ]);
+
+    expect(rows).toEqual([]);
+  });
+
+  it("drops a code the server refused for any other reason", () => {
+    expect(
+      selectableSuggestions([
+        product({
+          code: "MGKVX0001",
+          composable: false,
+          blockedReason: { code: "NO_MEDIA", userMessage: "Chưa có ảnh nào trên Drive." },
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  // --- The happy path --------------------------------------------------------
+  it("keeps postable codes, in the order the catalog answered", () => {
+    const rows = selectableSuggestions([
+      product({ code: "MGKVX0001" }),
+      product({
+        code: "MGKVX0002",
+        composable: false,
+        blockedReason: { code: "NO_MEDIA", userMessage: "Chưa có ảnh." },
+      }),
+      product({ code: "MGKVX0003" }),
+    ]);
+
+    expect(rows.map((row) => row.code)).toEqual(["MGKVX0001", "MGKVX0003"]);
+    // Nothing that survives may carry a refusal — the row has no place to show it.
+    expect(rows.every((row) => row.blockedMessage === null)).toBe(true);
+  });
+});
+
+describe("suggestionEmptyState", () => {
+  it("blames the blocked codes BEFORE the search — the one branch a match can reach", () => {
+    const state = suggestionEmptyState("MGKVX", 4);
+
+    expect(state.title).toBe("Không có mã nào đăng được");
+    expect(state.hint).toContain("4 mã đang vướng");
+    expect(state.hint).toContain("màn Sản phẩm");
+    // Saying "không có mã nào khớp" here is the lie the product screen contradicts.
+    expect(state.title).not.toContain("khớp");
+  });
+
+  it("sends an unsynced tenant to the sync, not to a search that cannot help", () => {
+    const state = suggestionEmptyState("   ", 0);
+
+    expect(state.title).toBe("Danh mục đang trống");
+    expect(state.hint).toContain("đồng bộ");
+  });
+
+  it("names the search back when nothing matched it", () => {
+    const state = suggestionEmptyState("  MGKVX  ", 0);
+
+    expect(state.title).toContain("MGKVX");
+    // A code typed in full is still the way out of an empty list.
+    expect(state.hint).toContain("gõ thẳng");
+  });
+});
+
+describe("suggestionFooterText", () => {
+  it("says the list is capped, so a big match count is not read as a long list", () => {
+    const text = suggestionFooterText(120, 0, 8);
+
+    expect(text).toContain("tối đa 8 mã");
+    expect(text).toContain("Khớp 120 mã đăng được");
+    expect(text).toContain("gõ thẳng");
+  });
+
+  it("counts what it hid, and where to go read why", () => {
+    expect(suggestionFooterText(3, 5, 8)).toContain("ẩn 5 mã đang vướng");
+  });
+
+  it("stays silent about hidden codes when none were hidden", () => {
+    expect(suggestionFooterText(3, 0, 8)).not.toContain("ẩn");
   });
 });

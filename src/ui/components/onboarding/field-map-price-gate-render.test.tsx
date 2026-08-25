@@ -102,7 +102,7 @@ function saveButton(html: string): string {
   return match?.[0] ?? "";
 }
 
-const CONFIRM_LABEL = "Tôi đã kiểm tra: các cột trên không chứa giá tiền";
+const CONFIRM_LABEL = "Tôi xác nhận các cột này KHÔNG chứa giá bán / giá buôn bí mật";
 
 describe("FieldMapForm — a money-looking column mapped onto a caption field", () => {
   it("cannot be saved until it is confirmed", () => {
@@ -132,7 +132,7 @@ describe("FieldMapForm — a money-looking column mapped onto a caption field", 
   it("leaves the read-only preview available", () => {
     const html = render(fieldMap({ description: "Giá bán" }));
     const preview = html.match(
-      /<button[^>]*>(?:(?!<\/button>)[\s\S])*?Xem lại số với ánh xạ này[\s\S]*?<\/button>/,
+      /<button[^>]*>(?:(?!<\/button>)[\s\S])*?Chạy thử kiểm tra số liệu[\s\S]*?<\/button>/,
     )?.[0];
 
     expect(preview).toBeDefined();

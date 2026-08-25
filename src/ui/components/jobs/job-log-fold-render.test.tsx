@@ -67,9 +67,15 @@ function render(items: PostJobLogEntry[]): string {
   );
 }
 
-/** How many data rows the markup carries, folded panels excluded. */
+/**
+ * How many data rows the markup carries, folded panels excluded.
+ *
+ * Counted by `data-row="job"`, NOT by the row's class list: the class list is
+ * styling and changed under this test once already, which failed the fold rule
+ * for a reason that had nothing to do with folding.
+ */
 function countRows(html: string): number {
-  return (html.match(/<tr class="border-t align-top">/g) ?? []).length;
+  return (html.match(/<tr data-row="job"/g) ?? []).length;
 }
 
 describe("JobLogTable folding", () => {

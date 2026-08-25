@@ -4,13 +4,9 @@ import {
   Banner,
   Button,
   CheckboxInput,
-  HStack,
-  Heading,
   RadioList,
   RadioListItem,
   Selector,
-  Stack,
-  Text,
   TextArea,
   TextInput,
 } from "@astryxdesign/core";
@@ -19,16 +15,10 @@ import {
   CheckCircle2,
   AlertCircle,
   Sparkles,
-  RotateCcw,
-  SlidersHorizontal,
   Layers,
   Image as ImageIcon,
   Boxes,
   Eye,
-  ArrowRight,
-  ArrowLeft,
-  Save,
-  HelpCircle,
 } from "lucide-react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
@@ -62,7 +52,6 @@ import {
   CATALOG_FIELDS,
   CATALOG_FIELD_HINTS,
   CATALOG_FIELD_LABELS,
-  CONFIDENCE_HINTS,
   CONFIDENCE_LABELS,
   STOCK_POLICY_HINTS,
   STOCK_POLICY_LABELS,
@@ -634,6 +623,15 @@ export function FieldMapForm({
           )}
         </div>
       </div>
+
+      {/* A disabled button that explains itself only in a tooltip is a dead end
+          for touch and for a screen reader. The reason is written out here, in
+          the flow, for the one gate the operator can clear from this screen. */}
+      {!isPriceConfirmed ? (
+        <p className="text-turmeric-deep text-xs leading-relaxed">
+          Chưa lưu được: cần tích xác nhận cột trông như cột giá ở phía trên.
+        </p>
+      ) : null}
 
       {saveError ? <ApiErrorNotice error={saveError} source="Lưu ánh xạ" /> : null}
       {preview.isError ? (
