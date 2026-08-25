@@ -33,10 +33,14 @@ import { presentApiError } from "@/ui/components/feedback/present-api-error";
  *   - ↓ ↑ wrap, Enter picks, Escape closes and KEEPS what was typed, Tab closes;
  *   - the number of results is announced politely.
  *
- * Business rule 1 made visible: a code the server marked un-composable — hết
- * hàng above all — is refused HERE, before a caption is ever written for it.
- * The server still runs the stock gate twice; this only saves the operator the
- * detour.
+ * Business rule 1 made visible: only codes the server marked composable are
+ * OFFERED here. A blocked one is not listed-and-greyed, it is absent — a row
+ * that exists only to be refused costs the operator a read and a click and
+ * teaches nothing, while the reason (hết hàng, thiếu ảnh, dữ liệu lệch) belongs
+ * on the product screen, which is the only place it can be fixed. The count of
+ * what was left out is still printed under the list, so "ẩn" never reads as
+ * "không tồn tại". Typing a blocked code by hand still works and still gets the
+ * server's answer; the server runs the stock gate twice regardless.
  */
 export function ProductPicker({
   id,
@@ -87,8 +91,6 @@ export function ProductPicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(-1);
-  /** Set when the operator picked a row the server will not compose. */
-  const [refused, setRefused] = useState<string | null>(null);
 
   /**
    * The ONE answer to "is the list showing", derived rather than stored: a
@@ -103,8 +105,17 @@ export function ProductPicker({
   const query = useDebouncedValue(value, 300);
   const suggestions = useProductSuggestions(query, isOpen);
 
-  const items: ProductSuggestion[] = (suggestions.data?.items ?? []).map(toProductSuggestion);
-  const total = suggestions.data?.totals.total ?? null;
+  // The query already asks for `status: "ok"`, and the filter repeats it on the
+  // rows: the two verdicts are computed by different code (the usecase's
+  // `composable`, this module's `describeBlock`), and if they ever disagree the
+  // safe answer is to drop the row rather than to offer a post that cannot go
+  // out.
+  const items: ProductSuggestion[] = (suggestions.data?.items ?? [])
+    .map(toProductSuggestion)
+    .filter((item) => !item.disabled);
+  const totals = suggestions.data?.totals ?? null;
+  /** Codes that matched the search but cannot be posted — counted, not listed. */
+  const hiddenCount = totals?.blocked ?? 0;
   const isLoading = suggestions.isPending || (suggestions.isFetching && !suggestions.data);
 
   function close() {
@@ -138,13 +149,6 @@ export function ProductPicker({
   }, [isOpen]);
 
   function pick(item: ProductSuggestion) {
-    if (item.disabled) {
-      // Not a silent no-op: the row explains itself, and the alert below the
-      // field repeats it where a screen reader will pick it up.
-      setRefused(item.blockedMessage);
-      return;
-    }
-    setRefused(null);
     onSelectCode(item.code);
     close();
     onSubmit();
@@ -203,7 +207,6 @@ export function ProductPicker({
             void register.onChange(event);
             setOpen(true);
             setHighlight(-1);
-            setRefused(null);
           }}
           onFocus={() => {
             if (suppressSuggestions) return;
@@ -264,68 +267,51 @@ export function ProductPicker({
                 </div>
               ) : items.length === 0 ? (
                 <div className="px-2.5 py-3">
+                  {/* Three different empty answers, because they send the
+                      operator to three different places: nothing synced yet,
+                      nothing matched, or things matched but none of them can be
+                      posted. Collapsing the third into "không có mã nào khớp"
+                      would be a lie the product screen then contradicts. */}
                   <p className="text-sm font-medium">
-                    {query.trim().length === 0
-                      ? "Danh mục đang trống"
-                      : `Không có mã nào khớp “${query.trim()}”`}
+                    {hiddenCount > 0
+                      ? "Không có mã nào đăng được"
+                      : query.trim().length === 0
+                        ? "Danh mục đang trống"
+                        : `Không có mã nào khớp “${query.trim()}”`}
                   </p>
                   <p className="text-muted-foreground pt-1 text-xs leading-relaxed">
-                    {query.trim().length === 0
-                      ? "Chạy đồng bộ dữ liệu ở màn Sản phẩm, hoặc gõ thẳng mã nếu bạn biết chắc."
-                      : "Mã vừa thêm vào bảng dữ liệu mà chưa đồng bộ vẫn gõ thẳng được — hệ thống sẽ tra lại khi bạn bấm nút."}
+                    {hiddenCount > 0
+                      ? `${hiddenCount} mã đang vướng (hết hàng, thiếu ảnh, hoặc dữ liệu lệch nhau) nên không hiện ở đây. Mở màn Sản phẩm để xem lý do từng mã.`
+                      : query.trim().length === 0
+                        ? "Chạy đồng bộ dữ liệu ở màn Sản phẩm, hoặc gõ thẳng mã nếu bạn biết chắc."
+                        : "Mã vừa thêm vào bảng dữ liệu mà chưa đồng bộ vẫn gõ thẳng được — hệ thống sẽ tra lại khi bạn bấm nút."}
                   </p>
                 </div>
               ) : (
-                <ul id={listId} role="listbox" aria-label="Gợi ý mã sản phẩm" className="flex flex-col">
+                <ul id={listId} role="listbox" aria-label="Gợi ý mã sản phẩm đăng được" className="flex flex-col">
                   {items.map((item, index) => (
                     <li
                       key={item.code}
                       id={`${listId}-option-${index}`}
                       role="option"
                       aria-selected={index === highlight}
-                      aria-disabled={item.disabled}
                       onMouseDown={(event) => event.preventDefault()}
                       onMouseEnter={() => setHighlight(index)}
                       onClick={() => pick(item)}
                       className={cn(
-                        "flex items-start gap-3 rounded-lg px-2.5 py-2",
-                        item.disabled ? "cursor-not-allowed" : "cursor-pointer",
+                        "flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2",
                         index === highlight && "bg-muted",
                       )}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={cn(
-                          "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg font-mono text-xs",
-                          // `text-muted-foreground`, NOT `text-foreground-subtle`:
-                          // subtle only clears 4.5:1 on the page and card inks —
-                          // on `--muted` it measures 4.36:1 (light) / 4.07:1
-                          // (dark), i.e. under the floor for text this small.
-                          // Muted-foreground is the tone the swatch scale keeps
-                          // for exactly this pairing.
-                          item.disabled
-                            ? "bg-muted text-muted-foreground"
-                            : "bg-accent/40 text-accent-foreground",
-                        )}
-                      >
-                        {item.code.slice(0, 2)}
-                      </span>
-
+                      {/* The CODE is the line that matters: it is what the
+                          operator copies into the Sheet, says on the phone and
+                          types next time, so it is read first and at full size.
+                          The name is what confirms the pick, and sits under it. */}
                       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <span className="font-mono text-xs tracking-wide">{item.code}</span>
-                        <span
-                          className={cn(
-                            "truncate text-sm",
-                            item.disabled ? "text-muted-foreground" : "font-medium",
-                          )}
-                        >
-                          {item.name}
+                        <span className="font-mono text-sm font-medium tracking-wide uppercase">
+                          {item.code}
                         </span>
-                        {item.blockedMessage ? (
-                          <span className="text-warning-foreground text-xs leading-relaxed">
-                            {item.blockedMessage}
-                          </span>
-                        ) : null}
+                        <span className="text-muted-foreground truncate text-xs">{item.name}</span>
                       </span>
 
                       <span className="text-muted-foreground shrink-0 pt-0.5 text-xs whitespace-nowrap">
@@ -337,9 +323,14 @@ export function ProductPicker({
               )}
             </div>
 
-            {total !== null ? (
+            {/* Says out loud that the list is filtered. Without this line a
+                short list reads as "chỉ có ngần này mã", and the operator goes
+                looking for a code that IS in the catalog but cannot be posted. */}
+            {totals !== null ? (
               <p className="border-border text-muted-foreground border-t px-3 py-2 text-xs">
-                Đang lọc trong {total} sản phẩm đã đồng bộ. Mã chưa đồng bộ vẫn gõ thẳng được.
+                Chỉ hiện mã đăng được: {totals.ok}/{totals.total} mã đã đồng bộ
+                {hiddenCount > 0 ? ` · ẩn ${hiddenCount} mã đang vướng (xem ở màn Sản phẩm)` : ""}.
+                Mã chưa đồng bộ vẫn gõ thẳng được.
               </p>
             ) : null}
           </div>
@@ -348,14 +339,9 @@ export function ProductPicker({
 
       {/* Result count, announced without stealing focus (core-form-inputs). */}
       <p className="sr-only" role="status" aria-live="polite">
-        {isOpen && !isLoading && !suggestions.isError ? `${items.length} kết quả` : ""}
+        {isOpen && !isLoading && !suggestions.isError ? `${items.length} mã đăng được` : ""}
       </p>
 
-      {refused ? (
-        <p role="alert" className="text-warning-foreground text-xs leading-relaxed">
-          {refused} Hãy chọn mã khác, hoặc sửa dữ liệu tồn kho của mã này rồi đồng bộ lại.
-        </p>
-      ) : null}
     </div>
   );
 }

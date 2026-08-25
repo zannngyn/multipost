@@ -52,9 +52,12 @@ describe("stepHref", () => {
 
 describe("stepStatuses", () => {
   it("marks step 1 done once a source is stored, even while standing on step 3", () => {
-    const statuses = stepStatuses("anh-xa", { hasSource: true });
+    // Step 3 is `bao-cao` since the rail was reordered to nguon → anh-xa →
+    // bao-cao; the claim is unchanged — standing late, everything behind is
+    // done and step 1 is done on the STORED source, not on having walked past it.
+    const statuses = stepStatuses("bao-cao", { hasSource: true });
 
-    expect(statuses).toEqual({ nguon: "done", "bao-cao": "done", "anh-xa": "current" });
+    expect(statuses).toEqual({ nguon: "done", "anh-xa": "done", "bao-cao": "current" });
   });
 
   it("does not call step 1 done for a tenant with no source", () => {

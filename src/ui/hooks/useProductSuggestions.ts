@@ -33,10 +33,14 @@ export function useProductSuggestions(query: string, enabled: boolean) {
   const q = query.trim();
 
   return useQuery<CatalogProductsResponse, ApiError>({
-    queryKey: ["catalog", tenantKey, "product-suggestions", q],
+    queryKey: ["catalog", tenantKey, "product-suggestions", "ok", q],
     queryFn: ({ signal }) =>
       listCatalogProducts(
-        { filter: { status: null, q: q.length > 0 ? q : null }, limit: SUGGESTION_LIMIT },
+        // `status: "ok"` is the whole point of this list: the picker offers
+        // codes that CAN be posted. A blocked code answered here would only ever
+        // be a row the operator is told not to click, and the reason it is
+        // blocked belongs on the product screen, which can act on it.
+        { filter: { status: "ok", q: q.length > 0 ? q : null }, limit: SUGGESTION_LIMIT },
         signal,
       ),
     // Nothing is fetched until `/api/me` says which company we are in (M1.4).
