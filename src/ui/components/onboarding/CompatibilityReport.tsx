@@ -12,6 +12,17 @@ import {
   Text,
 } from "@astryxdesign/core";
 import { Fragment } from "react";
+import {
+  CheckCircle2,
+  AlertTriangle,
+  FileSpreadsheet,
+  Image as ImageIcon,
+  Boxes,
+  HelpCircle,
+  Sparkles,
+  ArrowDownRight,
+  TrendingDown,
+} from "lucide-react";
 
 import { StockCheckSkippedBanner } from "@/ui/components/inventory/StockCheckSkippedBanner";
 import { headlineNumber, profileFunnel } from "@/ui/components/onboarding/profile-funnel";
@@ -21,27 +32,8 @@ import {
   type CatalogProfileReport,
 } from "@/ui/schemas/catalog-mapping.schema";
 
-/**
- * "Báo cáo tương thích" — what the tool can actually do with THIS customer's
- * spreadsheet, read out loud.
- *
- * This is the screen a customer and a salesperson look at together, so it is
- * built around one number ("bao nhiêu mã đăng được ngay") and the chain of
- * losses that explains it. Nothing here is rounded up: a stage that lost rows
- * says how many and why, and a number that could not be computed is left
- * unwritten with its reason instead of shown as 0 (business rule 5).
- *
- * Presentational — it fetches nothing and decides nothing. Every count comes
- * from `profileCatalogSource`, which runs the same parser and the same stock
- * gate the real pipeline runs: a report must never be more optimistic than the
- * thing that actually posts.
- *
- * Rows, not cards (DESIGN.md §Layout: dữ liệu quét là HÀNG): `Item` + `Divider`
- * is the same row shape the rest of the app scans.
- */
 export function CompatibilityReport({
   report,
-  /** h2 on the wizard step, h3 when embedded as a preview under the map form. */
   headingLevel = 2,
 }: {
   report: CatalogProfileReport;
@@ -49,171 +41,228 @@ export function CompatibilityReport({
 }) {
   const headline = headlineNumber(report);
   const stages = profileFunnel(report);
-  const subHeadingLevel = (headingLevel + 1) as 3 | 4;
   const mapIssues = report.fieldMap.issues;
 
+  const totalProducts = report.sheet.productsParsed || report.sheet.totalRows || 0;
+  const postableCount = headline.value ?? 0;
+  const postableRate = totalProducts > 0 ? Math.round((postableCount / totalProducts) * 100) : 0;
+
   return (
-    <Stack direction="vertical" gap={4}>
-      {/* --- The number ------------------------------------------------- */}
-      <Section variant="muted" padding={5}>
-        <Stack direction="vertical" gap={2}>
-          {/* Eyebrow (DESIGN.md signature): a woven label, not a heading. */}
-          <Text type="label" color="secondary">
-            ĐĂNG ĐƯỢC NGAY
-          </Text>
+    <div className="flex flex-col gap-6">
+      {/* 1. Hero Stat Headline Card */}
+      <div className="relative overflow-hidden rounded-xl border border-border/80 bg-card p-6 shadow-xs">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-mono text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+              BÁO CÁO TƯƠNG THÍCH DỮ LIỆU
+            </p>
+            {headline.value !== null && (
+              <span
+                className={`rounded-full px-2.5 py-0.5 font-mono text-xs font-medium ${
+                  postableRate >= 80
+                    ? "bg-leaf/20 text-leaf-deep"
+                    : postableRate >= 40
+                      ? "bg-turmeric/20 text-turmeric-deep"
+                      : "bg-madder/20 text-madder"
+                }`}
+              >
+                Tỷ lệ sẵn sàng: {postableRate}%
+              </span>
+            )}
+          </div>
 
-          {headline.value === null ? (
-            <Text type="large">Chưa tính được</Text>
-          ) : (
-            <HStack gap={2} align="end" wrap="wrap">
-              <Text type="display-1" hasTabularNumbers>
-                {String(headline.value)}
-              </Text>
-              <Text type="supporting">
-                trên {String(report.sheet.productsParsed)} mã đọc được từ bảng tính
-              </Text>
-            </HStack>
-          )}
+          <div className="flex flex-wrap items-baseline gap-3">
+            {headline.value === null ? (
+              <span className="text-2xl font-semibold text-muted-foreground">
+                Chưa tính được số mã
+              </span>
+            ) : (
+              <>
+                <span className="font-mono text-4xl font-bold tracking-tight text-foreground md:text-5xl tabular-nums">
+                  {headline.value.toLocaleString("vi-VN")}
+                </span>
+                <span className="text-base text-muted-foreground">
+                  mã hợp lệ sẵn sàng đăng ngay trên{" "}
+                  <strong className="font-mono text-foreground font-semibold">
+                    {report.sheet.productsParsed.toLocaleString("vi-VN")}
+                  </strong>{" "}
+                  mã đọc được từ bảng tính
+                </span>
+              </>
+            )}
+          </div>
 
-          <Text type="supporting">
+          <p className="text-xs leading-relaxed text-muted-foreground max-w-2xl">
             {headline.unavailableReason ??
               (headline.stockCheckSkipped
-                ? "Số mã có đủ dòng dữ liệu và có ảnh trên Drive. Đơn vị này tắt kiểm tồn nên số tồn KHÔNG được xét — con số này lạc quan hơn thực tế. Bảng dưới nói rõ các mã còn lại rơi ở đâu."
-                : "Số mã có đủ dòng dữ liệu, có ảnh trên Drive và qua được kiểm tồn. Bảng dưới nói rõ các mã còn lại rơi ở đâu.")}
-          </Text>
-        </Stack>
-      </Section>
+                ? "Số mã có đủ dữ liệu trên bảng và tìm thấy ảnh trên Drive. Bạn đang tắt kiểm tồn nên số lượng tồn chưa được trừ — kết quả này có thể cao hơn thực tế."
+                : "Số mã có đầy đủ tên, mã sản phẩm, vượt qua kiểm tra tồn kho và đã tìm thấy ảnh tương ứng trên Google Drive.")}
+          </p>
+        </div>
+      </div>
 
-      {/* The number is optimistic by construction when nobody checked stock —
-          said here, next to the number, not only on the catalog screen. */}
       {headline.stockCheckSkipped ? <StockCheckSkippedBanner reason={null} /> : null}
 
-      {/* --- Where the rest went ---------------------------------------- */}
-      <Stack direction="vertical" gap={2}>
-        <Heading level={subHeadingLevel}>Vì sao chỉ ngần này</Heading>
-        <Stack direction="vertical">
-          {stages.map((stage, index) => (
-            <Fragment key={stage.key}>
-              {index > 0 ? <Divider /> : null}
-              <Item
-                align="start"
-                density="compact"
-                label={stage.label}
-                description={stage.loss ?? "Không mất mã nào ở bước này."}
-                endContent={
-                  <Text type="large" hasTabularNumbers>
-                    {String(stage.value)}
-                  </Text>
-                }
-              />
-            </Fragment>
-          ))}
-        </Stack>
-      </Stack>
+      {/* 2. Visual Pipeline / Funnel */}
+      <div className="flex flex-col gap-3 rounded-xl border border-border/80 bg-card p-5 shadow-xs">
+        <div className="flex items-center justify-between border-b border-border/60 pb-3">
+          <div className="flex items-center gap-2">
+            <TrendingDown className="size-4 text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">
+              Quy trình lọc dữ liệu (Vì sao chỉ ngần này mã)
+            </h3>
+          </div>
+          <span className="text-xs text-muted-foreground">Phân tích từng giai đoạn</span>
+        </div>
 
-      {/* --- Caveats about the report itself ----------------------------- */}
-      {report.warnings.length > 0 ? (
-        <Banner
-          status="warning"
-          title="Báo cáo này có điểm cần lưu ý"
-          description="Các con số ở trên vẫn dùng được, nhưng phải đọc kèm những dòng sau."
-          defaultIsExpanded
-        >
-          <Stack direction="vertical" gap={1} padding={3}>
-            {report.warnings.map((warning) => (
-              <Text key={warning} type="supporting">
-                {warning}
-              </Text>
+        <div className="flex flex-col divide-y divide-border/60">
+          {stages.map((stage, idx) => (
+            <div key={stage.key} className="flex flex-col gap-1.5 py-3 first:pt-1 last:pb-1">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex size-5 items-center justify-center rounded-full bg-muted font-mono text-[10px] font-semibold text-muted-foreground">
+                    {idx + 1}
+                  </span>
+                  <span className="text-sm font-medium text-foreground">{stage.label}</span>
+                </div>
+                <span className="font-mono text-base font-semibold text-foreground tabular-nums">
+                  {stage.value.toLocaleString("vi-VN")}
+                </span>
+              </div>
+
+              {stage.loss ? (
+                <div className="flex items-center gap-1.5 pl-7 text-xs text-turmeric-deep">
+                  <ArrowDownRight className="size-3.5 shrink-0" />
+                  <span>{stage.loss}</span>
+                </div>
+              ) : (
+                <p className="pl-7 text-xs text-muted-foreground">
+                  Không bị mất mã nào ở giai đoạn này.
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 3. Mapping Issues (if any) */}
+      {mapIssues.length > 0 && (
+        <div className="flex flex-col gap-3 rounded-xl border border-madder/30 bg-madder/10 p-5">
+          <div className="flex items-center gap-2 text-madder font-semibold text-sm">
+            <AlertTriangle className="size-4" />
+            <span>Cần kiểm tra lại ánh xạ cột</span>
+          </div>
+          <div className="flex flex-col gap-2">
+            {mapIssues.map((issue) => (
+              <div
+                key={`${issue.code}-${issue.column ?? issue.fields.join(",")}`}
+                className="flex flex-col gap-0.5 rounded-lg border border-madder/20 bg-card p-3"
+              >
+                <span className="text-xs font-semibold text-foreground">
+                  {issue.fields.map((field) => CATALOG_FIELD_LABELS[field]).join(" · ")}
+                </span>
+                <p className="text-xs text-muted-foreground">{issue.detail}</p>
+              </div>
             ))}
-          </Stack>
-        </Banner>
-      ) : null}
+          </div>
+        </div>
+      )}
 
-      {/* --- Problems with the mapping itself ---------------------------- */}
-      {mapIssues.length > 0 ? (
-        <Stack direction="vertical" gap={2}>
-          <Heading level={subHeadingLevel}>Ánh xạ cột đang có vấn đề</Heading>
-          {mapIssues.map((issue) => (
-            <Banner
-              key={`${issue.code}-${issue.column ?? issue.fields.join(",")}`}
-              status={issue.severity === "error" ? "error" : "warning"}
-              title={issue.fields.map((field) => CATALOG_FIELD_LABELS[field]).join(" · ")}
-              description={issue.detail}
-            />
-          ))}
-        </Stack>
-      ) : null}
+      {/* 4. Top Issues To Fix */}
+      <div className="flex flex-col gap-3 rounded-xl border border-border/80 bg-card p-5 shadow-xs">
+        <div className="flex items-center justify-between border-b border-border/60 pb-3">
+          <h3 className="text-sm font-semibold text-foreground">Những việc cần xử lý nhất</h3>
+          <span className="font-mono text-xs text-muted-foreground">
+            {report.topIssues.length} nhóm vấn đề
+          </span>
+        </div>
 
-      {/* --- The operator's to-do list ----------------------------------- */}
-      <Stack direction="vertical" gap={2}>
-        <Heading level={subHeadingLevel}>Việc cần sửa nhiều nhất</Heading>
         {report.topIssues.length === 0 ? (
-          <Text type="supporting">
-            Không có nhóm lỗi nào nổi bật. Phần mã chưa đăng được (nếu có) nằm ở các bước trong
-            bảng trên, không phải do dữ liệu sai chuẩn.
-          </Text>
+          <div className="flex items-center gap-2 py-4 text-xs text-leaf-deep">
+            <CheckCircle2 className="size-4" />
+            <span>Dữ liệu rất chuẩn! Không có lỗi nào đáng kể làm gián đoạn việc đăng bài.</span>
+          </div>
         ) : (
-          <Stack direction="vertical">
-            {report.topIssues.map((issue, index) => (
-              <Fragment key={issue.reason}>
-                {index > 0 ? <Divider /> : null}
-                <Item
-                  align="start"
-                  density="compact"
-                  label={issue.detail}
-                  description={
-                    issue.examples.length > 0
-                      ? `Ví dụ: ${issue.examples.join(" · ")}${
-                          issue.count > issue.examples.length ? " …" : ""
-                        }`
-                      : undefined
-                  }
-                  // The COUNT is the real number of occurrences; `examples` is
-                  // capped at three, so the two must not be read as one.
-                  endContent={<Badge variant="neutral" label={String(issue.count)} />}
-                />
-              </Fragment>
+          <div className="flex flex-col divide-y divide-border/60">
+            {report.topIssues.map((issue) => (
+              <div key={issue.reason} className="flex flex-col gap-1 py-3 first:pt-1 last:pb-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-foreground">{issue.detail}</span>
+                  <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-xs font-semibold text-muted-foreground tabular-nums">
+                    {issue.count} mã
+                  </span>
+                </div>
+                {issue.examples.length > 0 && (
+                  <p className="font-mono text-[11px] text-muted-foreground">
+                    Ví dụ các mã gặp lỗi: {issue.examples.join(", ")}
+                    {issue.count > issue.examples.length ? " …" : ""}
+                  </p>
+                )}
+              </div>
             ))}
-          </Stack>
+          </div>
         )}
-      </Stack>
+      </div>
 
-      <Divider />
+      {/* 5. Sheet & Column Inventory Facts */}
+      <div className="flex flex-col gap-3 rounded-xl border border-border/80 bg-card p-5 shadow-xs">
+        <div className="flex items-center justify-between border-b border-border/60 pb-3">
+          <div className="flex items-center gap-2">
+            <FileSpreadsheet className="size-4 text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">
+              Thông tin bảng tính đã quét
+            </h3>
+          </div>
+          <span className="font-mono text-xs text-muted-foreground">
+            Tab “{report.sheetName}”
+          </span>
+        </div>
 
-      {/* --- The raw facts, for whoever asks ----------------------------- */}
-      <Stack direction="vertical" gap={2}>
-        <Heading level={subHeadingLevel}>Hệ thống đọc được gì</Heading>
-        <Text type="supporting">
-          Tab “{report.sheetName}” · {String(report.sheet.columns.length)} cột ·{" "}
-          {String(report.sheet.totalRows)} dòng.
-          {report.media
-            ? ` Thư mục ảnh: đọc ${String(report.media.sampled)} file${
-                report.media.capped ? " đầu tiên (lấy mẫu)" : ""
-              }, lấy được mã từ tên file ${formatPercent(report.media.parseRate)}.`
-            : " Chưa đối chiếu được thư mục ảnh."}
-        </Text>
+        <div className="flex flex-col gap-2.5 text-xs text-muted-foreground">
+          <p>
+            Đã đọc{" "}
+            <strong className="font-mono text-foreground font-semibold">
+              {report.sheet.columns.length} cột
+            </strong>{" "}
+            và{" "}
+            <strong className="font-mono text-foreground font-semibold">
+              {report.sheet.totalRows.toLocaleString("vi-VN")} dòng
+            </strong>
+            .
+            {report.media
+              ? ` Thư mục ảnh Drive: quét ${report.media.sampled} file${
+                  report.media.capped ? " (lấy mẫu)" : ""
+                }, tỷ lệ đọc được mã từ file đạt ${formatPercent(report.media.parseRate)}.`
+              : " Chưa liên kết thư mục ảnh Drive."}
+          </p>
 
-        <HStack gap={1} wrap="wrap">
-          {report.sheet.columns.map((column) => (
-            <Badge key={column} variant="neutral" label={column} />
-          ))}
-        </HStack>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {report.sheet.columns.map((column) => (
+              <span
+                key={column}
+                className="rounded-md border border-border/80 bg-muted/40 px-2 py-1 font-mono text-[11px] text-foreground"
+              >
+                {column}
+              </span>
+            ))}
+          </div>
 
-        {report.fieldMap.priceLikeColumns.length > 0 ? (
-          <Text type="supporting">
-            Cột trông như cột giá và KHÔNG được đọc: {report.fieldMap.priceLikeColumns.join(", ")}.
-            Giá không bao giờ đi vào caption.
-          </Text>
-        ) : null}
+          {report.fieldMap.priceLikeColumns.length > 0 && (
+            <p className="text-[11px] text-turmeric-deep pt-1">
+              * Cột trông như giá và không đưa vào caption:{" "}
+              {report.fieldMap.priceLikeColumns.join(", ")}
+            </p>
+          )}
 
-        {report.sheet.conflictingCodes.length > 0 ? (
-          <Text type="supporting">
-            {String(report.sheet.conflictingCodes.length)} mã có hai dòng mang dữ liệu khác nhau
-            nên bị chặn: {report.sheet.conflictingCodes.slice(0, 5).join(", ")}
-            {report.sheet.conflictingCodes.length > 5 ? "…" : ""}
-          </Text>
-        ) : null}
-      </Stack>
-    </Stack>
+          {report.sheet.conflictingCodes.length > 0 && (
+            <p className="text-[11px] text-madder pt-1">
+              * Có {report.sheet.conflictingCodes.length} mã bị trùng lặp mang dữ liệu mâu thuẫn:{" "}
+              {report.sheet.conflictingCodes.slice(0, 5).join(", ")}
+              {report.sheet.conflictingCodes.length > 5 ? "…" : ""}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

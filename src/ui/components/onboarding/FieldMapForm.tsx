@@ -3,10 +3,9 @@
 import {
   Banner,
   Button,
-  Divider,
+  CheckboxInput,
   HStack,
   Heading,
-  CheckboxInput,
   RadioList,
   RadioListItem,
   Selector,
@@ -16,6 +15,21 @@ import {
   TextInput,
 } from "@astryxdesign/core";
 import { useEffect, useMemo, useState } from "react";
+import {
+  CheckCircle2,
+  AlertCircle,
+  Sparkles,
+  RotateCcw,
+  SlidersHorizontal,
+  Layers,
+  Image as ImageIcon,
+  Boxes,
+  Eye,
+  ArrowRight,
+  ArrowLeft,
+  Save,
+  HelpCircle,
+} from "lucide-react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { ReadOnlyNotice } from "@/ui/components/feedback/ReadOnlyNotice";
@@ -54,34 +68,15 @@ import {
   STOCK_POLICY_LABELS,
   STOCK_POLICY_MODES,
   confidenceBand,
+  type CatalogField,
   type CatalogFieldMap,
   type CatalogProfileReport,
+  type FieldSuggestion,
   type MediaProfileConfig,
   type StockPolicy,
   type StockPolicyMode,
 } from "@/ui/schemas/catalog-mapping.schema";
 
-/**
- * Step 3 — "Ánh xạ cột, kiểm tồn & nguồn ảnh": which column of THIS customer's
- * sheet holds which logical field, how the stock cell is read, and where their
- * photos live.
- *
- * Three parts, one save, because they are one decision: a `stock` column with no
- * policy is unreadable, a policy with no column is unusable, and the photo
- * layout is stored half inside the map itself (`fieldMap.mediaLink`), so a
- * separate step would have to send a half-map — the "mỗi bước một form riêng"
- * that core-wizard names as the source of lost data.
- *
- * The half that matters most is the smallest one. `disabled` suspends CLAUDE.md
- * business rule 3 for the whole tenant, so it is deliberately the hardest branch
- * to submit: it demands a written reason, it shows the red banner the operator
- * will meet again on every screen that displays stock, and the save button
- * refuses to fire without both.
- *
- * Nothing here decides anything about the data: the map is validated again by
- * `validateFieldMap` in the domain, and the numbers under "Xem lại số" come from
- * a real dry-run of the customer's spreadsheet, not from anything computed here.
- */
 export function FieldMapForm({
   report,
   storedFieldMap,
@@ -92,61 +87,35 @@ export function FieldMapForm({
   readOnlyReason,
   onDirtyChange,
   onSave,
+  onBack,
+  onNext,
 }: {
-  /** The baseline report: the tenant's real columns and the suggestion for each. */
   report: CatalogProfileReport;
-  /**
-   * What the tenant DECLARED, straight from `tenant_integration` — or null when
-   * it never declared anything and is running on the MYSP preset.
-   *
-   * `null` and "a map that happens to equal the preset" are different answers
-   * and this form renders them differently: null pre-fills from the suggestion
-   * and warns that saving overwrites, a value is restored as-is and warns about
-   * nothing, because nothing is being guessed.
-   */
   storedFieldMap: CatalogFieldMap | null;
   storedStockPolicy: StockPolicy | null;
-  /**
-   * Where this tenant's photos live, as DECLARED — null when nobody declared
-   * anything and the built-in `MÃ-Màu (số)` convention is what runs.
-   *
-   * Today the server never sends it (see `CatalogSourceSchema.mediaProfile`), so
-   * this is null for everybody and the form offers the report's recommendation.
-   * The moment `toCatalogSourceView` puts the key on the wire, the declared kind
-   * is restored here with no change on this side.
-   */
   storedMediaProfile: MediaProfileConfig | null;
   isSaving: boolean;
   saveError: unknown;
-  /** Set while the app is read-only (support mode, M3.3). */
   readOnlyReason: string | null;
-  /** Lets the screen guard navigation while there is unsaved work. */
   onDirtyChange: (isDirty: boolean) => void;
   onSave: (payload: {
     fieldMap: CatalogFieldMap;
     stockPolicy: StockPolicy;
     mediaProfile: MediaProfileConfig;
   }) => void;
+  onBack?: () => void;
+  onNext?: () => void;
 }) {
   const columns = report.sheet.columns;
   const suggestions = report.fieldMap.fields;
-  /** The one fact that decides the wording of this whole step. */
   const hasStoredMap = storedFieldMap !== null;
 
-  // The stored map wins; the suggestion is the fallback for a tenant that never
-  // declared one (`report.fieldMap.fieldMap` IS that suggestion in that case,
-  // because the route only forwards a stored map when there is one).
   const [values, setValues] = useState<CatalogFieldMap>(
     () => storedFieldMap ?? report.fieldMap.fieldMap,
   );
   const [stockForm, setStockForm] = useState<StockPolicyFormState>(() =>
     stockPolicyFormFromStored(storedStockPolicy),
   );
-  /**
-   * The photo half. `storedFieldMap?.mediaLink` and not `values.mediaLink`: the
-   * initialiser must read what is STORED, and `values` may already be the
-   * report's suggestion for a tenant who declared nothing.
-   */
   const [mediaForm, setMediaForm] = useState<MediaProfileFormState>(() =>
     mediaProfileFormFromStored(
       storedMediaProfile,
@@ -154,56 +123,27 @@ export function FieldMapForm({
       report.mediaProfileSuggestion,
     ),
   );
+
+  const [activeTab, setActiveTab] = useState<"mapping" | "stock" | "media">("mapping");
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
   const isReadOnly = readOnlyReason !== null;
-  /** No header row = nothing to map, and nothing to validate a map against. */
   const hasColumns = columns.length > 0;
   const preview = useProfilePreview();
 
   const mapIssues = useMemo(() => validateFieldMapValues(values, columns), [values, columns]);
-  /*
-   * Two halves, two lifecycles.
-   *
-   * `blockers` stop the save and are only shown once the operator has pressed it
-   * — painting eight fields red before anybody typed is how a form teaches
-   * people to ignore red.
-   *
-   * `warnings` are the opposite: a price-looking column mapped onto a caption
-   * field has to be said AT THE MOMENT it is picked, because the whole point is
-   * to catch it before it is stored (business rule 2). It never blocks — the
-   * match is a guess about a header, and a real "Giá trị sử dụng" column must
-   * stay mappable.
-   */
   const blockers = useMemo(() => blockingIssues(mapIssues), [mapIssues]);
   const warnings = useMemo(() => warningIssues(mapIssues), [mapIssues]);
 
-  /*
-   * THE PRICE GATE (business rule 2, PM decision 24/08/2026).
-   *
-   * A yellow line was not enough. Rule 2 is a hard rule and a price in a public
-   * caption is damage that cannot be taken back, so pointing a caption field at
-   * a money-looking column now costs a deliberate tick before this form will
-   * save. It is a speed bump, not a wall: the match is a guess about a HEADER,
-   * and a tenant with a real "Giá trị sử dụng" column must still be able to map
-   * it — which is why the domain was left alone and this lives here.
-   *
-   * The tick is stored as the KEY of what was confirmed, never as a boolean.
-   * A boolean would keep vouching after the operator repointed the same field at
-   * a different money column — they confirmed one column, not the checkbox.
-   */
   const priceAssignments = useMemo(() => priceLikeCaptionAssignments(values), [values]);
   const priceKey = useMemo(() => priceConfirmationKey(priceAssignments), [priceAssignments]);
   const [confirmedPriceKey, setConfirmedPriceKey] = useState<string | null>(null);
   const isPriceConfirmed = priceAssignments.length === 0 || confirmedPriceKey === priceKey;
+
   const stockResult = useMemo(() => toStockPolicy(stockForm), [stockForm]);
   const stockIssues = stockResult.ok ? [] : stockResult.issues;
-  /*
-   * The media half validates against the map being EDITED, not the stored one:
-   * "cột link cũng đang nuôi caption" has to react the moment somebody points a
-   * caption field at it, not at the next reload.
-   */
+
   const mediaIssues = useMemo(
     () => validateMediaProfileForm(mediaForm, columns, values),
     [mediaForm, columns, values],
@@ -214,12 +154,6 @@ export function FieldMapForm({
     onDirtyChange(isDirty);
   }, [isDirty, onDirtyChange]);
 
-  /**
-   * Closing the tab or reloading with unsaved changes. In-app navigation is
-   * guarded by the screen (it owns the step rail) — two mechanisms, because
-   * `beforeunload` does not fire for a client-side route change
-   * (web-form-architecture rule 8).
-   */
   useEffect(() => {
     if (!isDirty || isSaving) return;
     const handler = (event: BeforeUnloadEvent) => {
@@ -248,15 +182,30 @@ export function FieldMapForm({
     setMediaForm((current) => ({ ...current, ...patch }));
   }
 
-  /**
-   * The one payload both buttons send.
-   *
-   * `mediaLink` is merged in here rather than kept in `values`: the column map
-   * on screen is about caption/stock fields, and the link column belongs to the
-   * photo question. It is sent whatever the chosen layout is — dropping it when
-   * the layout does not read it would delete the only thing that lets the next
-   * report SCORE the `sheet-column` option.
-   */
+  function autoApplySuggestions() {
+    setIsDirty(true);
+    const updated = { ...values };
+    for (const entry of suggestions) {
+      if (entry.column && columns.includes(entry.column)) {
+        updated[entry.field] = entry.column;
+      }
+    }
+    setValues(updated);
+  }
+
+  function resetToStored() {
+    setIsDirty(false);
+    setValues(storedFieldMap ?? report.fieldMap.fieldMap);
+    setStockForm(stockPolicyFormFromStored(storedStockPolicy));
+    setMediaForm(
+      mediaProfileFormFromStored(
+        storedMediaProfile,
+        storedFieldMap?.mediaLink ?? null,
+        report.mediaProfileSuggestion,
+      ),
+    );
+  }
+
   function buildPayload(policy: StockPolicy) {
     return {
       fieldMap: { ...values, mediaLink: mediaForm.mediaLinkColumn },
@@ -268,8 +217,6 @@ export function FieldMapForm({
   function runPreview() {
     setHasSubmitted(true);
     if (!hasColumns) return;
-    // A preview with a broken map would report "0 mã đọc được" and read as a
-    // verdict on the customer's data instead of on the form.
     if (blockers.length > 0 || mediaBlockers.length > 0 || !stockResult.ok) return;
     preview.mutate(buildPayload(stockResult.policy));
   }
@@ -278,9 +225,6 @@ export function FieldMapForm({
     setHasSubmitted(true);
     if (!hasColumns) return;
     if (blockers.length > 0 || mediaBlockers.length > 0 || !stockResult.ok) return;
-    // The tick is checked HERE too, not only on the button: a disabled button is
-    // a hint, and this is the last line before a price column becomes the map
-    // every future sync reads.
     if (!isPriceConfirmed) return;
     onSave(buildPayload(stockResult.policy));
     setIsDirty(false);
@@ -289,325 +233,544 @@ export function FieldMapForm({
   const showIssues = hasSubmitted;
   const previewReport = preview.data?.state === "profiled" ? preview.data.report : null;
 
-  return (
-    <Stack direction="vertical" gap={5}>
-      {/*
-        Two different situations, two different sentences — and the difference is
-        whether anything on this screen is a GUESS.
+  // Stats calculation
+  const mappedCount = CATALOG_FIELDS.filter((f) => Boolean(values[f])).length;
+  const requiredMapped = Boolean(values.code) && Boolean(values.name);
 
-        Declared: the boxes hold what this tenant chose, so there is nothing to
-        warn about and the line is a quiet fact. Never declared: the boxes hold
-        the system's guess from the header row, and saving turns a guess into the
-        thing every sync reads — which the operator has to be told BEFORE they
-        press it, not after (business rule 5).
-      */}
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Top Banner Status */}
       {hasStoredMap ? (
-        <Text type="supporting">
-          Đang hiển thị ánh xạ đơn vị này đã lưu. Sửa ô nào thì chỉ ô đó đổi; bấm “Lưu ánh xạ” mới
-          ghi lại.
-        </Text>
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border/80 bg-card p-3.5 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="size-4 text-leaf-deep shrink-0" />
+            <span className="text-sm font-medium text-foreground">
+              Đang hiển thị cấu hình ánh xạ đã lưu của đơn vị này.
+            </span>
+          </div>
+          <span className="font-mono text-xs text-muted-foreground tabular-nums">
+            {mappedCount}/8 trường đã gán
+          </span>
+        </div>
       ) : (
         <Banner
           status="info"
-          title="Đơn vị này chưa khai ánh xạ — các ô dưới là gợi ý tự động"
-          description="Hệ thống đoán từ tên cột trên bảng tính của bạn và đang chạy theo mẫu mặc định. Kiểm tra từng dòng rồi bấm Lưu để chốt — từ lúc đó mọi lần đồng bộ đọc theo ánh xạ này."
+          title="Đơn vị chưa lưu ánh xạ — hệ thống đã tự động gợi ý theo tên cột"
+          description="Kiểm tra các cột đã chọn bên dưới, điều chỉnh nếu cần rồi bấm “Lưu ánh xạ”. Hệ thống sẽ ghi nhớ vĩnh viễn cho mọi lần đồng bộ sau."
         />
       )}
 
       <ReadOnlyNotice reason={readOnlyReason} />
 
-      {/*
-        Summary at the TOP of the form, not only inline on each field
-        (core-form-architecture §tóm tắt lỗi đầu form): with eight dropdowns the
-        broken one can be a screen away, and a save that "did nothing" with the
-        reason below the fold is a save the operator will try three more times.
-        `role="alert"` so it is announced, not just drawn.
-      */}
+      {/* Errors on Submit */}
       {showIssues && blockers.length + mediaBlockers.length > 0 ? (
         <Banner
           status="error"
-          title={`Chưa lưu được: ${blockers.length + mediaBlockers.length} ô cần sửa`}
-          description="Mỗi ô bên dưới có ghi rõ vấn đề của nó. Sửa xong bấm “Lưu ánh xạ” lại."
+          title={`Chưa thể lưu: Cần sửa ${blockers.length + mediaBlockers.length} mục bên dưới`}
+          description="Vui lòng kiểm tra các ô có đánh dấu lỗi màu đỏ để hoàn tất."
           role="alert"
         />
       ) : null}
 
-      {/*
-        Not gated on submit, and deliberately louder than the inline note under
-        the field: this is the last screen before a price column can reach a
-        public caption (business rule 2). Saving is still allowed — the match is
-        a guess about a header, not a verdict — so the wording asks rather than
-        refuses.
-      */}
+      {/* Price Safety Warning Gate */}
       {warnings.length > 0 ? (
-        <Banner
-          status="warning"
-          title="Có cột trông như cột GIÁ đang được gán vào caption"
-          description={warnings.map((issue) => issue.message).join(" ")}
-          // Expanded: the confirmation below is the point of the banner, and a
-          // gate hidden behind a toggle is a gate nobody meets.
-          defaultIsExpanded
-        >
-          {/*
-            The speed bump. Not a second warning — a control the operator has to
-            touch, naming the columns they are vouching for so the sentence is
-            about THEIR data and not about a rule in the abstract.
-          */}
-          <CheckboxInput
-            label="Tôi đã kiểm tra: các cột trên không chứa giá tiền"
-            description={`Xác nhận cho: ${priceAssignments
-              .map((entry) => `“${entry.column}” → ${CATALOG_FIELD_LABELS[entry.field]}`)
-              .join(" · ")}. Nội dung các cột này sẽ đi thẳng vào caption và hiện ra với khách.`}
-            value={isPriceConfirmed}
-            isDisabled={isReadOnly || isSaving}
-            disabledMessage={readOnlyReason ?? undefined}
-            // Ticking stores WHAT was confirmed; unticking forgets it. Repointing
-            // a field at another money column changes the key and asks again.
-            onChange={(checked) => setConfirmedPriceKey(checked ? priceKey : null)}
-          />
-        </Banner>
+        <div className="rounded-lg border border-turmeric/50 bg-turmeric/10 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 size-5 text-turmeric-deep shrink-0" />
+            <div className="flex flex-col gap-2">
+              <h4 className="text-sm font-semibold text-turmeric-deep">
+                Phát hiện cột có vẻ là GIÁ TIỀN đang gán vào trường Caption
+              </h4>
+              <p className="text-xs text-foreground/80 leading-relaxed">
+                {warnings.map((issue) => issue.message).join(" ")}
+              </p>
+              <div className="mt-1">
+                <CheckboxInput
+                  label="Tôi xác nhận các cột này KHÔNG chứa giá bán / giá buôn bí mật"
+                  description={`Xác nhận cho: ${priceAssignments
+                    .map((entry) => `“${entry.column}” → ${CATALOG_FIELD_LABELS[entry.field]}`)
+                    .join(" · ")}. Nội dung sẽ hiện công khai trong bài đăng.`}
+                  value={isPriceConfirmed}
+                  isDisabled={isReadOnly || isSaving}
+                  disabledMessage={readOnlyReason ?? undefined}
+                  onChange={(checked) => setConfirmedPriceKey(checked ? priceKey : null)}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
       ) : null}
 
-      {/* --- Columns ------------------------------------------------------ */}
-      <Stack direction="vertical" gap={3}>
-        <Stack direction="vertical" gap={1}>
-          <Heading level={3}>Cột nào của bạn là gì</Heading>
-          <Text type="supporting">
-            Chỉ những cột bạn chọn ở đây mới được đọc. Cột không chọn là vô hình với hệ thống — đó
-            cũng là cách giá và ghi chú nội bộ không bao giờ lọt vào caption.
-          </Text>
-        </Stack>
+      {/* Navigation Tabs Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+        <div className="flex items-center gap-1.5 rounded-lg border border-border/80 bg-muted/30 p-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab("mapping")}
+            className={`flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-medium transition-all ${
+              activeTab === "mapping"
+                ? "bg-card text-foreground shadow-xs font-semibold"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Layers className="size-3.5" />
+            <span>1. Ánh xạ cột</span>
+            <span
+              className={`rounded-full px-1.5 py-0.2 font-mono text-[10px] ${
+                requiredMapped
+                  ? "bg-leaf/15 text-leaf-deep"
+                  : "bg-madder/15 text-madder"
+              }`}
+            >
+              {mappedCount}/8
+            </span>
+          </button>
 
-        {columns.length === 0 ? (
-          <Banner
-            status="error"
-            title="Chưa đọc được dòng tiêu đề của bảng tính"
-            description="Không có cột nào để chọn. Kiểm tra lại tên tab và quyền chia sẻ ở bước “Nguồn dữ liệu”, rồi chạy lại báo cáo."
-          />
-        ) : (
-          CATALOG_FIELDS.map((field) => {
-            const suggestion = suggestions.find((entry) => entry.field === field);
-            const band = suggestion ? confidenceBand(suggestion) : "none";
-            // A blocker only after a press; a warning the moment it is true.
-            const issue =
-              (showIssues ? issueForField(blockers, field) : null) ??
-              issueForField(warnings, field);
-            const goesIntoCaption = CATALOG_CONTENT_FIELDS.includes(field);
+          <button
+            type="button"
+            onClick={() => setActiveTab("stock")}
+            className={`flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-medium transition-all ${
+              activeTab === "stock"
+                ? "bg-card text-foreground shadow-xs font-semibold"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Boxes className="size-3.5" />
+            <span>2. Quy tắc tồn kho</span>
+            <span className="rounded-full bg-muted px-1.5 py-0.2 font-mono text-[10px] text-muted-foreground">
+              {STOCK_POLICY_LABELS[stockForm.mode]}
+            </span>
+          </button>
 
-            return (
-              <Selector
-                key={field}
-                label={CATALOG_FIELD_LABELS[field]}
-                isRequired={isRequiredField(field)}
-                isOptional={!isRequiredField(field)}
-                // One string, on purpose: the hint, whether it reaches a
-                // caption, and how sure the suggestion is are all things the
-                // operator needs BEFORE opening the list — and a colour-only
-                // confidence chip would say none of it (Named Status Rule).
-                //
-                // The confidence line is dropped once a map is STORED: it grades
-                // the system's guess, and printing "Khớp rõ" next to a column a
-                // human chose reads as the system approving their work.
-                description={[
-                  CATALOG_FIELD_HINTS[field],
-                  goesIntoCaption ? "Nội dung cột này sẽ đi vào caption." : null,
-                  hasStoredMap ? null : `Gợi ý: ${CONFIDENCE_LABELS[band]} — ${CONFIDENCE_HINTS[band]}`,
-                ]
-                  .filter((part): part is string => part !== null)
-                  .join(" ")}
-                options={columnOptions(field, columns, values)}
-                value={values[field] ?? UNMAPPED_OPTION_VALUE}
-                onChange={(next) => setField(field, next)}
-                // Named, not left to the library default: a required field with
-                // no stored column shows the placeholder, and "Select…" is the
-                // one string on this screen that would come back in English.
-                placeholder="Chọn cột trên bảng của bạn…"
-                hasSearch={columns.length > 8}
-                searchPlaceholder="Tìm tên cột…"
-                isDisabled={isReadOnly || isSaving}
-                disabledMessage={readOnlyReason ?? undefined}
-                status={
-                  issue ? { type: issue.severity, message: issue.message } : undefined
-                }
-                statusVariant="detached"
-                width="100%"
-              />
-            );
-          })
+          <button
+            type="button"
+            onClick={() => setActiveTab("media")}
+            className={`flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-medium transition-all ${
+              activeTab === "media"
+                ? "bg-card text-foreground shadow-xs font-semibold"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <ImageIcon className="size-3.5" />
+            <span>3. Nguồn ảnh Drive</span>
+          </button>
+        </div>
+
+        {/* Quick Actions */}
+        {activeTab === "mapping" && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              label="Tự động khớp theo gợi ý"
+              onClick={autoApplySuggestions}
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              label="Đặt lại ban đầu"
+              onClick={resetToStored}
+            />
+          </div>
         )}
-      </Stack>
+      </div>
 
-      <Divider />
-
-      {/* --- Stock policy -------------------------------------------------- */}
-      <Stack direction="vertical" gap={3}>
-        <Stack direction="vertical" gap={1}>
-          <Heading level={3}>Đọc ô tồn kho thế nào</Heading>
-          <Text type="supporting">
-            Hệ thống kiểm tồn hai lần cho mỗi bài: lúc soạn và ngay trước khi đăng. Chọn cách đọc
-            đúng với bảng của bạn, nếu không mọi mã sẽ bị chặn oan.
-          </Text>
-        </Stack>
-
-        <RadioList
-          label="Cách đọc ô tồn kho"
-          value={stockForm.mode}
-          onChange={(next) => setStock({ mode: next as StockPolicyMode })}
-          isDisabled={isReadOnly || isSaving}
-          disabledMessage={readOnlyReason ?? undefined}
-        >
-          {STOCK_POLICY_MODES.map((mode) => (
-            <RadioListItem
-              key={mode}
-              value={mode}
-              label={STOCK_POLICY_LABELS[mode]}
-              description={STOCK_POLICY_HINTS[mode]}
-            />
-          ))}
-        </RadioList>
-
-        {stockForm.mode === "textual" ? (
-          <Stack direction="vertical" gap={3}>
-            <TextInput
-              label="Giá trị nghĩa là CÒN hàng"
-              description="Cách nhau bằng dấu phẩy. Không phân biệt hoa thường và dấu."
-              value={stockForm.inStockText}
-              onChange={(next) => setStock({ inStockText: next })}
-              isDisabled={isReadOnly || isSaving}
-              placeholder="còn hàng, còn, sẵn hàng"
-              width="100%"
-            />
-            <TextInput
-              label="Giá trị nghĩa là HẾT hàng"
-              description="Giá trị không nằm trong hai danh sách sẽ bị CHẶN — hệ thống không đoán."
-              value={stockForm.outOfStockText}
-              onChange={(next) => setStock({ outOfStockText: next })}
-              isDisabled={isReadOnly || isSaving}
-              placeholder="hết hàng, hết, ngừng bán"
-              width="100%"
-            />
-          </Stack>
-        ) : null}
-
-        {stockForm.mode === "disabled" ? (
-          <Stack direction="vertical" gap={3}>
-            {/* Red, and shown BEFORE the field, not after the save: the operator
-                has to know what they are turning off while they type the
-                reason for turning it off. */}
+      {/* TAB 1: COLUMN MAPPING */}
+      {activeTab === "mapping" && (
+        <div className="flex flex-col gap-6">
+          {columns.length === 0 ? (
             <Banner
               status="error"
-              title="Chọn mục này là bỏ chốt chặn theo SỐ TỒN"
-              description="Ô tồn trống, bằng 0 hay không phải số sẽ không còn chặn ở bất kỳ bước nào — soạn bài, duyệt, hay lúc đăng. Vẫn chặn như thường: ô Lưu ý ghi “HẾT HÀNG”, và mã có nhiều dòng dữ liệu khác nhau. Mọi màn hình có tồn kho sẽ hiện cảnh báo đỏ kèm lý do bạn ghi dưới đây."
+              title="Chưa đọc được dòng tiêu đề của bảng tính"
+              description="Không có cột nào để chọn. Kiểm tra lại tên tab và quyền chia sẻ ở bước 1 “Nguồn dữ liệu”, rồi chạy lại báo cáo."
             />
-            <TextArea
-              label="Vì sao đơn vị này không cần kiểm tồn kho?"
-              description="Ít nhất 10 ký tự. Lý do được ghi vào nhật ký và hiện cho mọi người vận hành."
-              value={stockForm.disabledReason}
-              onChange={(next) => setStock({ disabledReason: next })}
-              isRequired
-              rows={3}
-              maxLength={500}
-              isDisabled={isReadOnly || isSaving}
-              placeholder="Ví dụ: tồn kho quản lý trên phần mềm bán hàng, bảng này chỉ dùng để đăng bài."
-              width="100%"
-            />
-          </Stack>
-        ) : null}
+          ) : (
+            <div className="flex flex-col gap-6">
+              {/* Group 1: Required Fields */}
+              <div className="flex flex-col gap-3 rounded-lg border-2 border-primary/20 bg-accent/15 p-4 md:p-5">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-sm bg-primary px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-primary-foreground">
+                      BẮT BUỘC
+                    </span>
+                    <h3 className="text-sm font-semibold text-foreground">
+                      Hai trường nhận diện chính của sản phẩm
+                    </h3>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Bắt buộc phải chọn đúng cột trên bảng của bạn — nếu thiếu 1 trong 2 trường này, hệ thống không thể tạo bài đăng.
+                  </p>
+                </div>
 
-        {showIssues && stockIssues.length > 0 ? (
-          <Banner
-            status="error"
-            title="Chưa lưu được phần kiểm tồn"
-            description={stockIssues.join(" ")}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 pt-2">
+                  <FieldCard
+                    field="code"
+                    values={values}
+                    columns={columns}
+                    suggestions={suggestions}
+                    hasStoredMap={hasStoredMap}
+                    showIssues={showIssues}
+                    blockers={blockers}
+                    warnings={warnings}
+                    isReadOnly={isReadOnly}
+                    isSaving={isSaving}
+                    readOnlyReason={readOnlyReason}
+                    onChange={(next) => setField("code", next)}
+                  />
+                  <FieldCard
+                    field="name"
+                    values={values}
+                    columns={columns}
+                    suggestions={suggestions}
+                    hasStoredMap={hasStoredMap}
+                    showIssues={showIssues}
+                    blockers={blockers}
+                    warnings={warnings}
+                    isReadOnly={isReadOnly}
+                    isSaving={isSaving}
+                    readOnlyReason={readOnlyReason}
+                    onChange={(next) => setField("name", next)}
+                  />
+                </div>
+              </div>
+
+              {/* Group 2: Content & Details */}
+              <div className="flex flex-col gap-3 rounded-lg border border-border/80 bg-card p-4 md:p-5">
+                <div className="flex flex-col gap-1">
+                  <span className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    NỘI DUNG BÀI ĐĂNG & TỒN KHO
+                  </span>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    Các trường thông tin bổ trợ (Tùy chọn)
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Nếu bảng tính của bạn có những cột này, hãy chọn tương ứng để bài đăng có đầy đủ mô tả, màu sắc và kiểm tra tồn kho.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 pt-2">
+                  {(["stock", "description", "category", "season", "colors", "note"] as const).map(
+                    (field) => (
+                      <FieldCard
+                        key={field}
+                        field={field}
+                        values={values}
+                        columns={columns}
+                        suggestions={suggestions}
+                        hasStoredMap={hasStoredMap}
+                        showIssues={showIssues}
+                        blockers={blockers}
+                        warnings={warnings}
+                        isReadOnly={isReadOnly}
+                        isSaving={isSaving}
+                        readOnlyReason={readOnlyReason}
+                        onChange={(next) => setField(field, next)}
+                      />
+                    ),
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: STOCK POLICY */}
+      {activeTab === "stock" && (
+        <div className="flex flex-col gap-5 rounded-lg border border-border/80 bg-card p-4 md:p-6">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold text-foreground">Cách đọc ô tồn kho</h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Hệ thống kiểm tồn hai lần cho mỗi bài: lúc soạn bài và ngay trước khi đăng. Hãy chọn cách đọc đúng với bảng tính của bạn để tránh bài bị chặn nhầm.
+            </p>
+          </div>
+
+          <RadioList
+            label="Chọn chế độ kiểm tra tồn kho"
+            value={stockForm.mode}
+            onChange={(next) => setStock({ mode: next as StockPolicyMode })}
+            isDisabled={isReadOnly || isSaving}
+            disabledMessage={readOnlyReason ?? undefined}
+          >
+            {STOCK_POLICY_MODES.map((mode) => (
+              <RadioListItem
+                key={mode}
+                value={mode}
+                label={STOCK_POLICY_LABELS[mode]}
+                description={STOCK_POLICY_HINTS[mode]}
+              />
+            ))}
+          </RadioList>
+
+          {stockForm.mode === "textual" && (
+            <div className="flex flex-col gap-4 rounded-lg border border-border/60 bg-muted/20 p-4">
+              <TextInput
+                label="Giá trị nghĩa là CÒN hàng"
+                description="Cách nhau bằng dấu phẩy (không phân biệt hoa thường/dấu)."
+                value={stockForm.inStockText}
+                onChange={(next) => setStock({ inStockText: next })}
+                isDisabled={isReadOnly || isSaving}
+                placeholder="còn hàng, còn, sẵn hàng, sll"
+                width="100%"
+              />
+              <TextInput
+                label="Giá trị nghĩa là HẾT hàng"
+                description="Giá trị không nằm trong hai danh sách sẽ bị CHẶN để an toàn."
+                value={stockForm.outOfStockText}
+                onChange={(next) => setStock({ outOfStockText: next })}
+                isDisabled={isReadOnly || isSaving}
+                placeholder="hết hàng, hết, tạm hết, ngừng bán"
+                width="100%"
+              />
+            </div>
+          )}
+
+          {stockForm.mode === "disabled" && (
+            <div className="flex flex-col gap-3 rounded-lg border border-madder/30 bg-madder/10 p-4">
+              <Banner
+                status="error"
+                title="Cảnh báo: Bỏ chốt chặn theo số tồn kho"
+                description="Ô tồn trống, bằng 0 hay không phải số sẽ KHÔNG chặn bài đăng. Ô Lưu ý “HẾT HÀNG” vẫn sẽ chặn. Bắt buộc nhập lý do bên dưới:"
+              />
+              <TextArea
+                label="Vì sao đơn vị không cần kiểm tồn kho từ bảng tính?"
+                description="Tối thiểu 10 ký tự. Lý do sẽ được lưu lại lịch sử vận hành."
+                value={stockForm.disabledReason}
+                onChange={(next) => setStock({ disabledReason: next })}
+                isRequired
+                rows={3}
+                maxLength={500}
+                isDisabled={isReadOnly || isSaving}
+                placeholder="Ví dụ: Tồn kho quản lý trên phần mềm POS, bảng này chỉ phục vụ marketing đăng bài."
+                width="100%"
+              />
+            </div>
+          )}
+
+          {showIssues && stockIssues.length > 0 ? (
+            <Banner
+              status="error"
+              title="Chưa lưu được phần kiểm tồn"
+              description={stockIssues.join(" ")}
+            />
+          ) : null}
+        </div>
+      )}
+
+      {/* TAB 3: MEDIA SOURCE */}
+      {activeTab === "media" && (
+        <div className="rounded-lg border border-border/80 bg-card p-4 md:p-6">
+          <MediaSourceFields
+            report={report}
+            storedKind={storedMediaProfile?.kind ?? null}
+            state={mediaForm}
+            issues={showIssues ? mediaIssues : mediaIssues.filter((issue) => issue.severity !== "error")}
+            isDisabled={isReadOnly || isSaving}
+            disabledMessage={readOnlyReason ?? undefined}
+            onChange={setMedia}
           />
-        ) : null}
-      </Stack>
+        </div>
+      )}
 
-      <Divider />
+      {/* Sticky Action Footer */}
+      <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card/95 p-4 shadow-lg backdrop-blur-md">
+        <div className="flex items-center gap-3">
+          {onBack && (
+            <Button
+              variant="secondary"
+              label="← Bước trước"
+              onClick={onBack}
+              isDisabled={isSaving}
+            />
+          )}
 
-      {/* --- Media source -------------------------------------------------- */}
-      <MediaSourceFields
-        report={report}
-        storedKind={storedMediaProfile?.kind ?? null}
-        state={mediaForm}
-        // Blockers only after a press, warnings the moment they are true — the
-        // same two lifecycles the column map uses, for the same reason.
-        issues={showIssues ? mediaIssues : mediaIssues.filter((issue) => issue.severity !== "error")}
-        isDisabled={isReadOnly || isSaving}
-        disabledMessage={readOnlyReason ?? undefined}
-        onChange={setMedia}
-      />
+          <div className="flex flex-col">
+            <span className="text-xs font-medium text-foreground">
+              {isSaving
+                ? "Đang lưu ánh xạ..."
+                : isDirty
+                  ? "Có thay đổi chưa lưu"
+                  : "Cấu hình đã sẵn sàng"}
+            </span>
+            <span className="text-[11px] text-muted-foreground font-mono tabular-nums">
+              {mappedCount}/8 trường · {requiredMapped ? "Đủ trường bắt buộc" : "Thiếu trường bắt buộc"}
+            </span>
+          </div>
+        </div>
 
-      <Divider />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            label={preview.isPending ? "Đang chạy thử..." : "Chạy thử kiểm tra số liệu"}
+            isLoading={preview.isPending}
+            isDisabled={preview.isPending || isSaving || !hasColumns}
+            onClick={runPreview}
+          />
 
-      {/* --- Actions ------------------------------------------------------- */}
-      <Stack direction="vertical" gap={2}>
-        <HStack gap={2} wrap="wrap" align="center">
           <Button
             variant="primary"
             label={isSaving ? "Đang lưu…" : "Lưu ánh xạ"}
             isLoading={isSaving}
-            // No header row means nothing was mapped against anything: saving
-            // there would also send the server no column list, and the domain
-            // reads an absent list as "cannot check" — a save that looks
-            // validated and was not.
-            isDisabled={isReadOnly || isSaving || !hasColumns || !isPriceConfirmed}
+            isDisabled={isReadOnly || isSaving || !hasColumns || !isPriceConfirmed || !requiredMapped}
             tooltip={
               readOnlyReason ??
               (!hasColumns
-                ? "Chưa đọc được cột nào trên bảng tính — sửa nguồn dữ liệu rồi chạy lại báo cáo."
-                : !isPriceConfirmed
-                  ? "Tích xác nhận ở khối cảnh báo phía trên trước đã — có cột trông như cột giá đang gán vào caption."
-                  : undefined)
+                ? "Chưa đọc được cột nào từ bảng tính."
+                : !requiredMapped
+                  ? "Cần chọn cột cho Mã sản phẩm và Tên sản phẩm trước."
+                  : !isPriceConfirmed
+                    ? "Vui lòng tích xác nhận cột giá ở cảnh báo phía trên."
+                    : undefined)
             }
             onClick={submit}
           />
-          {/* The whole point of step 3: change the map, see the number move,
-              before committing anything. Read-only, so it stays available in
-              support mode — looking is exactly what support mode is for. */}
-          <Button
-            variant="secondary"
-            label={preview.isPending ? "Đang đọc lại bảng tính…" : "Xem lại số với ánh xạ này"}
-            isLoading={preview.isPending}
-            isDisabled={preview.isPending || isSaving}
-            onClick={runPreview}
-          />
-        </HStack>
 
-        <Text type="supporting" role="status" aria-live="polite">
-          {isSaving
-            ? "Đang lưu ánh xạ cột"
-            : preview.isPending
-              ? "Đang chạy lại báo cáo tương thích"
-              : !isPriceConfirmed
-                ? "Chưa lưu được: cần tích xác nhận cột trông như cột giá ở phía trên."
-                : isDirty
-                  ? "Có thay đổi chưa lưu."
-                  : ""}
-        </Text>
-
-        <Text type="supporting">
-          Lưu ánh xạ KHÔNG chạy đồng bộ. Dữ liệu trong hệ thống vẫn là của lần đồng bộ trước cho
-          tới khi bạn chạy lại ở màn “Đồng bộ dữ liệu”.
-        </Text>
-      </Stack>
+          {onNext && (
+            <Button
+              variant="ghost"
+              label="Sang Báo cáo →"
+              onClick={onNext}
+            />
+          )}
+        </div>
+      </div>
 
       {saveError ? <ApiErrorNotice error={saveError} source="Lưu ánh xạ" /> : null}
       {preview.isError ? (
-        <ApiErrorNotice error={preview.error} onRetry={runPreview} source="Báo cáo thử" />
+        <ApiErrorNotice error={preview.error} onRetry={runPreview} source="Báo cáo thử nghiệm" />
       ) : null}
 
-      {previewReport ? (
-        <Stack direction="vertical" gap={2}>
-          <Divider />
-          <Heading level={3}>Kết quả với ánh xạ đang sửa</Heading>
-          <Text type="supporting">
-            Đây là bản chạy thử — chưa có gì được lưu. Bấm “Lưu ánh xạ” nếu con số này là cái bạn
-            muốn.
-          </Text>
+      {/* Inline Preview Dry Run Results */}
+      {previewReport && (
+        <div className="flex flex-col gap-3 rounded-xl border border-primary/30 bg-accent/10 p-5">
+          <div className="flex items-center justify-between border-b border-border/60 pb-3">
+            <div className="flex items-center gap-2">
+              <Eye className="size-5 text-primary" />
+              <h3 className="text-base font-semibold text-foreground">
+                Kết quả chạy thử với ánh xạ bạn đang chỉnh
+              </h3>
+            </div>
+            <span className="font-mono text-xs text-muted-foreground">
+              Bản xem trước · Chưa ghi đè vào hệ thống
+            </span>
+          </div>
           <CompatibilityReport report={previewReport} headingLevel={3} />
-        </Stack>
-      ) : null}
-    </Stack>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FieldCard({
+  field,
+  values,
+  columns,
+  suggestions,
+  hasStoredMap,
+  showIssues,
+  blockers,
+  warnings,
+  isReadOnly,
+  isSaving,
+  readOnlyReason,
+  onChange,
+}: {
+  field: CatalogField;
+  values: CatalogFieldMap;
+  columns: readonly string[];
+  suggestions: readonly FieldSuggestion[];
+  hasStoredMap: boolean;
+  showIssues: boolean;
+  blockers: readonly { field: CatalogField | null; severity: "error" | "warning"; message: string }[];
+  warnings: readonly { field: CatalogField | null; severity: "error" | "warning"; message: string }[];
+  isReadOnly: boolean;
+  isSaving: boolean;
+  readOnlyReason: string | null;
+  onChange: (next: string | null) => void;
+}) {
+  const suggestion = suggestions.find((entry) => entry.field === field);
+  const band = suggestion ? confidenceBand(suggestion) : "none";
+  const issue =
+    (showIssues ? issueForField(blockers, field) : null) ??
+    issueForField(warnings, field);
+  const isRequired = isRequiredField(field);
+  const goesIntoCaption = CATALOG_CONTENT_FIELDS.includes(field);
+  const currentValue = values[field];
+  const isMapped = Boolean(currentValue);
+
+  return (
+    <div
+      className={`flex flex-col justify-between gap-3 rounded-lg border p-3.5 transition-all ${
+        issue
+          ? "border-madder/50 bg-madder/5"
+          : isMapped
+            ? "border-border/80 bg-card shadow-xs"
+            : "border-dashed border-border/60 bg-muted/10"
+      }`}
+    >
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-semibold text-foreground">
+              {CATALOG_FIELD_LABELS[field]}
+            </span>
+            {isRequired ? (
+              <span className="rounded-xs bg-madder/15 px-1 py-0.2 font-mono text-[10px] font-bold text-madder">
+                BẮT BUỘC
+              </span>
+            ) : (
+              <span className="text-[11px] text-muted-foreground">(Tùy chọn)</span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1">
+            {goesIntoCaption && (
+              <span className="rounded-xs bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                Caption
+              </span>
+            )}
+            {isMapped ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-leaf-deep">
+                <CheckCircle2 className="size-3.5" />
+                Đã gán
+              </span>
+            ) : isRequired ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-madder">
+                <AlertCircle className="size-3.5" />
+                Chưa gán
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          {CATALOG_FIELD_HINTS[field]}
+        </p>
+
+        {!hasStoredMap && suggestion?.column && (
+          <div className="flex items-center gap-1 pt-1 font-mono text-[11px] text-muted-foreground">
+            <Sparkles className="size-3 text-primary" />
+            <span>Gợi ý: Cột “{suggestion.column}” ({CONFIDENCE_LABELS[band]})</span>
+          </div>
+        )}
+      </div>
+
+      <div className="pt-1">
+        <Selector
+          label=""
+          options={columnOptions(field, columns, values)}
+          value={values[field] ?? UNMAPPED_OPTION_VALUE}
+          onChange={onChange}
+          placeholder="Chọn cột trên bảng tính của bạn…"
+          hasSearch={columns.length > 8}
+          searchPlaceholder="Tìm tên cột…"
+          isDisabled={isReadOnly || isSaving}
+          disabledMessage={readOnlyReason ?? undefined}
+          status={issue ? { type: issue.severity, message: issue.message } : undefined}
+          statusVariant="detached"
+          width="100%"
+        />
+      </div>
+    </div>
   );
 }

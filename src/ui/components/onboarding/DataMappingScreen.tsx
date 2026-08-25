@@ -89,20 +89,6 @@ export function DataMappingScreen() {
   const gate = writeGate(useReadOnlyReason());
 
   const configuredSource = source.data?.state === "configured" ? source.data.source : null;
-
-  /**
-   * Is step 1 FINISHED — `null` while the query is still in flight.
-   *
-   * Null is not "no source": bouncing an operator back to step 1 because a query
-   * is in flight is the bug that third state exists to prevent.
-   *
-   * It asks `isSourceReady` rather than "does a row exist", and since onboarding
-   * phase 3 that distinction has teeth in both directions. A tenant who uploaded
-   * a CSV has a row whose Google coordinates are all empty strings — a
-   * row-exists check would call them unconfigured and refuse them step 2, which
-   * is precisely the customer this phase exists for. A tenant with a half-filled
-   * Google row would sail through into a report that cannot read anything.
-   */
   const hasSource = source.data === undefined ? null : isSourceReady(configuredSource);
   const { step, refusedStep } = resolveStep(
     searchParams.get(DATA_MAPPING_STEP_PARAM),
@@ -112,31 +98,16 @@ export function DataMappingScreen() {
   const [isMapDirty, setIsMapDirty] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<DataMappingStep | null>(null);
 
-  /**
-   * Client-side navigation changes the content without moving focus, so a
-   * keyboard or screen-reader user is left on the rail with no idea the body
-   * changed (web-accessibility rule 3). The heading of the new step takes focus.
-   */
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     stepHeadingRef.current?.focus();
   }, [step]);
 
-  // Plain functions, not `useCallback`: the React Compiler is on for this repo
-  // and refuses to compile a component whose manual memoization it cannot
-  // preserve (`react-hooks/preserve-manual-memoization`). It memoizes these on
-  // its own.
   function goToStep(next: DataMappingStep) {
     setPendingLeave(null);
-    // push, not replace: Back must walk one step, not leave the flow.
     router.push(stepHref(next));
   }
 
-  /**
-   * A rail entry stays a real link (focusable, middle-clickable, copyable), but
-   * an unsaved map is not thrown away on the first click: the press is caught,
-   * the screen says what is at stake, and a second press goes through.
-   */
   function requestStep(next: DataMappingStep) {
     if (step === "anh-xa" && isMapDirty && pendingLeave !== next) {
       setPendingLeave(next);
@@ -146,53 +117,54 @@ export function DataMappingScreen() {
   }
 
   return (
-    <Stack direction="vertical" gap={5} padding={4} maxWidth={960}>
-      <Stack direction="vertical" gap={1}>
-        <Heading level={1}>Kết nối dữ liệu</Heading>
-        <Text type="supporting">
-          MYSP học cấu trúc bảng của bạn một lần, ngay tại đây. Bạn không phải đổi tên cột hay sắp
-          xếp lại bảng đang dùng — dù đó là Google Sheet hay file CSV xuất ra từ Excel.
-        </Text>
-      </Stack>
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-6">
+      {/* Page Header */}
+      <div className="flex flex-col gap-1.5 border-b border-border/60 pb-5">
+        <p className="font-mono text-xs font-medium uppercase tracking-widest text-muted-foreground">
+          CẤU HÌNH HỆ THỐNG · ONBOARDING
+        </p>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
+          Kết nối & Ánh xạ dữ liệu
+        </h1>
+        <p className="text-sm leading-relaxed text-muted-foreground max-w-3xl">
+          MYSP học cấu trúc bảng sản phẩm của bạn một lần duy nhất. Bạn hoàn toàn không cần phải đổi tên cột hay sắp xếp lại bảng tính đang dùng — hỗ trợ cả Google Sheet và file CSV xuất từ Excel.
+        </p>
+      </div>
 
+      {/* Step Rail */}
       <StepRail current={step} hasSource={hasSource} onNavigate={requestStep} />
 
-      {/*
-        Changing step swaps the body without moving the page, so a screen-reader
-        user hears nothing (web-wizard rule 5). The region is rendered OUTSIDE
-        every conditional so it exists before the text inside it changes —
-        a live region mounted together with its message is not announced.
-      */}
       <VisuallyHidden as="div" role="status" aria-live="polite">
         {`Bước ${String(stepIndex(step) + 1)} trên ${String(DATA_MAPPING_STEPS.length)}: ${stepLabel(step)}`}
       </VisuallyHidden>
 
-      {/* A refused jump is SAID, never silent (core-wizard). */}
+      {/* Refused Step Alert */}
       {refusedStep ? (
         <Banner
           status="info"
           title={`Chưa mở được bước “${stepLabel(refusedStep)}”`}
-          description="Bước này đọc bảng sản phẩm thật của đơn vị, nên phải khai nguồn dữ liệu trước. Làm ở bước bên dưới rồi quay lại."
+          description="Bước này cần đọc bảng sản phẩm thật của đơn vị, nên bạn cần hoàn thành bước khai nguồn dữ liệu trước."
         />
       ) : null}
 
+      {/* Unsaved Changes Banner */}
       {pendingLeave ? (
         <Banner
           status="warning"
           title="Bạn có thay đổi ánh xạ chưa lưu"
-          description="Rời khỏi bước này sẽ mất những lựa chọn vừa sửa. Lưu trước, hoặc xác nhận rời đi."
+          description="Rời khỏi bước này sẽ mất những lựa chọn vừa sửa. Bạn nên lưu trước hoặc xác nhận rời đi."
           endContent={
             <HStack gap={2} wrap="wrap">
               <Button
                 variant="secondary"
                 size="sm"
-                label={`Rời đi, bỏ thay đổi`}
+                label="Rời đi, bỏ thay đổi"
                 onClick={() => goToStep(pendingLeave)}
               />
               <Button
                 variant="ghost"
                 size="sm"
-                label="Ở lại"
+                label="Ở lại chỉnh tiếp"
                 onClick={() => setPendingLeave(null)}
               />
             </HStack>
@@ -200,27 +172,16 @@ export function DataMappingScreen() {
         />
       ) : null}
 
-      {/* Idle: no company, no question to ask yet (M1.4). */}
+      {/* Idle / No Company */}
       {!isResolved ? (
         <EmptyState
           isCompact
           headingLevel={2}
           title="Chưa chọn công ty"
-          description="Chọn công ty ở thanh trên cùng để bắt đầu kết nối dữ liệu."
+          description="Vui lòng chọn công ty ở thanh điều hướng trên cùng để bắt đầu kết nối dữ liệu."
         />
       ) : (
-        <Stack direction="vertical" gap={4}>
-          <Stack direction="vertical" gap={1}>
-            {/* `tabIndex={-1}`: focused programmatically after a step change,
-                never a tab stop of its own. */}
-            <Heading level={2} ref={stepHeadingRef} tabIndex={-1}>
-              {stepLabel(step)}
-            </Heading>
-            <Text type="supporting">
-              {DATA_MAPPING_STEPS[stepIndex(step)]?.summary ?? ""}
-            </Text>
-          </Stack>
-
+        <div className="flex flex-col gap-6">
           {step === "nguon" ? (
             <SourceStep
               isError={source.isError}
@@ -229,24 +190,25 @@ export function DataMappingScreen() {
               source={source.data === undefined ? undefined : configuredSource}
               isReady={hasSource}
               readOnlyReason={gate.reason}
-              onContinue={() => requestStep("bao-cao")}
+              onContinue={() => requestStep("anh-xa")}
             />
-          ) : null}
-
-          {step === "bao-cao" ? (
-            <ReportStep onGoToMapping={() => requestStep("anh-xa")} />
           ) : null}
 
           {step === "anh-xa" ? (
             <MappingStep
               readOnlyReason={gate.reason}
               onDirtyChange={setIsMapDirty}
-              onBack={() => requestStep("bao-cao")}
+              onBack={() => requestStep("nguon")}
+              onNext={() => requestStep("bao-cao")}
             />
           ) : null}
-        </Stack>
+
+          {step === "bao-cao" ? (
+            <ReportStep onGoToMapping={() => requestStep("anh-xa")} />
+          ) : null}
+        </div>
       )}
-    </Stack>
+    </div>
   );
 }
 
@@ -275,75 +237,85 @@ function StepRail({
   const statuses = stepStatuses(current, { hasSource });
 
   return (
-    <Section variant="muted" padding={3}>
-      <Stack direction="vertical" gap={2} as="ol" aria-label="Các bước kết nối dữ liệu">
+    <nav aria-label="Các bước kết nối dữ liệu" className="w-full">
+      <ol className="grid grid-cols-1 gap-3 md:grid-cols-3">
         {DATA_MAPPING_STEPS.map((entry, index) => {
           const status = statuses[entry.key];
           const isCurrent = status === "current";
+          const isDone = status === "done";
           const canVisit = canVisitStep(entry.key, { hasSource }) && !isCurrent;
 
-          return (
-            <Stack
-              key={entry.key}
-              as="li"
-              direction="horizontal"
-              gap={2}
-              align="start"
-              aria-current={isCurrent ? "step" : undefined}
+          const cardContent = (
+            <div
+              className={`group flex h-full flex-col justify-between rounded-lg border p-3.5 transition-all ${
+                isCurrent
+                  ? "border-primary bg-accent/40 shadow-xs ring-2 ring-primary/20"
+                  : isDone
+                    ? "border-border/80 bg-card hover:border-primary/40 hover:bg-accent/20 cursor-pointer"
+                    : "border-border/40 bg-card/60 opacity-70"
+              }`}
             >
-              {/* Mono numerals (DESIGN.md §The Mono Ledger Rule): the number
-                  names the order of an invariant flow, it is not a score. */}
-              <Text type="code" hasTabularNumbers>
-                {String(index + 1)}
-              </Text>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`flex size-6 items-center justify-center rounded-full font-mono text-xs font-semibold ${
+                      isCurrent
+                        ? "bg-primary text-primary-foreground"
+                        : isDone
+                          ? "bg-leaf/20 text-leaf-deep"
+                          : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {isDone ? "✓" : `0${index + 1}`}
+                  </span>
+                  <span
+                    className={`text-sm font-medium ${
+                      isCurrent
+                        ? "text-primary font-semibold"
+                        : isDone
+                          ? "text-foreground"
+                          : "text-muted-foreground"
+                    }`}
+                  >
+                    {entry.label}
+                  </span>
+                </div>
 
-              <StackItem size="fill">
-                <Stack direction="vertical" gap={0.5}>
-                  {canVisit ? (
-                    <Link
-                      href={stepHref(entry.key)}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        onNavigate(entry.key);
-                      }}
-                    >
-                      {entry.label}
-                    </Link>
-                  ) : (
-                    <Text weight={isCurrent ? "semibold" : "normal"}>{entry.label}</Text>
-                  )}
-                  <Text type="supporting">{entry.summary}</Text>
-                </Stack>
-              </StackItem>
+                <Badge
+                  variant={isDone ? "success" : isCurrent ? "info" : "neutral"}
+                  label={isDone ? "Đã xong" : isCurrent ? "Đang làm" : "Chưa tới"}
+                />
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {entry.summary}
+              </p>
+            </div>
+          );
 
-              {/* The word, not only the colour (DESIGN.md §The Named Status Rule). */}
-              <Badge
-                variant={status === "done" ? "success" : isCurrent ? "info" : "neutral"}
-                label={status === "done" ? "Đã xong" : isCurrent ? "Đang làm" : "Chưa tới"}
-              />
-            </Stack>
+          return (
+            <li key={entry.key} aria-current={isCurrent ? "step" : undefined}>
+              {canVisit ? (
+                <Link
+                  href={stepHref(entry.key)}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigate(entry.key);
+                  }}
+                  className="block h-full no-underline"
+                >
+                  {cardContent}
+                </Link>
+              ) : (
+                cardContent
+              )}
+            </li>
           );
         })}
-      </Stack>
-    </Section>
+      </ol>
+    </nav>
   );
 }
 
-/**
- * Step 1 — WHERE this tenant's product table comes from.
- *
- * TWO OPTIONS, AS PEERS (onboarding phase 3). The Google card is listed first
- * because it also brings the photos, not because the other is a fallback: a
- * customer with no Google Workspace has exactly one way to use this product, and
- * filing it under "nâng cao" would tell them what we think of them. The radio
- * list is the same idiom step 3 already uses for the stock policy, so there is
- * nothing new to learn.
- *
- * The chosen option decides only which CARD is on screen. What the tenant
- * actually READS is whatever is stored on the server (`textSource`), and moving
- * the radio changes nothing until the card below it is used — a radio that
- * silently repointed a live catalog would be data loss one click deep.
- */
 function SourceStep({
   isError,
   error,
@@ -356,50 +328,37 @@ function SourceStep({
   isError: boolean;
   error: unknown;
   onRetry: () => void;
-  /** The stored source; `undefined` while the query is still in flight. */
   source: CatalogSource | null | undefined;
-  /** Null = the source query has not answered yet. NOT "no source". */
   isReady: boolean | null;
   readOnlyReason: string | null;
   onContinue: () => void;
 }) {
   const upload = useUploadCatalogFile();
-  /**
-   * Which card is showing. Seeded from what is STORED, so a tenant already on a
-   * CSV lands on the CSV card instead of a Google form they do not use.
-   *
-   * Seeded once, in the `useState` initialiser rather than an effect: re-seeding
-   * it when the query settles would yank the card out from under somebody who
-   * had already switched.
-   */
   const [choice, setChoice] = useState<CatalogTextSourceKind>(() => activeSourceChoice(source));
 
   return (
-    <Stack direction="vertical" gap={4}>
+    <div className="flex flex-col gap-6">
       {isError ? <ApiErrorNotice error={error} onRetry={onRetry} source="Nguồn dữ liệu" /> : null}
 
-      <RadioList
-        label="Bảng sản phẩm của đơn vị nằm ở đâu"
-        value={choice}
-        onChange={(next) => setChoice(next as CatalogTextSourceKind)}
-        isDisabled={upload.isPending}
-      >
-        {CATALOG_SOURCE_CHOICES.map((entry) => (
-          <RadioListItem
-            key={entry.kind}
-            value={entry.kind}
-            label={entry.label}
-            description={`${entry.summary} ${entry.fitFor}`}
-          />
-        ))}
-      </RadioList>
+      <div className="rounded-lg border border-border/80 bg-card p-4 md:p-5 shadow-xs">
+        <RadioList
+          label="Bảng sản phẩm của đơn vị nằm ở đâu"
+          value={choice}
+          onChange={(next) => setChoice(next as CatalogTextSourceKind)}
+          isDisabled={upload.isPending}
+        >
+          {CATALOG_SOURCE_CHOICES.map((entry) => (
+            <RadioListItem
+              key={entry.kind}
+              value={entry.kind}
+              label={entry.label}
+              description={`${entry.summary} ${entry.fitFor}`}
+            />
+          ))}
+        </RadioList>
+      </div>
 
       {choice === "google_sheet" ? (
-        /*
-          `lastRunHealth="unknown"` is the literal truth from here: this screen
-          does not read sync status, and "unknown" is what keeps the card OPEN —
-          which is what a setup step needs. It is not a guess dressed as a fact.
-        */
         <CatalogSourceCard lastRunHealth="unknown" />
       ) : (
         <CatalogFileCard
@@ -412,15 +371,6 @@ function SourceStep({
             upload.mutate(
               { file },
               {
-                /*
-                  Straight on to the compatibility report — the same place the
-                  Google branch reaches through the button below. ONE flow and
-                  one mapping step, which is the whole point of routing both
-                  sources through the same wizard.
-
-                  On success only: a refusal has to stay on the card that can
-                  explain it, beside the file that caused it.
-                */
                 onSuccess: onContinue,
               },
             )
@@ -428,32 +378,32 @@ function SourceStep({
         />
       )}
 
-      <HStack gap={2} wrap="wrap" align="center">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/40 p-4">
+        <div className="flex flex-col gap-0.5">
+          <p className="text-sm font-medium text-foreground">Sẵn sàng sang bước ánh xạ cột?</p>
+          <p className="text-xs text-muted-foreground">
+            Hệ thống chỉ đọc dòng tiêu đề và mẫu dữ liệu từ bảng của bạn — không sửa, không ghi đè gì lên bảng gốc.
+          </p>
+        </div>
         <Button
           variant="primary"
-          label="Đọc thử dữ liệu"
+          label="Tiếp tục: Ánh xạ cột →"
           isDisabled={isReady !== true || upload.isPending}
-          // `tooltip`, not a bare disabled button: a control that cannot be
-          // pressed must say why (DESIGN.md §Named Status Rule) — and the
-          // sentence beside it repeats the reason for anyone not hovering.
           tooltip={
             isReady === null
               ? "Đang đọc cấu hình hiện tại…"
-              : (missingSourceReason(source) ?? "Khai nguồn dữ liệu ở trên trước đã.")
+              : (missingSourceReason(source) ?? "Vui lòng chọn nguồn dữ liệu ở trên trước.")
           }
           onClick={onContinue}
         />
-        <Text type="supporting">
-          Bước sau chỉ ĐỌC bảng sản phẩm của bạn để đếm — không sửa, không đăng gì.
-        </Text>
-      </HStack>
-    </Stack>
+      </div>
+    </div>
   );
 }
 
-/** Step 2 — the compatibility report, with its own four states. */
 function ReportStep({ onGoToMapping }: { onGoToMapping: () => void }) {
   const profile = useCatalogProfile();
+  const router = useRouter();
   const isFirstLoad = profile.isPending && profile.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
 
@@ -477,71 +427,62 @@ function ReportStep({ onGoToMapping }: { onGoToMapping: () => void }) {
         isCompact
         headingLevel={3}
         title="Chưa có nguồn dữ liệu để đọc"
-        description="Quay lại bước “Nguồn dữ liệu” và khai bảng sản phẩm của đơn vị này — bảng Google Sheet, hoặc file CSV tải lên."
+        description="Vui lòng quay lại bước 1 “Nguồn dữ liệu” để kết nối bảng Google Sheet hoặc tải file CSV lên."
       />
     );
   }
 
   return (
-    <Stack direction="vertical" gap={4}>
+    <div className="flex flex-col gap-6">
       <CompatibilityReport report={profile.data.report} />
 
-      <HStack gap={2} wrap="wrap" align="center">
-        <Button variant="primary" label="Chỉnh ánh xạ cột" onClick={onGoToMapping} />
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/80 pt-4">
         <Button
           variant="secondary"
-          label={profile.isFetching ? "Đang đọc lại…" : "Chạy lại báo cáo"}
-          isLoading={profile.isFetching}
-          isDisabled={profile.isFetching}
-          onClick={() => void profile.refetch()}
+          label="← Quay lại chỉnh ánh xạ cột"
+          onClick={onGoToMapping}
         />
-      </HStack>
-    </Stack>
+
+        <HStack gap={2} wrap="wrap">
+          <Button
+            variant="secondary"
+            label={profile.isFetching ? "Đang đọc lại…" : "Chạy lại báo cáo"}
+            isLoading={profile.isFetching}
+            isDisabled={profile.isFetching}
+            onClick={() => void profile.refetch()}
+          />
+          <Button
+            variant="primary"
+            label="Đi tới Đồng bộ dữ liệu →"
+            onClick={() => router.push("/sync")}
+          />
+        </HStack>
+      </div>
+    </div>
   );
 }
 
-/** Step 3 — the mapping form, plus what to do after it saves. */
 function MappingStep({
   readOnlyReason,
   onDirtyChange,
   onBack,
+  onNext,
 }: {
   readOnlyReason: string | null;
   onDirtyChange: (isDirty: boolean) => void;
   onBack: () => void;
+  onNext: () => void;
 }) {
   const profile = useCatalogProfile();
   const source = useCatalogSource();
   const save = useUpdateCatalogSource();
   const invalidate = useInvalidateMapping();
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  /**
-   * The media profile of the last successful save, kept only until the server
-   * starts echoing it back.
-   *
-   * `PUT /api/catalog/source` stores it and answers 200, but the response — like
-   * the GET — is a `CatalogSourceView`, which does not carry `mediaProfile`
-   * today. Without this, remounting the form right after a save would read
-   * "chưa khai" and offer the report's recommendation again, i.e. silently
-   * propose to overwrite the answer somebody just gave. This holds what the
-   * server acknowledged, nothing more, and it dies with the page (a reload falls
-   * back to the recommendation until core puts the key on the view).
-   */
   const [savedMediaProfile, setSavedMediaProfile] = useState<MediaProfileConfig | null>(null);
 
   const isFirstLoad = profile.isPending && profile.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
   const report = profile.data?.state === "profiled" ? profile.data.report : null;
-  /**
-   * The tenant's STORED configuration, used for two things only: knowing that
-   * step 1 is finished, and seeding the form with the map/policy/layout that are
-   * currently saved.
-   *
-   * It is deliberately NOT the source of coordinates for the save any more — see
-   * `handleSave`. This value comes from a GET that ran outside any transaction,
-   * so anything read here is a snapshot, safe to DISPLAY and unsafe to write
-   * back.
-   */
   const configured = source.data?.state === "configured" ? source.data.source : null;
 
   const handleSave = useCallback(
@@ -550,49 +491,12 @@ function MappingStep({
       stockPolicy: StockPolicy;
       mediaProfile: MediaProfileConfig;
     }) => {
-      // Both guards, not one: the stored source and the header row arrive from
-      // two different queries, and either can still be in flight.
       if (!configured || !report) return;
       save.mutate(
         {
-          /*
-           * THE THREE COORDINATES ARE NOT SENT, and their absence is the point.
-           *
-           * This screen edits a COLUMN MAPPING. It knows the tenant's Drive
-           * folder and spreadsheet only because a GET fetched them — outside any
-           * transaction, possibly minutes ago while the operator worked through
-           * the wizard. Echoing them back would make "Lưu ánh xạ" silently
-           * revert a folder another admin moved in the meantime: the lost
-           * update, with a window as long as the wizard stays open (N1, same
-           * class as F3).
-           *
-           * `updateCatalogSource` reads an absent key as "giữ nguyên cái đang
-           * lưu" and the repo merges it under its own lock, so the value that
-           * survives is the one that is current at write time — not the one this
-           * tab happened to read. Nothing is lost by not sending them; something
-           * is lost by sending them.
-           *
-           * `textSourceKind` goes too, for the same reason it existed: it only
-           * told the client-side guard whether the coordinates were required,
-           * and there are no coordinates to guard any more.
-           */
           fieldMap: payload.fieldMap,
           stockPolicy: payload.stockPolicy,
-          // Phase 2. Sent on the same PUT as the map on purpose: the layout and
-          // the `mediaLink` column it needs are one answer, and two writes could
-          // leave a tenant with `sheet-column` stored and no column to read.
           mediaProfile: payload.mediaProfile,
-          /*
-           * The header row the operator actually mapped against — the same list
-           * that filled the dropdowns. It lets the server repeat the
-           * "cột này không còn tồn tại" check instead of trusting that the
-           * browser ran it.
-           *
-           * `undefined` when the report came back with no columns at all (an
-           * unreadable tab): the domain reads an empty list as "caller has no
-           * header row" and skips the check, so sending `[]` would look like a
-           * check that passed. The form refuses to save in that state anyway.
-           */
           sheetColumns: report.sheet.columns.length > 0 ? report.sheet.columns : undefined,
         },
         {
@@ -631,57 +535,49 @@ function MappingStep({
   }
 
   return (
-    <Stack direction="vertical" gap={4}>
+    <div className="flex flex-col gap-6">
       {savedAt !== null && !save.isPending ? (
         <Banner
           status="success"
-          title="Đã lưu ánh xạ cột, cách kiểm tồn và nguồn ảnh"
-          description="Chạy đồng bộ ở màn “Đồng bộ dữ liệu” để hệ thống đọc lại toàn bộ bảng theo ánh xạ mới."
+          title="Đã lưu thành công ánh xạ cột, quy tắc kiểm tồn và nguồn ảnh"
+          description="Bạn có thể tiếp tục sang bước 3 để xem báo cáo tương thích, hoặc sang màn “Đồng bộ dữ liệu” để hệ thống cập nhật."
           isDismissable
           onDismiss={() => setSavedAt(null)}
+          endContent={
+            <Button
+              variant="secondary"
+              size="sm"
+              label="Xem Báo cáo tương thích →"
+              onClick={onNext}
+            />
+          }
         />
       ) : null}
 
-      {/* `key` on the report identity: after a save the baseline is refetched,
-          and the form must restart from the map that is now stored instead of
-          keeping the state of a form the operator already submitted. */}
       <FieldMapForm
         key={`${report.spreadsheetId}:${report.sheetName}:${savedAt ?? 0}`}
         report={report}
-        // Straight from `tenant_integration`, not from the report: the report
-        // echoes whatever it was asked to compute with, while these two answer
-        // "đã khai hay chưa" — and `null` there is the whole difference between
-        // restoring somebody's work and offering to overwrite it.
         storedFieldMap={configured.fieldMap}
         storedStockPolicy={configured.stockPolicy}
-        // `?? null` folds "server does not send the key yet" into "chưa khai",
-        // which is the honest reading of both (see CatalogSourceSchema).
         storedMediaProfile={configured.mediaProfile ?? savedMediaProfile}
         isSaving={save.isPending}
         saveError={save.isError ? save.error : null}
         readOnlyReason={readOnlyReason}
         onDirtyChange={onDirtyChange}
         onSave={handleSave}
+        onBack={onBack}
+        onNext={onNext}
       />
-
-      <HStack gap={2}>
-        <Button variant="ghost" label="Quay lại báo cáo" onClick={onBack} />
-      </HStack>
-    </Stack>
+    </div>
   );
 }
 
-/**
- * Same blocks, same heights as the real report, so the answer lands without
- * pushing the page around (web-feedback-states rule 1). `aria-hidden` because a
- * screen reader has nothing to read in a grey box.
- */
 function ReportSkeleton() {
   return (
-    <Stack direction="vertical" gap={4} aria-hidden="true">
-      <Skeleton height={132} />
-      <Skeleton height={220} />
-      <Skeleton height={160} />
-    </Stack>
+    <div className="flex flex-col gap-4" aria-hidden="true">
+      <Skeleton height={120} />
+      <Skeleton height={200} />
+      <Skeleton height={140} />
+    </div>
   );
 }

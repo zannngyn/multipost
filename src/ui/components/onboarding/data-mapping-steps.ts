@@ -21,20 +21,18 @@ export const DATA_MAPPING_STEP_PARAM = "buoc";
 export const DATA_MAPPING_STEPS = [
   {
     key: "nguon",
-    /** Names the CONTENT, never "Bước 1" (core-wizard §chỉ báo tiến độ). */
-    label: "Nguồn dữ liệu",
-    summary: "Bảng sản phẩm của đơn vị — Google Sheet hoặc file CSV — và thư mục ảnh.",
-  },
-  {
-    key: "bao-cao",
-    label: "Báo cáo tương thích",
-    summary: "Đọc thử dữ liệu thật: bao nhiêu mã đăng được ngay.",
+    label: "1. Nguồn dữ liệu",
+    summary: "Bảng sản phẩm (Google Sheet hoặc CSV) & Thư mục ảnh Drive",
   },
   {
     key: "anh-xa",
-    label: "Ánh xạ cột, kiểm tồn & nguồn ảnh",
-    summary:
-      "Cột nào của bạn là mã, tên, tồn…, cách đọc ô tồn, và cách hệ thống tìm ảnh cho từng mã.",
+    label: "2. Ánh xạ cột & Quy tắc",
+    summary: "Ghép cột bảng tính vào trường MYSP, quy tắc tồn kho & nguồn ảnh",
+  },
+  {
+    key: "bao-cao",
+    label: "3. Báo cáo tương thích",
+    summary: "Xem trước số mã hợp lệ sẵn sàng đăng bài",
   },
 ] as const;
 
