@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+import { Copy, Check, Clock, Calendar, Hash, Sparkles } from "lucide-react";
 import { Token } from "@astryxdesign/core";
 
 import { BatchStatusBadge } from "@/ui/components/post/PostStatusBadge";
@@ -8,107 +12,165 @@ import {
   type BatchStatusResponse,
 } from "@/ui/schemas/post-batch.schema";
 
-/**
- * Batch header: what happened, to which product, and how long it took.
- * Presentational only.
- *
- * Business rule 2: the product CODE and colour are identity, not caption
- * material — and stock/price have no field here at all. Rule 6: `partial` is
- * shown as its own outcome, never softened into "xong".
- *
- * Since onboarding phase 3 it also carries PROVENANCE: a batch built from a
- * product somebody typed by hand says so, months later, without a trip to the
- * database.
- */
-
-/**
- * "Facebook giữ lịch" is its own tile even though it is already counted inside
- * "Đang chạy": a batch that sits at 0 published for three days is alarming until
- * you can see that Facebook is holding the posts until their hour (E8.6).
- */
 const TOTALS_FIELDS = [
-  { key: "total", label: "Tổng số kênh" },
-  { key: "published", label: "Đã đăng" },
-  { key: "inProgress", label: "Đang chạy" },
-  { key: "scheduledOnFacebook", label: "Facebook giữ lịch" },
-  { key: "blocked", label: "Bị chặn" },
-  { key: "failed", label: "Lỗi" },
+  { key: "total", label: "TỔNG SỐ KÊNH", tone: "neutral" },
+  { key: "published", label: "ĐÃ ĐĂNG", tone: "leaf" },
+  { key: "inProgress", label: "ĐANG CHẠY", tone: "indigo" },
+  { key: "scheduledOnFacebook", label: "FB GIỮ LỊCH", tone: "turmeric" },
+  { key: "blocked", label: "BỊ CHẶN", tone: "turmeric" },
+  { key: "failed", label: "LỖI", tone: "madder" },
 ] as const;
 
 export function BatchSummaryCard({ batch }: { batch: BatchStatusResponse }) {
+  const [copied, setCopied] = useState(false);
+
+  function copyBatchId() {
+    navigator.clipboard.writeText(batch.batchId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
   return (
-    <section aria-labelledby="batch-summary-heading" className="bg-card space-y-4 rounded-xl border p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="batch-summary-heading" className="text-base font-semibold">
-          Tổng kết lô
-        </h2>
-        <BatchStatusBadge status={batch.status} />
+    <div className="flex flex-col gap-4 rounded-xl border border-border/80 bg-card p-5 shadow-xs">
+      {/* Header Info */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-4">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+              TỔNG KẾT LÔ ĐĂNG
+            </span>
+            <BatchStatusBadge status={batch.status} />
+          </div>
+          <p className="text-sm font-medium text-foreground leading-relaxed">
+            {batch.summaryMessage}
+          </p>
+        </div>
+
+        {/* Product Identity Pill */}
+        <div className="flex items-center gap-2 rounded-lg border border-border/80 bg-muted/30 px-3 py-2">
+          <div className="flex flex-col">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              Sản phẩm
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-sm font-bold text-foreground">
+                {batch.productCode}
+              </span>
+              {batch.color.trim().length > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  · {batch.color}
+                </span>
+              )}
+            </div>
+          </div>
+          {batch.productOrigin === "manual" && (
+            <Token
+              size="sm"
+              color="orange"
+              label={MANUAL_PRODUCT_BADGE}
+              description="Thông tin sản phẩm do người vận hành nhập tay."
+            />
+          )}
+        </div>
       </div>
 
-      <p className="text-sm">{batch.summaryMessage}</p>
+      {/* Signature Stat Tape (6 connected cells) */}
+      <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-border/80 bg-border/40 gap-px sm:grid-cols-3 lg:grid-cols-6">
+        {TOTALS_FIELDS.map((field) => {
+          const count = batch.totals[field.key];
+          const hasItems = count > 0;
 
-      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {TOTALS_FIELDS.map((field) => (
-          <div key={field.key} className="bg-muted/40 rounded-lg border p-3">
-            <dt className="text-muted-foreground text-xs">{field.label}</dt>
-            <dd className="text-lg font-semibold tabular-nums">{batch.totals[field.key]}</dd>
-          </div>
-        ))}
-      </dl>
+          return (
+            <div
+              key={field.key}
+              className={`flex flex-col justify-between p-3.5 transition-colors ${field.tone === "leaf" && hasItems
+                  ? "bg-leaf/10"
+                  : field.tone === "madder" && hasItems
+                    ? "bg-madder/10"
+                    : field.tone === "turmeric" && hasItems
+                      ? "bg-turmeric/10"
+                      : field.tone === "indigo" && hasItems
+                        ? "bg-accent/40"
+                        : "bg-card"
+                }`}
+            >
+              <span className="font-mono text-[10px] font-semibold tracking-wider text-muted-foreground">
+                {field.label}
+              </span>
+              <span
+                className={`font-mono text-2xl font-bold tracking-tight tabular-nums pt-1 ${field.tone === "leaf" && hasItems
+                    ? "text-leaf-deep"
+                    : field.tone === "madder" && hasItems
+                      ? "text-madder"
+                      : field.tone === "turmeric" && hasItems
+                        ? "text-turmeric-deep"
+                        : field.tone === "indigo" && hasItems
+                          ? "text-primary"
+                          : "text-foreground"
+                  }`}
+              >
+                {count}
+              </span>
+            </div>
+          );
+        })}
+      </div>
 
-      <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Mã sản phẩm:</dt>
-          <dd className="font-medium">{batch.productCode}</dd>
+      {/* Metadata Bar */}
+      <div className="grid grid-cols-1 gap-3 pt-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Calendar className="size-3.5 shrink-0 text-muted-foreground/70" />
+          <span>
+            Bắt đầu:{" "}
+            <strong className="font-mono text-foreground font-medium tabular-nums">
+              {formatDateTime(batch.startedAt)}
+            </strong>
+          </span>
         </div>
-        {/*
-          Onboarding phase 3 — WHERE this batch's product text came from, read
-          from the stamp on the job row rather than joined from `product` (by the
-          time somebody asks, that row may be gone). Its own line in the summary
-          because "bài này lấy dữ liệu từ đâu" is asked about a whole batch, and
-          asked long after the batch ran.
 
-          Nothing is drawn for a synced batch: that is the overwhelming majority,
-          and a badge on every one of them would be noise nobody reads.
-        */}
-        {batch.productOrigin === "manual" ? (
-          <div className="flex gap-2">
-            <dt className="text-muted-foreground">Nguồn dữ liệu:</dt>
-            <dd>
-              <Token
-                size="sm"
-                color="orange"
-                label={MANUAL_PRODUCT_BADGE}
-                description="Thông tin sản phẩm của lô này do người vận hành nhập tay ở màn Soạn bài, không lấy từ dữ liệu đã đồng bộ."
-              />
-            </dd>
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Clock className="size-3.5 shrink-0 text-muted-foreground/70" />
+          <span>
+            Kết thúc:{" "}
+            <strong className="font-mono text-foreground font-medium tabular-nums">
+              {batch.finishedAt ? formatDateTime(batch.finishedAt) : "Đang chạy…"}
+            </strong>
+          </span>
+        </div>
+
+        {batch.durationMs !== null && (
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Sparkles className="size-3.5 shrink-0 text-muted-foreground/70" />
+            <span>
+              Thời gian:{" "}
+              <strong className="font-mono text-foreground font-medium tabular-nums">
+                {formatDurationMs(batch.durationMs)}
+              </strong>
+            </span>
           </div>
-        ) : null}
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Màu:</dt>
-          <dd>{batch.color.trim().length > 0 ? batch.color : "Tất cả màu"}</dd>
-        </div>
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Bắt đầu:</dt>
-          <dd className="tabular-nums">{formatDateTime(batch.startedAt)}</dd>
-        </div>
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Kết thúc:</dt>
-          <dd className="tabular-nums">
-            {batch.finishedAt ? formatDateTime(batch.finishedAt) : "— (chưa xong)"}
-          </dd>
-        </div>
-        {batch.durationMs !== null ? (
-          <div className="flex gap-2">
-            <dt className="text-muted-foreground">Thời gian chạy:</dt>
-            <dd className="tabular-nums">{formatDurationMs(batch.durationMs)}</dd>
+        )}
+
+        <div className="flex items-center justify-between gap-1 sm:justify-start">
+          <div className="flex items-center gap-1.5 overflow-hidden text-muted-foreground">
+            <Hash className="size-3.5 shrink-0 text-muted-foreground/70" />
+            <span className="truncate font-mono text-[11px]">
+              {batch.batchId}
+            </span>
           </div>
-        ) : null}
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">Mã lô:</dt>
-          <dd className="font-mono text-xs break-all">{batch.batchId}</dd>
+          <button
+            type="button"
+            onClick={copyBatchId}
+            title="Sao chép mã lô"
+            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            {copied ? (
+              <Check className="size-3 text-leaf-deep" />
+            ) : (
+              <Copy className="size-3" />
+            )}
+          </button>
         </div>
-      </dl>
-    </section>
+      </div>
+    </div>
   );
 }

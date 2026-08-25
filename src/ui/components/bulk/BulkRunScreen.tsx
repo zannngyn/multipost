@@ -6,7 +6,6 @@ import {
   Layout,
   LayoutContent,
   LayoutHeader,
-  Text,
 } from "@astryxdesign/core";
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
