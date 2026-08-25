@@ -22,6 +22,12 @@ import {
   type TransitionMeta,
 } from "@/core/domain/post-job";
 import { productOrigin } from "@/core/domain/product";
+import {
+  parseBatchSpacingMs,
+  spacingRejectionMessage,
+  MAX_SPACING_MS,
+  MIN_SPACING_MS,
+} from "@/core/domain/publish-spacing";
 import { isTenantId } from "@/core/domain/tenant";
 import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { Clock, Logger } from "@/core/ports/infra";
@@ -95,6 +101,20 @@ export interface CreatePostBatchInput {
    * khung giờ vàng khác nhau"). A bad time blocks ONLY that channel.
    */
   readonly scheduledAtByChannel?: Readonly<Record<string, Date | null | undefined>>;
+  /**
+   * E7 — gap the spacing gate keeps between two posts of THIS run, in
+   * MILLISECONDS. Absent/null = keep using the tenant's configured spacing
+   * (`PublishSettings.spacingMs`), which is what every batch did before this
+   * field existed.
+   *
+   * Range [0, 24h]. 0 is a real choice ("đăng liên tục"), not an absence. The
+   * UI advises at least 5 minutes but nothing here refuses a smaller number —
+   * that is advice, not a rule.
+   *
+   * PENDING(E1): the gap is between posts of the SAME CHANNEL; the channels of
+   * one batch still do not wait for each other.
+   */
+  readonly spacingMs?: number | null;
   /** `app_user.id` when the caller already knows it; wins over `actorEmail`. */
   readonly createdBy?: string | null;
   /**
@@ -127,6 +147,12 @@ export interface CreatePostBatchResult {
   readonly color: string;
   readonly format: PostFormat;
   readonly batchStatus: PostBatchStatus;
+  /**
+   * The gap STORED on this run, in milliseconds. Null = nothing was stored, so
+   * the tenant's configured spacing applies at publish time. Echoed back so a
+   * screen can show what it actually got instead of what it hoped it sent.
+   */
+  readonly spacingMs: number | null;
   readonly channels: readonly CreatePostBatchChannelResult[];
   /** Internal operator notes (low stock...). Never part of a caption. */
   readonly warnings: readonly string[];
@@ -218,6 +244,27 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
       });
     }
 
+    // A spacing this usecase cannot store must stop the batch HERE, before a
+    // single row exists: a run created with the wrong gap would publish to real
+    // Pages at the wrong pace, and there is no undo for that.
+    const spacing = parseBatchSpacingMs(input?.spacingMs);
+    if (!spacing.ok) {
+      throw new AppError("INVALID_INPUT", {
+        message: `createPostBatch received an invalid spacingMs (${spacing.reason})`,
+        userMessage: spacingRejectionMessage(spacing.reason),
+        context: {
+          tenant_id: tenantId,
+          product_code: productCode,
+          field: "spacingMs",
+          reason: `SPACING_MS_${spacing.reason}`,
+          received: spacing.received,
+          min_ms: MIN_SPACING_MS,
+          max_ms: MAX_SPACING_MS,
+        },
+      });
+    }
+    const spacingMs = spacing.ms;
+
     const batchId = str(input?.batchId) || deps.newId();
     const color = normaliseColor(input?.color);
     const log = deps.logger.child({
@@ -289,6 +336,8 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
         color,
         format,
         note: str(input?.note) || null,
+        // null = "this run picked nothing"; the worker then reads the tenant's.
+        spacingMs,
         // Bug B6: an explicit id wins, otherwise the session e-mail is looked
         // up. `post_batch.created_by` is a FK to `app_user.id`, so an e-mail
         // must never be written into it raw.
@@ -304,6 +353,9 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
 
     log.info("Post batch created", {
       channels: channelIds,
+      // Answers "vì sao lô này đăng nhanh/chậm thế" without reading the row.
+      spacing_ms: spacingMs,
+      spacing_source: spacingMs === null ? "tenant" : "batch",
       product_origin: origin,
       job_count: created.jobs.length,
       media_count: media.length,
@@ -369,6 +421,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
         color,
         format,
         batchStatus: summary.status,
+        spacingMs,
         channels,
         warnings,
       };
@@ -535,6 +588,7 @@ export function makeCreatePostBatch(deps: CreatePostBatchDeps) {
       color,
       format,
       batchStatus: summary.status,
+      spacingMs,
       channels,
       warnings,
     };

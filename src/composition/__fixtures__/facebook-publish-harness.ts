@@ -149,6 +149,10 @@ export function makeMemoryRepo(job: PostJob) {
     async findLastPublishedAt() {
       return null;
     },
+    async findBatchSpacingMs() {
+      // No per-run gap: the tenant setting applies, as it always did.
+      return null;
+    },
     async refreshBatchStatus(_tenantId: string, batchId: string): Promise<PostBatchSummary> {
       const list = [...store.values()].filter((entry) => entry.batchId === batchId);
       const byStatus = {

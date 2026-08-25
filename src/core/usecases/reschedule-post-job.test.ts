@@ -114,6 +114,10 @@ function makeRepo(job: PostJob | null, options: { rejectReschedule?: boolean } =
     async findLastPublishedAt() {
       return null;
     },
+    async findBatchSpacingMs() {
+      // No per-run gap: the tenant setting applies, as it always did.
+      return null;
+    },
     async refreshBatchStatus() {
       throw new Error("not used");
     },

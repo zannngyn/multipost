@@ -11,7 +11,12 @@ import type { Product } from "@/core/domain/product";
 import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { Clock, LogBindings, LogContext, Logger } from "@/core/ports/infra";
 import type { EnqueueOptions, JobQueue } from "@/core/ports/job-queue";
-import type { NewPostJob, PostBatchSummary, PostJobRepo } from "@/core/ports/post-job-repo";
+import type {
+  NewPostBatch,
+  NewPostJob,
+  PostBatchSummary,
+  PostJobRepo,
+} from "@/core/ports/post-job-repo";
 import type { ProductRepo } from "@/core/ports/product-repo";
 import type {
   ChannelConfig,
@@ -107,9 +112,13 @@ function channel(channelId: string, status: "active" | "disabled" = "active"): C
 
 function makeRepo(options: { failCreate?: AppError } = {}) {
   const store = new Map<string, PostJob>();
-  const repo: PostJobRepo & { store: typeof store } = {
+  /** Every batch row this repo was asked to write — the write-side contract. */
+  const batches: NewPostBatch[] = [];
+  const repo: PostJobRepo & { store: typeof store; batches: NewPostBatch[] } = {
     store,
-    async createBatchWithJobs(input: { batch: { id: string }; jobs: readonly NewPostJob[] }) {
+    batches,
+    async createBatchWithJobs(input: { batch: NewPostBatch; jobs: readonly NewPostJob[] }) {
+      batches.push(input.batch);
       if (options.failCreate) throw options.failCreate;
       const jobs = input.jobs.map((job) => {
         const created: PostJob = {
@@ -174,6 +183,10 @@ function makeRepo(options: { failCreate?: AppError } = {}) {
       return [];
     },
     async findLastPublishedAt() {
+      return null;
+    },
+    async findBatchSpacingMs() {
+      // No per-run gap: the tenant setting applies, as it always did.
       return null;
     },
     async refreshBatchStatus(_tenantId, batchId): Promise<PostBatchSummary> {
@@ -1042,5 +1055,111 @@ describe("createPostBatch — stock gate on a MANUAL product (phase 3)", () => {
       expect(job.status).toBe("blocked");
       expect(job.lastErrorCode).toBe("OUT_OF_STOCK");
     }
+  });
+});
+
+/**
+ * Per-RUN spacing (post_batch.spacing_ms). The gate itself lives in
+ * publish-post; this file owns the WRITE contract: what is accepted, what is
+ * refused before a row exists, and what an absent value means.
+ */
+describe("createPostBatch — spacing of this run", () => {
+  // --- Edge cases first: nothing may be created with a gap we cannot store ---
+  it.each([
+    ["a negative gap", -1],
+    ["a gap above the 24h ceiling", 24 * 60 * 60_000 + 1],
+    ["a fractional millisecond", 1.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["a numeric string (never coerced)", "300000"],
+    ["a boolean", true],
+  ])("refuses %s and creates NOTHING", async (_case, spacingMs) => {
+    const { createPostBatch, repo, queue } = harness();
+
+    await expect(
+      createPostBatch({ ...BASE_INPUT, spacingMs } as never),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    expect(repo.batches).toHaveLength(0);
+    expect(repo.store.size).toBe(0);
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("names the field and the reason so a form can show it inline", async () => {
+    const { createPostBatch } = harness();
+
+    let error: AppError | null = null;
+    try {
+      await createPostBatch({ ...BASE_INPUT, spacingMs: -1 });
+    } catch (caught) {
+      error = caught as AppError;
+    }
+
+    expect(error).toBeInstanceOf(AppError);
+    if (!error) throw new Error("createPostBatch must refuse a negative gap");
+    expect(error.code).toBe("INVALID_INPUT");
+    expect(error.context).toMatchObject({
+      field: "spacingMs",
+      reason: "SPACING_MS_BELOW_MIN",
+      received: -1,
+      min_ms: 0,
+      max_ms: 24 * 60 * 60_000,
+    });
+    expect(error.userMessage.length).toBeGreaterThan(10);
+  });
+
+  it("stores NULL when the caller says nothing — the tenant setting keeps applying", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch(BASE_INPUT);
+
+    expect(result.spacingMs).toBeNull();
+    expect(repo.batches[0]?.spacingMs ?? null).toBeNull();
+  });
+
+  it("stores NULL for an explicit null (same meaning as absent)", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: null });
+
+    expect(result.spacingMs).toBeNull();
+    expect(repo.batches[0]?.spacingMs ?? null).toBeNull();
+  });
+
+  it("stores 0 as a real choice, not as an absence", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: 0 });
+
+    expect(result.spacingMs).toBe(0);
+    expect(repo.batches[0]?.spacingMs).toBe(0);
+  });
+
+  it("stores a free-form gap BELOW the 5-minute recommendation (advice, not a rule)", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: 90_000 });
+
+    expect(result.spacingMs).toBe(90_000);
+    expect(repo.batches[0]?.spacingMs).toBe(90_000);
+  });
+
+  it("stores the 24h ceiling", async () => {
+    const { createPostBatch, repo } = harness();
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: 24 * 60 * 60_000 });
+
+    expect(repo.batches[0]?.spacingMs).toBe(24 * 60 * 60_000);
+    expect(result.spacingMs).toBe(24 * 60 * 60_000);
+  });
+
+  it("keeps the gap on a batch the stock gate blocked, so a re-run reads the same one", async () => {
+    const { createPostBatch, repo } = harness({ product: makeProduct("0") });
+
+    const result = await createPostBatch({ ...BASE_INPUT, spacingMs: 300_000 });
+
+    expect(result.batchStatus).toBe("blocked");
+    expect(result.spacingMs).toBe(300_000);
+    expect(repo.batches[0]?.spacingMs).toBe(300_000);
   });
 });

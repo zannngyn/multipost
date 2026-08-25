@@ -209,6 +209,56 @@ describe("POST /api/posts/batches — the fan-out", () => {
     expect(input.scheduledAtByChannel["fbpage-a"]).toEqual(new Date("2026-08-13T03:00:00.000Z"));
   });
 
+  // --- Per-run spacing: edge cases first ---------------------------------
+  it.each([
+    ["a negative gap", -1],
+    ["a gap above 24h", 24 * 60 * 60_000 + 1],
+    ["a fractional millisecond", 1.5],
+    ["a numeric STRING (never coerced — \"5\" would mean 5 minutes)", "300000"],
+    ["a boolean", true],
+  ])("400s %s and creates no batch", async (_case, spacingMs) => {
+    const response = await POST(post(validBody({ spacingMs })));
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { code: string; issues?: Array<{ path: string }> };
+    expect(body.code).toBe("INVALID_INPUT");
+    expect(body.issues?.some((issue) => issue.path === "spacingMs")).toBe(true);
+    expect(createPostBatch).not.toHaveBeenCalled();
+  });
+
+  it("forwards a valid gap in milliseconds", async () => {
+    await POST(post(validBody({ spacingMs: 300_000 })));
+
+    expect(createPostBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ spacingMs: 300_000 }),
+    );
+  });
+
+  it("forwards 0 — a run may switch spacing off", async () => {
+    await POST(post(validBody({ spacingMs: 0 })));
+
+    expect(createPostBatch).toHaveBeenCalledWith(expect.objectContaining({ spacingMs: 0 }));
+  });
+
+  it("forwards an explicit null (use the tenant setting)", async () => {
+    await POST(post(validBody({ spacingMs: null })));
+
+    expect(createPostBatch).toHaveBeenCalledWith(expect.objectContaining({ spacingMs: null }));
+  });
+
+  it("omits the key entirely when the body says nothing — old clients keep working", async () => {
+    await POST(post(validBody()));
+
+    expect(createPostBatch.mock.calls[0]?.[0]).not.toHaveProperty("spacingMs");
+  });
+
+  it("accepts a gap under the 5-minute recommendation (advice, not a floor)", async () => {
+    const response = await POST(post(validBody({ spacingMs: 60_000 })));
+
+    expect(response.status).toBe(201);
+    expect(createPostBatch).toHaveBeenCalledWith(expect.objectContaining({ spacingMs: 60_000 }));
+  });
+
   it("surfaces OUT_OF_STOCK as 409, not as a created batch", async () => {
     createPostBatch.mockRejectedValue(new AppError("OUT_OF_STOCK"));
 

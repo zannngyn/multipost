@@ -28,6 +28,7 @@ import {
   type PostJobProgress,
   type PostJobStage,
 } from "@/core/domain/post-job-progress";
+import { resolveSpacingMs, type ResolvedSpacing } from "@/core/domain/publish-spacing";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { JobProgressStore } from "@/core/ports/job-progress";
@@ -64,6 +65,7 @@ import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
  *   1c. handoff window (E8.6) — a scheduled post outside its window goes back to
  *                              the queue; nothing is claimed and nothing is sent
  *   2. spacing gate          — too soon on this channel? re-enqueue, stay queued
+ *                              (the gap of THIS run, else the tenant's)
  *   3. CLAIM queued->publishing (optimistic, WHERE status='queued')
  *   4. STOCK RECHECK         — the last gate before the API call, ALWAYS
  *   5. channel config        — token/page id from tenant_integration
@@ -433,8 +435,12 @@ export function makePublishPost(deps: PublishPostDeps) {
     }
 
     // --- 2. Spacing gate (brief §6, PENDING(E1): per channel) ----------------
+    // The NUMBER comes from this run when it picked one, otherwise from the
+    // tenant configuration. Everything else about the gate is unchanged: same
+    // per-channel measurement, same SPACING_GATE deferral, same real deadline.
+    const spacing = await resolveJobSpacing(deps, job, settings, log);
     const lastPublishedAt = await deps.postJobs.findLastPublishedAt(tenantId, job.channelId);
-    const waitMs = spacingWaitMs(lastPublishedAt, deps.clock.nowMs(), settings.spacingMs);
+    const waitMs = spacingWaitMs(lastPublishedAt, deps.clock.nowMs(), spacing.ms);
     if (waitMs > 0) {
       // The spacing gate computed this wait; it is a fact, not an estimate.
       await progress.stage(
@@ -443,7 +449,7 @@ export function makePublishPost(deps: PublishPostDeps) {
           waitUntil: new Date(deps.clock.nowMs() + waitMs),
           now: deps.clock.now(),
         }),
-        { wait_ms: waitMs, spacing_ms: settings.spacingMs },
+        { wait_ms: waitMs, spacing_ms: spacing.ms, spacing_source: spacing.source },
       );
       return await deferQueuedJob(deps, log, job, {
         delayMs: waitMs,
@@ -453,7 +459,11 @@ export function makePublishPost(deps: PublishPostDeps) {
         attempt,
         logMessage: "Publish deferred by the spacing gate",
         extraLog: {
-          spacing_ms: settings.spacingMs,
+          spacing_ms: spacing.ms,
+          // "batch" or "tenant" — the first question anyone asks when a post
+          // waits longer than they expected.
+          spacing_source: spacing.source,
+          tenant_spacing_ms: settings.spacingMs,
           last_published_at: lastPublishedAt?.toISOString() ?? null,
         },
       });
@@ -886,6 +896,62 @@ async function resolveStockPolicy(
     });
     throw appError;
   }
+}
+
+/**
+ * The gap this job must keep from the previous post ON ITS CHANNEL.
+ *
+ * Two levels, one winner: the RUN (post_batch.spacing_ms, chosen for one run by
+ * the operator) beats the TENANT setting; a run that picked nothing keeps the
+ * tenant value, which is what every batch did before the column existed.
+ *
+ * A read FAILURE is rethrown, never downgraded to "no gap": the job is still
+ * `queued` at this point (nothing claimed, nothing sent), so the queue simply
+ * retries it — whereas guessing here would post to a real Page at a pace nobody
+ * asked for.
+ *
+ * PENDING(E1): still measured between posts of the SAME CHANNEL.
+ */
+async function resolveJobSpacing(
+  deps: PublishPostDeps,
+  job: PostJob,
+  settings: PublishSettings,
+  log: Logger,
+): Promise<ResolvedSpacing> {
+  let stored: number | null;
+  try {
+    stored = await deps.postJobs.findBatchSpacingMs(job.tenantId, job.batchId);
+  } catch (error) {
+    const appError = AppError.from(error, "DB_ERROR", {
+      tenant_id: job.tenantId,
+      job_id: job.id,
+      batch_id: job.batchId,
+      channel: job.channelId,
+      operation: "publishPost.findBatchSpacingMs",
+    });
+    log.error("Publish stopped: the spacing of this run could not be read", {
+      outcome: "failed",
+      reason: "BATCH_SPACING_UNREADABLE",
+      error_code: appError.code,
+      err: appError,
+      ...appError.toLogObject(),
+      alert: "OPERATOR_ATTENTION",
+    });
+    throw appError;
+  }
+
+  const spacing = resolveSpacingMs(stored, settings.spacingMs);
+  if (spacing.ignoredBatchSpacingMs !== null) {
+    // Only reachable by a row that bypassed the HTTP schema, the usecase guard
+    // AND the CHECK constraint. Loud, and never silently in force.
+    log.warn("Ignored an out-of-range spacing stored on this run — using the tenant setting", {
+      reason: "BATCH_SPACING_OUT_OF_RANGE",
+      batch_spacing_ms: spacing.ignoredBatchSpacingMs,
+      tenant_spacing_ms: settings.spacingMs,
+      alert: "OPERATOR_ATTENTION",
+    });
+  }
+  return spacing;
 }
 
 /**

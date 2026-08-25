@@ -1,6 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 
+import { MAX_SPACING_MS, MIN_SPACING_MS } from "@/core/domain/publish-spacing";
 import { AppError } from "@/core/domain/errors";
 import type { Logger } from "@/core/ports/infra";
 import {
@@ -84,7 +85,14 @@ const ChannelSchema = z.object({
 
 const ChannelProviderConfigSchema = z.object({
   /** PENDING(E1): spacing between posts of the SAME channel. Brief §6: 1–3'. */
-  spacingMs: z.coerce.number().int().min(0).max(24 * 60 * 60_000).default(DEFAULT_PUBLISH_SETTINGS.spacingMs),
+  spacingMs: z.coerce
+    .number()
+    .int()
+    .min(MIN_SPACING_MS)
+    // Same ceiling as the per-run gap on post_batch, from the same constant: a
+    // tenant and a run that disagreed on the bound would be a silent trap.
+    .max(MAX_SPACING_MS)
+    .default(DEFAULT_PUBLISH_SETTINGS.spacingMs),
   retryBackoffMs: z.coerce.number().int().min(0).max(60 * 60_000).default(DEFAULT_PUBLISH_SETTINGS.retryBackoffMs),
   maxAttempts: z.coerce.number().int().min(1).max(5).default(DEFAULT_PUBLISH_SETTINGS.maxAttempts),
   channels: z.array(ChannelSchema).default([]),

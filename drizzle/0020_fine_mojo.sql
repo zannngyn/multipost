@@ -1,0 +1,2 @@
+ALTER TABLE "post_batch" ADD COLUMN "spacing_ms" integer;--> statement-breakpoint
+ALTER TABLE "post_batch" ADD CONSTRAINT "post_batch_spacing_ms_range" CHECK ("post_batch"."spacing_ms" IS NULL OR ("post_batch"."spacing_ms" >= 0 AND "post_batch"."spacing_ms" <= 86400000));

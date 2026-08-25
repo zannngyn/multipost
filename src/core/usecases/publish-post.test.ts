@@ -145,11 +145,16 @@ function makeMemoryRepo(jobs: PostJob[]) {
     events: PostJobEventInput[];
     get(id: string): PostJob | undefined;
     refreshCalls: string[];
+    /** post_batch.spacing_ms of the run under test. Null = no per-run value. */
+    batchSpacingMs: number | null;
+    batchSpacingCalls: string[];
   } = {
     transitions,
     transitionInputs,
     events,
     refreshCalls: [],
+    batchSpacingMs: null,
+    batchSpacingCalls: [],
     get: (id: string) => store.get(id),
     async createBatchWithJobs() {
       throw new Error("not used in this test");
@@ -193,6 +198,10 @@ function makeMemoryRepo(jobs: PostJob[]) {
     },
     async findScheduledOnPlatformDue() {
       return [];
+    },
+    async findBatchSpacingMs(_tenantId: string, batchId: string) {
+      repo.batchSpacingCalls.push(batchId);
+      return repo.batchSpacingMs;
     },
     async findLastPublishedAt(_tenantId: string, channelId: string) {
       const published = [...store.values()]
@@ -387,8 +396,11 @@ function harness(options: {
   products?: ProductRepo;
   /** Swap the silent logger for a recording one to assert on a log line. */
   lines?: LogLine[];
+  /** post_batch.spacing_ms for this run. Undefined/null = no per-run value. */
+  batchSpacingMs?: number | null;
 } = {}): Harness {
   const repo = makeMemoryRepo(options.jobs ?? [makeJob()]);
+  repo.batchSpacingMs = options.batchSpacingMs ?? null;
   const queue = makeQueue();
   const clock = fixedClock();
   const publisher = {
@@ -866,6 +878,211 @@ describe("publishPost — spacing gate (brief §6, PENDING(E1): per channel)", (
     const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
     expect(result.outcome).toBe("published");
     expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Per-RUN spacing: post_batch.spacing_ms decides the gap for this lô, and the
+ * tenant setting is the fallback. Only the SOURCE of the number changes — the
+ * gate itself (per channel PENDING(E1), SPACING_GATE deferral, real deadline)
+ * is the same one tested above.
+ */
+describe("publishPost — spacing gate reads the run's own gap first", () => {
+  /** A post that went out 30s before the fixed clock, on the same channel. */
+  function previousPost() {
+    return makeJob({
+      id: "job-0",
+      status: "published",
+      publishedPostId: "555000111_0",
+      publishedAt: new Date("2026-08-13T01:59:30.000Z"),
+    });
+  }
+
+  it("keeps the OLD behaviour when the run has no gap of its own (null column)", async () => {
+    const { publish, repo, queue } = harness({
+      jobs: [previousPost(), makeJob()],
+      settings: { spacingMs: 60_000 },
+      batchSpacingMs: null,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(30_000);
+    expect(queue.enqueued[0].opts?.delayMs).toBe(30_000);
+    expect(repo.get("job-1")?.status).toBe("queued");
+    // The gate did ask the batch — it just got no answer.
+    expect(repo.batchSpacingCalls).toEqual(["batch-1"]);
+  });
+
+  it("treats a run gap of 0 as a VALUE and publishes even though the tenant says 60s", async () => {
+    const { publish, publisher, queue } = harness({
+      jobs: [previousPost(), makeJob()],
+      settings: { spacingMs: 60_000 },
+      batchSpacingMs: 0,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+    expect(queue.enqueued).toHaveLength(0);
+  });
+
+  it("lets a LONGER run gap win over the tenant setting", async () => {
+    const { publish, publisher, queue, repo } = harness({
+      jobs: [previousPost(), makeJob()],
+      settings: { spacingMs: 60_000 },
+      batchSpacingMs: 300_000,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    // 5 minutes asked, 30 seconds already elapsed.
+    expect(result.deferredMs).toBe(270_000);
+    expect(queue.enqueued[0].opts?.delayMs).toBe(270_000);
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(repo.get("job-1")?.status).toBe("queued");
+  });
+
+  it("lets a SHORTER run gap win over the tenant setting", async () => {
+    const { publish, publisher } = harness({
+      jobs: [previousPost(), makeJob()],
+      settings: { spacingMs: 600_000 },
+      batchSpacingMs: 20_000,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    // 20s asked, 30s already elapsed: nothing left to wait for.
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the SOURCE of the gap in the deferral log and the progress detail", async () => {
+    const lines: LogLine[] = [];
+    const { publish, progress, repo } = harness({
+      jobs: [previousPost(), makeJob()],
+      settings: { spacingMs: 60_000 },
+      batchSpacingMs: 300_000,
+      lines,
+    });
+
+    await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    const deferred = lines.find((line) => line.context?.defer_reason === "SPACING_GATE");
+    expect(deferred?.context).toMatchObject({
+      spacing_ms: 300_000,
+      spacing_source: "batch",
+      tenant_spacing_ms: 60_000,
+    });
+    expect(progress.stages()).toContain("waiting_for_spacing");
+    // E7.5 milestone carries the same two numbers, so the tracking screen can
+    // explain the wait without a second query.
+    const event = repo.events.find((entry) => entry.stage === "waiting_for_spacing");
+    expect(event?.detail).toMatchObject({
+      wait_ms: 270_000,
+      spacing_ms: 300_000,
+      spacing_source: "batch",
+    });
+  });
+
+  it("does not make two channels wait for each other — PENDING(E1) is unchanged", async () => {
+    const otherChannel = makeJob({
+      id: "job-0",
+      channelId: "chan-other",
+      status: "published",
+      publishedPostId: "555000111_0",
+      publishedAt: new Date("2026-08-13T01:59:59.000Z"),
+    });
+    const { publish, publisher } = harness({
+      jobs: [otherChannel, makeJob()],
+      settings: { spacingMs: 60_000 },
+      batchSpacingMs: 600_000,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("published");
+    expect(publisher.publishImagePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps a clock skew against the RUN gap, not against the tenant one", async () => {
+    const future = makeJob({
+      id: "job-0",
+      status: "published",
+      publishedPostId: "555000111_0",
+      // Published "an hour from now": a wrong clock somewhere.
+      publishedAt: new Date("2026-08-13T03:00:00.000Z"),
+    });
+    const { publish, queue } = harness({
+      jobs: [future, makeJob()],
+      settings: { spacingMs: 60_000 },
+      batchSpacingMs: 120_000,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(120_000);
+    expect(queue.enqueued[0].opts?.delayMs).toBe(120_000);
+  });
+
+  it("IGNORES an impossible stored gap, says so loudly, and falls back to the tenant", async () => {
+    const lines: LogLine[] = [];
+    const { publish, queue } = harness({
+      jobs: [previousPost(), makeJob()],
+      settings: { spacingMs: 60_000 },
+      batchSpacingMs: -5,
+      lines,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.outcome).toBe("deferred");
+    expect(result.deferredMs).toBe(30_000);
+    expect(queue.enqueued[0].opts?.delayMs).toBe(30_000);
+    const warn = lines.find((line) => line.context?.reason === "BATCH_SPACING_OUT_OF_RANGE");
+    expect(warn?.level).toBe("warn");
+    expect(warn?.context).toMatchObject({ batch_spacing_ms: -5, tenant_spacing_ms: 60_000 });
+  });
+
+  it("ignores a stored gap above the 24h ceiling the same way", async () => {
+    const lines: LogLine[] = [];
+    const { publish } = harness({
+      jobs: [previousPost(), makeJob()],
+      settings: { spacingMs: 60_000 },
+      batchSpacingMs: 24 * 60 * 60_000 + 1,
+      lines,
+    });
+
+    const result = await publish({ tenantId: TENANT, postJobId: "job-1" });
+
+    expect(result.deferredMs).toBe(30_000);
+    expect(lines.some((line) => line.context?.reason === "BATCH_SPACING_OUT_OF_RANGE")).toBe(true);
+  });
+
+  it("stops the attempt when the run gap cannot be READ — nothing claimed, nothing sent", async () => {
+    const lines: LogLine[] = [];
+    const { publish, publisher, repo } = harness({
+      jobs: [makeJob()],
+      settings: { spacingMs: 60_000 },
+      lines,
+    });
+    repo.findBatchSpacingMs = async () => {
+      throw new AppError("DB_ERROR", { message: "connection reset" });
+    };
+
+    await expect(publish({ tenantId: TENANT, postJobId: "job-1" })).rejects.toMatchObject({
+      code: "DB_ERROR",
+    });
+    // Still `queued`: the queue can retry it, and no row is stranded.
+    expect(repo.get("job-1")?.status).toBe("queued");
+    expect(publisher.publishImagePost).not.toHaveBeenCalled();
+    expect(
+      lines.some((line) => line.context?.reason === "BATCH_SPACING_UNREADABLE"),
+    ).toBe(true);
   });
 });
 

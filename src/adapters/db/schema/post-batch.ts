@@ -1,4 +1,7 @@
-import { index, pgEnum, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { check, index, integer, pgEnum, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+
+import { MAX_SPACING_MS, MIN_SPACING_MS } from "@/core/domain/publish-spacing";
 
 import { timestamps } from "./_columns";
 import { tenantIdColumn } from "./_tenant-column";
@@ -38,9 +41,29 @@ export const postBatches = pgTable(
     note: text("note"),
     /** Null for system/worker-created batches. */
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    /**
+     * Gap the SPACING GATE must keep between two posts of THIS run, in
+     * milliseconds. NULL = this run said nothing, so the tenant's
+     * `PublishSettings.spacingMs` applies — which is byte-for-byte what every
+     * batch created before this column did, and why the column is nullable
+     * instead of defaulted.
+     *
+     * PENDING(E1): still measured between posts of the SAME CHANNEL; two
+     * channels of one batch never wait for each other.
+     */
+    spacingMs: integer("spacing_ms"),
     ...timestamps,
   },
-  (table) => [index("post_batch_tenant_created_idx").on(table.tenantId, table.createdAt)],
+  (table) => [
+    index("post_batch_tenant_created_idx").on(table.tenantId, table.createdAt),
+    // The last line of defence for a number that decides when a real Page gets
+    // posted to: zod guards the HTTP body and the usecase guards the write, but
+    // a script or a psql session reaches neither.
+    check(
+      "post_batch_spacing_ms_range",
+      sql`${table.spacingMs} IS NULL OR (${table.spacingMs} >= ${sql.raw(String(MIN_SPACING_MS))} AND ${table.spacingMs} <= ${sql.raw(String(MAX_SPACING_MS))})`,
+    ),
+  ],
 );
 
 export type PostBatchRow = typeof postBatches.$inferSelect;
