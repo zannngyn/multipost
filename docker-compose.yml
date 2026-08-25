@@ -69,6 +69,14 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       AUTH_ALLOWED_DOMAINS: ${AUTH_ALLOWED_DOMAINS:-example.com}
+      # The e-mail half of the escape hatch (M3.1). Same failure mode as the
+      # Facebook list below, and it bit us the same way: `deploy/env/*.env.example`
+      # ships the variable, an operator fills it in on the VPS, and nothing
+      # reaches the container because this file passes env EXPLICITLY rather than
+      # through env_file. `isBootstrapAdminEmail()` then answers false for every
+      # address and the deployment has no bootstrap admin at all — with no error
+      # anywhere, because an empty list is a legal configuration.
+      AUTH_BOOTSTRAP_ADMINS: ${AUTH_BOOTSTRAP_ADMINS:-}
       # E5.2. An ABSENT list means nobody can sign in with Facebook (see
       # composition/config.ts) — leaving it out of compose silently disabled the
       # whole Facebook sign-in door in every container.
