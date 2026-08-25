@@ -359,8 +359,8 @@ export function ComposeFocus() {
               ) : (
                 <div className="flex flex-wrap items-center gap-3">
                   <p id={codeHintId} className="text-[13px] text-[var(--muted-foreground)]">
-                    Gõ vài ký tự đầu của mã rồi chọn trong danh sách. Mã đã hết hàng không đăng
-                    được — danh sách nói rõ ngay khi bạn chọn.
+                    Gõ vài ký tự đầu của mã rồi chọn trong danh sách — danh sách chỉ gợi ý mã
+                    đăng được. Mã đang vướng vẫn gõ thẳng được, hệ thống sẽ nói rõ lý do.
                   </p>
                   <span className="flex-1" />
                   {/* Not in the mock, which only draws the resolved state: the

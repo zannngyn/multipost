@@ -26,7 +26,7 @@ import { listCatalogProducts } from "@/ui/services/catalog.api";
  */
 
 /** Enough to scan without scrolling; the field itself is the way to narrow. */
-const SUGGESTION_LIMIT = 8;
+export const SUGGESTION_LIMIT = 8;
 
 export function useProductSuggestions(query: string, enabled: boolean) {
   const { tenantKey, isResolved } = useActiveTenant();

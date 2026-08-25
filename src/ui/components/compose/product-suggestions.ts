@@ -100,6 +100,78 @@ function describeMeta(product: CatalogProduct): string {
 }
 
 /**
+ * The rows the picker may actually OFFER.
+ *
+ * The query already asks the catalog for `status: "ok"`, so this is the second
+ * of two gates, and it is deliberate: `composable` is decided by the usecase,
+ * `describeBlock` above is decided here, and the two are different code. If they
+ * ever disagree the safe answer is to drop the row — a suggestion that cannot be
+ * posted costs the operator a click and teaches nothing.
+ */
+export function selectableSuggestions(
+  products: readonly CatalogProduct[],
+): readonly ProductSuggestion[] {
+  return products.map(toProductSuggestion).filter((item) => !item.disabled);
+}
+
+export interface SuggestionEmptyState {
+  readonly title: string;
+  readonly hint: string;
+}
+
+/**
+ * What an empty dropdown says.
+ *
+ * THREE answers, not one, because they send the operator to three different
+ * places: nothing synced at all, nothing matched the search, or things matched
+ * and every one of them is blocked. Collapsing the third into "không có mã nào
+ * khớp" is a sentence the product screen then contradicts.
+ *
+ * `hiddenCount` is read FIRST: it is the only branch that can be true while the
+ * search did match, so testing the query first would hide it.
+ */
+export function suggestionEmptyState(query: string, hiddenCount: number): SuggestionEmptyState {
+  const q = query.trim();
+
+  if (hiddenCount > 0) {
+    return {
+      title: "Không có mã nào đăng được",
+      hint: `${hiddenCount} mã đang vướng (hết hàng, thiếu ảnh, hoặc dữ liệu lệch nhau) nên không hiện ở đây. Mở màn Sản phẩm để xem lý do từng mã.`,
+    };
+  }
+  if (q.length === 0) {
+    return {
+      title: "Danh mục đang trống",
+      hint: "Chạy đồng bộ dữ liệu ở màn Sản phẩm, hoặc gõ thẳng mã nếu bạn biết chắc.",
+    };
+  }
+  return {
+    title: `Không có mã nào khớp “${q}”`,
+    hint: "Mã vừa thêm vào bảng dữ liệu mà chưa đồng bộ vẫn gõ thẳng được — hệ thống sẽ tra lại khi bạn bấm nút.",
+  };
+}
+
+/**
+ * The line under the list.
+ *
+ * It exists because the list is FILTERED and a filtered list that does not say
+ * so reads as "chỉ có ngần này mã" — the operator then goes hunting for a code
+ * that is in the catalog but cannot be posted. It names the page size too: "khớp
+ * 120 mã" over eight visible rows is otherwise read as a broken list.
+ */
+export function suggestionFooterText(
+  okCount: number,
+  hiddenCount: number,
+  limit: number,
+): string {
+  const hidden = hiddenCount > 0 ? `, ẩn ${hiddenCount} mã đang vướng (xem ở màn Sản phẩm)` : "";
+  return (
+    `Danh sách chỉ gợi ý mã đăng được, tối đa ${limit} mã một lần — gõ thêm ký tự để thu hẹp. ` +
+    `Khớp ${okCount} mã đăng được${hidden}. Mã chưa đồng bộ vẫn gõ thẳng được.`
+  );
+}
+
+/**
  * Where the highlight goes on ↓ / ↑.
  *
  * Wraps at both ends (core-form-inputs §bàn phím) and answers -1 for an empty

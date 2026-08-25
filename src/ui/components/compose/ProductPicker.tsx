@@ -6,13 +6,15 @@ import type { UseFormRegisterReturn } from "react-hook-form";
 import { cn } from "@/shared/utils";
 import {
   nextHighlight,
-  toProductSuggestion,
+  selectableSuggestions,
+  suggestionEmptyState,
+  suggestionFooterText,
   type ProductSuggestion,
 } from "@/ui/components/compose/product-suggestions";
 import { Button } from "@/ui/components/ui/button";
 import { Input } from "@/ui/components/ui/input";
 import { useDebouncedValue } from "@/ui/hooks/useDebouncedValue";
-import { useProductSuggestions } from "@/ui/hooks/useProductSuggestions";
+import { SUGGESTION_LIMIT, useProductSuggestions } from "@/ui/hooks/useProductSuggestions";
 import { presentApiError } from "@/ui/components/feedback/present-api-error";
 
 /**
@@ -105,14 +107,7 @@ export function ProductPicker({
   const query = useDebouncedValue(value, 300);
   const suggestions = useProductSuggestions(query, isOpen);
 
-  // The query already asks for `status: "ok"`, and the filter repeats it on the
-  // rows: the two verdicts are computed by different code (the usecase's
-  // `composable`, this module's `describeBlock`), and if they ever disagree the
-  // safe answer is to drop the row rather than to offer a post that cannot go
-  // out.
-  const items: ProductSuggestion[] = (suggestions.data?.items ?? [])
-    .map(toProductSuggestion)
-    .filter((item) => !item.disabled);
+  const items: readonly ProductSuggestion[] = selectableSuggestions(suggestions.data?.items ?? []);
   const totals = suggestions.data?.totals ?? null;
   /** Codes that matched the search but cannot be posted — counted, not listed. */
   const hiddenCount = totals?.blocked ?? 0;
@@ -267,24 +262,11 @@ export function ProductPicker({
                 </div>
               ) : items.length === 0 ? (
                 <div className="px-2.5 py-3">
-                  {/* Three different empty answers, because they send the
-                      operator to three different places: nothing synced yet,
-                      nothing matched, or things matched but none of them can be
-                      posted. Collapsing the third into "không có mã nào khớp"
-                      would be a lie the product screen then contradicts. */}
                   <p className="text-sm font-medium">
-                    {hiddenCount > 0
-                      ? "Không có mã nào đăng được"
-                      : query.trim().length === 0
-                        ? "Danh mục đang trống"
-                        : `Không có mã nào khớp “${query.trim()}”`}
+                    {suggestionEmptyState(query, hiddenCount).title}
                   </p>
                   <p className="text-muted-foreground pt-1 text-xs leading-relaxed">
-                    {hiddenCount > 0
-                      ? `${hiddenCount} mã đang vướng (hết hàng, thiếu ảnh, hoặc dữ liệu lệch nhau) nên không hiện ở đây. Mở màn Sản phẩm để xem lý do từng mã.`
-                      : query.trim().length === 0
-                        ? "Chạy đồng bộ dữ liệu ở màn Sản phẩm, hoặc gõ thẳng mã nếu bạn biết chắc."
-                        : "Mã vừa thêm vào bảng dữ liệu mà chưa đồng bộ vẫn gõ thẳng được — hệ thống sẽ tra lại khi bạn bấm nút."}
+                    {suggestionEmptyState(query, hiddenCount).hint}
                   </p>
                 </div>
               ) : (
@@ -323,14 +305,9 @@ export function ProductPicker({
               )}
             </div>
 
-            {/* Says out loud that the list is filtered. Without this line a
-                short list reads as "chỉ có ngần này mã", and the operator goes
-                looking for a code that IS in the catalog but cannot be posted. */}
             {totals !== null ? (
               <p className="border-border text-muted-foreground border-t px-3 py-2 text-xs">
-                Chỉ hiện mã đăng được: {totals.ok}/{totals.total} mã đã đồng bộ
-                {hiddenCount > 0 ? ` · ẩn ${hiddenCount} mã đang vướng (xem ở màn Sản phẩm)` : ""}.
-                Mã chưa đồng bộ vẫn gõ thẳng được.
+                {suggestionFooterText(totals.ok, hiddenCount, SUGGESTION_LIMIT)}
               </p>
             ) : null}
           </div>
