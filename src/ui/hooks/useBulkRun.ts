@@ -3,6 +3,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { DEFAULT_CAPTION_TONE, type CaptionTone } from "@/shared/caption-tone";
+
 import {
   isBulkSkipCode,
   renderCaptionTemplate,
@@ -55,6 +57,8 @@ export interface BulkRunInput {
   codes: readonly string[];
   channelIds: readonly string[];
   captionMode: BulkCaptionMode;
+  /** Tông giọng gửi kèm mỗi lời gọi AI. Mặc định = không thêm gì vào prompt. */
+  captionTone?: CaptionTone;
   captionTemplate: string;
   /**
    * E8.1 — one publish instant (ISO) for EVERY code and channel of this run;
@@ -62,6 +66,8 @@ export interface BulkRunInput {
    * apart, so a run of 20 codes hẹn cùng giờ goes out in order, not at once.
    */
   scheduledAt?: string | null;
+  /** Giãn cách riêng của lô, mili-giây. Bỏ trống = theo cấu hình công ty. */
+  spacingMs?: number | null;
 }
 
 export type BulkRunPhase = "idle" | "running" | "stopping" | "finished";
@@ -130,6 +136,12 @@ export function useBulkRun() {
   const { tenantKey } = useActiveTenant();
   const [rows, setRows] = useState<BulkRunRow[]>([]);
   const [phase, setPhase] = useState<BulkRunPhase>("idle");
+  /**
+   * Máy chủ đã từ chối trường `tone` và lời gọi phải chạy lại KHÔNG có nó.
+   * Rule 5 — không im lặng bỏ qua: caption viết bằng giọng mặc định trong khi
+   * ô chọn nói khác là đúng thứ luật đó cấm, nên cờ này phải nổi lên màn hình.
+   */
+  const [toneDropped, setToneDropped] = useState(false);
 
   const stopRef = useRef(false);
   /** Guards against a second "Chạy" click and against a stale run writing rows. */
@@ -192,6 +204,7 @@ export function useBulkRun() {
     runIdRef.current += 1;
     setRows([]);
     setPhase("idle");
+    setToneDropped(false);
   }, [phase]);
 
   const start = useCallback(
@@ -203,6 +216,8 @@ export function useBulkRun() {
       const runId = runIdRef.current + 1;
       runIdRef.current = runId;
       stopRef.current = false;
+      // Lượt mới, cảnh báo cũ không được dính lại.
+      setToneDropped(false);
       // Per-run counter: the `finally` of the previous run already flushed what
       // it created, and starting from a clean 0 means nobody has to reason
       // across runs about who owes the cache an invalidation.
@@ -253,9 +268,11 @@ export function useBulkRun() {
                 {
                   content: composed.content,
                   channels: [BASE_CHANNEL_ID],
+                  tone: input.captionTone ?? DEFAULT_CAPTION_TONE,
                 },
                 signal,
               );
+              if (captions.toneDropped) setToneDropped(true);
               caption =
                 captions.generated.find((item) => item.channelId === BASE_CHANNEL_ID)?.text.trim() ??
                 "";
@@ -295,6 +312,9 @@ export function useBulkRun() {
                 channelIds: input.channelIds,
                 captionByChannel,
                 scheduledAt: input.scheduledAt ?? null,
+                // `?? null` chứ không `||`: 0 là "đăng liên tục", một lựa chọn
+                // thật, không phải "chưa chọn".
+                spacingMs: input.spacingMs ?? null,
                 // Cover first — `composePost` already ordered the album that way.
                 media: composed.media.map((asset) => ({
                   driveFileId: asset.driveFileId,
@@ -336,6 +356,7 @@ export function useBulkRun() {
   return {
     rows,
     phase,
+    toneDropped,
     summary: summarise(rows),
     isRunning: phase === "running" || phase === "stopping",
     start,

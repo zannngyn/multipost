@@ -298,6 +298,12 @@ export interface CreatePostBatchParams {
    * by the domain: a bad time blocks ONE channel with a reason, never the lô.
    */
   scheduledAt?: string | null;
+  /**
+   * Khoảng giãn cách RIÊNG của lô này, tính bằng MILI-GIÂY. Bỏ trống/null =
+   * dùng cấu hình của công ty như trước nay; `0` là một lựa chọn thật ("đăng
+   * liên tục"), không phải "chưa chọn" — nên đừng rút gọn bằng `||`.
+   */
+  spacingMs?: number | null;
 }
 
 /**
@@ -357,6 +363,7 @@ export async function createPostBatch(
       ...(color ? { color } : {}),
       ...(params.format ? { format: params.format } : {}),
       ...(scheduledAt ? { scheduledAt } : {}),
+      ...(typeof params.spacingMs === "number" ? { spacingMs: params.spacingMs } : {}),
       channelIds: [...params.channelIds],
       captionByChannel: params.captionByChannel,
       // Explicit field list: no URL, no stock, no price travels with a post.

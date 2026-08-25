@@ -56,61 +56,70 @@ export function BulkProgressTable({ rows }: { rows: readonly BulkRunRow[] }) {
           <col className="w-[30%]" />
           <col className="w-[14%]" />
         </colgroup>
-        <thead className="bg-muted/50">
+        <thead className="bg-muted/60 text-xs text-foreground font-semibold">
           <tr className="text-left">
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">
               #
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">
               Mã sản phẩm
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">
               Sản phẩm
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">
               Trạng thái
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">
               Lý do / ghi chú
             </th>
-            <th scope="col" className="px-3 py-2 font-medium whitespace-nowrap">
+            <th scope="col" className="px-3 py-2.5 whitespace-nowrap">
               Lô đăng
             </th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-border/60">
           {rows.map((row, index) => (
-            <tr key={`${row.code}-${index}`} className="border-border border-t align-top">
+            <tr
+              key={`${row.code}-${index}`}
+              className="border-border border-t align-top transition-colors hover:bg-muted/30"
+            >
               <td className="text-foreground-subtle px-3 py-2.5 font-mono text-xs tabular-nums">
                 {index + 1}
               </td>
               {/* The Mono Ledger Rule, and nowrap: a product code broken across
                   two lines is a different string to the eye reading it back to
                   the Sheet. */}
-              <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap">{row.code}</td>
-              <td className="px-3 py-2.5">{row.productName ?? "—"}</td>
+              <td className="px-3 py-2.5 font-mono text-xs font-semibold text-foreground whitespace-nowrap">
+                {row.code}
+              </td>
+              <td className="px-3 py-2.5 text-xs text-foreground font-medium">
+                {row.productName ?? "—"}
+              </td>
               <td className="px-3 py-2.5">
                 <Badge tone={BULK_ROW_STATUS_TONES[row.status]}>
                   {BULK_ROW_STATUS_LABELS[row.status]}
                 </Badge>
               </td>
-              <td className="px-3 py-2.5">
+              <td className="px-3 py-2.5 text-xs">
                 {row.reason ? (
-                  <span className="max-w-prose break-words">{row.reason}</span>
+                  <span className="max-w-prose break-words text-foreground leading-relaxed">
+                    {row.reason}
+                  </span>
                 ) : (
                   <span className="text-muted-foreground">—</span>
                 )}
                 {row.errorCode ? (
-                  <span className="text-foreground-subtle block font-mono text-xs">
+                  <span className="text-foreground-subtle block font-mono text-[11px] mt-0.5">
                     Mã lỗi: {row.errorCode}
                   </span>
                 ) : null}
               </td>
-              <td className="px-3 py-2.5">
+              <td className="px-3 py-2.5 text-xs">
                 {row.batchId ? (
                   <Link
                     href={`/batches/${encodeURIComponent(row.batchId)}`}
-                    className="underline underline-offset-4"
+                    className="font-medium text-primary underline underline-offset-4 hover:opacity-80 transition-opacity"
                   >
                     Xem lô ({row.channelCount} kênh)
                   </Link>

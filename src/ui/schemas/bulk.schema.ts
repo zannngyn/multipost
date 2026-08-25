@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { CAPTION_TONES } from "@/shared/caption-tone";
+import { MAX_SPACING_MS, MS_PER_MINUTE } from "@/shared/publish-spacing";
+
 
 /**
  * Contracts of the "Chạy hàng loạt" screen (E10.5).
@@ -168,10 +171,54 @@ export const BulkRunFormSchema = z
     // No `tenantId` (M1.4): the run belongs to the company in the session.
     codesText: z.string().min(1, "Nhập ít nhất một mã sản phẩm."),
     captionMode: z.enum(BULK_CAPTION_MODES),
+    /**
+     * Tông giọng cho nhánh AI — CÙNG danh sách đóng với màn Soạn bài
+     * (`shared/caption-tone`), nên hai màn không thể lệch nhau. Nhánh mẫu chung
+     * bỏ qua giá trị này: mẫu do người viết, không có gì để chỉnh giọng.
+     *
+     * Không dùng `.default()`: nó làm kiểu vào/ra của schema lệch nhau và
+     * react-hook-form từ chối resolver. Giá trị mặc định do `defaultValues`
+     * của form đặt, chỉ một chỗ.
+     */
+    captionTone: z.enum(CAPTION_TONES),
     captionTemplate: z.string(),
+    /**
+     * Giãn cách riêng của lượt chạy, tính bằng PHÚT.
+     *
+     * Là CHUỖI vì nó đến từ một ô nhập text: đăng ký ô số với `valueAsNumber`
+     * thì ô rỗng ra `NaN`, và `NaN` lọt qua mọi phép so sánh mà không ai thấy.
+     * Rỗng = dùng cấu hình của công ty. `"0"` là lựa chọn thật ("đăng liên
+     * tục"), không phải chưa chọn — nên không được rút gọn bằng `||`.
+     */
+    spacingMinutes: z.string(),
   })
   .superRefine((values, ctx) => {
     const parsed = parseBulkCodes(values.codesText);
+
+    // Edge case trước: ô rỗng là hợp lệ và có nghĩa riêng, không phải lỗi.
+    const rawSpacing = values.spacingMinutes.trim();
+    if (rawSpacing.length > 0) {
+      const minutes = Number(rawSpacing);
+      if (!Number.isFinite(minutes) || !Number.isInteger(minutes)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["spacingMinutes"],
+          message: "Nhập số phút nguyên, ví dụ 5. Để trống nếu muốn dùng cấu hình của công ty.",
+        });
+      } else if (minutes < 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["spacingMinutes"],
+          message: "Số phút không được âm — nhập 0 nếu muốn đăng liên tục.",
+        });
+      } else if (minutes * MS_PER_MINUTE > MAX_SPACING_MS) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["spacingMinutes"],
+          message: `Tối đa ${MAX_SPACING_MS / MS_PER_MINUTE} phút (24 giờ).`,
+        });
+      }
+    }
 
     if (parsed.codes.length === 0) {
       ctx.addIssue({
