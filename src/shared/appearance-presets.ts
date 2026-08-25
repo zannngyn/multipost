@@ -141,6 +141,14 @@ interface PaletteRoles {
   readonly inkMuted: OklchColor;
   /** The third tone: eyebrows, mono metadata. The tightest ratio in the set. */
   readonly inkSubtle: OklchColor;
+  /**
+   * A panel that stands OFF the page: the ink used as a surface in the light
+   * scheme, and — since there is nothing left to invert on dark cloth — an
+   * elevated surface in the dark one. Same role, both schemes.
+   */
+  readonly inverseSurface: OklchColor;
+  /** The text that stands on it. */
+  readonly inverseForeground: OklchColor;
   /** Hairline borders — the ink at low alpha, never a grey. */
   readonly hairline: OklchColor;
   /** The slightly stronger hairline an input wears. */
@@ -165,6 +173,8 @@ const LIGHT_ROLES: PaletteRoles = {
   ink: { l: 0.28, c: 0.018, h: 55 },
   inkMuted: { l: 0.47, c: 0.02, h: 58 },
   inkSubtle: { l: 0.53, c: 0.02, h: 60 },
+  inverseSurface: { l: 0.28, c: 0.018, h: 55 },
+  inverseForeground: { l: 0.955, c: 0.013, h: 84 },
   hairline: { l: 0.28, c: 0.018, h: 55, alpha: 0.12 },
   inputLine: { l: 0.28, c: 0.018, h: 55, alpha: 0.16 },
 };
@@ -194,6 +204,8 @@ const DARK_ROLES: PaletteRoles = {
   ink: { l: 0.94, c: 0.01, h: 84 },
   inkMuted: { l: 0.72, c: 0.016, h: 65 },
   inkSubtle: { l: 0.66, c: 0.018, h: 60 },
+  inverseSurface: { l: 0.38, c: 0.016, h: 60 },
+  inverseForeground: { l: 0.96, c: 0.01, h: 84 },
   hairline: { l: 1, c: 0, h: 0, alpha: 0.12 },
   inputLine: { l: 1, c: 0, h: 0, alpha: 0.16 },
 };
@@ -208,11 +220,13 @@ const SURFACE_ROLES: readonly PaletteRole[] = [
   "sunken",
   "mediaEmpty",
   "mediaCover",
+  "inverseSurface",
 ];
 const INK_ROLES: readonly PaletteRole[] = [
   "ink",
   "inkMuted",
   "inkSubtle",
+  "inverseForeground",
   "hairline",
   "inputLine",
 ];
@@ -249,6 +263,7 @@ const TOKEN_ROLES = {
   "--muted": "sunken",
   "--media-empty": "mediaEmpty",
   "--media-empty-cover": "mediaCover",
+  "--inverse-surface": "inverseSurface",
 
   // The cloth — ink and hairlines
   "--foreground": "ink",
@@ -258,6 +273,7 @@ const TOKEN_ROLES = {
   "--sidebar-foreground": "ink",
   "--muted-foreground": "inkMuted",
   "--foreground-subtle": "inkSubtle",
+  "--inverse-foreground": "inverseForeground",
   "--border": "hairline",
   "--input": "inputLine",
   "--sidebar-border": "hairline",
@@ -299,6 +315,19 @@ export interface AppearancePreset {
  * NO RED PRESET, on purpose: `--destructive` is madder at hue 30, and an action
  * colour a few degrees from the delete colour is the one confusion this palette
  * must never sell. The warm slot is `ca-phe`.
+ *
+ * `son-mai` IS THE ONE EXCEPTION TO THAT RULE, and it was asked for explicitly:
+ * its gold is the hue `--warning` already occupies. The separation was measured
+ * rather than hoped for. In OKLab distance the action colour sits 0.312 from
+ * the warning colour in the light scheme — the same room the shipped `ca-phe`
+ * has (0.313), and not far off indigo's 0.383. In the DARK scheme it is only
+ * 0.123, because both are light golds there and only lightness separates them.
+ * For scale: `globals.css` records 0.084 as too close ("hai cái pill cách màn
+ * hình một mét trông như một màu") and moved dark `--info` to fix it. 0.123 is
+ * comfortably better than the case that was rejected and clearly worse than the
+ * rest of this table, so: a gold "Lưu" button and a gold "cảnh báo" badge on one
+ * dark screen will read as related. Hue does not fix it — sweeping 70°–100°
+ * moves the distance by 0.007 — only lightness would, and lightness is frozen.
  */
 export const APPEARANCE_PRESETS = [
   {
@@ -310,6 +339,21 @@ export const APPEARANCE_PRESETS = [
     groundShift: 0,
     surfaceChromaScale: 1,
     inkChromaScale: 1,
+  },
+  {
+    id: "son-mai",
+    label: "Sơn mài",
+    description: "Nền than ấm, nhấn vàng nghệ — tông của thẻ thiết lập, trải ra cả sản phẩm.",
+    // Turmeric, the hue the setup dock already wears. It sits close to
+    // `--warning`, which is the same gold — see the note below the table.
+    hue: 85,
+    chromaScale: 1,
+    groundShift: 1,
+    // Lower than the other presets on purpose: lacquer is black and gold, so
+    // the cloth stays near-neutral (warm ivory in light, warm charcoal in dark)
+    // and the gold does all the talking. A tinted ground would fight it.
+    surfaceChromaScale: 2.5,
+    inkChromaScale: 1.5,
   },
   {
     id: "ngoc-luc",
@@ -367,10 +411,26 @@ export type AppearancePresetId = (typeof APPEARANCE_PRESETS)[number]["id"];
 
 /**
  * What the app wears when nobody has chosen anything — and what "hoàn nguyên"
- * returns to. It is the approved direction, so an empty settings table and a
- * fresh install look exactly like the design that was signed off.
+ * returns to.
+ *
+ * `son-mai`, not `cham`: the tone of the setup dock — warm charcoal and gold —
+ * was asked for as the tone of the whole product, and a default nobody has to
+ * go and select is the only way "cả hệ thống" is actually true on a fresh
+ * install.
+ *
+ * `cham` stays in the table and stays the REFERENCE: it is the only preset
+ * that reproduces `globals.css` value for value, which is what the tests
+ * measure everything else against. Reference and default are two different
+ * jobs, and this is the one line that decides the second.
  */
-export const DEFAULT_APPEARANCE_PRESET_ID: AppearancePresetId = "cham";
+export const DEFAULT_APPEARANCE_PRESET_ID: AppearancePresetId = "son-mai";
+
+/**
+ * The preset that reproduces the approved "Sổ mẫu vải" palette exactly. Used
+ * by the tests as the baseline every other preset is compared against — never
+ * as "what the app looks like".
+ */
+export const REFERENCE_APPEARANCE_PRESET_ID: AppearancePresetId = "cham";
 
 export const APPEARANCE_PRESET_IDS = APPEARANCE_PRESETS.map(
   (preset) => preset.id,

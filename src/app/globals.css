@@ -18,8 +18,9 @@
    the neutral stylesheet stopped matching anything. Regenerate with
    `pnpm exec astryx theme build src/ui/theme/mysp-theme.ts`. */
 @import "../ui/theme/mysp.css";
-/* Platform-admin colour presets (M3.4). Each block re-values ONLY the variables
-   cut from the dye, scoped to `[data-theme-preset]` on <html>. It sits up here
+/* Platform-admin colour presets (M3.4). Each block re-values the ground, every
+   surface above it, the ink and the action colour — never a lightness and
+   never a status hue — scoped to `[data-theme-preset]` on <html>. It sits up here
    with the other imports because CSS demands every @import precede the rules —
    position is irrelevant anyway: `:root[data-theme-preset=…]` outranks the bare
    `:root` below on specificity, and `:root.dark[data-theme-preset=…]` outranks
@@ -71,6 +72,14 @@
      surface — never a fake picture an operator could "approve" unseen. */
   --color-media-empty: var(--media-empty);
   --color-media-empty-cover: var(--media-empty-cover);
+  /* An INVERTED panel: ink-coloured in the light scheme, so a floating dock
+     reads as a different plane from the page it sits on. In the dark scheme
+     there is nothing left to invert, so it becomes an ELEVATED surface
+     instead — the same role, the same name, the way Material's
+     "inverse surface" works. Without it, `bg-foreground` on a dark page
+     paints a near-white slab. */
+  --color-inverse-surface: var(--inverse-surface);
+  --color-inverse-foreground: var(--inverse-foreground);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -130,6 +139,9 @@
   --info-foreground: oklch(0.47 0.11 257);
   --media-empty: oklch(0.92 0.02 84);
   --media-empty-cover: oklch(0.90 0.025 80);
+  /* The ink, used as a surface: 12.6:1 against the muslin on it. */
+  --inverse-surface: oklch(0.28 0.018 55);
+  --inverse-foreground: oklch(0.955 0.013 84);
   /* Hairlines are the ink at low alpha, not a grey: on an unbleached ground a
      neutral grey border reads cold and detaches the card from its background. */
   --border: oklch(0.28 0.018 55 / 12%);
@@ -142,7 +154,13 @@
   --chart-3: oklch(0.68 0.11 160);
   --chart-4: oklch(0.76 0.12 75);
   --chart-5: oklch(0.54 0.15 30);
-  --radius: 0.5rem; /* cạnh cắt vải — squarer than the old pastel world */
+  /* The roundest the design system allows. Astryx caps its radius multiplier at
+     2 (`astryx docs theme`), and `mysp-theme.ts` sets it there; 1rem is the
+     value that puts an interactive control on the same 16px on this side, so a
+     shadcn button and an Astryx button never sit side by side with different
+     corners. Everything above derives from it, so this is the ONE number to
+     move if the shape is ever revisited. */
+  --radius: 1rem;
   --sidebar: oklch(0.984 0.007 84);
   --sidebar-foreground: oklch(0.28 0.018 55);
   --sidebar-primary: oklch(0.45 0.105 262);
@@ -198,6 +216,11 @@
   --info-foreground: oklch(0.85 0.075 235);
   --media-empty: oklch(0.33 0.018 60);
   --media-empty-cover: oklch(0.36 0.022 75);
+  /* Not an inversion any more — see the note in @theme. A step ABOVE the card
+     so a floating dock still reads as its own plane, with the page's own ink
+     on it. 8.9:1. */
+  --inverse-surface: oklch(0.38 0.016 60);
+  --inverse-foreground: oklch(0.96 0.01 84);
   /* Shadows are near-invisible on a dark ground — elevation comes from a
      lighter hairline instead (core-design-tokens §dark mode). */
   --border: oklch(1 0 0 / 12%);

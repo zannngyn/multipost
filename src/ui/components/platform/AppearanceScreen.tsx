@@ -234,7 +234,7 @@ export function AppearanceScreen() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        label="Hoàn nguyên về bản gốc"
+                        label="Về bộ mặc định"
                         isDisabled={
                           update.isPending ||
                           (livePresetId === DEFAULT_APPEARANCE_PRESET_ID && !hasUnsavedPick)
@@ -242,7 +242,8 @@ export function AppearanceScreen() {
                         onClick={() => handlePick(DEFAULT_APPEARANCE_PRESET_ID)}
                       />
                       <Text type="supporting">
-                        Bản gốc là Chàm — bộ màu của thiết kế đã duyệt.
+                        Mặc định là Sơn mài — nền than ấm, nhấn vàng nghệ. Chàm là bản gốc của
+                        thiết kế đã duyệt, vẫn chọn được trong danh sách.
                       </Text>
                     </HStack>
                   ) : null}

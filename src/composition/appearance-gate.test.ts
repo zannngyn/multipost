@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AppError } from "@/core/domain/errors";
 import type { Clock, Logger } from "@/core/ports/infra";
 import type { PlatformAppearance } from "@/core/usecases/platform-appearance";
+import { DEFAULT_APPEARANCE_PRESET_ID } from "@/shared/appearance-presets";
 
 import { makeAppearanceGate } from "./appearance-gate";
 
@@ -67,6 +68,7 @@ describe("appearance gate", () => {
 
     const gate = makeAppearanceGate({ appearance, clock: makeClock(), logger: makeLogger() });
 
+    // The STORED value, not the default: this is about the cache, not fallback.
     await expect(gate.get()).resolves.toMatchObject({ presetId: "cham" });
     await gate.set({ ...ACTOR, presetId: "tia" });
     // No clock advance: the TTL has not moved, and it must not matter.
@@ -104,7 +106,10 @@ describe("appearance gate", () => {
       logger,
     });
 
-    await expect(gate.get()).resolves.toEqual({ presetId: "cham", isDefault: true });
+    await expect(gate.get()).resolves.toEqual({
+      presetId: DEFAULT_APPEARANCE_PRESET_ID,
+      isDefault: true,
+    });
     expect(logger.error).toHaveBeenCalledTimes(1);
     expect(logger.error.mock.calls[0][1]).toMatchObject({ error_code: "DB_ERROR" });
   });
@@ -121,7 +126,7 @@ describe("appearance gate", () => {
       logger: makeLogger(),
     });
 
-    await expect(gate.get()).resolves.toMatchObject({ presetId: "cham" });
+    await expect(gate.get()).resolves.toMatchObject({ presetId: DEFAULT_APPEARANCE_PRESET_ID });
     await expect(gate.get()).resolves.toMatchObject({ presetId: "man" });
   });
 
@@ -129,7 +134,7 @@ describe("appearance gate", () => {
     const boom = new AppError("INVALID_INPUT", { message: "Unknown appearance preset" });
     const gate = makeAppearanceGate({
       appearance: {
-        get: vi.fn(async () => ({ presetId: "cham", isDefault: true })),
+        get: vi.fn(async () => ({ presetId: DEFAULT_APPEARANCE_PRESET_ID, isDefault: true })),
         set: vi.fn(async () => {
           throw boom;
         }),
@@ -142,7 +147,7 @@ describe("appearance gate", () => {
   });
 
   it("invalidate() forces the next read to go back to the usecase", async () => {
-    const get = vi.fn(async () => ({ presetId: "cham" as const, isDefault: true }));
+    const get = vi.fn(async () => ({ presetId: DEFAULT_APPEARANCE_PRESET_ID, isDefault: true }));
     const gate = makeAppearanceGate({
       appearance: { get, set: vi.fn() } as unknown as PlatformAppearance,
       clock: makeClock(),

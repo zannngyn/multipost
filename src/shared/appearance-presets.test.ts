@@ -4,6 +4,7 @@ import {
   APPEARANCE_PRESETS,
   APPEARANCE_TOKEN_NAMES,
   DEFAULT_APPEARANCE_PRESET_ID,
+  REFERENCE_APPEARANCE_PRESET_ID,
   derivePresetColors,
   derivePresetTokens,
   findAppearancePreset,
@@ -72,9 +73,17 @@ const MIN_CONTRAST = 4.5;
 const EVERY_PRESET = APPEARANCE_PRESETS.map((preset) => [preset.id, preset] as const);
 
 describe("appearance preset table", () => {
-  it("has the approved direction as its default", () => {
-    expect(DEFAULT_APPEARANCE_PRESET_ID).toBe("cham");
+  it("defaults to the lacquer tone the product was asked to wear", () => {
+    expect(DEFAULT_APPEARANCE_PRESET_ID).toBe("son-mai");
     expect(isAppearancePresetId(DEFAULT_APPEARANCE_PRESET_ID)).toBe(true);
+  });
+
+  it("keeps a reference preset that reproduces the approved palette", () => {
+    // Separate from the default on purpose: every measurement below compares
+    // against this one, so it has to stay the untouched original whatever the
+    // product happens to ship as its out-of-the-box colour.
+    expect(REFERENCE_APPEARANCE_PRESET_ID).toBe("cham");
+    expect(isAppearancePresetId(REFERENCE_APPEARANCE_PRESET_ID)).toBe(true);
   });
 
   it("has unique ids", () => {
@@ -104,7 +113,7 @@ describe("appearance preset table", () => {
 
 describe.each(SCHEMES)("preset colours (%s scheme)", (scheme) => {
   it("never moves lightness — the invariant the contrast argument rests on", () => {
-    const base = derivePresetColors(findAppearancePreset(DEFAULT_APPEARANCE_PRESET_ID), scheme);
+    const base = derivePresetColors(findAppearancePreset(REFERENCE_APPEARANCE_PRESET_ID), scheme);
 
     for (const preset of APPEARANCE_PRESETS) {
       const colors = derivePresetColors(preset, scheme);
@@ -148,6 +157,8 @@ describe.each(SCHEMES)("preset colours (%s scheme)", (scheme) => {
       // A selected row: its own ink on its own tint, and body ink over it too.
       ["wash ink on the wash", c.washInk, c.wash],
       ["body ink on the wash", c.ink, c.wash],
+      // The floating setup dock: a plane of its own, in both schemes.
+      ["inverse ink on the inverse surface", c.inverseForeground, c.inverseSurface],
     ];
 
     for (const [what, foreground, background] of pairs) {
@@ -167,8 +178,8 @@ describe.each(SCHEMES)("preset colours (%s scheme)", (scheme) => {
   });
 });
 
-describe("the default preset reproduces globals.css", () => {
-  const cham = findAppearancePreset(DEFAULT_APPEARANCE_PRESET_ID);
+describe("the reference preset reproduces globals.css", () => {
+  const cham = findAppearancePreset(REFERENCE_APPEARANCE_PRESET_ID);
 
   it("emits the light values the palette already ships", () => {
     const tokens = derivePresetTokens(cham, "light");
@@ -251,6 +262,10 @@ describe("what a preset must NOT repaint", () => {
       "--sidebar-border",
       "--media-empty",
       "--media-empty-cover",
+      // Missing this pair is what turned the setup dock into a near-white
+      // slab the day the dark scheme was switched on.
+      "--inverse-surface",
+      "--inverse-foreground",
       "--primary",
       "--accent",
       "--ring",
