@@ -138,7 +138,7 @@ export function DockPill({
         type="button"
         onClick={onExpand}
         className={cn(
-          "group bg-foreground text-background flex items-center gap-2.5 rounded-full py-2 pr-4 pl-2 shadow-lg",
+          "group bg-inverse-surface text-inverse-foreground flex items-center gap-2.5 rounded-full py-2 pr-4 pl-2 shadow-lg",
           "focus-visible:ring-warning/60 outline-none focus-visible:ring-3",
           "motion-safe:transition-transform motion-safe:duration-200 motion-safe:hover:-translate-y-0.5",
         )}
@@ -148,10 +148,10 @@ export function DockPill({
         <span
           className="relative grid size-7 shrink-0 place-items-center rounded-full"
           style={{
-            background: `conic-gradient(var(--warning) ${percent}%, color-mix(in oklch, var(--background) 25%, transparent) 0)`,
+            background: `conic-gradient(var(--warning) ${percent}%, color-mix(in oklch, var(--inverse-foreground) 25%, transparent) 0)`,
           }}
         >
-          <span className="bg-foreground text-background grid size-5 place-items-center rounded-full font-mono text-[10px] font-semibold">
+          <span className="bg-inverse-surface text-inverse-foreground grid size-5 place-items-center rounded-full font-mono text-[10px] font-semibold">
             {done}
           </span>
         </span>
@@ -211,28 +211,34 @@ export function DockPanel({
     <DockAnchor isInline={isInline}>
       <section
         aria-label="Tiến trình thiết lập công ty"
-        className="bg-foreground text-background w-[min(21rem,calc(100vw-2rem))] overflow-hidden rounded-xl shadow-xl"
+        /* `inverse-surface`, NOT `foreground`. This panel is deliberately a
+           different plane from the page, which in the light scheme means the
+           ink used as a surface — but `bg-foreground` says "whatever the body
+           text is", and once the dark scheme exists that is a NEAR-WHITE slab
+           floating on a dark app. The role token means the plane, not the
+           text colour, and it is defined for both schemes (globals.css). */
+        className="bg-inverse-surface text-inverse-foreground w-[min(21rem,calc(100vw-2rem))] overflow-hidden rounded-xl shadow-xl"
       >
         {/* Head: what this is, where it has got to, and the way out */}
         <header className="flex items-start justify-between gap-3 px-4 pt-3.5 pb-2">
           <div className="min-w-0">
-            <p className="text-background/55 font-mono text-[10px] tracking-[0.18em] uppercase">
+            <p className="text-inverse-foreground/55 font-mono text-[10px] tracking-[0.18em] uppercase">
               Thiết lập
             </p>
             {/*
-              `text-background` stated, not inherited. Astryx's `Theme` scopes
+              `text-inverse-foreground` stated, not inherited. Astryx's `Theme` scopes
               `--color-text-primary` (= `--foreground`) onto text elements
               inside the app shell — the same warm near-black this panel uses as
               its BACKGROUND — so this heading was invisible in the real app
               while looking fine on the dev preview page, which renders outside
               that scope. Nothing on a dark surface here may inherit its colour.
             */}
-            <h2 className="text-background mt-1 truncate text-sm font-semibold">
+            <h2 className="text-inverse-foreground mt-1 truncate text-sm font-semibold">
               {remaining > 0 ? `Còn ${remaining} bước nữa` : "Đăng bài đầu tiên"}
             </h2>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <span className="text-background/55 font-mono text-[11px] tabular-nums">
+            <span className="text-inverse-foreground/55 font-mono text-[11px] tabular-nums">
               {String(done).padStart(2, "0")} / {String(total).padStart(2, "0")}
             </span>
             <button
@@ -241,7 +247,7 @@ export function DockPanel({
               // Collapse, not dismiss: the list is the only place the remaining
               // steps are gathered, so it must always be one click away again.
               aria-label="Thu gọn bảng thiết lập"
-              className="text-background/60 hover:bg-background/10 hover:text-background focus-visible:ring-warning/60 grid size-6 place-items-center rounded outline-none focus-visible:ring-2"
+              className="text-inverse-foreground/60 hover:bg-inverse-foreground/10 hover:text-inverse-foreground focus-visible:ring-warning/60 grid size-6 place-items-center rounded outline-none focus-visible:ring-2"
             >
               <X className="size-3.5" aria-hidden="true" />
             </button>
@@ -256,7 +262,7 @@ export function DockPanel({
             aria-valuemax={total}
             aria-valuenow={done}
             aria-valuetext={`${done} trên ${total} bước đã xong`}
-            className="bg-background/15 h-1 w-full overflow-hidden rounded-full"
+            className="bg-inverse-foreground/15 h-1 w-full overflow-hidden rounded-full"
           >
             <div
               className="bg-warning h-full rounded-full motion-safe:transition-[width] motion-safe:duration-500 motion-safe:ease-out"
@@ -282,7 +288,7 @@ export function DockPanel({
                     "group flex items-center gap-3 rounded-lg px-2.5 py-2 outline-none",
                     "focus-visible:ring-warning/60 focus-visible:ring-2",
                     "motion-safe:transition-colors motion-safe:duration-150",
-                    "hover:bg-background/10",
+                    "hover:bg-inverse-foreground/10",
                     isFlashing && "motion-safe:animate-pulse bg-success/25",
                   )}
                 >
@@ -293,7 +299,7 @@ export function DockPanel({
                       "grid size-5 shrink-0 place-items-center rounded-full border",
                       isDone && "bg-warning border-warning text-foreground",
                       isCurrent && "border-warning text-warning",
-                      !isDone && !isCurrent && "border-background/30 text-background/30",
+                      !isDone && !isCurrent && "border-inverse-foreground/30 text-inverse-foreground/30",
                     )}
                   >
                     {isDone ? (
@@ -306,9 +312,9 @@ export function DockPanel({
                   <span
                     className={cn(
                       "min-w-0 flex-1 truncate text-[13px]",
-                      isDone && "text-background/55",
-                      isCurrent && "text-background font-medium",
-                      !isDone && !isCurrent && "text-background/70",
+                      isDone && "text-inverse-foreground/55",
+                      isCurrent && "text-inverse-foreground font-medium",
+                      !isDone && !isCurrent && "text-inverse-foreground/70",
                     )}
                   >
                     {step.title}
@@ -332,7 +338,7 @@ export function DockPanel({
                   <span
                     className={cn(
                       "shrink-0 font-mono text-[11px] tabular-nums",
-                      isDone ? "text-warning" : "text-background/40",
+                      isDone ? "text-warning" : "text-inverse-foreground/40",
                     )}
                   >
                     {isDone ? (
@@ -349,8 +355,8 @@ export function DockPanel({
           })}
         </ul>
 
-        <footer className="border-background/10 flex items-center justify-between gap-3 border-t px-4 py-2.5">
-          <p className="text-background/45 text-[11px]">Bấm một dòng để mở bước đó.</p>
+        <footer className="border-inverse-foreground/10 flex items-center justify-between gap-3 border-t px-4 py-2.5">
+          <p className="text-inverse-foreground/45 text-[11px]">Bấm một dòng để mở bước đó.</p>
           <Link
             href="/#thiet-lap"
             className="text-warning hover:text-warning/80 focus-visible:ring-warning/60 flex shrink-0 items-center gap-0.5 rounded text-[11px] font-medium outline-none focus-visible:ring-2"

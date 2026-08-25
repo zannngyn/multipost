@@ -35,6 +35,24 @@ import { neutralTheme } from "@astryxdesign/theme-neutral";
 export const myspTheme = defineTheme({
   name: "mysp",
   extends: neutralTheme,
+  /**
+   * THE ROUNDEST THE SYSTEM ALLOWS. `astryx docs theme` caps `multiplier` at 2,
+   * so this is not a taste setting that could be pushed further — it is the
+   * ceiling. It doubles the whole semantic scale at once: inner 4→8, element
+   * 8→16, container 12→24, page 28→56. `--radius-none` and `--radius-full` are
+   * fixed anchors and do not move.
+   *
+   * `--radius` in `globals.css` is set to 1rem to land on the same 16px for an
+   * interactive control — the two scales have to agree or a shadcn button and
+   * an Astryx button sit side by side with different corners, which is the kind
+   * of difference nobody can name and everybody sees.
+   *
+   * `base: 4` is the standard unit and is restated because `radius` REPLACES
+   * the inherited config rather than merging into it (`astryx docs theme`
+   * §Extending: "typography, motion, radius, color — child config replaces base
+   * entirely"). Dropping it here would silently re-anchor the whole scale.
+   */
+  radius: { base: 4, multiplier: 2 },
   tokens: {
     /** Body copy, headings, anything Astryx calls "primary" ink. */
     "--color-text-primary": "var(--foreground)",
@@ -74,10 +92,12 @@ export const myspTheme = defineTheme({
      *  - contrast on the primary button is 7.19:1 light (primary-foreground on
      *    indigo dye) and 5.99:1 dark — both past 4.5:1.
      *
-     * NOT affected, verified in the built CSS: `StatusDot`/`ProgressBar` with
-     * `accent`, and `Banner` with `info`, each re-declare `--color-accent`
-     * on their own element, so they keep the values the neutral theme gave
-     * them and no status colour turns into an action colour.
+     * NOT reached by this line, verified in the built CSS: `StatusDot` and
+     * `ProgressBar` with `accent`, and `Banner` with `info`, each re-declare
+     * `--color-accent` on their OWN element, and a property set on the element
+     * beats one inherited from the theme root. That is a feature for the status
+     * variants and was a bug for `ProgressBar accent`, which stayed the neutral
+     * theme's blue — see the `progressbar` entry under `components` below.
      */
     "--color-accent": "var(--primary)",
     /** The ink that stands on that indigo — one source, class-switched. */
@@ -144,6 +164,27 @@ export const myspTheme = defineTheme({
     "--color-track": "var(--muted)",
   },
   components: {
+    /**
+     * THE PROGRESS BAR'S OWN BLUE.
+     *
+     * The neutral theme re-declares `--color-accent: #0074e2` ON the bar's own
+     * element (built CSS: `.astryx-progressbar.accent`), so the global accent
+     * override at the top of this file never reaches it — a custom property
+     * set on the element beats one inherited from the theme root.
+     *
+     * It went unnoticed while the dye WAS a blue: a #0074e2 bar next to indigo
+     * buttons read as a shade, not as a different colour. The platform colour
+     * presets (M3.4) ended that — on a gold or green preset the setup progress
+     * bar was the one blue object left on the page.
+     *
+     * Only the `accent` variant is touched. `success`, `warning` and `error`
+     * keep the neutral theme's status colours, exactly as `--chart-2..5` and
+     * every status hue do: a bar that says "this failed" must not follow the
+     * brand.
+     */
+    progressbar: {
+      "variant:accent": { "--color-accent": "var(--primary)" },
+    },
     /**
      * THE SR-ONLY TRAP, closed once instead of screen by screen.
      *
