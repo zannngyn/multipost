@@ -306,6 +306,22 @@ export function JobLogScreen() {
         <ApiErrorNotice error={log.error} onRetry={() => void log.refetch()} />
       ) : null}
 
+      {/* A failed page fetch WITH rows already on screen used to show nothing at
+          all: the spinner stopped and the screen went on claiming the list was
+          complete — including inside the "chưa thấy … trong N bài đã tải" empty
+          state, which then tells the operator to load more that cannot load.
+          Same answer the batch screen gives: keep what is on screen, say it is
+          incomplete. */}
+      {log.isError && items.length > 0 ? (
+        <p
+          role="status"
+          className="rounded-lg border border-turmeric/50 bg-turmeric/10 p-3 text-xs text-turmeric-deep"
+        >
+          Lần tải gần nhất thất bại — danh sách bên dưới có thể còn thiếu bài cũ hơn. Bấm “Làm
+          mới” để thử lại.
+        </p>
+      ) : null}
+
       {/* Empty States */}
       {!isFirstLoad && !log.isError && items.length === 0 ? (
         hasFilter || localSearch ? (

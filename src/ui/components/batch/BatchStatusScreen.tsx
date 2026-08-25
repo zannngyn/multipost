@@ -12,13 +12,15 @@ import { Button } from "@/ui/components/ui/button";
 import { copyStatusMessage, useCopyToClipboard } from "@/ui/hooks/useCopyToClipboard";
 import { useBatchStatus } from "@/ui/hooks/usePostBatch";
 import { useChannels } from "@/ui/hooks/useChannels";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
 
 export function BatchStatusScreen({ batchId }: { batchId: string }) {
   const batch = useBatchStatus(batchId);
   const channels = useChannels();
-  const clipboard = useCopyToClipboard("batch", { batch_id: batchId });
+  const { tenantId } = useActiveTenant();
+  const clipboard = useCopyToClipboard("batch", { tenant_id: tenantId, batch_id: batchId });
 
   const isFirstLoad = batch.isPending && batch.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
@@ -99,21 +101,29 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
             </Button>
           </div>
         </div>
+
+        {/* The copy outcome keeps its own region: sharing one with the batch
+            state meant a failed copy hid the state, or the next poll wiped the
+            failure before it was read. */}
+        <p role="status" aria-live="polite" className="text-muted-foreground text-xs">
+          {copyStatusMessage(clipboard.state, "link theo dõi")}
+        </p>
       </header>
 
       {/* Live region: a screen reader hears the outcome without re-reading the
-          page — this screen polls, so the change has no other way to be heard. */}
+          page — this screen polls, so a change has no other way to be heard.
+          What it must NOT announce is the poll itself: `isFetching` flips every
+          3–8s (usePostBatch), and reading a sentence out loud that often makes
+          the screen unusable. Only states that CHANGE something are here; the
+          spinner on the refresh button covers "đang tải". */}
       <p role="status" aria-live="polite" className="text-muted-foreground text-sm">
-        {copyStatusMessage(clipboard.state, "link theo dõi") ||
-          (batch.isError
-            ? "Không đọc được trạng thái lô."
-            : !data
-              ? "Đang tải trạng thái lô…"
-              : settled
-                ? "Lô đã kết thúc — trang dừng tự cập nhật."
-                : batch.isFetching
-                  ? "Đang cập nhật…"
-                  : "Trang tự cập nhật vài giây một lần khi còn bài đang chạy.")}
+        {batch.isError
+          ? "Không đọc được trạng thái lô."
+          : !data
+            ? "Đang tải trạng thái lô…"
+            : settled
+              ? "Lô đã kết thúc — trang dừng tự cập nhật."
+              : "Trang tự cập nhật vài giây một lần khi còn bài đang chạy."}
       </p>
 
       {/* Loading Skeleton */}

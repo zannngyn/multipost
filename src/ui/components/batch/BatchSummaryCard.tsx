@@ -4,6 +4,7 @@ import { Copy, Check, Clock, Calendar, Hash, Sparkles } from "lucide-react";
 import { Token } from "@astryxdesign/core";
 
 import { BatchStatusBadge } from "@/ui/components/post/PostStatusBadge";
+import { useActiveTenant } from "@/ui/hooks/useMe";
 import { copyStatusMessage, useCopyToClipboard } from "@/ui/hooks/useCopyToClipboard";
 import { MANUAL_PRODUCT_BADGE } from "@/ui/schemas/product-origin.schema";
 import {
@@ -22,7 +23,11 @@ const TOTALS_FIELDS = [
 ] as const;
 
 export function BatchSummaryCard({ batch }: { batch: BatchStatusResponse }) {
-  const clipboard = useCopyToClipboard("batch", { batch_id: batch.batchId });
+  const { tenantId } = useActiveTenant();
+  const clipboard = useCopyToClipboard("batch", {
+    tenant_id: tenantId,
+    batch_id: batch.batchId,
+  });
 
   return (
     <section

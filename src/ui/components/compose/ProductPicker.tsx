@@ -17,6 +17,18 @@ import { useDebouncedValue } from "@/ui/hooks/useDebouncedValue";
 import { SUGGESTION_LIMIT, useProductSuggestions } from "@/ui/hooks/useProductSuggestions";
 import { presentApiError } from "@/ui/components/feedback/present-api-error";
 
+/** The empty dropdown, as one call rather than one call per line. */
+function EmptyRow({ query, hiddenCount }: { query: string; hiddenCount: number }) {
+  const empty = suggestionEmptyState(query, hiddenCount);
+
+  return (
+    <div className="px-2.5 py-3">
+      <p className="text-sm font-medium">{empty.title}</p>
+      <p className="text-muted-foreground pt-1 text-xs leading-relaxed">{empty.hint}</p>
+    </div>
+  );
+}
+
 /**
  * The one field that starts a post: type a code, or pick it out of the catalog.
  *
@@ -261,14 +273,7 @@ export function ProductPicker({
                   </p>
                 </div>
               ) : items.length === 0 ? (
-                <div className="px-2.5 py-3">
-                  <p className="text-sm font-medium">
-                    {suggestionEmptyState(query, hiddenCount).title}
-                  </p>
-                  <p className="text-muted-foreground pt-1 text-xs leading-relaxed">
-                    {suggestionEmptyState(query, hiddenCount).hint}
-                  </p>
-                </div>
+                <EmptyRow query={query} hiddenCount={hiddenCount} />
               ) : (
                 <ul id={listId} role="listbox" aria-label="Gợi ý mã sản phẩm đăng được" className="flex flex-col">
                   {items.map((item, index) => (
