@@ -298,7 +298,7 @@ export function OverviewScreen() {
             {/* Above the numbers, and only while there are steps left: a
                 company that cannot publish yet has nothing to count, and the
                 tape below would report three zeroes as if that were news.
-                `#thiet-lap` is where the dock's "Mở đầy đủ" lands. */}
+                `#thiet-lap` is where the dock's footer link lands. */}
             <SetupChecklistSection />
 
             <StatTape

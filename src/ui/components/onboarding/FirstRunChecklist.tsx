@@ -1,17 +1,17 @@
 import {
   Button,
   Card,
-  Divider,
   Heading,
-  ProgressBar,
   Skeleton,
   Stack,
   Text,
 } from "@astryxdesign/core";
 
+import Link from "next/link";
+
+import { cn } from "@/shared/utils";
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
 import type { FirstRunChecklistProps } from "./first-run.types";
-import { FirstRunStepRow } from "./FirstRunStepRow";
 import { SETUP_STEP_PRESENTATION } from "./setup-steps";
 
 export function FirstRunChecklist({
@@ -26,23 +26,20 @@ export function FirstRunChecklist({
   // --- 1. Loading State (Skeleton) -------------------------------------------
   if (isLoading) {
     return (
-      <Card padding={4} aria-hidden="true" className="border-border bg-card">
-        <Stack direction="vertical" gap={3}>
-          <Stack direction="vertical" gap={1}>
-            <Skeleton width={160} height={14} />
-            <Skeleton width={280} height={24} />
-            <Skeleton width="100%" height={16} />
-          </Stack>
-          <Skeleton width="100%" height={12} />
-          <Divider orientation="horizontal" />
-          {/* Six rows, matching the six real ones — a skeleton that is shorter
-              than what replaces it makes the page jump when data lands. */}
-          <Stack direction="vertical" gap={2}>
+      <Card padding={3} aria-hidden="true" className="border-border bg-card">
+        {/* Cùng một dòng, cùng chiều cao với dải thật — skeleton lệch chiều cao
+            làm cả trang nhảy một nhịp khi dữ liệu về. */}
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="flex items-center gap-1">
             {SETUP_STEP_PRESENTATION.map((step) => (
-              <Skeleton key={step.id} width="100%" height={76} />
+              <Skeleton key={step.id} width={24} height={8} />
             ))}
-          </Stack>
-        </Stack>
+          </span>
+          <span className="min-w-0 flex-1">
+            <Skeleton width="60%" height={20} />
+          </span>
+          <Skeleton width={104} height={32} />
+        </div>
       </Card>
     );
   }
@@ -84,46 +81,62 @@ export function FirstRunChecklist({
   // --- 3. Main Checklist State ----------------------------------------------
   return (
     <Stack direction="vertical" gap={4}>
-      {/* Khối thẻ mẫu chính của dải 5 bước */}
-      <Card padding={4} className="border-border bg-card shadow-xs">
-        <Stack direction="vertical" gap={3}>
-          {/* Header thẻ mẫu sổ vải */}
-          <Stack direction="vertical" gap={1}>
-            <Stack direction="horizontal" gap={2} align="center" justify="between" wrap="wrap">
-              <Eyebrow>Dải bước thiết lập — Sổ mẫu vải</Eyebrow>
-              <span className="font-mono text-xs text-foreground-subtle">
-                {doneCount}/{requiredCount} bước bắt buộc
-              </span>
-            </Stack>
-
-            <Heading level={2} className="text-foreground text-lg font-semibold tracking-tight">
-              Thiết lập công ty để sẵn sàng đăng bài
-            </Heading>
-
-            <Text type="supporting" className="text-xs text-muted-foreground">
-              Hoàn thành các bước dưới đây để kết nối kho ảnh, bảng thông tin sản phẩm và Fanpage bán hàng.
-            </Text>
-          </Stack>
-
-          {/* Thanh đo tiến độ 5 bước */}
-          <ProgressBar
-            label="Tiến độ thiết lập công ty"
-            value={doneCount}
-            max={requiredCount}
-            hasValueLabel
-            formatValueLabel={(val, max) => `${val}/${max} bước hoàn thành`}
-            variant={isReady ? "success" : "accent"}
-          />
-
-          <Divider orientation="horizontal" />
-
-          {/* Dải rail 5 bước */}
-          <Stack direction="vertical" gap={2}>
+      {/* Dải thiết lập — MỘT dòng, không phải một danh sách.
+          Danh sách đầy đủ sống ở dock góc phải (SetupDock), nên nhắc lại cả
+          sáu hàng ở đây chỉ đẩy mọi thứ khác xuống dưới màn hình. Khối này trả
+          lời đúng hai câu: còn mấy bước, và bước kế tiếp là bước nào. */}
+      <Card padding={3} className="border-border bg-card shadow-xs">
+        <div className="flex flex-wrap items-center gap-4">
+          {/* Sáu mũi chỉ khâu — trạng thái đọc được bằng mắt, số đọc được bằng
+              trình đọc màn hình. Từng mũi ẩn với a11y để không đọc ra sáu ô rỗng. */}
+          <span
+            role="img"
+            aria-label={`Đã xong ${doneCount} trên ${requiredCount} bước bắt buộc`}
+            className="flex items-center gap-1"
+          >
             {steps.map((step) => (
-              <FirstRunStepRow key={step.id} step={step} />
+              <span
+                key={step.id}
+                aria-hidden="true"
+                className={cn(
+                  "block h-2 w-6 rounded-full",
+                  step.state === "done"
+                    ? "bg-primary"
+                    : step.state === "current"
+                      ? "bg-primary/30 ring-primary/60 ring-1"
+                      : "bg-border",
+                )}
+              />
             ))}
-          </Stack>
-        </Stack>
+          </span>
+
+          <p className="text-foreground min-w-0 flex-1 text-sm">
+            {isReady ? (
+              "Thiết lập xong — sẵn sàng soạn bài."
+            ) : (
+              <>
+                <span className="font-medium">
+                  Còn {Math.max(0, requiredCount - doneCount)} bước thiết lập
+                </span>
+                <span className="text-muted-foreground">
+                  {" · tiếp theo: "}
+                  {steps.find((step) => step.state === "current")?.title ?? "—"}
+                </span>
+              </>
+            )}
+          </p>
+
+          {/* Link, không phải nút gọi router: mở được tab mới, hiện đích khi rê
+              chuột, và điều hướng phía client như mọi chỗ khác trong app. */}
+          <Link
+            href={
+              isReady ? "/compose" : (steps.find((step) => step.state === "current")?.href ?? "/")
+            }
+            className="bg-primary text-primary-foreground hover:bg-primary/80 focus-visible:ring-ring inline-flex h-8 shrink-0 items-center rounded-lg px-3 text-[0.8rem] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
+          >
+            {isReady ? "Soạn bài đầu tiên" : "Mở bước này"}
+          </Link>
+        </div>
       </Card>
 
       {/* --- 4. Ready State: Thẻ ký danh khi đủ điều kiện soạn bài ------------- */}

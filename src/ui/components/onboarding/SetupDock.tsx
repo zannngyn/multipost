@@ -325,9 +325,10 @@ export function DockPanel({
                     FULL lock sentence — printing it in this slot pushed the
                     title out of a 21rem card and spilled the text past the
                     edge. So the visible slot takes a tick, an estimate, or a
-                    padlock, and the sentence itself is announced instead: it is
-                    written out in full on the checklist behind "Mở đầy đủ",
-                    which has the room for it.
+                    padlock, and the sentence is announced to assistive tech
+                    instead. It used to be printed in full on the overview
+                    checklist; that block is now a one-line strip, so this
+                    padlock is the only VISIBLE trace a step is locked.
                   */}
                   {isLocked ? (
                     <span id={`${step.id}-reason`} className="sr-only">
@@ -357,11 +358,14 @@ export function DockPanel({
 
         <footer className="border-inverse-foreground/10 flex items-center justify-between gap-3 border-t px-4 py-2.5">
           <p className="text-inverse-foreground/45 text-[11px]">Bấm một dòng để mở bước đó.</p>
+          {/* This panel IS the full list now, so the link no longer promises a
+              fuller one — it is just the way back to the overview from
+              whichever screen a step sent the operator to. */}
           <Link
             href="/#thiet-lap"
             className="text-warning hover:text-warning/80 focus-visible:ring-warning/60 flex shrink-0 items-center gap-0.5 rounded text-[11px] font-medium outline-none focus-visible:ring-2"
           >
-            Mở đầy đủ
+            Về trang Tổng quan
             <ChevronRight className="size-3" aria-hidden="true" />
           </Link>
         </footer>
