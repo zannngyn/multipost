@@ -1,8 +1,14 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import { ExternalLink, Search } from "lucide-react";
 
+import {
+  countChannelStatuses,
+  filterBatchChannels,
+  showsStatusPill,
+  type ChannelStatusFilter,
+} from "@/ui/components/batch/batch-channel-filter";
 import { ChannelProgress } from "@/ui/components/batch/ChannelProgress";
 import {
   channelLabelIndex,
@@ -26,61 +32,26 @@ export function BatchChannelTable({
   progressSteps: readonly string[];
   tenantChannels?: readonly Channel[];
 }) {
+  const searchId = useId();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "published" | "active" | "issues">("all");
+  const [statusFilter, setStatusFilter] = useState<ChannelStatusFilter>("all");
 
-  const labels = channelLabelIndex(
-    channels.map((channel) => channel.channelId),
-    tenantChannels,
+  // Memoised, because this Map is a dependency of the filter below: rebuilding
+  // it every render made that `useMemo` recompute every render too.
+  const labels = useMemo(
+    () => channelLabelIndex(channels.map((channel) => channel.channelId), tenantChannels),
+    [channels, tenantChannels],
   );
 
-  // Filter logic
-  const filteredChannels = useMemo(() => {
-    return channels.filter((channel) => {
-      // 1. Status filter
-      if (statusFilter === "published" && channel.status !== "published") return false;
-      if (
-        statusFilter === "active" &&
-        channel.status !== "queued" &&
-        channel.status !== "publishing"
-      )
-        return false;
-      if (
-        statusFilter === "issues" &&
-        channel.status !== "failed" &&
-        channel.status !== "blocked"
-      )
-        return false;
+  const filteredChannels = useMemo(
+    () => filterBatchChannels(channels, statusFilter, search, labels),
+    [channels, statusFilter, search, labels],
+  );
 
-      // 2. Search filter
-      if (search.trim().length > 0) {
-        const query = search.toLowerCase();
-        const label = labels.get(channel.channelId);
-        const name = label?.name?.toLowerCase() ?? "";
-        const id = channel.channelId.toLowerCase();
-        const msg = channel.userMessage.toLowerCase();
-        return name.includes(query) || id.includes(query) || msg.includes(query);
-      }
-
-      return true;
-    });
-  }, [channels, statusFilter, search, labels]);
-
-  // Counts for filter pills
-  const counts = useMemo(() => {
-    let published = 0;
-    let active = 0;
-    let issues = 0;
-    for (const c of channels) {
-      if (c.status === "published") published++;
-      else if (c.status === "queued" || c.status === "publishing") active++;
-      else if (c.status === "failed" || c.status === "blocked") issues++;
-    }
-    return { all: channels.length, published, active, issues };
-  }, [channels]);
+  const counts = useMemo(() => countChannelStatuses(channels), [channels]);
 
   return (
-    <div className="flex flex-col gap-4">
+    <section aria-labelledby="batch-channels-heading" className="flex flex-col gap-4">
       {/* Header & Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -118,7 +89,10 @@ export function BatchChannelTable({
             >
               Đã đăng ({counts.published})
             </button>
-            {counts.active > 0 && (
+            {/* Kept while it is the ACTIVE filter even at zero: this screen polls,
+                so a retry that succeeds would otherwise remove the very pill that
+                is filtering, leaving an empty table and no way back. */}
+            {showsStatusPill(counts.active, "active", statusFilter) && (
               <button
                 type="button"
                 onClick={() => setStatusFilter("active")}
@@ -131,7 +105,7 @@ export function BatchChannelTable({
                 Đang chạy ({counts.active})
               </button>
             )}
-            {counts.issues > 0 && (
+            {showsStatusPill(counts.issues, "issues", statusFilter) && (
               <button
                 type="button"
                 onClick={() => setStatusFilter("issues")}
@@ -148,8 +122,12 @@ export function BatchChannelTable({
 
           {/* Search Box */}
           <div className="relative">
+            <label htmlFor={searchId} className="sr-only">
+              Tìm trong danh sách kênh của lô này
+            </label>
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <input
+              id={searchId}
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -168,6 +146,9 @@ export function BatchChannelTable({
         aria-label="Bảng kết quả theo kênh"
       >
         <table className="w-full border-collapse text-sm">
+          <caption className="sr-only">
+            Trạng thái đăng bài của từng kênh trong lô, kèm số lần thử và lý do lỗi
+          </caption>
           <thead className="border-b border-border/80 bg-muted/40 text-xs text-muted-foreground">
             <tr className="text-left">
               <th scope="col" className="px-4 py-3 font-semibold">
@@ -202,15 +183,16 @@ export function BatchChannelTable({
                     key={channel.postJobId}
                     className="align-top transition-colors hover:bg-accent/20"
                   >
-                    {/* Channel info */}
-                    <td className="px-4 py-3.5">
+                    {/* Channel info — the row's header, so a screen reader can
+                        name which channel a status cell belongs to. */}
+                    <th scope="row" className="px-4 py-3.5 text-left">
                       <div className="font-medium text-foreground">
                         <ChannelNameCell
                           channelId={channel.channelId}
                           label={labels.get(channel.channelId)}
                         />
                       </div>
-                    </td>
+                    </th>
 
                     {/* Status Badge */}
                     <td className="px-4 py-3.5">
@@ -284,6 +266,6 @@ export function BatchChannelTable({
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   );
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
 import { ArrowLeft, RefreshCw, CheckCircle2, History, PenSquare, Copy, Check } from "lucide-react";
 
 import { BatchChannelTable } from "@/ui/components/batch/BatchChannelTable";
@@ -10,6 +9,7 @@ import { BatchSummaryCard } from "@/ui/components/batch/BatchSummaryCard";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { Button } from "@/ui/components/ui/button";
+import { copyStatusMessage, useCopyToClipboard } from "@/ui/hooks/useCopyToClipboard";
 import { useBatchStatus } from "@/ui/hooks/usePostBatch";
 import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
@@ -18,19 +18,13 @@ import { isSettledBatchStatus } from "@/ui/schemas/post-batch.schema";
 export function BatchStatusScreen({ batchId }: { batchId: string }) {
   const batch = useBatchStatus(batchId);
   const channels = useChannels();
-  const [copiedLink, setCopiedLink] = useState(false);
+  const clipboard = useCopyToClipboard("batch", { batch_id: batchId });
 
   const isFirstLoad = batch.isPending && batch.fetchStatus === "fetching";
   const showSkeleton = useDelayedFlag(isFirstLoad);
 
   const data = batch.data;
   const settled = data ? isSettledBatchStatus(data.status) : false;
-
-  function copyTrackingLink() {
-    navigator.clipboard.writeText(window.location.href);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
-  }
 
   return (
     <section className="flex flex-col gap-6" aria-labelledby="batch-heading">
@@ -81,11 +75,15 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
               type="button"
               variant="outline"
               size="sm"
-              onClick={copyTrackingLink}
+              onClick={() => void clipboard.copy(window.location.href)}
               className="gap-1.5 text-xs"
             >
-              {copiedLink ? <Check className="size-3.5 text-leaf-deep" /> : <Copy className="size-3.5" />}
-              <span>{copiedLink ? "Đã chép link" : "Sao chép link"}</span>
+              {clipboard.state === "copied" ? (
+                <Check className="size-3.5 text-leaf-deep" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
+              <span>{clipboard.state === "copied" ? "Đã chép link" : "Sao chép link"}</span>
             </Button>
             <Button
               type="button"
@@ -97,10 +95,26 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
             >
               <RefreshCw className={`size-3.5 ${batch.isFetching ? "animate-spin" : ""}`} />
               <span>Làm mới</span>
+              <span className="sr-only"> trạng thái lô</span>
             </Button>
           </div>
         </div>
       </header>
+
+      {/* Live region: a screen reader hears the outcome without re-reading the
+          page — this screen polls, so the change has no other way to be heard. */}
+      <p role="status" aria-live="polite" className="text-muted-foreground text-sm">
+        {copyStatusMessage(clipboard.state, "link theo dõi") ||
+          (batch.isError
+            ? "Không đọc được trạng thái lô."
+            : !data
+              ? "Đang tải trạng thái lô…"
+              : settled
+                ? "Lô đã kết thúc — trang dừng tự cập nhật."
+                : batch.isFetching
+                  ? "Đang cập nhật…"
+                  : "Trang tự cập nhật vài giây một lần khi còn bài đang chạy.")}
+      </p>
 
       {/* Loading Skeleton */}
       {isFirstLoad ? (showSkeleton ? <BatchStatusSkeleton /> : null) : null}
@@ -122,7 +136,10 @@ export function BatchStatusScreen({ batchId }: { batchId: string }) {
         <div className="flex flex-col gap-6">
           {/* Stale data alert */}
           {batch.isError && (
-            <div className="rounded-lg border border-turmeric/50 bg-turmeric/10 p-3 text-xs text-turmeric-deep">
+            <div
+              role="status"
+              className="rounded-lg border border-turmeric/50 bg-turmeric/10 p-3 text-xs text-turmeric-deep"
+            >
               Lần cập nhật gần nhất thất bại — bảng bên dưới đang hiển thị dữ liệu đã lưu trước đó. Vui lòng bấm “Làm mới” để thử lại.
             </div>
           )}

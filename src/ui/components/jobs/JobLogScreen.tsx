@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { RefreshCw, Search, CheckCircle2, X } from "lucide-react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
 import { JobLogSkeleton } from "@/ui/components/jobs/JobLogSkeleton";
+import { filterJobsBySearch } from "@/ui/components/jobs/job-log-search";
 import { JobLogTable } from "@/ui/components/jobs/JobLogTable";
 import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
 import { RulesDisclosure } from "@/ui/components/posts/RulesDisclosure";
@@ -31,6 +32,13 @@ export function JobLogScreen() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const searchId = useId();
+  /**
+   * Deliberately NOT in the URL, unlike the status filter beside it: this box
+   * searches the pages ALREADY LOADED, so a shared link carrying it would
+   * reopen on a different set of pages and show a different answer. The line
+   * under the box says so out loud — see `searchScopeNote` below.
+   */
   const [localSearch, setLocalSearch] = useState("");
 
   const filter = useMemo(
@@ -56,19 +64,9 @@ export function JobLogScreen() {
   const rawItems = useMemo(() => log.data?.pages.flatMap((page) => page.items) ?? [], [log.data]);
   const hasFilter = filter.status !== null || filter.batchId !== null;
 
-  // Filter items by local search query if provided
-  const items = useMemo(() => {
-    if (!localSearch.trim()) return rawItems;
-    const q = localSearch.toLowerCase();
-    return rawItems.filter(
-      (job) =>
-        job.productCode.toLowerCase().includes(q) ||
-        job.channelId.toLowerCase().includes(q) ||
-        job.batchId.toLowerCase().includes(q) ||
-        job.userMessage.toLowerCase().includes(q) ||
-        (job.lastErrorCode && job.lastErrorCode.toLowerCase().includes(q)),
-    );
-  }, [rawItems, localSearch]);
+  // Over the loaded pages only — see `job-log-search.ts` for why that is said
+  // out loud on screen instead of being hidden behind a plausible empty state.
+  const items = useMemo(() => filterJobsBySearch(rawItems, localSearch), [rawItems, localSearch]);
 
   function applyStatus(status: PostJobStatus | null) {
     const params = jobLogSearchParams({ ...filter, status });
@@ -107,8 +105,10 @@ export function JobLogScreen() {
           <h2 id="jobs-heading" className="text-xl font-semibold tracking-tight text-foreground md:text-2xl">
             Nhật ký đăng bài
           </h2>
+          {/* "đã tải", not "đã ghi nhận": this is the number of rows fetched so
+              far, not the tenant's total — the list is paged. */}
           <span className="font-mono text-xs text-muted-foreground tabular-nums">
-            {rawItems.length} bài đã ghi nhận
+            {rawItems.length} bài đã tải
           </span>
         </div>
         <p className="text-xs text-muted-foreground leading-relaxed max-w-3xl">
@@ -177,8 +177,12 @@ export function JobLogScreen() {
           {/* Search Box & Refresh */}
           <div className="flex items-center gap-2">
             <div className="relative">
+              <label htmlFor={searchId} className="sr-only">
+                Tìm trong {rawItems.length} bài đã tải
+              </label>
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <input
+                id={searchId}
                 type="text"
                 value={localSearch}
                 onChange={(e) => setLocalSearch(e.target.value)}
@@ -189,9 +193,11 @@ export function JobLogScreen() {
                 <button
                   type="button"
                   onClick={() => setLocalSearch("")}
+                  title="Xoá từ khoá tìm kiếm"
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   <X className="size-3" />
+                  <span className="sr-only">Xoá từ khoá tìm kiếm</span>
                 </button>
               )}
             </div>
@@ -278,7 +284,11 @@ export function JobLogScreen() {
 
       {/* Success Notification after Retry */}
       {retryNotice && (
-        <div className="flex items-center gap-2 rounded-lg border border-leaf/40 bg-leaf/10 p-3 text-xs font-medium text-leaf-deep">
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-lg border border-leaf/40 bg-leaf/10 p-3 text-xs font-medium text-leaf-deep"
+        >
           <CheckCircle2 className="size-4 shrink-0" />
           <span>{retryNotice}</span>
         </div>
@@ -301,12 +311,35 @@ export function JobLogScreen() {
         hasFilter || localSearch ? (
           <EmptyState
             kind="no-result"
-            title="Không có bài đăng nào khớp bộ lọc"
-            description="Không tìm thấy bài nào ở trạng thái hoặc từ khóa đang chọn. Dữ liệu vẫn còn nguyên — bấm bên dưới để hiển thị toàn bộ."
+            title={
+              localSearch && log.hasNextPage
+                ? `Chưa thấy “${localSearch.trim()}” trong ${rawItems.length} bài đã tải`
+                : "Không có bài đăng nào khớp bộ lọc"
+            }
+            description={
+              // The search only sees the pages already fetched. Saying "không có
+              // bài nào khớp" over a paged list is a false negative: the code may
+              // sit in a page nobody has asked for yet, and this screen is the one
+              // that must answer "vì sao bài này không lên".
+              localSearch && log.hasNextPage
+                ? "Ô tìm kiếm chỉ tìm trong các bài đã tải về. Bấm “Tải thêm các bài cũ hơn” rồi tìm lại, hoặc xoá bộ lọc để xem toàn bộ."
+                : "Không tìm thấy bài nào ở trạng thái hoặc từ khóa đang chọn. Dữ liệu vẫn còn nguyên — bấm bên dưới để hiển thị toàn bộ."
+            }
             action={
-              <Button type="button" variant="outline" onClick={clearFilters}>
-                Xóa bộ lọc
-              </Button>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {localSearch && log.hasNextPage ? (
+                  <Button
+                    type="button"
+                    onClick={() => void log.fetchNextPage()}
+                    disabled={log.isFetchingNextPage}
+                  >
+                    {log.isFetchingNextPage ? "Đang tải thêm…" : "Tải thêm các bài cũ hơn"}
+                  </Button>
+                ) : null}
+                <Button type="button" variant="outline" onClick={clearFilters}>
+                  Xóa bộ lọc
+                </Button>
+              </div>
             }
           />
         ) : (
@@ -328,8 +361,16 @@ export function JobLogScreen() {
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
             <p role="status" aria-live="polite" className="text-xs text-muted-foreground">
-              Đang hiển thị <strong className="font-mono text-foreground font-semibold">{items.length.toLocaleString("vi-VN")}</strong> bài
-              {log.hasNextPage ? " (còn dữ liệu cũ hơn)" : ""}.
+              Đang hiển thị{" "}
+              <strong className="font-mono text-foreground font-semibold">
+                {items.length.toLocaleString("vi-VN")}
+              </strong>{" "}
+              bài
+              {log.hasNextPage ? " (còn dữ liệu cũ hơn)" : ""}
+              {localSearch
+                ? ` — tìm “${localSearch.trim()}” trong ${rawItems.length} bài đã tải`
+                : ""}
+              .
             </p>
             {channels.isError && (
               <span className="text-xs text-turmeric-deep">

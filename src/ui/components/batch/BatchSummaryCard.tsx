@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
 import { Copy, Check, Clock, Calendar, Hash, Sparkles } from "lucide-react";
 import { Token } from "@astryxdesign/core";
 
 import { BatchStatusBadge } from "@/ui/components/post/PostStatusBadge";
+import { copyStatusMessage, useCopyToClipboard } from "@/ui/hooks/useCopyToClipboard";
 import { MANUAL_PRODUCT_BADGE } from "@/ui/schemas/product-origin.schema";
 import {
   formatDateTime,
@@ -22,23 +22,23 @@ const TOTALS_FIELDS = [
 ] as const;
 
 export function BatchSummaryCard({ batch }: { batch: BatchStatusResponse }) {
-  const [copied, setCopied] = useState(false);
-
-  function copyBatchId() {
-    navigator.clipboard.writeText(batch.batchId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
+  const clipboard = useCopyToClipboard("batch", { batch_id: batch.batchId });
 
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border/80 bg-card p-5 shadow-xs">
+    <section
+      aria-labelledby="batch-summary-heading"
+      className="flex flex-col gap-4 rounded-xl border border-border/80 bg-card p-5 shadow-xs"
+    >
       {/* Header Info */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 pb-4">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            <h2
+              id="batch-summary-heading"
+              className="font-mono text-xs font-semibold uppercase tracking-widest text-muted-foreground"
+            >
               TỔNG KẾT LÔ ĐĂNG
-            </span>
+            </h2>
             <BatchStatusBadge status={batch.status} />
           </div>
           <p className="text-sm font-medium text-foreground leading-relaxed">
@@ -56,11 +56,12 @@ export function BatchSummaryCard({ batch }: { batch: BatchStatusResponse }) {
               <span className="font-mono text-sm font-bold text-foreground">
                 {batch.productCode}
               </span>
-              {batch.color.trim().length > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  · {batch.color}
-                </span>
-              )}
+              {/* An empty colour is the batch that covers EVERY colour — saying
+                  nothing makes it look like a single-colour batch, which is a
+                  different job with a different scope. */}
+              <span className="text-xs text-muted-foreground">
+                · {batch.color.trim().length > 0 ? batch.color : "Tất cả màu"}
+              </span>
             </div>
           </div>
           {batch.productOrigin === "manual" && (
@@ -159,18 +160,26 @@ export function BatchSummaryCard({ batch }: { batch: BatchStatusResponse }) {
           </div>
           <button
             type="button"
-            onClick={copyBatchId}
+            onClick={() => void clipboard.copy(batch.batchId)}
             title="Sao chép mã lô"
             className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
           >
-            {copied ? (
+            {clipboard.state === "copied" ? (
               <Check className="size-3 text-leaf-deep" />
             ) : (
               <Copy className="size-3" />
             )}
+            {/* An icon-only button has no name without this. */}
+            <span className="sr-only">Sao chép mã lô {batch.batchId}</span>
           </button>
         </div>
       </div>
-    </div>
+
+      {/* The copy either happened or it did not, and the operator is told which:
+          a tick that appears whatever the browser did is worse than no tick. */}
+      <p role="status" aria-live="polite" className="text-muted-foreground text-xs">
+        {copyStatusMessage(clipboard.state, "mã lô")}
+      </p>
+    </section>
   );
 }

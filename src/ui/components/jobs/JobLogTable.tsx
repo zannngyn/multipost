@@ -19,6 +19,7 @@ import {
   jobLogFoldKey,
   type JobRowGroup,
 } from "@/ui/components/posts/job-row-grouping";
+import { TableScrollRegion } from "@/ui/components/posts/TableScrollRegion";
 import { Button } from "@/ui/components/ui/button";
 import type { GroupChannelLabel } from "@/ui/components/channels/channel-group-labels";
 import type { Channel } from "@/ui/schemas/channel.schema";
@@ -59,10 +60,11 @@ export function JobLogTable({
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-border/80 bg-card shadow-xs">
+    <TableScrollRegion aria-label="Bảng nhật ký đăng, cuộn ngang được">
       <table className="w-full min-w-4xl border-collapse text-sm">
         <caption className="sr-only">
-          Nhật ký đăng bài đa kênh
+          Nhật ký đăng: thời gian, mã sản phẩm, màu, kênh, trạng thái, số lần thử và lý do lỗi. Bài
+          đăng cùng lúc lên nhiều kênh gộp thành một dòng mở được.
         </caption>
         <thead className="border-b border-border/80 bg-muted/40 text-xs text-muted-foreground">
           <tr className="text-left">
@@ -104,7 +106,7 @@ export function JobLogTable({
           ))}
         </tbody>
       </table>
-    </div>
+    </TableScrollRegion>
   );
 }
 
@@ -144,8 +146,9 @@ function JobLogRows({
           )}
         </td>
 
-        {/* Product Code */}
-        <td className="px-4 py-3.5">
+        {/* Product Code — the row's header: without `scope="row"` a status cell
+            read on its own does not say which post it belongs to. */}
+        <th scope="row" className="px-4 py-3.5 text-left">
           <div className="flex flex-col gap-0.5">
             <span className="font-mono text-xs font-bold text-foreground">
               {job.productCode}
@@ -161,7 +164,7 @@ function JobLogRows({
               </span>
             )}
           </div>
-        </td>
+        </th>
 
         {/* Color */}
         <td className="px-4 py-3.5">
@@ -240,8 +243,11 @@ function JobLogRows({
                 <span>Xem lô</span>
               </Link>
 
+              {/* The error code is what an operator reads out to support, so it
+                  keeps the body text size and the full-strength muted ink rather
+                  than the 10px/80% it was shrunk to. */}
               {job.lastErrorCode && (
-                <span className="font-mono text-[10px] text-muted-foreground/80">
+                <span className="font-mono text-xs text-muted-foreground">
                   Mã lỗi: {job.lastErrorCode}
                 </span>
               )}
@@ -355,6 +361,10 @@ function RetryAction({
       <div className="flex items-center gap-1.5">
         <Button type="button" size="sm" variant="outline" disabled className="text-xs h-7">
           Chạy lại
+          <span className="sr-only">
+            {" "}
+            bài {job.productCode} trên kênh {channelName}
+          </span>
         </Button>
         <span className="text-xs text-muted-foreground">{readOnlyReason}</span>
       </div>
