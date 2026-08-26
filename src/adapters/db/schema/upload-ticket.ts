@@ -1,4 +1,4 @@
-import { bigint, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, index, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 import { timestamps } from "./_columns";
 import { tenantIdColumn } from "./_tenant-column";
@@ -30,8 +30,14 @@ export const uploadTickets = pgTable(
     ...timestamps,
   },
   (table) => [
-    // Confirm looks up by (tenant, asset); the sweep scans by expires_at.
-    index("upload_ticket_tenant_asset_idx").on(table.tenantId, table.assetId),
+    // An asset_id names exactly one stored object: two ticket rows for the
+    // same (tenant, asset) is never legitimate. UNIQUE (not just an index)
+    // so a retried/duplicate createMany fails loudly instead of leaving a
+    // second, orphaned ticket that confirm's Map-by-assetId would silently
+    // drop. This constraint's own index also serves confirm's lookup, so
+    // the plain index this replaced is gone.
+    unique("upload_ticket_tenant_asset_uq").on(table.tenantId, table.assetId),
+    // The expiry sweep scans by expires_at alone, across every tenant.
     index("upload_ticket_expires_idx").on(table.expiresAt),
   ],
 );

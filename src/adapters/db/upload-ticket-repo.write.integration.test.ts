@@ -87,4 +87,13 @@ describe.skipIf(!url)("DrizzleUploadTicketRepo", () => {
   it("findMany returns empty for an empty list without touching the DB", async () => {
     expect(await repo.findMany(TENANT, [])).toEqual([]);
   });
+
+  it("rejects a duplicate (tenant, asset) insert — a retried createMany must fail loudly, not double the row", async () => {
+    await repo.createMany(TENANT, [ticket("t5")]);
+    await expect(repo.createMany(TENANT, [ticket("t5")])).rejects.toMatchObject({ code: "DB_ERROR" });
+  });
+
+  it("still accepts the same asset id under a DIFFERENT tenant — the constraint must not become a cross-tenant collision", async () => {
+    expect(await repo.createMany(OTHER, [ticket("t5", OTHER)])).toBe(1);
+  });
 });
