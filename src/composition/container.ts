@@ -13,6 +13,7 @@ import { DrizzlePlatformTenantRepo } from "@/adapters/db/platform-tenant-repo.dr
 import { DrizzleSupportSessionRepo } from "@/adapters/db/support-session-repo.drizzle";
 import { DrizzleOAuthStateStore } from "@/adapters/db/oauth-state-store.drizzle";
 import { DrizzleTenantOnboardingRepo } from "@/adapters/db/tenant-onboarding-repo.drizzle";
+import { DrizzleTenantProfileRepo } from "@/adapters/db/tenant-profile-repo.drizzle";
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
@@ -144,6 +145,14 @@ import {
 import { makeGetCatalogSource, type GetCatalogSource } from "@/core/usecases/get-catalog-source";
 import { makeGetSetupProgress, type GetSetupProgress } from "@/core/usecases/get-setup-progress";
 import {
+  makeCompleteOnboarding,
+  makeGetOnboardingProfile,
+  makeSaveOnboardingProfile,
+  type CompleteOnboarding,
+  type GetOnboardingProfile,
+  type SaveOnboardingProfile,
+} from "@/core/usecases/onboarding-profile";
+import {
   makeProfileCatalogSource,
   type ProfileCatalogSource,
 } from "@/core/usecases/profile-catalog-source";
@@ -235,6 +244,14 @@ export interface Usecases {
    * ONE request so the dock can ride in the shell without costing five.
    */
   getSetupProgress: GetSetupProgress;
+  /**
+   * E10 — the onboarding survey (spec §8). Three verbs on one row: read it so a
+   * half-finished flow reopens where it stopped, save ONE step at a time, and
+   * stamp `completed_at` once — that stamp is what stops the flow reappearing.
+   */
+  getOnboardingProfile: GetOnboardingProfile;
+  saveOnboardingProfile: SaveOnboardingProfile;
+  completeOnboarding: CompleteOnboarding;
   /** E2/E3 — catalog screen: products with their composable/blocked verdict. */
   listCatalogProducts: ListCatalogProducts;
   composePost: ComposePost;
@@ -746,6 +763,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const channelGroups = new DrizzleChannelGroupRepo(deps.db);
   // E10 — one open compose draft per operator per tenant.
   const postDrafts = new DrizzlePostDraftRepo(deps.db);
+  // E10 — the onboarding survey answers; one row per tenant.
+  const tenantProfiles = new DrizzleTenantProfileRepo(deps.db);
   // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
   const users = new DrizzleUserRepo(deps.db);
   // E1.4 — who may sign in. Read on every request through `operatorAccess`.
@@ -1005,6 +1024,15 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       channels,
       groups: channelGroups,
       postJobs,
+      logger: deps.logger,
+    }),
+    getOnboardingProfile: makeGetOnboardingProfile({ profiles: tenantProfiles, logger: deps.logger }),
+    saveOnboardingProfile: makeSaveOnboardingProfile({ profiles: tenantProfiles, logger: deps.logger }),
+    completeOnboarding: makeCompleteOnboarding({
+      profiles: tenantProfiles,
+      // Injected, not `new Date()`: `completed_at` is the one value that decides
+      // whether the flow ever appears again, so a test must be able to pin it.
+      clock: deps.clock,
       logger: deps.logger,
     }),
     listCatalogProducts: makeListCatalogProducts({
