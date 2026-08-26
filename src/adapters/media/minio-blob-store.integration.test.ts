@@ -43,7 +43,7 @@ beforeAll(() => {
       MINIO_SECRET_KEY: SECRET_KEY,
       MINIO_BUCKET: BUCKET,
       MINIO_USE_SSL: false,
-      region: "us-east-1",
+      MINIO_REGION: "us-east-1",
     },
     logger: noopLogger,
   });
@@ -162,7 +162,7 @@ describe.skipIf(!endpoint)("MinioBlobStore — client separation (I1)", () => {
         MINIO_SECRET_KEY: SECRET_KEY,
         MINIO_BUCKET: BUCKET,
         MINIO_USE_SSL: false,
-        region: "us-east-1",
+        MINIO_REGION: "us-east-1",
       },
       logger: noopLogger,
     });

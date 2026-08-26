@@ -33,14 +33,11 @@ import type { TenantId } from "@/core/domain/tenant-context";
  */
 
 /**
- * The MinIO env fields this adapter needs, named mostly like `MinioConfig`
+ * The MinIO env fields this adapter needs, named exactly like `MinioConfig`
  * (src/composition/config.ts) but declared locally rather than imported: the
  * dependency rule (docs/07) forbids adapters importing from composition.
- * Every field but `region` mirrors `MinioConfig` by name, so
- * `loadMinioConfig()`'s return value can supply them without a cast;
- * `region` is named without the `MINIO_` prefix on purpose (composition maps
- * `MINIO_REGION` onto it explicitly) so this type stays legible as "what the
- * client needs" rather than "what the env var was called".
+ * `loadMinioConfig()`'s return value satisfies this shape structurally, so
+ * composition wiring needs no cast and no per-field mapping.
  */
 export interface MinioBlobStoreConfig {
   readonly MINIO_INTERNAL_ENDPOINT: string;
@@ -58,7 +55,7 @@ export interface MinioBlobStoreConfig {
    * endpoint the app container cannot reach (the tunnel hostname) made every
    * presign throw instead of just failing when the browser used the URL.
    */
-  readonly region: string;
+  readonly MINIO_REGION: string;
 }
 
 export interface MinioBlobStoreOptions {
@@ -307,7 +304,7 @@ function internalClientFor(config: MinioBlobStoreConfig): Client {
     endPoint: host,
     port: port ? Number(port) : config.MINIO_USE_SSL ? 443 : 80,
     useSSL: config.MINIO_USE_SSL,
-    region: config.region,
+    region: config.MINIO_REGION,
     accessKey: config.MINIO_ACCESS_KEY,
     secretKey: config.MINIO_SECRET_KEY,
   });
@@ -330,7 +327,7 @@ function publicClientFor(config: MinioBlobStoreConfig): Client {
     endPoint: url.hostname,
     port: url.port ? Number(url.port) : useSSL ? 443 : 80,
     useSSL,
-    region: config.region,
+    region: config.MINIO_REGION,
     accessKey: config.MINIO_ACCESS_KEY,
     secretKey: config.MINIO_SECRET_KEY,
   });
