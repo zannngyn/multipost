@@ -43,6 +43,11 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
+      # `:?` is load-bearing, not decoration: an EMPTY value (not just an
+      # unset one) makes MinIO silently fall back to minioadmin:minioadmin.
+      # `:-` or a bare ${...} would let that happen quietly on a published
+      # port — `:?` aborts the whole `up` instead. Locked by
+      # minio-bucket-privacy.test.ts.
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
     volumes:

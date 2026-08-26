@@ -17,6 +17,14 @@ import { parse } from "yaml";
  * `minio` to answer its healthcheck (`service_healthy`) — otherwise a
  * container can start serving uploads to a bucket that has not been made
  * private yet.
+ *
+ * And locks the `:?` (required) form on `minio`'s own root credentials.
+ * MinIO treats an EMPTY MINIO_ROOT_USER/PASSWORD as "not set" and silently
+ * falls back to minioadmin:minioadmin — `:-` or a bare `${...}` would let
+ * that happen quietly on a port this compose file publishes; `:?` aborts
+ * `up` instead. A "harmless cleanup" swap to `:-` would not be caught by
+ * anything else here (the stack still boots, still looks private) — only a
+ * live login with minioadmin/minioadmin would reveal it.
  */
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
@@ -29,6 +37,7 @@ function loadCompose(): Record<string, unknown> {
 interface ServiceDef {
   entrypoint?: string;
   depends_on?: Record<string, { condition?: string }>;
+  environment?: Record<string, string>;
 }
 
 describe("MinIO bucket stays private", () => {
@@ -44,6 +53,19 @@ describe("MinIO bucket stays private", () => {
     it(`${name} waits for minio-init to finish, not just for minio to answer its healthcheck`, () => {
       const condition = services[name]?.depends_on?.["minio-init"]?.condition;
       expect(condition).toBe("service_completed_successfully");
+    });
+  }
+
+  for (const [envVar, sourceVar] of [
+    ["MINIO_ROOT_USER", "MINIO_ACCESS_KEY"],
+    ["MINIO_ROOT_PASSWORD", "MINIO_SECRET_KEY"],
+  ] as const) {
+    it(`minio's ${envVar} still requires ${sourceVar} with the ':?' form`, () => {
+      const value = services.minio?.environment?.[envVar] ?? "";
+      // Must reference the ':?' required form, not ':-' (silent default) or
+      // a bare interpolation (silently empty when unset) — either of those
+      // lets MinIO fall back to minioadmin:minioadmin without a peep.
+      expect(value).toContain(`\${${sourceVar}:?`);
     });
   }
 });
