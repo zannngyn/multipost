@@ -27,13 +27,22 @@ import type { UploadTicket, UploadTicketRepo } from "@/core/ports/upload-ticket-
  *      (business rule 6 in spirit: one item failing must not stop the others).
  */
 
-/** Matches UPLOAD_ORPHAN_TTL_HOURS; the caller normally passes the configured one. */
+/**
+ * Fallback only for a caller that supplies no constructor `ttlHours` (tests,
+ * mainly). Production wiring passes UPLOAD_ORPHAN_TTL_HOURS via
+ * `CleanupUploadsDeps.ttlHours` (composition/container.ts) — same pattern as
+ * `cleanup-media-cache.ts`/MEDIA_CACHE_TTL_HOURS.
+ */
 export const DEFAULT_ORPHAN_TTL_HOURS = 24;
 /** Rows per pass. Small on purpose: the sweep is a background chore. */
 export const DEFAULT_CLEANUP_LIMIT = 200;
 
 export interface CleanupUploadsInput {
-  /** How old an unreferenced upload must be before it may be removed. */
+  /**
+   * Per-tick override, for an operator draining the volume by hand. Absent on
+   * every scheduled tick, which is the case that matters: those use the SAME
+   * configured TTL `deps.ttlHours` carries.
+   */
   readonly ttlHours?: number;
   readonly limit?: number;
 }
@@ -48,6 +57,12 @@ export interface CleanupUploadsResult {
   readonly ticketsScanned: number;
   /** Expired ticket rows removed this pass, after their staged bytes were gone. */
   readonly ticketsRemoved: number;
+  /**
+   * True when `tickets.listExpired` itself threw, so `ticketsScanned: 0` can
+   * be told apart from "nothing was expired this pass" — a failed listing
+   * must not read as a clean one.
+   */
+  readonly ticketListFailed: boolean;
 }
 
 export interface CleanupUploadsDeps {
@@ -56,14 +71,23 @@ export interface CleanupUploadsDeps {
   tickets: UploadTicketRepo;
   clock: Clock;
   logger: Logger;
+  /**
+   * UPLOAD_ORPHAN_TTL_HOURS. Required, not defaulted: a silent default here
+   * would let the wiring gap this fixes (I4) reopen unnoticed — the caller
+   * must pass the configured value explicitly (falls back to
+   * `DEFAULT_ORPHAN_TTL_HOURS` only when omitted, e.g. in tests).
+   */
+  ttlHours?: number;
 }
 
 export function makeCleanupUploads(deps: CleanupUploadsDeps) {
+  const configuredTtlHours = positive(deps?.ttlHours) ?? DEFAULT_ORPHAN_TTL_HOURS;
+
   return async function cleanupUploads(
     input: CleanupUploadsInput = {},
   ): Promise<CleanupUploadsResult> {
     // --- Edge cases first (CLAUDE.md technical rule 1) ---------------------
-    const ttlHours = positive(input?.ttlHours) ?? DEFAULT_ORPHAN_TTL_HOURS;
+    const ttlHours = positive(input?.ttlHours) ?? configuredTtlHours;
     const limit = positiveInt(input?.limit) ?? DEFAULT_CLEANUP_LIMIT;
 
     const log = deps.logger.child({ component: "upload-cleanup" });
@@ -126,9 +150,11 @@ export function makeCleanupUploads(deps: CleanupUploadsDeps) {
     // never promoted — they still live in the STAGING area, never the serving
     // one, so this MUST call `deleteStaging`, not `delete`.
     let expired: readonly UploadTicket[] = [];
+    let ticketListFailed = false;
     try {
       expired = await deps.tickets.listExpired({ now: deps.clock.now(), limit });
     } catch (error) {
+      ticketListFailed = true;
       const appError = AppError.from(error, "DB_ERROR", { reason: "LIST_EXPIRED_TICKETS_FAILED" });
       log.error("Could not list expired upload tickets", appError.toLogObject());
     }
@@ -176,6 +202,7 @@ export function makeCleanupUploads(deps: CleanupUploadsDeps) {
       rows_removed: rowsRemoved,
       tickets_scanned: ticketsScanned,
       tickets_removed: ticketsRemoved,
+      ticket_list_failed: ticketListFailed,
       failed,
       ttl_hours: ttlHours,
     });
@@ -187,6 +214,7 @@ export function makeCleanupUploads(deps: CleanupUploadsDeps) {
       failed,
       ticketsScanned,
       ticketsRemoved,
+      ticketListFailed,
     };
   };
 }

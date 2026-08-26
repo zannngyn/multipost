@@ -5,6 +5,13 @@ import { requireTenantContext } from "@/app/api/_lib/require-tenant-context";
 import { getContainer, MAX_UPLOAD_BYTES, type UploadedFile } from "@/composition/container";
 
 /**
+ * @deprecated Superseded by the presigned-ticket path: `POST
+ * /api/posts/uploads/tickets` (sign) then `POST /api/posts/uploads/confirm`
+ * (sniff + register), which sends bytes browser -> MinIO directly instead of
+ * buffering the whole multipart body through this process. Kept only until
+ * the compose UI has fully moved onto that flow; remove this route and
+ * `uploadMedia` together once that migration is confirmed complete.
+ *
  * E9.1 — mode B intake. Thin by contract (docs/07 §3.3): authorise, parse the
  * multipart body (`_lib/read-upload-form`), hand it to `uploadMedia`, map the
  * AppError.

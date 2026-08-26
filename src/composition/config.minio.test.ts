@@ -22,4 +22,28 @@ describe("loadMinioConfig", () => {
   it("rejects a public endpoint that is not a URL", () => {
     expect(() => loadMinioConfig({ ...base, MINIO_PUBLIC_ENDPOINT: "minio:9000" })).toThrow();
   });
+
+  // I5: a strict allowlist, not "!== 'false'" — that guess used to turn "",
+  // "0", "no" and "off" into `true`, which re-opens the Critical this epic
+  // already paid for once (MINIO_USE_SSL=true against the plain-HTTP
+  // internal hop boots green, then every confirm dies with EPROTO).
+  describe("MINIO_USE_SSL — strict allowlist", () => {
+    it.each([
+      ["true", true],
+      ["TRUE", true],
+      ["false", false],
+      ["FALSE", false],
+      [" true ", true],
+    ])("accepts %j as %s", (raw, expected) => {
+      expect(loadMinioConfig({ ...base, MINIO_USE_SSL: raw }).MINIO_USE_SSL).toBe(expected);
+    });
+
+    it("defaults to false when unset", () => {
+      expect(loadMinioConfig(base).MINIO_USE_SSL).toBe(false);
+    });
+
+    it.each(["", "0", "no", "off", "yes"])("rejects %j instead of guessing", (raw) => {
+      expect(() => loadMinioConfig({ ...base, MINIO_USE_SSL: raw })).toThrow();
+    });
+  });
 });

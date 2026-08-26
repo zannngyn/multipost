@@ -57,6 +57,7 @@ function harness(
     listExpiredError?: unknown;
     deleteStagingError?: unknown;
     deleteTicketRowError?: unknown;
+    ttlHours?: number;
   } = {},
 ) {
   const listOrphanedUploads = vi.fn(async () => options.orphans ?? []);
@@ -135,7 +136,14 @@ function harness(
     deleteMany,
     serving,
     staging,
-    cleanupUploads: makeCleanupUploads({ media, blobs, tickets, clock, logger: makeLogger() }),
+    cleanupUploads: makeCleanupUploads({
+      media,
+      blobs,
+      tickets,
+      clock,
+      logger: makeLogger(),
+      ttlHours: options.ttlHours,
+    }),
   };
 }
 
@@ -159,6 +167,21 @@ describe("cleanupUploads — nothing to do", () => {
       { olderThan: Date; limit: number },
     ];
     expect(input.olderThan.toISOString()).toBe("2026-08-14T10:00:00.000Z");
+  });
+
+  it("I4: uses the constructor-configured ttlHours when no per-tick override is given", async () => {
+    // Mirrors production: the worker's scheduled tick payload is always `{}`
+    // (worker/index.ts), so the configured UPLOAD_ORPHAN_TTL_HOURS — passed
+    // here as the constructor dep, exactly like container.ts wires it — is
+    // the ONLY thing that can move `olderThan` off the 24h fallback.
+    const { cleanupUploads, listOrphanedUploads } = harness({ ttlHours: 5 });
+
+    await cleanupUploads({});
+
+    const [input] = listOrphanedUploads.mock.calls[0] as unknown as [
+      { olderThan: Date; limit: number },
+    ];
+    expect(input.olderThan.toISOString()).toBe("2026-08-15T05:00:00.000Z");
   });
 });
 
@@ -346,7 +369,7 @@ describe("cleanupUploads — expired presigned-upload tickets", () => {
     expect(result.failed).toBe(1);
   });
 
-  it("does not throw when listing expired tickets fails, and reports nothing scanned", async () => {
+  it("does not throw when listing expired tickets fails, and marks the pass as a failed listing, not a clean one", async () => {
     const { cleanupUploads, removeStagingBlob, deleteMany } = harness({
       listExpiredError: new Error("db down"),
     });
@@ -355,7 +378,19 @@ describe("cleanupUploads — expired presigned-upload tickets", () => {
 
     expect(result.ticketsScanned).toBe(0);
     expect(result.ticketsRemoved).toBe(0);
+    // I5 (small item): `ticketsScanned: 0` alone reads identically to "nothing
+    // was expired this pass" — this flag is what tells the two apart.
+    expect(result.ticketListFailed).toBe(true);
     expect(removeStagingBlob).not.toHaveBeenCalled();
     expect(deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("reports ticketListFailed: false on an ordinary pass with nothing expired", async () => {
+    const { cleanupUploads } = harness();
+
+    const result = await cleanupUploads();
+
+    expect(result.ticketsScanned).toBe(0);
+    expect(result.ticketListFailed).toBe(false);
   });
 });

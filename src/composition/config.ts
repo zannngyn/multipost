@@ -334,10 +334,12 @@ export const UploadConfigSchema = z.object({
 export type UploadConfig = z.infer<typeof UploadConfigSchema>;
 
 /**
- * MinIO. Hai endpoint chứ không phải một: URL presigned được KÝ kèm hostname,
- * nên URL đưa ra browser phải ký bằng host công khai, còn stat/copy/delete
- * phía server đi bằng host nội bộ trong mạng Docker. Ký nhầm host là lỗi im
- * lặng — chỉ lộ khi chạy thật qua tunnel.
+ * MinIO. Two endpoints, not one: a presigned URL is SIGNED with the hostname
+ * baked in, so the URL handed to the browser must be signed with the public
+ * host, while server-side stat/copy/delete go through the internal host
+ * inside the Docker network. Signing with the wrong host is a silent
+ * failure — it only shows up once something runs for real through the
+ * tunnel.
  */
 export const MinioConfigSchema = z.object({
   MINIO_INTERNAL_ENDPOINT: z.string().trim().min(1),
@@ -363,7 +365,23 @@ export const MinioConfigSchema = z.object({
   MINIO_USE_SSL: z
     .union([z.boolean(), z.string()])
     .default(false)
-    .transform((value) => (typeof value === "boolean" ? value : value.trim().toLowerCase() !== "false")),
+    .transform((value, ctx) => {
+      if (typeof value === "boolean") return value;
+      // Strict allowlist, not a "not false" guess: `""`, `"0"`, `"no"` and
+      // `"off"` used to all read as true, which re-opens the exact Critical
+      // this epic already paid for once — `MINIO_USE_SSL=true` against the
+      // plain-HTTP internal hop boots green and then every confirm dies with
+      // EPROTO inside statStaging/copyObject. Anything ambiguous must fail
+      // loudly at boot, not guess and fail later inside a MinIO call.
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `MINIO_USE_SSL must be exactly "true" or "false" (case-insensitive), got ${JSON.stringify(value)}`,
+      });
+      return z.NEVER;
+    }),
   /**
    * Passed to both the internal and public MinIO clients so the SDK never
    * makes a live `getBucketRegion` lookup against the endpoint before it can

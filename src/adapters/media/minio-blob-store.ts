@@ -266,12 +266,20 @@ export function makeMinioBlobStore(options: MinioBlobStoreOptions): MediaBlobSto
       try {
         await internal.removeObject(bucket, STAGING_PREFIX + key);
       } catch (error) {
-        // The serving copy already exists — this does not fail the post. A
-        // sweep job cleans up the leftover staging copy later.
-        logger.warn("Promoted the object but could not remove its staging copy", {
+        // The serving copy already exists — this does not fail the post.
+        // KNOWN LEAK, not swept: `confirm-upload.ts` deletes the ticket row
+        // the moment promote succeeds, and `cleanup-uploads.ts` only ever
+        // walks ticket rows — a leftover staging object with no row is
+        // invisible to it, exactly the class of leak this epic exists to
+        // close. Nothing currently finds or removes this object again; the
+        // tenant_id + storage key below are the only way an operator can, by
+        // hand, until a row-less staging sweep exists.
+        logger.warn("Promoted the object but could not remove its staging copy — orphaned staging object, no sweep covers it", {
           ...AppError.from(error, "INTERNAL", { reason: "STAGING_CLEANUP_FAILED" }).toLogObject(),
           tenant_id: String(input.tenantId),
           asset_id: input.assetId,
+          storage_key: key,
+          staging_object: STAGING_PREFIX + key,
         });
       }
 

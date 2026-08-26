@@ -314,6 +314,39 @@ describe("confirmUpload — edge cases first", () => {
     expect(h.blobs.deleteStaging).toHaveBeenCalledWith({ tenantId: TENANT, storageKey: `${TENANT}/a2` });
   });
 
+  it("keeps a refused file's ticket row when deleteStaging fails, so the sweep can retry it", async () => {
+    // a2's object never arrived, so it is refused; its staged delete then
+    // throws too. Losing the row on top of that would strand the object
+    // forever — the sweep can only find leftovers BY ROW.
+    const h = makeHarness({
+      tickets: [ticket("a1"), ticket("a2")],
+      blobs: { staging: { [`${TENANT}/a1`]: { sizeBytes: 8 } } },
+    });
+    h.blobs.deleteStaging.mockRejectedValueOnce(new Error("minio down"));
+
+    const result = await makeConfirmUpload(h.deps)({
+      tenantId: TENANT,
+      productCode: "MG0AD6112",
+      assets: [{ assetId: "a1" }, { assetId: "a2" }],
+    });
+
+    expect(result.rejected).toEqual([
+      expect.objectContaining({ fileName: "a2.png", reason: "UNSUPPORTED_TYPE" }),
+    ]);
+    // Only a1 (the accepted file) had its ticket row deleted. a2's row must
+    // survive — deleting it here would be the only handle the sweep has left.
+    expect(h.tickets.deleteMany).toHaveBeenCalledTimes(1);
+    expect(h.tickets.deleteMany).toHaveBeenCalledWith(TENANT, ["a1"]);
+    expect(h.logger.warn).toHaveBeenCalledWith(
+      "Could not remove a refused upload's staged bytes; keeping its ticket row for the sweep to retry",
+      expect.objectContaining({
+        asset_id: "a2",
+        tenant_id: TENANT,
+        context: expect.objectContaining({ reason: "REFUSED_STAGING_DELETE_FAILED" }),
+      }),
+    );
+  });
+
   it("happy path: promotes then registers, sequence follows the order", async () => {
     const h = makeHarness({
       tickets: [ticket("a1"), ticket("a2")],

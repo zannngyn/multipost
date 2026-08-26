@@ -193,6 +193,7 @@ import {
   loadMetaOAuthConfig,
   loadOnboardingConfig,
   loadSecretsConfig,
+  loadUploadConfig,
   loadVideoConfig,
   type Config,
   type EnvRecord,
@@ -1074,6 +1075,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       tickets: uploadTickets,
       clock: deps.clock,
       logger: deps.logger,
+      // I4: was never wired — the worker enqueued an empty payload and the
+      // usecase silently fell back to its own default every tick.
+      ttlHours: loadUploadConfig().UPLOAD_ORPHAN_TTL_HOURS,
     }),
     cleanupMediaCache: makeCleanupMediaCache({
       cache: mediaCache,

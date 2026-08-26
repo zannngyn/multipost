@@ -84,6 +84,19 @@ describe.skipIf(!url)("DrizzleUploadTicketRepo", () => {
     expect(expired.map((t) => t.assetId)).not.toContain("t2");
   });
 
+  it("listExpired orders oldest expiry first, so a limited pass cannot starve older rows behind a repeat offender", async () => {
+    const base = Date.now() - 10 * 60_000;
+    await repo.createMany(TENANT, [
+      ticket("t7-newer", TENANT, new Date(base + 2_000)),
+      ticket("t6-oldest", TENANT, new Date(base)),
+      ticket("t8-middle", TENANT, new Date(base + 1_000)),
+    ]);
+
+    const expired = await repo.listExpired({ now: new Date(), limit: 50 });
+    const ours = expired.filter((t) => ["t6-oldest", "t7-newer", "t8-middle"].includes(t.assetId));
+    expect(ours.map((t) => t.assetId)).toEqual(["t6-oldest", "t8-middle", "t7-newer"]);
+  });
+
   it("findMany returns empty for an empty list without touching the DB", async () => {
     expect(await repo.findMany(TENANT, [])).toEqual([]);
   });

@@ -1,4 +1,4 @@
-import { inArray, lt } from "drizzle-orm";
+import { asc, inArray, lt } from "drizzle-orm";
 
 import type { TenantId } from "@/core/domain/tenant-context";
 import type { UploadTicket, UploadTicketRepo } from "@/core/ports/upload-ticket-repo";
@@ -106,10 +106,14 @@ export class DrizzleUploadTicketRepo implements UploadTicketRepo {
     // expired tickets, so this is the one method that does NOT go through
     // forTenant().
     try {
+      // Oldest expiry first: without a deterministic order a ticket the sweep
+      // keeps failing to clear (a transient staging delete error) could be
+      // re-picked every pass while others past their expiry never get a turn.
       const rows = await this.db
         .select()
         .from(uploadTickets)
         .where(lt(uploadTickets.expiresAt, input.now))
+        .orderBy(asc(uploadTickets.expiresAt))
         .limit(input.limit);
       return rows.map(toTicket);
     } catch (error) {

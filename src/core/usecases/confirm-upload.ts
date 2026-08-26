@@ -11,6 +11,7 @@ import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaRepo } from "@/core/ports/product-repo";
 import type { UploadTicketRepo } from "@/core/ports/upload-ticket-repo";
 
+import { discardPreviousUploads } from "./discard-previous-uploads";
 import { assertOneAlbumKind, type UploadRejectionReport } from "./upload-media";
 
 /**
@@ -208,7 +209,7 @@ export function makeConfirmUpload(deps: ConfirmUploadDeps) {
 
     assertOneAlbumKind(usable.map((item) => item.kind), { tenantId, productCode });
 
-    await discardPreviousUploads(deps, tenantId, productCode, log);
+    await discardPreviousUploads(deps, { tenantId, productCode, log });
 
     // --- Promote, then register ----------------------------------------------
     const accepted: MediaAsset[] = [];
@@ -318,6 +319,13 @@ function applyOrder(
  * are only ever in the staging prefix. `delete` targets serving and would
  * silently no-op, and the ticket row deleted right after is the only other
  * thing that could ever have named the object again.
+ *
+ * Only the ticket rows whose staged object was ACTUALLY removed get deleted.
+ * A row whose `deleteStaging` just failed is kept on purpose — mirrors
+ * `cleanup-uploads.ts`'s "keep the row: it is the only handle left" rule.
+ * The sweep iterates ticket rows to find orphaned staging objects; deleting a
+ * row after a failed delete would strand that object with nothing left able
+ * to name it again, forever.
  */
 async function discardRefused(
   deps: ConfirmUploadDeps,
@@ -327,72 +335,36 @@ async function discardRefused(
   log: Logger,
 ): Promise<void> {
   if (assetIds.length === 0) return;
+  const clearedAssetIds: string[] = [];
   for (const assetId of assetIds) {
     const storageKey = byAssetId.get(assetId)?.storageKey;
     if (!storageKey) continue;
     try {
       await deps.blobs.deleteStaging({ tenantId, storageKey });
+      clearedAssetIds.push(assetId);
     } catch (error) {
-      log.warn("Could not remove a refused upload's staged bytes", {
+      // Keep the row: it is the only handle the sweep has left to retry this
+      // object's staging delete next hour.
+      log.warn("Could not remove a refused upload's staged bytes; keeping its ticket row for the sweep to retry", {
         ...AppError.from(error, "INTERNAL", { reason: "REFUSED_STAGING_DELETE_FAILED" }).toLogObject(),
+        tenant_id: tenantId,
         asset_id: assetId,
       });
     }
   }
+  if (clearedAssetIds.length === 0) return;
   try {
-    await deps.tickets.deleteMany(tenantId, assetIds);
+    await deps.tickets.deleteMany(tenantId, clearedAssetIds);
   } catch (error) {
     log.warn("Could not remove the tickets of refused uploads", {
       ...AppError.from(error, "DB_ERROR", { reason: "REFUSED_TICKET_DELETE_FAILED" }).toLogObject(),
+      tenant_id: tenantId,
     });
   }
 }
 
-/**
- * Replace, not merge: `sequence` numbers from 1 every time, so a second
- * upload batch for the same code would collide with the first and compose
- * would return a scrambled album. Only uploads no post job references yet
- * are removed.
- *
- * These rows are already-promoted uploads (they made it into `media_asset`
- * on an earlier confirm), so their bytes live in the SERVING area — `delete`
- * is correct here, unlike `discardRefused` above.
- */
-async function discardPreviousUploads(
-  deps: ConfirmUploadDeps,
-  tenantId: TenantId,
-  productCode: string,
-  log: Logger,
-): Promise<void> {
-  let previous: readonly { assetId: string; storageKey: string }[];
-  try {
-    previous = await deps.media.listUnreferencedUploadsForCode(tenantId, productCode);
-  } catch (error) {
-    log.error("Could not list the previous uploads to replace", {
-      ...AppError.from(error, "DB_ERROR", { reason: "LIST_PREVIOUS_UPLOADS_FAILED" }).toLogObject(),
-    });
-    return;
-  }
-  if (previous.length === 0) return;
-
-  for (const item of previous) {
-    if (!item.storageKey) continue;
-    try {
-      await deps.blobs.delete({ tenantId, storageKey: item.storageKey });
-    } catch (error) {
-      log.warn("Could not remove the bytes of a replaced upload", {
-        ...AppError.from(error, "INTERNAL", { reason: "REPLACED_BLOB_DELETE_FAILED" }).toLogObject(),
-        drive_file_id: item.assetId,
-      });
-    }
-  }
-
-  try {
-    const removed = await deps.media.deleteUploads(tenantId, previous.map((item) => item.assetId));
-    log.info("Replaced the previous upload attempt for this code", { removed });
-  } catch (error) {
-    log.error("Could not remove the rows of a replaced upload", {
-      ...AppError.from(error, "DB_ERROR", { reason: "REPLACED_ROW_DELETE_FAILED" }).toLogObject(),
-    });
-  }
-}
+// `discardPreviousUploads` (replace, not merge, an earlier unposted attempt
+// for this code) is shared with `upload-media.ts` — see
+// `./discard-previous-uploads` for the full rationale. Unlike `discardRefused`
+// above, its bytes live in the SERVING area (already promoted by an earlier
+// confirm), so it correctly calls `blobs.delete`, never `deleteStaging`.
