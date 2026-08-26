@@ -131,7 +131,19 @@ export function OnboardingFrame({
               /* 23.5dvh puts the block's centre on y≈279 at 1400x867, the
                  measured position of the greeting. A share of the window, not a
                  pixel count, so it holds its proportion on a taller screen. */
-              isWelcome ? "self-start pt-[23.5dvh] pb-16" : "self-center py-28",
+              isWelcome
+                ? "self-start pt-[23.5dvh] pb-16"
+                : /* THE QUESTIONS ARE NOT ON THE WINDOW'S CENTRE LINE. Both
+                     reference shots put the block — top of the heading to the
+                     foot of "Bỏ qua" — on y≈459.5 of 867, i.e. 53.0%, and they
+                     agree on it despite being 15px apart in height, so it is a
+                     property of the frame and not of the content. Plain
+                     centring lands on 50% (measured: 429.5); the surplus 6.9dvh
+                     of top padding moves the centre down by half of itself,
+                     which is the missing 3%. A share of the window rather than
+                     a pixel count, because vertical position is compared by
+                     ratio (spec section 0b). */
+                  "self-center pt-[calc(7rem+6.9dvh)] pb-28",
             )}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1, transition: { duration: enterDuration, ease: "easeOut" } }}
