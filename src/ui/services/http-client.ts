@@ -25,7 +25,12 @@ import { ApiError, CLIENT_ERROR_CODES } from "./api-error";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 export interface ApiRequestOptions<T> {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  /**
+   * `PATCH` is here for the one resource that saves a FIELD rather than a
+   * document (`/api/tenants/onboarding-profile`): an absent key means "leave
+   * the stored answer alone", which `PUT` cannot express.
+   */
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /**
    * Serialised as JSON. Omitted when absent (GET, DELETE with query params).
    *

@@ -53,6 +53,23 @@ export const JoinTenantResponseSchema = z.object({
 });
 export type JoinTenantResponse = z.infer<typeof JoinTenantResponseSchema>;
 
+/**
+ * `POST /api/tenants/ensure-default` (E10) — the THIRD door, and the only one
+ * nobody knocks on: the first-run gate calls it for an account that belongs
+ * nowhere, and it is written to be safe to call on every entry.
+ *
+ * `wasCreated` is the whole payload's reason for existing. `201` + a moved
+ * active-tenant cookie means a company was just minted for this account; `200`
+ * means it already had one and the cookie was NOT touched — reading that as
+ * "we selected a company for you" is how an operator with several companies
+ * gets yanked out of the one they were working in.
+ */
+export const EnsureDefaultTenantResponseSchema = z.object({
+  tenantId: z.string().min(1),
+  wasCreated: z.boolean(),
+});
+export type EnsureDefaultTenantResponse = z.infer<typeof EnsureDefaultTenantResponseSchema>;
+
 // --- Slug -------------------------------------------------------------------
 
 export const SLUG_MIN_LENGTH = 3;
