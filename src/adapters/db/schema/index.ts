@@ -15,6 +15,7 @@ export * from "./platform-access-session";
 export * from "./sync-run";
 export * from "./product";
 export * from "./media-asset";
+export * from "./upload-ticket";
 export * from "./post-batch";
 export * from "./post-job";
 export * from "./post-job-event";
