@@ -32,6 +32,7 @@ vi.mock("@/app/_auth/session", () => ({
 
 const { GET } = await import("./route");
 const { OAUTH_STATE_COOKIE } = await import("../_lib/oauth-state-cookie");
+const { OAUTH_RETURN_COOKIE } = await import("@/app/api/_lib/oauth-return-cookie");
 
 const TENANT = "00000000-0000-0000-0000-000000000001";
 const NONCE = "c".repeat(64);
@@ -105,5 +106,72 @@ describe("GET /api/channels/connect — start", () => {
     expect(cookie).toContain(`${OAUTH_STATE_COOKIE}=${NONCE}`);
     expect(cookie).not.toContain(TENANT);
     expect(cookie).toContain("HttpOnly");
+  });
+});
+
+// --- Where the round trip is told to land -------------------------------------
+
+describe("GET /api/channels/connect — return target", () => {
+  const returnCookie = (response: Response): string =>
+    response.headers.getSetCookie().find((c) => c.startsWith(`${OAUTH_RETURN_COOKIE}=`)) ?? "";
+
+  it("clears any stale return flag when the connect starts from /channels", async () => {
+    // The historic entry point must keep landing on /channels, and an abandoned
+    // onboarding attempt from ten minutes ago must not hijack it. Declaring the
+    // destination on EVERY connect is what keeps the two doors independent.
+    const response = await GET(request());
+
+    expect(returnCookie(response)).toContain(`${OAUTH_RETURN_COOKIE}=;`);
+    expect(returnCookie(response)).toContain("Max-Age=0");
+  });
+
+  it("flags the round trip when the connect starts in onboarding", async () => {
+    const response = await GET(
+      new Request("http://localhost/api/channels/connect?return=onboarding"),
+    );
+
+    // Both cookies must survive: an object literal would keep only the last.
+    const cookies = response.headers.getSetCookie();
+    expect(cookies).toHaveLength(2);
+    expect(cookies.some((c) => c.includes(`${OAUTH_STATE_COOKIE}=${NONCE}`))).toBe(true);
+    expect(returnCookie(response)).toContain(`${OAUTH_RETURN_COOKIE}=onboarding`);
+    expect(returnCookie(response)).toContain("SameSite=Lax");
+    expect(returnCookie(response)).toContain("HttpOnly");
+  });
+
+  it("ignores an unknown return value rather than trusting it", async () => {
+    const response = await GET(
+      new Request("http://localhost/api/channels/connect?return=https://evil.test"),
+    );
+
+    expect(returnCookie(response)).toContain(`${OAUTH_RETURN_COOKIE}=;`);
+  });
+
+  it("redirects instead of answering JSON when the Meta app is missing mid-slideshow", async () => {
+    // A raw JSON page in the middle of the slideshow is a dead end: there is
+    // no screen left to read it on (spec §12).
+    startFacebookConnect.mockRejectedValue(new AppError("CHANNEL_NOT_CONFIGURED"));
+
+    const response = await GET(
+      new Request("http://localhost/api/channels/connect?return=onboarding"),
+    );
+
+    expect(response.status).toBe(302);
+    const target = new URL(response.headers.get("location") ?? "", "http://localhost");
+    expect(target.pathname).toBe("/onboarding");
+    expect(target.searchParams.get("step")).toBe("facebook");
+    expect(target.searchParams.get("reason")).toBe("CHANNEL_NOT_CONFIGURED");
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it("keeps the JSON error body for the /channels entry point", async () => {
+    // Unchanged for everyone outside onboarding — the operator is still on the
+    // channels screen and can read the body (doc 10 §3).
+    startFacebookConnect.mockRejectedValue(new AppError("CHANNEL_NOT_CONFIGURED"));
+
+    const response = await GET(request());
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "CHANNEL_NOT_CONFIGURED" });
   });
 });
