@@ -71,6 +71,10 @@ import {
 } from "@/core/usecases/check-operator-access";
 import { makeCreateTenant, type CreateTenant } from "@/core/usecases/create-tenant";
 import {
+  makeEnsureDefaultTenant,
+  type EnsureDefaultTenant,
+} from "@/core/usecases/ensure-default-tenant";
+import {
   makeGetOperatorOverview,
   type GetOperatorOverview,
 } from "@/core/usecases/get-operator-overview";
@@ -330,6 +334,11 @@ export interface Usecases {
   oauthStates: OAuthStateService;
   /** M2.1 — self-service company creation; the creator becomes owner. */
   createTenant: CreateTenant;
+  /**
+   * E10 — first entry without a company provisions one (spec §1). Idempotent:
+   * an account that already belongs somewhere gets that company back.
+   */
+  ensureDefaultTenant: EnsureDefaultTenant;
   /** M2.2 — invite links: list / create (role ladder) / revoke. */
   invites: ManageInvites;
   /** M2.2 — `POST /api/join`: token → membership (NoMembership state's door). */
@@ -914,6 +923,22 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     },
     randomSuffix: () => randomBytes(2).toString("hex"),
   });
+  /**
+   * Creating a company mints a NEW membership — every cache over accounts and
+   * memberships is stale the same instant, so they drop HERE (the same
+   * discipline as decideAccessRequest below). Without this, /api/me and
+   * requireTenant would not see the new company for up to a TTL.
+   *
+   * Named rather than inlined into `usecases.createTenant` because
+   * `ensureDefaultTenant` delegates to the SAME wrapper: a company it
+   * provisions must invalidate exactly as much.
+   */
+  const createTenant: CreateTenant = async (input) => {
+    const result = await baseCreateTenant(input);
+    operatorAccounts.invalidateAll();
+    tenantGate.invalidateAll();
+    return result;
+  };
   const inviteRepo = new DrizzleInviteRepo(deps.db, { logger: deps.logger });
   const baseJoinWithInvite = makeJoinWithInvite({
     invites: inviteRepo,
@@ -1158,18 +1183,17 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       store: new DrizzleOAuthStateStore(deps.db, { logger: deps.logger }),
       clock: deps.clock,
     }),
+    createTenant,
     /**
-     * Both onboarding writes mint a NEW membership — every cache over accounts
-     * and memberships is stale the same instant, so the caches drop HERE (the
-     * same discipline as decideAccessRequest above). Without this, /api/me and
-     * requireTenant would not see the new company for up to a TTL.
+     * E10 — lazy provisioning on first entry. It reads memberships through the
+     * RAW repo, not `operatorAccounts`: a cached "no memberships" would
+     * provision a second company for someone who already has one.
      */
-    createTenant: async (input) => {
-      const result = await baseCreateTenant(input);
-      operatorAccounts.invalidateAll();
-      tenantGate.invalidateAll();
-      return result;
-    },
+    ensureDefaultTenant: makeEnsureDefaultTenant({
+      accounts: accountRepo,
+      createTenant,
+      logger: deps.logger,
+    }),
     invites: makeManageInvites({
       invites: inviteRepo,
       clock: deps.clock,
