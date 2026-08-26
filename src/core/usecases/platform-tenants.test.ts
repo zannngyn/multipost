@@ -3,9 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 import { AppError } from "@/core/domain/errors";
 import { testTenantId } from "@/core/domain/tenant-context.testing";
 import type { InviteRepo } from "@/core/ports/invite-repo";
-import type { PlatformTenantRepo } from "@/core/ports/platform-tenant-repo";
+import type {
+  PlatformTenantListItem,
+  PlatformTenantRepo,
+} from "@/core/ports/platform-tenant-repo";
 import type { Clock, LogBindings, Logger } from "@/core/ports/infra";
 
+import { FOCUS_CHANNELS, SELLER_KINDS } from "./onboarding-profile";
 import { makePlatformTenants } from "./platform-tenants";
 
 /**
@@ -31,11 +35,11 @@ const clock: Clock = {
   nowMs: () => new Date("2026-08-21T05:00:00Z").getTime(),
 };
 
-function harness(options: { takenSlugs?: string[] } = {}) {
+function harness(options: { takenSlugs?: string[]; rows?: PlatformTenantListItem[] } = {}) {
   const taken = new Set(options.takenSlugs ?? []);
   const createdSlugs: string[] = [];
   const platformTenants: PlatformTenantRepo = {
-    listTenants: vi.fn(async () => []),
+    listTenants: vi.fn(async () => options.rows ?? []),
     createTenant: vi.fn(async (input) => {
       createdSlugs.push(input.slug);
       if (taken.has(input.slug)) throw new AppError("SLUG_TAKEN");
@@ -143,5 +147,68 @@ describe("platform setTenantStatus", () => {
     expect(platformTenants.setStatus).toHaveBeenCalledWith(
       expect.objectContaining({ status: "suspended", reason: "Khách nợ phí 3 tháng liên tiếp" }),
     );
+  });
+});
+
+// --- The survey aggregate (plan task 11) --------------------------------------
+
+const row = (over: Partial<PlatformTenantListItem> = {}): PlatformTenantListItem => ({
+  id: TENANT,
+  name: "Khách A",
+  slug: "khach-a",
+  plan: "standard",
+  status: "active",
+  memberCount: 1,
+  createdAt: new Date("2026-08-21T05:00:00Z"),
+  survey: null,
+  ...over,
+});
+
+describe("platform listTenants — the survey aggregate", () => {
+  it("hands the rows back untouched next to the summary", async () => {
+    const rows = [row({ survey: null }), row({ survey: { sellerKind: "agency", currentTools: [], channelCount: null, focusChannels: ["tiktok"], completedAt: null } })];
+    const { usecase } = harness({ rows });
+
+    const result = await usecase.listTenants();
+    expect(result.items).toEqual(rows);
+    expect(result.surveySummary.total).toBe(2);
+  });
+
+  it("keeps 'skipped' and 'none of these' apart in the counts", async () => {
+    const { usecase } = harness({
+      rows: [
+        row({ survey: null }),
+        row({ survey: { sellerKind: null, currentTools: null, channelCount: null, focusChannels: null, completedAt: null } }),
+        row({ survey: { sellerKind: null, currentTools: [], channelCount: null, focusChannels: [], completedAt: new Date("2026-08-26T10:00:00Z") } }),
+      ],
+    });
+
+    const { surveySummary } = await usecase.listTenants();
+    expect(surveySummary.currentTools.noAnswer).toBe(2);
+    expect(surveySummary.currentTools.answeredNone).toBe(1);
+    expect(surveySummary.completed).toBe(1);
+    expect(surveySummary.notCompleted).toBe(2);
+  });
+
+  it("seeds every offered code so an unchosen channel reads as 0, not as absent", async () => {
+    const { usecase } = harness({
+      rows: [row({ survey: { sellerKind: "agency", currentTools: null, channelCount: null, focusChannels: ["tiktok"], completedAt: null } })],
+    });
+
+    const { surveySummary } = await usecase.listTenants();
+    const codes = surveySummary.focusChannels.byCode.map((tally) => tally.code).sort();
+    expect(codes).toEqual([...FOCUS_CHANNELS].sort());
+    expect(surveySummary.focusChannels.byCode[0]).toEqual({ code: "tiktok", count: 1 });
+
+    const sellerCodes = surveySummary.sellerKind.byCode.map((tally) => tally.code).sort();
+    expect(sellerCodes).toEqual([...SELLER_KINDS].sort());
+  });
+
+  it("summarises an empty platform without touching the vocabulary counts", async () => {
+    const { usecase } = harness({ rows: [] });
+    const { items, surveySummary } = await usecase.listTenants();
+    expect(items).toEqual([]);
+    expect(surveySummary.total).toBe(0);
+    expect(surveySummary.focusChannels.votes).toBe(0);
   });
 });

@@ -1,7 +1,9 @@
 import { and, count, desc, eq } from "drizzle-orm";
+import { z } from "zod";
 
 import { AppError } from "@/core/domain/errors";
 import { isTenantStatus } from "@/core/domain/tenant";
+import type { OnboardingProfile } from "@/core/ports/tenant-profile";
 import type {
   PlatformCreatedTenant,
   PlatformCreateTenantRecord,
@@ -14,7 +16,7 @@ import type { Logger } from "@/core/ports/infra";
 
 import type { Database } from "./client";
 import { findPgError, wrapDbError } from "./db-errors";
-import { auditLogs, memberships, tenants } from "./schema";
+import { auditLogs, memberships, tenantProfiles, tenants } from "./schema";
 
 /**
  * Platform tenant administration (M3.2). NOT behind `forTenant()` — this IS
@@ -25,6 +27,73 @@ import { auditLogs, memberships, tenants } from "./schema";
 
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * The joined `tenant_profile` columns, validated at the boundary (technical
+ * rule 2 — data out of the database is external data too). The table carries no
+ * enum and no check constraint by design, so this is the only shape gate on the
+ * read path.
+ *
+ * `.nullable()` everywhere and `z.array(...)` accepting `[]` are the point: the
+ * three states (`null` = skipped/not reached, `[]` = "none of these", a value =
+ * an answer) must arrive intact. A blank string is NOT a fourth spelling of
+ * "no answer" — it fails here, loudly.
+ */
+const SurveyCodeSchema = z.string().trim().min(1).max(64);
+const SurveyRowSchema = z.object({
+  sellerKind: SurveyCodeSchema.nullable(),
+  currentTools: z.array(SurveyCodeSchema).nullable(),
+  channelCount: SurveyCodeSchema.nullable(),
+  focusChannels: z.array(SurveyCodeSchema).nullable(),
+  completedAt: z.date().nullable(),
+});
+
+interface JoinedSurveyColumns {
+  readonly profileTenantId: unknown;
+  readonly sellerKind: unknown;
+  readonly currentTools: unknown;
+  readonly channelCount: unknown;
+  readonly focusChannels: unknown;
+  readonly surveyCompletedAt: unknown;
+}
+
+/**
+ * `null` here means "no `tenant_profile` row" — the OUTER join missed and this
+ * tenant never started the survey. It is NOT the same as a row of nulls, which
+ * means the operator opened the flow and skipped a step.
+ *
+ * An unreadable row also answers `null`, but only after a WARN naming the
+ * tenant and the failing field. Throwing would take the whole platform list —
+ * every customer of MYSP — down over one corrupt row; staying silent would let
+ * corruption read as "bỏ qua" and quietly inflate the skip rate.
+ */
+function readSurvey(
+  row: JoinedSurveyColumns,
+  tenantId: string,
+  logger: Logger,
+): OnboardingProfile | null {
+  if (row.profileTenantId === null || row.profileTenantId === undefined) return null;
+
+  const parsed = SurveyRowSchema.safeParse({
+    sellerKind: row.sellerKind,
+    currentTools: row.currentTools,
+    channelCount: row.channelCount,
+    focusChannels: row.focusChannels,
+    completedAt: row.surveyCompletedAt,
+  });
+  if (!parsed.success) {
+    logger.warn("Unreadable tenant_profile row — survey reported as absent", {
+      tenant_id: tenantId,
+      operation: "platformTenant.list",
+      reason: "UNREADABLE_PROFILE_ROW",
+      field: String(parsed.error.issues[0]?.path[0] ?? "profile"),
+      issue: parsed.error.issues[0]?.message ?? "invalid",
+    });
+    return null;
+  }
+
+  return parsed.data;
 }
 
 export class DrizzlePlatformTenantRepo implements PlatformTenantRepo {
@@ -44,13 +113,29 @@ export class DrizzlePlatformTenantRepo implements PlatformTenantRepo {
           status: tenants.status,
           createdAt: tenants.createdAt,
           memberCount: count(memberships.id),
+          // Onboarding survey (E10). LEFT, not INNER: most tenants predate the
+          // survey and have no row, and an inner join would silently delete
+          // them from the platform list.
+          profileTenantId: tenantProfiles.tenantId,
+          sellerKind: tenantProfiles.sellerKind,
+          currentTools: tenantProfiles.currentTools,
+          channelCount: tenantProfiles.channelCount,
+          focusChannels: tenantProfiles.focusChannels,
+          surveyCompletedAt: tenantProfiles.completedAt,
         })
         .from(tenants)
         .leftJoin(
           memberships,
           and(eq(memberships.tenantId, tenants.id), eq(memberships.status, "active")),
         )
-        .groupBy(tenants.id)
+        .leftJoin(tenantProfiles, eq(tenantProfiles.tenantId, tenants.id))
+        /**
+         * Both PRIMARY KEYS. `tenant_profile` is 1:1 with `tenant`, so adding
+         * its key changes no group's cardinality (the member count stays
+         * right); grouping by a PK is what lets the rest of that table's
+         * columns be selected without aggregating each one.
+         */
+        .groupBy(tenants.id, tenantProfiles.tenantId)
         .orderBy(desc(tenants.createdAt));
 
       return rows.map((row) => ({
@@ -61,6 +146,7 @@ export class DrizzlePlatformTenantRepo implements PlatformTenantRepo {
         status: readStatus(row.status),
         memberCount: row.memberCount,
         createdAt: row.createdAt,
+        survey: readSurvey(row, row.id, this.deps.logger),
       }));
     } catch (error) {
       throw wrapDbError(error, { operation: "platformTenant.list" });
