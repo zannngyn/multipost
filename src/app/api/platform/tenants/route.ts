@@ -54,8 +54,17 @@ export async function GET(_request: Request): Promise<Response> {
     const session = await getOperatorSession(`api:${ROUTE_GET}`);
     await container.usecases.requirePlatformAdmin(session, { minRole: "support" });
 
-    const items = await container.usecases.platformTenants.listTenants();
-    return Response.json({ items });
+    /**
+     * The onboarding survey aggregate rides along with the rows it was counted
+     * from (E10 — plan task 11). One answer, so the summary strip and the table
+     * below it can never describe two different moments.
+     *
+     * Same `support` bar as the list itself: these are answers about how a
+     * customer sells, not credentials, and they are already visible row by row
+     * in the table this call feeds. Nothing here widens who may look.
+     */
+    const { items, surveySummary } = await container.usecases.platformTenants.listTenants();
+    return Response.json({ items, surveySummary });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE_GET } });
   }

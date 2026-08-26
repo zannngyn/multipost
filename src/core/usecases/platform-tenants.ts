@@ -1,4 +1,8 @@
 import { AppError } from "@/core/domain/errors";
+import {
+  summarizeOnboardingSurvey,
+  type OnboardingSurveySummary,
+} from "@/core/domain/onboarding-survey-summary";
 import type { TenantId } from "@/core/domain/tenant-context";
 import type { InviteRepo } from "@/core/ports/invite-repo";
 import type { Clock, Logger } from "@/core/ports/infra";
@@ -10,6 +14,7 @@ import type {
 
 import { slugify } from "./create-tenant";
 import { INVITE_TTL_MS } from "./manage-invites";
+import { CHANNEL_COUNTS, FOCUS_CHANNELS, SELLER_KINDS, TOOL_KINDS } from "./onboarding-profile";
 
 /**
  * M3.2 — platform tenant administration. The business flow this exists for:
@@ -54,8 +59,29 @@ export interface SetTenantStatusInput {
   readonly actorEmail: string | null;
 }
 
+/**
+ * The list AND its aggregate in ONE answer, on purpose.
+ *
+ * Two reasons, and neither is "one fewer round trip":
+ * 1. the summary is computed from exactly the rows returned beside it, so the
+ *    strip above the table can never disagree with the table — a second
+ *    endpoint re-reads the platform a moment later and a tenant created in
+ *    between makes the two contradict each other, with no way for the reader
+ *    to tell which is right;
+ * 2. it costs nothing extra: the aggregate is a pass over rows already in
+ *    memory, not a second query. A GROUP BY in SQL would be a second read of
+ *    the same table for a platform-sized list (tens of rows, not millions).
+ * If the platform ever grows past what one list can carry, the summary moves
+ * to its own verb WITH its own query — and this comment is the note that the
+ * two must then be timestamped so a mismatch is explainable.
+ */
+export interface PlatformTenantListResult {
+  readonly items: readonly PlatformTenantListItem[];
+  readonly surveySummary: OnboardingSurveySummary;
+}
+
 export interface PlatformTenants {
-  listTenants(): Promise<readonly PlatformTenantListItem[]>;
+  listTenants(): Promise<PlatformTenantListResult>;
   createTenant(input: PlatformCreateTenantInput): Promise<PlatformCreateTenantResult>;
   setTenantStatus(input: SetTenantStatusInput): Promise<SetTenantStatusResult>;
 }
@@ -73,7 +99,26 @@ export interface PlatformTenantsDeps {
 export function makePlatformTenants(deps: PlatformTenantsDeps): PlatformTenants {
   return {
     async listTenants() {
-      return deps.platformTenants.listTenants();
+      const items = await deps.platformTenants.listTenants();
+
+      /**
+       * The vocabulary is passed in so an OFFERED option nobody picked shows
+       * up as 0 instead of vanishing — "nên làm TikTok hay Instagram trước" is
+       * unanswerable when the channel with zero votes is simply missing. A
+       * code stored before an option was retired is still counted; see the
+       * summariser.
+       */
+      const surveySummary = summarizeOnboardingSurvey(
+        items.map((item) => item.survey),
+        {
+          sellerKind: SELLER_KINDS,
+          channelCount: CHANNEL_COUNTS,
+          currentTools: TOOL_KINDS,
+          focusChannels: FOCUS_CHANNELS,
+        },
+      );
+
+      return { items, surveySummary };
     },
 
     async createTenant(input) {

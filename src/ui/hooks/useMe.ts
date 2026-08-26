@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 
+import { adoptActiveTenantCache } from "@/ui/hooks/adopt-active-tenant";
 import { useNowMs } from "@/ui/hooks/useNowMs";
 
 import {
@@ -130,33 +131,20 @@ export function useActiveTenant(): ActiveTenant {
 
 /**
  * What EVERY way of landing in a different company has to do: switching (M2.3),
- * creating one (M2.1) and accepting an invite all end here.
+ * creating one (M2.1), accepting an invite (M2.2), being provisioned a first
+ * company (E10) and entering or leaving support mode (M3.3) all end here.
  *
- * The ENTIRE cache is dropped, not just the queries that look tenant-scoped:
- * anything still holding company A's rows would be shown under company B's name
- * (core-auth-session: "chuyển tổ chức mà không dọn cache = rò rỉ dữ liệu giữa
- * các tổ chức").
+ * The cookie itself is already set by the server on all of those paths — this
+ * side only has to stop believing what it knew a moment ago, and make sure the
+ * new answer actually REACHES the screens that are already mounted.
  *
- * `removeQueries` rather than `invalidateQueries`: invalidation keeps the old
- * data on screen while it refetches, which is exactly the leak. Removing also
- * throws away infinite-query pages, so a products cursor from the previous
- * company cannot be sent to the new one (docs/11 §4).
- *
- * The cookie itself is already set by the server on all three paths — this side
- * only has to stop believing what it knew a moment ago.
+ * The rule and its two failure modes live in `adoptActiveTenantCache`, which is
+ * plain TypeScript so it can be tested without a DOM.
  */
 export function useAdoptActiveTenant(): () => Promise<void> {
   const queryClient = useQueryClient();
 
-  return useCallback(async () => {
-    queryClient.removeQueries();
-    // The identity query is what every screen waits on, so it is refetched
-    // immediately instead of on the next render.
-    await queryClient.fetchQuery({
-      queryKey: meKeys.me(),
-      queryFn: ({ signal }) => fetchMe(signal),
-    });
-  }, [queryClient]);
+  return useCallback(() => adoptActiveTenantCache(queryClient), [queryClient]);
 }
 
 /** Switching to a company the account is already a member of. */

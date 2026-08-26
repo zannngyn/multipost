@@ -30,6 +30,9 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   // "never existed" is a probing oracle.
   TENANT_LIMIT_REACHED: 409,
   SLUG_TAKEN: 409,
+  // 503, not 409: no slug the caller sent is at fault and the same request,
+  // sent again, draws fresh entropy and very probably succeeds.
+  SLUG_DERIVATION_EXHAUSTED: 503,
   INVITE_INVALID: 404,
   INVITE_ROLE_FORBIDDEN: 403,
   // Members (M2.3) + retirement (M2.4)
