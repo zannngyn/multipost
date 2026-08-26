@@ -39,6 +39,7 @@ vi.mock("@/app/_auth/session", () => ({
 
 const { GET } = await import("./route");
 const { GOOGLE_OAUTH_STATE_COOKIE } = await import("../_lib/oauth-state-cookie");
+const { OAUTH_RETURN_COOKIE } = await import("@/app/api/_lib/oauth-return-cookie");
 
 const TENANT = "00000000-0000-0000-0000-000000000001";
 const OTHER_TENANT = "00000000-0000-0000-0000-0000000000ff";
@@ -190,5 +191,78 @@ describe("GET /api/catalog/google/callback — success", () => {
     expect(completeGoogleConnect).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId: TENANT }),
     );
+  });
+});
+
+// --- Where the browser lands --------------------------------------------------
+
+describe("GET /api/catalog/google/callback — return target", () => {
+  /** Same round trip, but started from the onboarding slideshow. */
+  function fromOnboarding(query: string, nonce = NONCE): Request {
+    const headers = new Headers();
+    headers.set(
+      "cookie",
+      `${GOOGLE_OAUTH_STATE_COOKIE}=${nonce}; ${OAUTH_RETURN_COOKIE}=onboarding`,
+    );
+    return new Request(`http://localhost/api/catalog/google/callback${query}`, { headers });
+  }
+
+  it("keeps /sync for every entry point that did not come from onboarding", async () => {
+    const response = await GET(request(`?code=abc&state=${NONCE}`, NONCE));
+
+    const target = location(response);
+    expect(target.pathname).toBe("/sync");
+    expect(target.searchParams.get("google")).toBe("connected");
+  });
+
+  it("returns a successful connect to the slide it started from", async () => {
+    const response = await GET(fromOnboarding(`?code=abc&state=${NONCE}`));
+
+    const target = location(response);
+    expect(target.pathname).toBe("/onboarding");
+    expect(target.searchParams.get("step")).toBe("data");
+    expect(target.searchParams.get("google")).toBe("connected");
+  });
+
+  it("returns the CANCELLED branch to the slide as well", async () => {
+    // Cancelling and landing on /sync mid-slideshow is the exact bug this
+    // mechanism exists to prevent.
+    const response = await GET(fromOnboarding("?error=access_denied"));
+
+    const target = location(response);
+    expect(target.pathname).toBe("/onboarding");
+    expect(target.searchParams.get("google")).toBe("cancelled");
+  });
+
+  it("returns the STATE_MISMATCH branch to the slide as well", async () => {
+    claim.mockResolvedValue(null);
+
+    const response = await GET(fromOnboarding(`?code=abc&state=${NONCE}`));
+
+    const target = location(response);
+    expect(target.pathname).toBe("/onboarding");
+    expect(target.searchParams.get("reason")).toBe("STATE_MISMATCH");
+  });
+
+  it("returns the thrown-error branch to the slide as well", async () => {
+    completeGoogleConnect.mockRejectedValue(new AppError("GOOGLE_AUTH_EXPIRED"));
+
+    const response = await GET(fromOnboarding(`?code=abc&state=${NONCE}`));
+
+    const target = location(response);
+    expect(target.pathname).toBe("/onboarding");
+    expect(target.searchParams.get("reason")).toBe("GOOGLE_AUTH_EXPIRED");
+  });
+
+  it("clears the return flag on every exit, so the next connect starts clean", async () => {
+    const response = await GET(fromOnboarding("?error=access_denied"));
+
+    const cookies = response.headers.getSetCookie();
+    // Two cookies, so `Headers.append`: an object literal would keep only one.
+    expect(cookies).toHaveLength(2);
+    expect(cookies.some((c) => c.startsWith(`${GOOGLE_OAUTH_STATE_COOKIE}=;`))).toBe(true);
+    expect(
+      cookies.some((c) => c.startsWith(`${OAUTH_RETURN_COOKIE}=;`) && c.includes("Max-Age=0")),
+    ).toBe(true);
   });
 });
