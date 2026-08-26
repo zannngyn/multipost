@@ -59,13 +59,11 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       navDefaultCollapsed={isNavCollapsedCookie(navCookie)}
       signOutAction={session.isDevFake ? undefined : signOutOperator}
     >
-      {/* Blocks the screens below until a company is established — the picker
-          and the first-run wizard live there. The sign-out action goes with it:
-          that wizard is a required dialog, so it covers the top bar's own
-          sign-out and has to carry one of its own. */}
-      <TenantBoundary signOutAction={session.isDevFake ? undefined : signOutOperator}>
-        {children}
-      </TenantBoundary>
+      {/* Blocks the screens below until a company is established: the picker
+          lives there, and an account that belongs to nowhere is sent on to the
+          full-screen `/onboarding` flow. No sign-out action travels with it any
+          more — that flow renders outside this shell and carries its own. */}
+      <TenantBoundary>{children}</TenantBoundary>
     </AppFrame>
   );
 }

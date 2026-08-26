@@ -14,6 +14,7 @@ import { AppLink } from "@/ui/components/shell/AppLink";
 import { myspTheme } from "@/ui/theme/mysp";
 
 import { ProgressRail } from "./ProgressRail";
+import { SlideCompany } from "./SlideCompany";
 import { SlideShell } from "./SlideShell";
 import {
   ONBOARDING_SLIDE_IDS,
@@ -34,9 +35,9 @@ import { usePassedSlides } from "./usePassedSlides";
  * back to the right place.
  */
 export function OnboardingFlow({
-  // Accepted now, wired in task 03: slide 01 is the only one that shows it, and
-  // `src/ui` may not import `src/app`, so the Server Action arrives as a prop.
-  signOutAction: _signOutAction,
+  // Slide 01 is the only one that shows it, and `src/ui` may not import
+  // `src/app`, so the Server Action arrives as a prop.
+  signOutAction,
 }: {
   signOutAction?: () => Promise<void>;
 }) {
@@ -131,10 +132,23 @@ export function OnboardingFlow({
               onBack={current === "company" ? undefined : goBack}
               exitHref={current === "company" ? undefined : "/"}
             >
-              {/* Task 03 replaces "company"; tasks 06-10 replace the rest. */}
-              <p className="text-muted-foreground text-sm">
-                Nội dung màn này được lắp ở task sau ({current}).
-              </p>
+              {/* Tasks 06-10 replace the remaining five placeholders. */}
+              {current === "company" ? (
+                <SlideCompany
+                  signOutAction={signOutAction}
+                  // Creating the company advances the flow only from the
+                  // mutation's `onSuccess`; a failed create must not move on.
+                  onCreated={advance}
+                  // Someone who accepted an invite joined a company somebody
+                  // else set up — the remaining five slides are not theirs to
+                  // do, so they go straight into the app.
+                  onJoined={() => router.replace("/")}
+                />
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  Nội dung màn này được lắp ở task sau ({current}).
+                </p>
+              )}
             </SlideShell>
           </AnimatePresence>
         </div>
