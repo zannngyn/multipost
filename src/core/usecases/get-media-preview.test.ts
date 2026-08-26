@@ -98,6 +98,14 @@ function harness(options: { assets?: Record<string, MediaAsset | undefined>; cac
     },
     get: getBlob,
     delete: async () => false,
+    createUploadUrl: async () => {
+      throw new Error("not used in this test");
+    },
+    stat: async () => null,
+    statStaging: async () => null,
+    readRange: async () => null,
+    promote: async () => ({ storageKey: "", sizeBytes: 0 }),
+    createDownloadUrl: async () => null,
   };
 
   const getCached = vi.fn(

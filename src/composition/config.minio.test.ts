@@ -9,17 +9,17 @@ const base = {
 };
 
 describe("loadMinioConfig", () => {
-  it("mặc định bucket và useSSL", () => {
+  it("defaults bucket and useSSL", () => {
     const cfg = loadMinioConfig(base);
     expect(cfg.MINIO_BUCKET).toBe("mysp-media");
     expect(cfg.MINIO_USE_SSL).toBe(true);
   });
 
-  it("từ chối khi thiếu secret", () => {
+  it("rejects when the secret is missing", () => {
     expect(() => loadMinioConfig({ ...base, MINIO_SECRET_KEY: "" })).toThrow();
   });
 
-  it("từ chối public endpoint không phải URL", () => {
+  it("rejects a public endpoint that is not a URL", () => {
     expect(() => loadMinioConfig({ ...base, MINIO_PUBLIC_ENDPOINT: "minio:9000" })).toThrow();
   });
 });

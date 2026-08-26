@@ -65,7 +65,19 @@ function harness(
     };
   });
   const remove = vi.fn(async () => true);
-  const blobs: MediaBlobStore = { put, get: async () => null, delete: remove };
+  const blobs: MediaBlobStore = {
+    put,
+    get: async () => null,
+    delete: remove,
+    createUploadUrl: async () => {
+      throw new Error("not used in this test");
+    },
+    stat: async () => null,
+    statStaging: async () => null,
+    readRange: async () => null,
+    promote: async () => ({ storageKey: "", sizeBytes: 0 }),
+    createDownloadUrl: async () => null,
+  };
 
   const registerUpload = vi.fn(async (_tenantId: string, asset: MediaAsset) => {
     if (options.registerError) throw options.registerError;

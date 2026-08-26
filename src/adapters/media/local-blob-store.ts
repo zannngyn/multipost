@@ -1,11 +1,14 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
 import { AppError } from "@/core/domain/errors";
 import type {
   BlobContent,
+  BlobStat,
+  CreateUploadUrlInput,
   GetBlobInput,
   MediaBlobStore,
+  PresignedUpload,
   PutBlobInput,
   StoredBlob,
 } from "@/core/ports/media-blob-store";
@@ -24,6 +27,12 @@ import type { TenantId } from "@/core/domain/tenant-context";
  * The blob is bytes only. The MIME type is NOT stored beside it: the asset row
  * already carries it, `getMediaContent` already falls back to that row, and a
  * second copy would be one more thing to keep in sync.
+ *
+ * Presign methods are deliberately degenerate here: local has no notion of a
+ * bucket that can accept a signed policy, and no notion of a staging prefix
+ * separate from the serving area (see `statStaging`/`promote` below). Those
+ * become real once the MinIO adapter lands (Task 3-4) — this store keeps
+ * today's behaviour (Node streams the bytes) unchanged.
  */
 
 export interface LocalBlobStoreOptions {
@@ -132,6 +141,88 @@ export function makeLocalBlobStore(options: LocalBlobStoreOptions): MediaBlobSto
         if (isMissing(error)) return false;
         throw AppError.from(error, "INTERNAL", { reason: "BLOB_DELETE_FAILED" });
       }
+    },
+
+    async stat(input: { tenantId: TenantId; storageKey: string }): Promise<BlobStat | null> {
+      const path = resolveKey(root, input?.tenantId, input?.storageKey);
+      if (!path) return null;
+      try {
+        // Same turbopackIgnore reasoning as get() above.
+        const info = await stat(/* turbopackIgnore: true */ path);
+        return info.isFile() ? { sizeBytes: info.size, mimeType: null } : null;
+      } catch (error) {
+        if (isMissing(error)) return null;
+        throw AppError.from(error, "INTERNAL", { reason: "BLOB_STAT_FAILED" });
+      }
+    },
+
+    async statStaging(input: { tenantId: TenantId; storageKey: string }): Promise<BlobStat | null> {
+      // Local writes straight to the serving area — there is no separate
+      // staging prefix to look at, so this degenerates to stat().
+      return this.stat(input);
+    },
+
+    async readRange(input: {
+      tenantId: TenantId;
+      storageKey: string;
+      length: number;
+    }): Promise<Uint8Array | null> {
+      const path = resolveKey(root, input?.tenantId, input?.storageKey);
+      if (!path) return null;
+
+      const length = input?.length;
+      if (typeof length !== "number" || !Number.isInteger(length) || length <= 0) {
+        throw new AppError("INVALID_INPUT", {
+          message: "readRange length must be a positive integer",
+          context: { reason: "INVALID_RANGE_LENGTH" },
+        });
+      }
+
+      let handle;
+      try {
+        handle = await open(/* turbopackIgnore: true */ path, "r");
+      } catch (error) {
+        if (isMissing(error)) return null;
+        throw AppError.from(error, "INTERNAL", { reason: "BLOB_OPEN_FAILED" });
+      }
+      try {
+        const buffer = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, 0);
+        return new Uint8Array(buffer.subarray(0, bytesRead));
+      } finally {
+        await handle.close();
+      }
+    },
+
+    async promote(input: { tenantId: TenantId; assetId: string }): Promise<StoredBlob> {
+      // Local has no staging area of its own: put() already wrote straight to
+      // the serving area, so promoting is just confirming the object is there.
+      const tenantId = requireSafeSegment(input?.tenantId, "tenant_id");
+      const assetId = requireSafeSegment(input?.assetId, "asset_id");
+      const storageKey = `${tenantId}/${assetId}`;
+      const info = await this.stat({ tenantId: input.tenantId, storageKey });
+      if (!info) {
+        throw new AppError("INVALID_INPUT", {
+          message: "Nothing to promote for this asset",
+          userMessage: "Không tìm thấy file vừa tải lên.",
+          context: { tenant_id: tenantId, asset_id: assetId, reason: "UPLOAD_OBJECT_MISSING" },
+        });
+      }
+      return { storageKey, sizeBytes: info.sizeBytes };
+    },
+
+    async createDownloadUrl(): Promise<string | null> {
+      // Cannot sign: the caller falls back to streaming through Node, which is
+      // exactly today's behaviour.
+      return null;
+    },
+
+    async createUploadUrl(input: CreateUploadUrlInput): Promise<PresignedUpload> {
+      throw new AppError("INTERNAL", {
+        message: "The local blob store cannot sign an upload policy",
+        userMessage: "Kho lưu trữ hiện tại không hỗ trợ tải thẳng — liên hệ quản trị.",
+        context: { tenant_id: String(input?.tenantId ?? ""), reason: "PRESIGN_UNSUPPORTED" },
+      });
     },
   };
 }
