@@ -3,15 +3,15 @@
 import { LinkProvider, Theme } from "@astryxdesign/core";
 import { InternationalizationProvider } from "@astryxdesign/core/i18n";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 
-import { useActiveTenant } from "@/ui/hooks/useMe";
-import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
 import { AppLink } from "@/ui/components/shell/AppLink";
-import { Button } from "@/ui/components/ui/button";
+import { useActiveTenant, useMe } from "@/ui/hooks/useMe";
+import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
 import { myspTheme } from "@/ui/theme/mysp";
 
-import { SlideShell } from "./SlideShell";
+import { OnboardingFrame } from "./OnboardingFrame";
+import { WelcomeScreen } from "./WelcomeScreen";
 import {
   nextScreen,
   previousScreen,
@@ -26,9 +26,9 @@ import { usePassedSlides } from "./usePassedSlides";
  * It holds no idea of "which step am I on". The URL carries an intent, the
  * answers carry the truth, `resolveScreen` reconciles them.
  *
- * TASK 5-9 REBUILD THIS FILE: the welcome screen, the four question screens and
- * the writes to `tenant_profile` land there. What is here is the state machine
- * wired up to placeholders, so the route still runs.
+ * TASKS 6-9 FILL THE FOUR QUESTION SCREENS IN. What is here is the frame, the
+ * greeting, and the state machine wired up — the four survey screens are still
+ * placeholders on purpose.
  */
 export function OnboardingFlow({
   // The welcome screen is the only one that shows it, and `src/ui` may not
@@ -39,6 +39,7 @@ export function OnboardingFlow({
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const me = useMe();
   const { isResolved, role } = useActiveTenant();
   const { passed, markPassed } = usePassedSlides();
 
@@ -50,18 +51,17 @@ export function OnboardingFlow({
     if (isResolved && !isAllowedRole) router.replace("/");
   }, [isResolved, isAllowedRole, router]);
 
-  // Which way the next screen should enter. State, not a ref: the value is READ
-  // WHILE RENDERING to pick the animation, and a ref read during render is both
-  // a lint error here and a value React makes no promise about. The extra
-  // render rides along with the navigation `goTo` is about to trigger anyway.
-  const [direction, setDirection] = useState<1 | -1>(1);
-
   // PENDING(task-9): `answered` comes from `tenant_profile` once the endpoint
   // exists. Until then the session note is the only record of what was answered
   // or skipped, which is enough to walk the flow but not to survive a reload.
   const answered: Partial<Record<OnboardingScreen, boolean>> = Object.fromEntries(
     passed.map((id) => [id, true]),
   );
+
+  // Trimmed to null: a whitespace-only display name is not a name, and would
+  // render "Chào  👋" with a hole in it.
+  const trimmedName = me.data?.account?.displayName?.trim() ?? "";
+  const displayName = trimmedName.length > 0 ? trimmedName : null;
 
   const current = resolveScreen({
     requested: searchParams.get("step"),
@@ -70,15 +70,20 @@ export function OnboardingFlow({
   });
 
   const goTo = useCallback(
-    (target: OnboardingScreen, way: 1 | -1) => {
-      setDirection(way);
+    (target: OnboardingScreen) => {
       const params = new URLSearchParams(searchParams.toString());
       params.set("step", target);
       // Drop the one-shot OAuth outcome so a refresh does not re-announce it.
       params.delete("google");
       params.delete("connect");
       params.delete("reason");
-      router.replace(`/onboarding?${params.toString()}`, { scroll: false });
+      /**
+       * PUSH, NOT REPLACE. `web-wizard` section 1: "Chuyển bước dùng push (back
+       * quay lui một bước), không dùng replace". With `replace` the browser's
+       * Back button left the flow altogether instead of stepping back one
+       * question — a wizard whose Back button escapes the wizard.
+       */
+      router.push(`/onboarding?${params.toString()}`, { scroll: false });
     },
     [router, searchParams],
   );
@@ -87,50 +92,41 @@ export function OnboardingFlow({
     markPassed(current);
     const target = nextScreen(current);
     // The survey has no sixth screen: finishing it means leaving for the app.
+    // `replace`, deliberately — the flow is done, and Back must not re-enter it.
     if (target === "done") {
       router.replace("/");
       return;
     }
-    goTo(target, 1);
+    goTo(target);
   }, [current, goTo, markPassed, router]);
 
   const goBack = useCallback(() => {
     const target = previousScreen(current);
-    if (target) goTo(target, -1);
+    if (target) goTo(target);
   }, [current, goTo]);
 
   if (isResolved && !isAllowedRole) return null;
 
-  /* ONE shell for the whole flow, NOT one per screen: the story column has to
-     survive the change of screen, or the heading and the rail would slide out
-     and back in on every step. `SlideShell` keys the travelling half on `id`
-     internally.
-
-     NO SETUP-PROGRESS FETCH ANY MORE: the survey asks about the operator, not
-     about the tenant's six connection flags, so nothing here has to wait on
-     that endpoint — and an unrelated failure of it must not block the survey. */
   const content = (
-    <SlideShell
-      id={current}
-      direction={direction}
-      heading={HEADINGS[current]}
-      lead={LEADS[current]}
-      // The greeting has nothing to skip and nothing to go back to.
-      onSkip={current === "welcome" ? undefined : advance}
+    <OnboardingFrame
+      screen={current}
+      // The greeting has nothing behind it to go back to.
       onBack={current === "welcome" ? undefined : goBack}
-      exitHref="/"
-      signOutAction={current === "welcome" ? signOutAction : undefined}
     >
-      {/* Tasks 5-8 replace every placeholder below. */}
-      <p className="text-muted-foreground text-sm">
-        Nội dung màn này được lắp ở task sau ({current}).
-      </p>
       {current === "welcome" ? (
-        <Button type="button" onClick={advance}>
-          Bắt đầu
-        </Button>
-      ) : null}
-    </SlideShell>
+        <WelcomeScreen
+          // `/api/me` has `account.displayName`, nullable, and no email at all
+          // — see PENDING(welcome-name) inside `WelcomeScreen`. A blank name is
+          // the same as no name: it must not render "Chào  👋".
+          name={displayName}
+          onStart={advance}
+        />
+      ) : (
+        // PENDING(task-6..8): the four question screens land here. Each one
+        // brings its OWN <h1>, which is what the frame moves focus to.
+        <PlaceholderScreen heading={HEADINGS[current]} onContinue={advance} />
+      )}
+    </OnboardingFrame>
   );
 
   /**
@@ -138,8 +134,8 @@ export function OnboardingFlow({
    * `SignInScreen` repeats them: this route group sits OUTSIDE `(app)`, so
    * nothing above it mounts them.
    *
-   * Without `<Theme>` every Astryx component rendered here — the error banner
-   * today, the connection panels the later slides reuse — falls back to
+   * Without `<Theme>` every Astryx component rendered here — `ColorSchemeToggle`
+   * in the header, the option cards the later tasks add — falls back to
    * Astryx's own palette: its blue `--color-accent` instead of Indigo Dye, and
    * the neutral theme's cold near-black instead of Warm Ink. That exact drift
    * was measured on /signin before its wrapper was added.
@@ -154,15 +150,51 @@ export function OnboardingFlow({
         locale={ASTRYX_LOCALE}
         messages={{ [ASTRYX_LOCALE]: ASTRYX_VI }}
       >
-        <Theme theme={myspTheme}>{content}</Theme>
+        <Theme theme={myspTheme}>
+          {content}
+          {/* The flow's own way out, kept for accounts that signed in with the
+              wrong Google account: this route has no top bar to sign out from. */}
+          {signOutAction && current === "welcome" ? (
+            <form action={signOutAction} className="fixed inset-x-0 bottom-6 z-20 text-center">
+              <button
+                type="submit"
+                className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-6 items-center rounded text-xs underline underline-offset-4 outline-none focus-visible:ring-2"
+              >
+                Đăng xuất
+              </button>
+            </form>
+          ) : null}
+        </Theme>
       </InternationalizationProvider>
     </LinkProvider>
   );
 }
 
+/** Stand-in for a question screen. Tasks 6-8 replace it wholesale. */
+function PlaceholderScreen({ heading, onContinue }: { heading: string; onContinue: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-8">
+      <h1
+        tabIndex={-1}
+        className="text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+      >
+        {heading}
+      </h1>
+      <p className="text-muted-foreground text-sm">Các lựa chọn của bước này được lắp ở task sau.</p>
+      <button
+        type="button"
+        onClick={onContinue}
+        className="bg-primary text-primary-foreground focus-visible:ring-ring inline-flex h-12 items-center rounded-md px-6 text-sm font-medium outline-none focus-visible:ring-2"
+      >
+        Tiếp tục
+      </button>
+    </div>
+  );
+}
+
 /**
- * Placeholder copy only. The real wording of each question lives in the step
- * components that tasks 5-8 add, next to the options it belongs with.
+ * Placeholder headings only. The real wording of each question lands in the
+ * step components that tasks 6-8 add, next to the options it belongs with.
  */
 const HEADINGS: Record<OnboardingScreen, string> = {
   welcome: "Chào mừng tới MYSP",
@@ -170,12 +202,4 @@ const HEADINGS: Record<OnboardingScreen, string> = {
   tools: "Bạn đang đăng bài bằng gì?",
   count: "Bạn đang quản lý bao nhiêu trang?",
   channels: "Kênh nào bạn đang tập trung?",
-};
-
-const LEADS: Record<OnboardingScreen, string> = {
-  welcome: "Bốn câu hỏi ngắn để MYSP hiểu cách bạn đang bán hàng.",
-  seller: "Chọn mô tả gần đúng nhất với bạn.",
-  tools: "Chọn tất cả những gì bạn đang dùng.",
-  count: "Số trang bạn đang đăng bài, không tính trang cá nhân.",
-  channels: "Hiện MYSP đăng được Facebook; các kênh khác đang làm.",
 };

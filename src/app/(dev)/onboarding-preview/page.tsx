@@ -18,7 +18,7 @@ import {
 } from "@/ui/components/onboarding/first-run.fixtures";
 import { OperatorWaitingCard } from "@/ui/components/onboarding/OperatorWaitingCard";
 import { DockPanel, DockPill } from "@/ui/components/onboarding/SetupDock";
-import { ProgressRail } from "@/ui/components/onboarding/flow/ProgressRail";
+import { StepDots } from "@/ui/components/onboarding/flow/StepDots";
 import { WizardStepInvite } from "@/ui/components/onboarding/WizardStepInvite";
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
 import type { SetupProgress, SetupStepId } from "@/ui/schemas/setup-progress.schema";
@@ -215,12 +215,12 @@ export default function OnboardingPreviewPage() {
           */}
           <Stack direction="vertical" gap={2}>
             <Text weight="semibold" className="text-sm text-primary">
-              14. Khảo sát onboarding — thanh tiến độ ở ba vị trí trong luồng
+              14. Khảo sát onboarding — chấm tiến độ ở ba vị trí trong luồng
             </Text>
             <Stack direction="vertical" gap={4}>
-              <ProgressRail current="seller" />
-              <ProgressRail current="count" />
-              <ProgressRail current="channels" />
+              <StepDots current="seller" />
+              <StepDots current="count" />
+              <StepDots current="channels" />
             </Stack>
           </Stack>
 
