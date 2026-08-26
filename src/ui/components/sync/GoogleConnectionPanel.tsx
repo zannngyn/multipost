@@ -50,6 +50,7 @@ export function GoogleConnectionPanel({
   onDismissOutcome,
   onPickSource,
   isPicking,
+  connectHref = googleConnectHref(),
 }: {
   connection: GoogleConnectionQuery;
   /**
@@ -64,6 +65,13 @@ export function GoogleConnectionPanel({
   /** Opens the in-app folder/spreadsheet picker. */
   onPickSource: () => void;
   isPicking: boolean;
+  /**
+   * Where the connect action goes. OPTIONAL, and the default is the route this
+   * panel has always used — the onboarding slideshow adds `?return=onboarding`
+   * so the callback lands back on its slide, and every other caller (/sync)
+   * must keep landing on /sync. Onboarding is an extra door, not a replacement.
+   */
+  connectHref?: string;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
   const [isConfirmingDisconnect, setIsConfirmingDisconnect] = useState(false);
@@ -102,12 +110,13 @@ export function GoogleConnectionPanel({
           error={connection.error}
           onRetry={() => void connection.refetch()}
           extraAction={
-            <ConnectLink label="Kết nối Google Drive" variant="outline" />
+            <ConnectLink href={connectHref} label="Kết nối Google Drive" variant="outline" />
           }
         />
       ) : connection.data ? (
         <ConnectionFacts
           data={connection.data}
+          connectHref={connectHref}
           isPicking={isPicking}
           isDisconnecting={disconnect.isPending}
           isConfirmingDisconnect={isConfirmingDisconnect}
@@ -163,6 +172,7 @@ export function GoogleConnectionPanel({
 /** The data state, split out so each `state` narrows on its own. */
 function ConnectionFacts({
   data,
+  connectHref,
   isPicking,
   isDisconnecting,
   isConfirmingDisconnect,
@@ -170,6 +180,8 @@ function ConnectionFacts({
   onAskDisconnect,
 }: {
   data: GoogleConnection;
+  /** Already resolved by the panel; both branches below must use the SAME one. */
+  connectHref: string;
   isPicking: boolean;
   isDisconnecting: boolean;
   isConfirmingDisconnect: boolean;
@@ -186,7 +198,7 @@ function ConnectionFacts({
             quyền đọc Drive và Google Sheet của tài khoản bạn chọn.
           </p>
         </div>
-        <ConnectLink label="Kết nối Google Drive" />
+        <ConnectLink href={connectHref} label="Kết nối Google Drive" />
       </div>
     );
   }
@@ -210,7 +222,7 @@ function ConnectionFacts({
           ảnh đã có vẫn giữ nguyên, nhưng sẽ không được cập nhật.
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          <ConnectLink label="Kết nối lại Google Drive" />
+          <ConnectLink href={connectHref} label="Kết nối lại Google Drive" />
           <Button
             type="button"
             variant="outline"
@@ -330,15 +342,17 @@ function SourceAccessNotice({
  * on a real anchor, so middle-click, "mở tab mới" and the status bar all work.
  */
 function ConnectLink({
+  href,
   label,
   variant = "default",
 }: {
+  href: string;
   label: string;
   variant?: "default" | "outline";
 }) {
   return (
     <Button asChild variant={variant}>
-      <a href={googleConnectHref()}>{label}</a>
+      <a href={href}>{label}</a>
     </Button>
   );
 }
