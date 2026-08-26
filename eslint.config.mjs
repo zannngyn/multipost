@@ -136,7 +136,14 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Local git worktrees carry their own .next/ — linting them OOMs eslint.
+    // Claude Code's own directory: installed plugins and skills ship bundled
+    // .cjs scripts that are not this repo's source and do not follow its rules.
+    // It is untracked, so linting it fails `pnpm verify` on whichever machine
+    // happens to have a skill installed — a gate that reports on the operator's
+    // tooling rather than on the diff. (Supersedes the worktree-only ignore
+    // below, which stays because it names a different reason: worktrees carry
+    // their own .next/ and linting them OOMs eslint.)
+    ".claude/**",
     ".claude/worktrees/**",
     // `astryx theme build` output (src/ui/theme/mysp-theme.ts is the source and
     // IS linted). Generated files cannot be fixed in place — the next build
