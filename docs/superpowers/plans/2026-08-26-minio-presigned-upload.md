@@ -85,17 +85,17 @@ const base = {
 };
 
 describe("loadMinioConfig", () => {
-  it("mặc định bucket và useSSL", () => {
+  it("defaults the bucket and useSSL", () => {
     const cfg = loadMinioConfig(base);
     expect(cfg.MINIO_BUCKET).toBe("mysp-media");
     expect(cfg.MINIO_USE_SSL).toBe(true);
   });
 
-  it("từ chối khi thiếu secret", () => {
+  it("rejects a missing secret", () => {
     expect(() => loadMinioConfig({ ...base, MINIO_SECRET_KEY: "" })).toThrow();
   });
 
-  it("từ chối public endpoint không phải URL", () => {
+  it("rejects a public endpoint that is not a URL", () => {
     expect(() => loadMinioConfig({ ...base, MINIO_PUBLIC_ENDPOINT: "minio:9000" })).toThrow();
   });
 });
@@ -181,29 +181,29 @@ beforeAll(async () => {
 });
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
 
-describe("local blob store — phần mở rộng", () => {
-  it("stat trả kích thước thật, null khi không có object", async () => {
+describe("local blob store — the extended surface", () => {
+  it("stat returns the real size, null when the object is absent", async () => {
     await store.put({ tenantId: TENANT, assetId: "a1", bytes: new Uint8Array([1, 2, 3]), mimeType: "image/png", kind: "image" });
     expect(await store.stat({ tenantId: TENANT, storageKey: `${TENANT}/a1` })).toMatchObject({ sizeBytes: 3 });
     expect(await store.stat({ tenantId: TENANT, storageKey: `${TENANT}/nope` })).toBeNull();
   });
 
-  it("readRange chỉ đọc n byte đầu", async () => {
+  it("readRange reads only the first n bytes", async () => {
     await store.put({ tenantId: TENANT, assetId: "a2", bytes: new Uint8Array([9, 8, 7, 6, 5]), mimeType: "image/png", kind: "image" });
     const head = await store.readRange({ tenantId: TENANT, storageKey: `${TENANT}/a2`, length: 2 });
     expect(head).toEqual(new Uint8Array([9, 8]));
   });
 
-  it("statStaging trả cùng kết quả với stat — local không có vùng staging riêng", async () => {
+  it("statStaging matches stat — the local store has no separate staging area", async () => {
     expect(await store.statStaging({ tenantId: TENANT, storageKey: `${TENANT}/a1` })).toMatchObject({ sizeBytes: 3 });
     expect(await store.statStaging({ tenantId: TENANT, storageKey: `${TENANT}/nope` })).toBeNull();
   });
 
-  it("createDownloadUrl trả null — local không ký được", async () => {
+  it("createDownloadUrl returns null — the local store cannot sign", async () => {
     expect(await store.createDownloadUrl({ tenantId: TENANT, storageKey: `${TENANT}/a1`, expiresInSeconds: 300 })).toBeNull();
   });
 
-  it("createUploadUrl ném, có reason rõ ràng", async () => {
+  it("createUploadUrl throws with an explicit reason", async () => {
     await expect(
       store.createUploadUrl({ tenantId: TENANT, assetId: "a3", declaredMimeType: "image/png", maxBytes: 10, expiresInSeconds: 60 }),
     ).rejects.toMatchObject({ context: { reason: "PRESIGN_UNSUPPORTED" } });
@@ -419,7 +419,7 @@ beforeAll(() => {
 });
 
 describe.skipIf(!endpoint)("MinioBlobStore — put/get/delete", () => {
-  it("ghi rồi đọc lại đúng byte", async () => {
+  it("stores and reads back the exact bytes", async () => {
     const bytes = new Uint8Array([137, 80, 78, 71]);
     const stored = await store.put({ tenantId: TENANT, assetId: "p1", bytes, mimeType: "image/png", kind: "image" });
     expect(stored.storageKey).toBe(`${TENANT}/p1`);
@@ -429,22 +429,22 @@ describe.skipIf(!endpoint)("MinioBlobStore — put/get/delete", () => {
     expect(got?.bytes).toEqual(bytes);
   });
 
-  it("get trả null khi key không có", async () => {
+  it("get returns null for an unknown key", async () => {
     expect(await store.get({ tenantId: TENANT, storageKey: `${TENANT}/khong-co`, maxBytes: 1024 })).toBeNull();
   });
 
-  it("get từ chối khi object lớn hơn maxBytes, KHÔNG kéo byte về", async () => {
+  it("get refuses an object above maxBytes without pulling the bytes", async () => {
     await store.put({ tenantId: TENANT, assetId: "p2", bytes: new Uint8Array(1024), mimeType: "image/png", kind: "image" });
     await expect(store.get({ tenantId: TENANT, storageKey: `${TENANT}/p2`, maxBytes: 10 }))
       .rejects.toMatchObject({ context: { reason: "BLOB_TOO_LARGE" } });
   });
 
-  it("không cho key của tenant khác lọt qua", async () => {
+  it("refuses a key belonging to another tenant", async () => {
     const other = randomUUID();
     expect(await store.get({ tenantId: TENANT, storageKey: `${other}/p1`, maxBytes: 1024 })).toBeNull();
   });
 
-  it("delete trả true rồi false", async () => {
+  it("delete returns true, then false", async () => {
     expect(await store.delete({ tenantId: TENANT, storageKey: `${TENANT}/p1` })).toBe(true);
     expect(await store.delete({ tenantId: TENANT, storageKey: `${TENANT}/p1` })).toBe(false);
   });
@@ -654,8 +654,8 @@ git commit -m "feat(media): add the MinIO blob store (put/get/delete)"
 
 ```ts
 // nối vào cuối src/adapters/media/minio-blob-store.integration.test.ts
-describe.skipIf(!endpoint)("MinioBlobStore — presign và promote", () => {
-  it("POST policy nhận file đúng cỡ và TỪ CHỐI file quá cỡ", async () => {
+describe.skipIf(!endpoint)("MinioBlobStore — presign and promote", () => {
+  it("the POST policy accepts a file in range and refuses an oversized one", async () => {
     const signed = await store.createUploadUrl({
       tenantId: TENANT, assetId: "u1", declaredMimeType: "image/png", maxBytes: 8, expiresInSeconds: 60,
     });
@@ -671,17 +671,17 @@ describe.skipIf(!endpoint)("MinioBlobStore — presign và promote", () => {
     expect((await fetch(signed.postUrl, { method: "POST", body: tooBig })).ok).toBe(false);
   });
 
-  it("statStaging thấy object ở staging, stat thì chưa", async () => {
+  it("statStaging sees the staged object while stat does not", async () => {
     expect(await store.statStaging({ tenantId: TENANT, storageKey: `${TENANT}/u1` })).toMatchObject({ sizeBytes: 4 });
     expect(await store.stat({ tenantId: TENANT, storageKey: `${TENANT}/u1` })).toBeNull();
   });
 
-  it("readRange đọc 4 byte đầu của object staging", async () => {
+  it("readRange reads the first four bytes of the staged object", async () => {
     const head = await store.readRange({ tenantId: TENANT, storageKey: `${TENANT}/u1`, length: 4 });
     expect(head).toEqual(new Uint8Array([137, 80, 78, 71]));
   });
 
-  it("promote chuyển staging sang vùng phục vụ và xoá bản staging", async () => {
+  it("promote moves staging into the serving prefix and removes the staged copy", async () => {
     const promoted = await store.promote({ tenantId: TENANT, assetId: "u1" });
     expect(promoted.storageKey).toBe(`${TENANT}/u1`);
     expect(promoted.sizeBytes).toBe(4);
@@ -689,12 +689,12 @@ describe.skipIf(!endpoint)("MinioBlobStore — presign và promote", () => {
     expect(await store.readRange({ tenantId: TENANT, storageKey: `${TENANT}/u1`, length: 4 })).toBeNull();
   });
 
-  it("promote ném UPLOAD_OBJECT_MISSING khi không có bản staging", async () => {
+  it("promote throws UPLOAD_OBJECT_MISSING when nothing is staged", async () => {
     await expect(store.promote({ tenantId: TENANT, assetId: "khongco" }))
       .rejects.toMatchObject({ context: { reason: "UPLOAD_OBJECT_MISSING" } });
   });
 
-  it("createDownloadUrl ký được URL tải về dùng thật", async () => {
+  it("createDownloadUrl signs a URL that actually fetches", async () => {
     const url = await store.createDownloadUrl({ tenantId: TENANT, storageKey: `${TENANT}/u1`, expiresInSeconds: 60 });
     expect(url).toBeTruthy();
     expect((await fetch(url as string)).ok).toBe(true);
@@ -1010,30 +1010,30 @@ describe.skipIf(!url)("DrizzleUploadTicketRepo", () => {
     declaredMime: "image/jpeg", declaredSize: 100, productCode: "MG0AD6112", expiresAt,
   });
 
-  it("tạo rồi tìm lại được", async () => {
+  it("creates tickets and finds them again", async () => {
     await repo.createMany(TENANT, [ticket("t1"), ticket("t2")]);
     const found = await repo.findMany(TENANT, ["t1", "t2"]);
     expect(found.map((t) => t.assetId).sort()).toEqual(["t1", "t2"]);
   });
 
-  it("KHÔNG trả vé của tenant khác", async () => {
+  it("never returns a ticket of another tenant", async () => {
     await repo.createMany(OTHER, [ticket("t3", OTHER)]);
     expect(await repo.findMany(TENANT, ["t3"])).toHaveLength(0);
   });
 
-  it("deleteMany chỉ xoá trong tenant của mình", async () => {
+  it("deleteMany only removes rows of its own tenant", async () => {
     expect(await repo.deleteMany(TENANT, ["t3"])).toBe(0);
     expect(await repo.deleteMany(TENANT, ["t1"])).toBe(1);
   });
 
-  it("listExpired chỉ trả vé đã quá hạn", async () => {
+  it("listExpired returns only tickets past their expiry", async () => {
     await repo.createMany(TENANT, [ticket("t4", TENANT, new Date(Date.now() - 60_000))]);
     const expired = await repo.listExpired({ now: new Date(), limit: 50 });
     expect(expired.map((t) => t.assetId)).toContain("t4");
     expect(expired.map((t) => t.assetId)).not.toContain("t2");
   });
 
-  it("findMany với danh sách rỗng trả rỗng, không đụng DB", async () => {
+  it("findMany returns empty for an empty list without touching the DB", async () => {
     expect(await repo.findMany(TENANT, [])).toEqual([]);
   });
 });
@@ -1212,24 +1212,24 @@ function deps(overrides: Record<string, unknown> = {}) {
 
 const png = { fileName: "a.png", mimeType: "image/png", sizeBytes: 100 };
 
-describe("issueUploadTickets — edge case trước", () => {
-  it("thiếu mã sản phẩm thì ném INVALID_INPUT", async () => {
+describe("issueUploadTickets — edge cases first", () => {
+  it("throws INVALID_INPUT without a product code", async () => {
     await expect(makeIssueUploadTickets(deps())({ tenantId: TENANT, productCode: "  ", files: [png] }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("danh sách rỗng thì ném", async () => {
+  it("throws on an empty file list", async () => {
     await expect(makeIssueUploadTickets(deps())({ tenantId: TENANT, productCode: "MG0AD6112", files: [] }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("quá 10 file thì từ chối CẢ LÔ", async () => {
+  it("refuses the WHOLE batch above ten files", async () => {
     const files = Array.from({ length: 11 }, (_, i) => ({ ...png, fileName: `${i}.png` }));
     await expect(makeIssueUploadTickets(deps())({ tenantId: TENANT, productCode: "MG0AD6112", files }))
       .rejects.toMatchObject({ context: { reason: "TOO_MANY_FILES" } });
   });
 
-  it("mime lạ thì từ chối RIÊNG file đó, các file khác vẫn có vé", async () => {
+  it("refuses an unknown mime on its own, the other files still get tickets", async () => {
     const result = await makeIssueUploadTickets(deps())({
       tenantId: TENANT, productCode: "MG0AD6112",
       files: [png, { fileName: "x.exe", mimeType: "application/x-msdownload", sizeBytes: 10 }],
@@ -1238,7 +1238,7 @@ describe("issueUploadTickets — edge case trước", () => {
     expect(result.rejected[0]).toMatchObject({ fileName: "x.exe" });
   });
 
-  it("file quá 25MB bị từ chối riêng, không gọi ký", async () => {
+  it("refuses an oversized file on its own and never signs it", async () => {
     const d = deps();
     const result = await makeIssueUploadTickets(d)({
       tenantId: TENANT, productCode: "MG0AD6112",
@@ -1248,14 +1248,14 @@ describe("issueUploadTickets — edge case trước", () => {
     expect(result.rejected).toHaveLength(1);
   });
 
-  it("trộn ảnh với video thì ném MIXED_ALBUM_KIND", async () => {
+  it("throws MIXED_ALBUM_KIND when photos and video are mixed", async () => {
     await expect(makeIssueUploadTickets(deps())({
       tenantId: TENANT, productCode: "MG0AD6112",
       files: [png, { fileName: "v.mp4", mimeType: "video/mp4", sizeBytes: 100 }],
     })).rejects.toMatchObject({ context: { reason: "MIXED_ALBUM_KIND" } });
   });
 
-  it("không file nào dùng được thì ném, không ghi vé", async () => {
+  it("throws without writing tickets when no file is usable", async () => {
     const d = deps();
     await expect(makeIssueUploadTickets(d)({
       tenantId: TENANT, productCode: "MG0AD6112",
@@ -1264,7 +1264,7 @@ describe("issueUploadTickets — edge case trước", () => {
     expect((d as never as { tickets: { createMany: { mock: { calls: unknown[] } } } }).tickets.createMany.mock.calls).toHaveLength(0);
   });
 
-  it("sourceIndex trỏ đúng file gốc kể cả khi file trước đó bị từ chối", async () => {
+  it("sourceIndex still points at the right file after an earlier one is refused", async () => {
     const result = await makeIssueUploadTickets(deps())({
       tenantId: TENANT, productCode: "MG0AD6112",
       files: [{ fileName: "x.exe", mimeType: "application/x-msdownload", sizeBytes: 10 }, png],
@@ -1273,7 +1273,7 @@ describe("issueUploadTickets — edge case trước", () => {
     expect(result.issued[0].sourceIndex).toBe(1);
   });
 
-  it("hai file TRÙNG TÊN đều có vé riêng", async () => {
+  it("two files sharing a name each get their own ticket", async () => {
     const result = await makeIssueUploadTickets(deps())({
       tenantId: TENANT, productCode: "MG0AD6112", files: [png, { ...png }],
     });
@@ -1281,7 +1281,7 @@ describe("issueUploadTickets — edge case trước", () => {
     expect(new Set(result.issued.map((t) => t.assetId)).size).toBe(2);
   });
 
-  it("happy path: ghi vé đúng số lượng và trả postUrl", async () => {
+  it("happy path: writes one ticket per file and returns a postUrl", async () => {
     const d = deps();
     const result = await makeIssueUploadTickets(d)({ tenantId: TENANT, productCode: "mg0ad6112", files: [png] });
     expect(result.issued[0].postUrl).toBe("https://media.vannt.asia/mysp-media");
@@ -1680,32 +1680,32 @@ function deps(over: Record<string, unknown> = {}) {
   } as never;
 }
 
-describe("confirmUpload — edge case trước", () => {
-  it("thiếu mã thì ném", async () => {
+describe("confirmUpload — edge cases first", () => {
+  it("throws without a product code", async () => {
     await expect(makeConfirmUpload(deps())({ tenantId: TENANT, productCode: "", assets: [{ assetId: "a1" }] }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("vé không có thì từ chối file đó", async () => {
+  it("refuses a file that has no ticket", async () => {
     const d = deps({ tickets: { findMany: vi.fn(async () => []), deleteMany: vi.fn(async () => 0) } });
     await expect(makeConfirmUpload(d)({ tenantId: TENANT, productCode: "MG0AD6112", assets: [{ assetId: "a1" }] }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("vé hết hạn thì từ chối, xoá object và xoá vé", async () => {
+  it("refuses an expired ticket, then removes its object and row", async () => {
     const d = deps({ tickets: { findMany: vi.fn(async () => [ticket("a1", { expiresAt: new Date(Date.now() - 1000) })]), deleteMany: vi.fn(async () => 1) } });
     await expect(makeConfirmUpload(d)({ tenantId: TENANT, productCode: "MG0AD6112", assets: [{ assetId: "a1" }] }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect((d as never as { blobs: { delete: { mock: { calls: unknown[] } } } }).blobs.delete.mock.calls.length).toBe(1);
   });
 
-  it("object không có trên storage thì từ chối", async () => {
+  it("refuses a file whose object never reached storage", async () => {
     const d = deps({ blobs: { ...(deps() as never as { blobs: object }).blobs, statStaging: vi.fn(async () => null) } });
     await expect(makeConfirmUpload(d)({ tenantId: TENANT, productCode: "MG0AD6112", assets: [{ assetId: "a1" }] }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("nội dung không khớp mime khai báo thì XOÁ object, không promote", async () => {
+  it("deletes the object and never promotes when content contradicts the declared mime", async () => {
     const exe = new Uint8Array([0x4d, 0x5a, 0x90, 0x00]);
     const base = deps() as never as { blobs: Record<string, unknown> };
     const d = deps({ blobs: { ...base.blobs, readRange: vi.fn(async () => exe) } });
@@ -1716,14 +1716,14 @@ describe("confirmUpload — edge case trước", () => {
     expect(blobs.delete.mock.calls).toHaveLength(1);
   });
 
-  it("object rỗng hoặc quá 25MB thì từ chối", async () => {
+  it("refuses an empty object and one above 25MB", async () => {
     const base = deps() as never as { blobs: Record<string, unknown> };
     const d = deps({ blobs: { ...base.blobs, statStaging: vi.fn(async () => ({ sizeBytes: 0, mimeType: "image/png" })) } });
     await expect(makeConfirmUpload(d)({ tenantId: TENANT, productCode: "MG0AD6112", assets: [{ assetId: "a1" }] }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
-  it("happy path: promote rồi register, sequence theo order", async () => {
+  it("happy path: promotes then registers, sequence follows the order", async () => {
     const d = deps({
       tickets: { findMany: vi.fn(async () => [ticket("a1"), ticket("a2")]), deleteMany: vi.fn(async () => 2) },
     });
@@ -1735,7 +1735,7 @@ describe("confirmUpload — edge case trước", () => {
     expect(result.accepted.map((a) => a.sequence)).toEqual([1, 2]);
   });
 
-  it("registerUpload lỗi thì xoá object đã promote (rollback)", async () => {
+  it("rolls back the promoted object when registerUpload fails", async () => {
     const base = deps() as never as { media: Record<string, unknown>; blobs: Record<string, unknown> };
     const d = deps({ media: { ...base.media, registerUpload: vi.fn(async () => { throw new Error("db down"); }) } });
     await expect(makeConfirmUpload(d)({ tenantId: TENANT, productCode: "MG0AD6112", assets: [{ assetId: "a1" }] }))
@@ -1743,7 +1743,7 @@ describe("confirmUpload — edge case trước", () => {
     expect((d as never as { blobs: { delete: { mock: { calls: unknown[] } } } }).blobs.delete.mock.calls.length).toBe(1);
   });
 
-  it("xoá lô upload trước đó của cùng mã", async () => {
+  it("discards the previous upload batch of the same code", async () => {
     const base = deps() as never as { media: Record<string, unknown> };
     const d = deps({
       media: {
@@ -2188,7 +2188,7 @@ git commit -m "feat(upload): confirm staged uploads by sniffing content before p
 
 ```ts
 // nối vào src/core/usecases/cleanup-uploads.test.ts
-it("dọn vé quá hạn: xoá byte trước, xoá vé sau", async () => {
+it("sweeps expired tickets: bytes first, row second", async () => {
   const order: string[] = [];
   const blobs = {
     delete: vi.fn(async () => { order.push("blob"); return true; }),
@@ -2206,7 +2206,7 @@ it("dọn vé quá hạn: xoá byte trước, xoá vé sau", async () => {
   expect(order).toEqual(["blob", "ticket"]);
 });
 
-it("một vé xoá lỗi không dừng cả lượt quét", async () => {
+it("one failing ticket does not stop the sweep", async () => {
   const blobs = { delete: vi.fn(async () => { throw new Error("storage down"); }) };
   const tickets = {
     listExpired: vi.fn(async () => [
@@ -2332,8 +2332,8 @@ import { makeGetMediaContent } from "@/core/usecases/get-media-content";
 
 // Dựng deps theo đúng khuôn get-media-content.test.ts đang dùng; chỉ phần
 // blobs và asset là khác.
-describe("getMediaContent — 302 cho asset upload", () => {
-  it("trả redirectUrl khi store ký được và KHÔNG đọc byte", async () => {
+describe("getMediaContent — 302 for uploaded assets", () => {
+  it("returns a redirectUrl when the store can sign, and reads no bytes", async () => {
     const blobs = {
       createDownloadUrl: vi.fn(async () => "https://media.vannt.asia/signed"),
       get: vi.fn(async () => { throw new Error("must not read bytes"); }),
@@ -2343,7 +2343,7 @@ describe("getMediaContent — 302 cho asset upload", () => {
     expect(blobs.get).not.toHaveBeenCalled();
   });
 
-  it("rơi về stream khi store trả null", async () => {
+  it("falls back to streaming when the store returns null", async () => {
     const blobs = {
       createDownloadUrl: vi.fn(async () => null),
       get: vi.fn(async () => ({ bytes: new Uint8Array([1]), mimeType: "image/png" })),
@@ -2353,7 +2353,7 @@ describe("getMediaContent — 302 cho asset upload", () => {
     expect(blobs.get).toHaveBeenCalled();
   });
 
-  it("asset Drive không bao giờ redirect", async () => {
+  it("never redirects a Drive asset", async () => {
     const blobs = { createDownloadUrl: vi.fn(async () => "https://x"), get: vi.fn() };
     const result = await makeGetMediaContent(depsForDriveAsset({ blobs }))(validSignedInput());
     expect(result.redirectUrl ?? null).toBeNull();
@@ -2471,18 +2471,18 @@ function fakeFile(name: string, size: number, type: string): File {
 }
 
 describe("direct-upload-queue", () => {
-  it("planUploadOrder giữ nguyên thứ tự và lấy đúng ba trường", () => {
+  it("planUploadOrder keeps the order and takes exactly three fields", () => {
     expect(planUploadOrder([fakeFile("b.png", 2, "image/png"), fakeFile("a.png", 1, "image/png")])).toEqual([
       { fileName: "b.png", mimeType: "image/png", sizeBytes: 2 },
       { fileName: "a.png", mimeType: "image/png", sizeBytes: 1 },
     ]);
   });
 
-  it("planUploadOrder với danh sách rỗng trả rỗng", () => {
+  it("planUploadOrder returns empty for an empty list", () => {
     expect(planUploadOrder([])).toEqual([]);
   });
 
-  it("nextProgress kẹp trong 0..100 và không chia cho 0", () => {
+  it("nextProgress clamps to 0..100 and never divides by zero", () => {
     expect(nextProgress(0, 0)).toBe(0);
     expect(nextProgress(1, 4)).toBe(25);
     expect(nextProgress(9, 4)).toBe(100);
