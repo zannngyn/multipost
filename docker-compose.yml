@@ -1,7 +1,7 @@
 # Single-VPS deployment (docs/07 section 1). Values come from .env — see .env.example.
 # Start order is enforced with service_healthy/service_completed_successfully,
 # never with sleeps:
-#   postgres/redis healthy -> migrate (runs to completion) -> web + worker -> caddy.
+#   postgres/redis/minio healthy -> migrate + minio-init -> web + worker -> caddy.
 
 services:
   postgres:
@@ -33,6 +33,57 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # E9 (MinIO upload) — object storage for operator-uploaded bytes (mode B).
+  # Two endpoints exist for it (web/worker read them from MINIO_INTERNAL_ENDPOINT
+  # / MINIO_PUBLIC_ENDPOINT, see .env.example): this service is reached over the
+  # INTERNAL one, `minio:9000`, from every container on this compose network.
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      # `:?` is load-bearing, not decoration: an EMPTY value (not just an
+      # unset one) makes MinIO silently fall back to minioadmin:minioadmin.
+      # `:-` or a bare ${...} would let that happen quietly on a published
+      # port — `:?` aborts the whole `up` instead. Locked by
+      # minio-bucket-privacy.test.ts.
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+    volumes:
+      - miniodata:/data
+    ports:
+      # LOOPBACK ONLY, never 0.0.0.0 — same discipline as WEB_BIND above. The
+      # bucket itself is private, but the API (and the admin console on 9001)
+      # still must not sit on the public interface. This is what the VPS's own
+      # Caddy (deploy/edge/mysp.caddy) proxies media.vannt.asia to; a bare
+      # `docker compose up` with no MINIO_API_PORT set just uses 9000 for
+      # local dev, where nothing else needs to reach it from outside the host.
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # One-shot bucket bootstrap. `mc anonymous set none` is what keeps the bucket
+  # PRIVATE — every tenant's photos are reachable ONLY through a presigned URL
+  # after this runs. Do not drop that line: without it the bucket defaults to
+  # readable by anyone who guesses (or is handed) an object key.
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "mc alias set local http://minio:9000 $$MINIO_ACCESS_KEY $$MINIO_SECRET_KEY &&
+             mc mb -p local/$$MINIO_BUCKET &&
+             mc anonymous set none local/$$MINIO_BUCKET"
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-mysp-media}
 
   # One-shot schema migration. Runs to completion BEFORE web/worker start.
   # Why a dependency and not a `setup` profile: with
@@ -100,6 +151,23 @@ services:
       # cache the sweep cannot see is a disk leak.
       MEDIA_CACHE_ROOT: /var/lib/mysp/media-cache
       MEDIA_CACHE_TTL_HOURS: ${MEDIA_CACHE_TTL_HOURS:-72}
+      # E9 (MinIO upload) — the blob store is built EAGERLY when the container
+      # boots (composition/container.ts), so unlike most credential groups below
+      # a missing key here fails the container at startup, not at first request.
+      # INTERNAL is the in-network hostname this container reaches MinIO on;
+      # PUBLIC is the hostname baked into the signature of URLs handed to the
+      # browser (the Cloudflare Tunnel origin) — see .env.example for why the
+      # two must never be the same value.
+      MINIO_INTERNAL_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:?MINIO_PUBLIC_ENDPOINT is required}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-mysp-media}
+      # false: MinIO runs plain HTTP inside this Docker network (no cert on
+      # the container) — true here throws EPROTO on every server-side call.
+      # Only describes THIS internal hop, never the public one above.
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
       # --- Credentials -------------------------------------------------------
       # Passed through explicitly rather than via env_file: each service should
       # carry only the secrets it actually uses, and the list doubles as the
@@ -147,6 +215,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
 
@@ -169,6 +241,17 @@ services:
       AUTH_URL: http://localhost:${DEMO_WEB_PORT:-3001}
       DEV_FAKE_SESSION: "1"
       SESSION_SECRET: ${SESSION_SECRET:-}
+      # `blobs` is built EAGERLY the first time any request touches
+      # getContainer() (composition/container.ts) — including `next dev`'s
+      # first request to almost any API route — so this profile needs the
+      # same MinIO env as `web`, not just its own upload/catalog volumes.
+      MINIO_INTERNAL_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:?MINIO_PUBLIC_ENDPOINT is required}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-mysp-media}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
     volumes:
       - ./:/app
       - webdemo_node_modules:/app/node_modules
@@ -181,6 +264,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
 
@@ -214,6 +301,19 @@ services:
       # volume mounted at the same path as the web process.
       MEDIA_CACHE_ROOT: /var/lib/mysp/media-cache
       MEDIA_CACHE_TTL_HOURS: ${MEDIA_CACHE_TTL_HOURS:-72}
+      # E9 (MinIO upload) — same eager-build note as the web service above: the
+      # blob store is constructed at container boot, so a missing key here
+      # fails startup rather than the first request.
+      MINIO_INTERNAL_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:?MINIO_PUBLIC_ENDPOINT is required}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-mysp-media}
+      # false: MinIO runs plain HTTP inside this Docker network (no cert on
+      # the container) — true here throws EPROTO on every server-side call.
+      # Only describes THIS internal hop, never the public one above.
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
       # --- Credentials -------------------------------------------------------
       # Passed through explicitly rather than via env_file: each service should
       # carry only the secrets it actually uses, and the list doubles as the
@@ -246,6 +346,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
 
@@ -322,3 +426,7 @@ volumes:
   # (hourly TTL sweep). Losing it costs re-downloads, nothing else: it holds no
   # data that does not exist on Drive.
   mediacachedata:
+  # E9 (MinIO upload) — the object storage backing `uploaddata` moves to.
+  # `uploaddata` itself stays defined above until Task 12 removes the local
+  # store for good; until then it is unused dead weight, not a hazard.
+  miniodata:

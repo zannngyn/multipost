@@ -334,6 +334,73 @@ export const UploadConfigSchema = z.object({
 export type UploadConfig = z.infer<typeof UploadConfigSchema>;
 
 /**
+ * MinIO. Two endpoints, not one: a presigned URL is SIGNED with the hostname
+ * baked in, so the URL handed to the browser must be signed with the public
+ * host, while server-side stat/copy/delete go through the internal host
+ * inside the Docker network. Signing with the wrong host is a silent
+ * failure — it only shows up once something runs for real through the
+ * tunnel.
+ */
+export const MinioConfigSchema = z.object({
+  MINIO_INTERNAL_ENDPOINT: z.string().trim().min(1),
+  MINIO_PUBLIC_ENDPOINT: z.string().trim()
+    .refine(
+      (value) => value.startsWith("https://") || value.startsWith("http://"),
+      "MINIO_PUBLIC_ENDPOINT must be an http(s) URL",
+    ),
+  MINIO_ACCESS_KEY: z.string().trim().min(1),
+  MINIO_SECRET_KEY: z.string().trim().min(1),
+  MINIO_BUCKET: z.string().trim().min(1).default("mysp-media"),
+  /**
+   * Describes ONLY the internal hop (MINIO_INTERNAL_ENDPOINT), never the
+   * public one — `MINIO_PUBLIC_ENDPOINT` carries its own scheme, and TLS for
+   * that client comes from parsing that URL (adapters/media/minio-blob-store.ts).
+   * Defaults to false because compose starts MinIO with `command: server
+   * /data` and no certificate: the internal hop lives entirely inside the
+   * Docker network, and `true` here throws EPROTO on every server-side call
+   * (stat/copy/delete) the moment the adapter dials plain HTTP with TLS
+   * turned on. Set it to true only if something inside the network actually
+   * terminates TLS in front of MinIO.
+   */
+  MINIO_USE_SSL: z
+    .union([z.boolean(), z.string()])
+    .default(false)
+    .transform((value, ctx) => {
+      if (typeof value === "boolean") return value;
+      // Strict allowlist, not a "not false" guess: `""`, `"0"`, `"no"` and
+      // `"off"` used to all read as true, which re-opens the exact Critical
+      // this epic already paid for once — `MINIO_USE_SSL=true` against the
+      // plain-HTTP internal hop boots green and then every confirm dies with
+      // EPROTO inside statStaging/copyObject. Anything ambiguous must fail
+      // loudly at boot, not guess and fail later inside a MinIO call.
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `MINIO_USE_SSL must be exactly "true" or "false" (case-insensitive), got ${JSON.stringify(value)}`,
+      });
+      return z.NEVER;
+    }),
+  /**
+   * Passed to both the internal and public MinIO clients so the SDK never
+   * makes a live `getBucketRegion` lookup against the endpoint before it can
+   * sign a URL (adapters/media/minio-blob-store.ts). A region-less client
+   * signing against an endpoint the app container cannot reach (the public
+   * tunnel hostname) made presigning itself throw, not just the browser's
+   * later request. "us-east-1" is MinIO's own effective default region.
+   */
+  MINIO_REGION: z.string().trim().min(1).default("us-east-1"),
+});
+
+export type MinioConfig = z.infer<typeof MinioConfigSchema>;
+
+export function loadMinioConfig(env: EnvRecord = process.env): MinioConfig {
+  return parseEnv(MinioConfigSchema, env, "minio");
+}
+
+
+/**
  * Catalog files an operator uploaded instead of connecting a Google Sheet
  * (phase 3). Its own group rather than a key of the upload group on purpose:
  * these bytes are the tenant's ONLY product data, so they must never be swept

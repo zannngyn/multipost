@@ -23,13 +23,14 @@ import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
 import { makeSecretBox, type SecretBox } from "@/adapters/db/secret-box";
 import { DrizzlePostDraftRepo } from "@/adapters/db/post-draft-repo.drizzle";
 import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
+import { DrizzleUploadTicketRepo } from "@/adapters/db/upload-ticket-repo.drizzle";
 import { DrizzleProductRepo } from "@/adapters/db/product-repo.drizzle";
 import { DrizzleSyncRunRepo } from "@/adapters/db/sync-run-repo.drizzle";
 import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
-import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
+import { makeMinioBlobStore } from "@/adapters/media/minio-blob-store";
 import { makeCsvCatalogTextSource } from "@/adapters/catalog/csv-text-source";
 import { makeSheetCatalogTextSource } from "@/adapters/catalog/sheet-text-source";
 import { makeLocalCatalogFileStore } from "@/adapters/catalog/local-catalog-file-store";
@@ -130,6 +131,14 @@ import {
 import { makeReadMediaBytes, type ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
 import {
+  makeIssueUploadTickets,
+  type IssueUploadTickets,
+} from "@/core/usecases/issue-upload-tickets";
+import {
+  makeConfirmUpload,
+  type ConfirmUpload,
+} from "@/core/usecases/confirm-upload";
+import {
   makeCancelScheduledJob,
   type CancelScheduledJob,
 } from "@/core/usecases/cancel-scheduled-job";
@@ -179,11 +188,12 @@ import {
   loadMediaConfig,
   loadMediaCacheConfig,
   loadCatalogFileConfig,
-  loadUploadConfig,
+  loadMinioConfig,
   loadMetaConfig,
   loadMetaOAuthConfig,
   loadOnboardingConfig,
   loadSecretsConfig,
+  loadUploadConfig,
   loadVideoConfig,
   type Config,
   type EnvRecord,
@@ -240,6 +250,13 @@ export interface Usecases {
   composePost: ComposePost;
   /** E9 — mode B: register operator-supplied files as media assets. */
   uploadMedia: UploadMedia;
+  /**
+   * E9/MinIO — stage 1 of the presigned-upload path: sign upload URLs
+   * without touching a byte. Stage 3 (confirm) lands in a later task.
+   */
+  issueUploadTickets: IssueUploadTickets;
+  /** E9/MinIO — stage 3: sniff the staged bytes, then promote and register. */
+  confirmUpload: ConfirmUpload;
   /** E9.4 — periodic sweep of uploads nobody posted. */
   cleanupUploads: CleanupUploads;
   /** E3.6 — periodic sweep of the Drive byte cache (TTL-based). */
@@ -739,6 +756,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const syncRuns = new DrizzleSyncRunRepo(deps.db, deps.logger);
   const catalogConfig = new DrizzleCatalogConfigRepo(deps.db, deps.logger);
   const postJobs = new DrizzlePostJobRepo(deps.db);
+  // MinIO presigned upload, stage 1 — its own table, its own repo (Task 5).
+  const uploadTickets = new DrizzleUploadTicketRepo(deps.db);
   const channels = new DrizzleChannelConfigRepo(deps.db, {
     box: makeTenantSecretBox(deps.logger),
     logger: deps.logger,
@@ -772,9 +791,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     tiktok: overrides.publishers?.tiktok ?? makeLazyTikTokPublisher(deps.logger),
   };
   const drive = overrides.drive ?? google.drive;
-  // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
-  // Google sources it needs no lazy wrapper.
-  const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
+  // E9 — mode B bytes, now MinIO (Task 11). `loadMinioConfig()`'s return value
+  // is field-for-field the adapter's own `MinioBlobStoreConfig`, so no mapping
+  // and no cast — see the type doc on that interface for why.
+  const blobs = overrides.blobs ?? makeMinioBlobStore({ config: loadMinioConfig(), logger: deps.logger });
 
   // Phase 3 — a tenant may hand us a CSV instead of connecting a Google Sheet.
   // Its own root, never the upload root: these bytes ARE the product catalog,
@@ -1030,11 +1050,34 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // so it is a safe path segment for the blob store.
       newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
     }),
+    // Stage 1 of the presigned-upload path. Shares the one `blobs` wired above
+    // (MinIO since Task 11) with every other upload usecase.
+    issueUploadTickets: makeIssueUploadTickets({
+      blobs,
+      tickets: uploadTickets,
+      logger: deps.logger,
+      newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
+      ticketTtlSeconds: 30 * 60,
+    }),
+    // Stage 3 of the presigned-upload path: sniffs the staged bytes before
+    // promoting them, on the same MinIO-backed `blobs` (Task 11).
+    confirmUpload: makeConfirmUpload({
+      tickets: uploadTickets,
+      blobs,
+      media,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
     cleanupUploads: makeCleanupUploads({
       media,
       blobs,
+      // Ticket sweep (Task 8), on the same MinIO-backed `blobs` (Task 11).
+      tickets: uploadTickets,
       clock: deps.clock,
       logger: deps.logger,
+      // I4: was never wired — the worker enqueued an empty payload and the
+      // usecase silently fell back to its own default every tick.
+      ttlHours: loadUploadConfig().UPLOAD_ORPHAN_TTL_HOURS,
     }),
     cleanupMediaCache: makeCleanupMediaCache({
       cache: mediaCache,

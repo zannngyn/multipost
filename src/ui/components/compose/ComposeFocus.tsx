@@ -543,8 +543,11 @@ export function ComposeFocus() {
                   onQueueChange={wizard.setUploadQueue}
                   onUpload={() => wizard.upload.mutate()}
                   isUploading={wizard.upload.isPending}
+                  progress={wizard.uploadProgress}
+                  onCancel={wizard.cancelUpload}
                   rejected={wizard.uploadRejections}
                   uploadedCount={wizard.uploadedCount}
+                  warnings={wizard.uploadWarnings}
                   disabled={compose.isPending}
                 />
                 {wizard.upload.isError ? (

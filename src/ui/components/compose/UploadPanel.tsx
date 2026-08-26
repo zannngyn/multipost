@@ -5,6 +5,7 @@ import { useId, useState } from "react";
 import { AlbumArranger } from "@/ui/components/compose/AlbumArranger";
 import { formatBytes, removeAt, type QueuedFile } from "@/ui/components/compose/upload-queue";
 import { Button } from "@/ui/components/ui/button";
+import { Progress } from "@/ui/components/ui/progress";
 import {
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_FILE_BYTES,
@@ -30,10 +31,20 @@ export interface UploadPanelProps {
   onQueueChange: (next: QueuedFile[]) => void;
   onUpload: () => void;
   isUploading: boolean;
+  /** 0..100 — real progress of the browser -> storage POSTs, not a guess. */
+  progress: number;
+  /** Cuts the upload's network calls, not just the button state. */
+  onCancel: () => void;
   /** Files the SERVER refused on the last attempt, with its reasons. */
   rejected: readonly UploadRejection[];
   /** Set once the upload succeeded, so the operator sees the album is stored. */
   uploadedCount: number;
+  /**
+   * Non-blocking notes from the confirm step — e.g. a malformed album order
+   * that was silently corrected server-side. Business rule 5 (không im lặng
+   * bỏ qua): these MUST reach the operator, not just the server log.
+   */
+  warnings: readonly string[];
   disabled?: boolean;
 }
 
@@ -162,6 +173,21 @@ export function UploadPanel(props: UploadPanelProps) {
         </div>
       ) : null}
 
+      {/* Corrections `confirmUpload` made without asking — must never be
+          silent (business rule 5). Kept OUTSIDE the caption/preview blocks
+          this component does not own; this is the only place these notes can
+          land for the operator. */}
+      {props.warnings.length > 0 ? (
+        <div className="border-warning/40 bg-warning/10 space-y-1 rounded-lg border p-3" role="alert">
+          <p className="text-warning-foreground text-sm font-medium">Lưu ý khi lưu file:</p>
+          <ul className="text-warning-foreground space-y-1 text-sm">
+            {props.warnings.map((message) => (
+              <li key={message}>{message}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <AlbumArranger
         items={queue}
         onChange={onQueueChange}
@@ -191,18 +217,40 @@ export function UploadPanel(props: UploadPanelProps) {
           upload empties the queue, and hiding the receipt with it would leave
           the operator with no sign anything happened. */}
       <div className="flex items-center gap-3">
-        {queue.length > 0 ? (
-          <Button type="button" onClick={props.onUpload} disabled={disabled || props.isUploading}>
-            {props.isUploading ? "Đang tải lên…" : `Tải ${queue.length} file lên`}
+        {queue.length > 0 && !props.isUploading ? (
+          <Button type="button" onClick={props.onUpload} disabled={disabled}>
+            {`Tải ${queue.length} file lên`}
           </Button>
         ) : null}
-        {props.uploadedCount > 0 ? (
+        {props.isUploading ? (
+          <Button type="button" variant="outline" onClick={props.onCancel}>
+            Huỷ tải lên
+          </Button>
+        ) : null}
+        {props.uploadedCount > 0 && !props.isUploading ? (
           <p className="text-muted-foreground text-sm" role="status">
             Đã lưu {props.uploadedCount} file cho bài này
             {queue.length > 0 ? " — bấm tải lên sẽ thay bằng danh sách mới." : "."}
           </p>
         ) : null}
       </div>
+
+      {/* Real progress, straight to the browser -> storage POSTs (stage 2).
+          `aria-live="polite"` announces a change in this text — and ONLY a
+          change: `progress` updates once per completed file, not on a timer,
+          so there is nothing here to re-announce on every tick (see commit
+          5a9b78a — that regression was the batch screen reading `isFetching`
+          on every poll instead of a value that actually moved). */}
+      {props.isUploading ? (
+        <div className="space-y-1" role="status" aria-live="polite">
+          <Progress
+            value={props.progress}
+            label="Tiến độ tải file lên"
+            valueText={`${props.progress}%`}
+          />
+          <p className="text-muted-foreground text-sm">Đang tải lên {props.progress}%.</p>
+        </div>
+      ) : null}
 
       {/* Adds and removals; moves are announced inside AlbumArranger. */}
       <p aria-live="polite" className="sr-only">

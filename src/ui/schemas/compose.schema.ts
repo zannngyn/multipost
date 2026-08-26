@@ -79,6 +79,13 @@ export type UploadRejection = z.infer<typeof UploadRejectionSchema>;
 export const UploadResponseSchema = z.object({
   accepted: z.array(UploadedAssetSchema),
   rejected: z.array(UploadRejectionSchema),
+  /**
+   * Non-blocking notes about how `confirmUpload` corrected a malformed album
+   * order (e.g. a duplicate/missing index falling back to upload order). Once
+   * silent, this used to swap the operator's chosen cover photo without a
+   * trace — MUST be shown, never dropped on the floor.
+   */
+  warnings: z.array(z.string()).default([]),
 });
 
 export type UploadResponse = z.infer<typeof UploadResponseSchema>;

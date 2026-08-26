@@ -118,6 +118,16 @@ function harness(options: HarnessOptions = {}) {
     },
     get: getBlob,
     delete: async () => false,
+    // Not exercised by this usecase — it never calls deleteStaging.
+    deleteStaging: async () => false,
+    createUploadUrl: async () => {
+      throw new Error("not used in this test");
+    },
+    stat: async () => null,
+    statStaging: async () => null,
+    readRange: async () => null,
+    promote: async () => ({ storageKey: "", sizeBytes: 0 }),
+    createDownloadUrl: async () => null,
   };
 
   const get = vi.fn(async (_input: GetCachedMediaInput): Promise<CachedMediaBytes | null> => {

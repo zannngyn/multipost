@@ -41,6 +41,7 @@
     "googleapis": "^174.0.1",
     "ioredis": "^6.0.0",
     "lucide-react": "^1.31.0",
+    "minio": "^8.0.7",
     "next": "16.3.0",
     "next-auth": "5.0.0-beta.32",
     "openai": "^7.4.0",

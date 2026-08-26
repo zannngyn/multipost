@@ -13,7 +13,17 @@ import type { MediaBlobStore } from "@/core/ports/media-blob-store";
 import type { MediaRepo } from "@/core/ports/product-repo";
 import { normalizeTenantId, type TenantId } from "@/core/domain/tenant-context";
 
+import { discardPreviousUploads } from "./discard-previous-uploads";
+
 /**
+ * @deprecated E9 mode B has moved to the presigned-ticket path: browser posts
+ * straight to MinIO (`issue-upload-tickets.ts`), then `confirm-upload.ts`
+ * sniffs and registers the bytes. This usecase (and its route,
+ * `POST /api/posts/uploads`) buffers the whole file through this process
+ * first, which the new path avoids. Kept only until the compose UI has fully
+ * moved onto mode B's direct-upload flow; remove both once that migration is
+ * confirmed complete.
+ *
  * E9.1 — take the files an operator supplied, keep the ones that can actually
  * be published, and register them as media assets of a product code.
  *
@@ -150,7 +160,10 @@ export function makeUploadMedia(deps: UploadMediaDeps) {
       });
     }
 
-    assertOneAlbumKind(usable, { tenantId, productCode });
+    assertOneAlbumKind(
+      usable.map((item) => item.kind),
+      { tenantId, productCode },
+    );
 
     // --- Replace, don't merge ----------------------------------------------
     // `sequence` numbers the album from 1 on every call, so a second upload for
@@ -258,67 +271,21 @@ export type UploadMedia = ReturnType<typeof makeUploadMedia>;
 // --- helpers ----------------------------------------------------------------
 
 /**
- * Clears the previous, still-unposted upload attempt for this code.
- *
- * Failures here are logged and swallowed on purpose: the operator asked to
- * upload files, and refusing that because some old bytes could not be deleted
- * would be the wrong trade. The hourly sweep (E9.4) picks up whatever is left.
- */
-async function discardPreviousUploads(
-  deps: UploadMediaDeps,
-  input: { tenantId: TenantId; productCode: string; log: Logger },
-): Promise<void> {
-  const { tenantId, productCode, log } = input;
-
-  let previous: readonly { assetId: string; storageKey: string }[];
-  try {
-    previous = await deps.media.listUnreferencedUploadsForCode(tenantId, productCode);
-  } catch (error) {
-    log.error("Could not list the previous uploads to replace", {
-      ...AppError.from(error, "DB_ERROR", { reason: "LIST_PREVIOUS_UPLOADS_FAILED" }).toLogObject(),
-    });
-    return;
-  }
-
-  if (previous.length === 0) return;
-
-  for (const item of previous) {
-    if (!item.storageKey) continue;
-    try {
-      await deps.blobs.delete({ tenantId, storageKey: item.storageKey });
-    } catch (error) {
-      log.warn("Could not remove the bytes of a replaced upload", {
-        ...AppError.from(error, "INTERNAL", { reason: "REPLACED_BLOB_DELETE_FAILED" }).toLogObject(),
-        drive_file_id: item.assetId,
-      });
-    }
-  }
-
-  try {
-    const removed = await deps.media.deleteUploads(
-      tenantId,
-      previous.map((item) => item.assetId),
-    );
-    log.info("Replaced the previous upload attempt for this code", { removed });
-  } catch (error) {
-    log.error("Could not remove the rows of a replaced upload", {
-      ...AppError.from(error, "DB_ERROR", { reason: "REPLACED_ROW_DELETE_FAILED" }).toLogObject(),
-    });
-  }
-}
-
-/**
  * One post is either an album of photos or a single clip — they are different
  * platform endpoints. Refusing here beats discovering it after the AI has
  * already been paid for a caption.
+ *
+ * Exported so `issueUploadTickets` (Task 6, the presigned-ticket path) can run
+ * the same gate before it ever signs a URL — it never holds an `UploadedFile`,
+ * only the client's claimed kind per file, hence the plain `MediaKind[]`.
  */
-function assertOneAlbumKind(
-  usable: ReadonlyArray<{ kind: MediaKind; file: UploadedFile }>,
+export function assertOneAlbumKind(
+  kinds: readonly MediaKind[],
   context: { tenantId: TenantId; productCode: string },
 ): void {
-  const kinds = new Set(usable.map((item) => item.kind));
+  const unique = new Set(kinds);
 
-  if (kinds.size > 1) {
+  if (unique.size > 1) {
     throw new AppError("INVALID_INPUT", {
       message: "An uploaded album mixes photos and video",
       userMessage:
@@ -331,15 +298,15 @@ function assertOneAlbumKind(
     });
   }
 
-  if (usable[0].kind === "video" && usable.length > 1) {
+  if (kinds[0] === "video" && kinds.length > 1) {
     throw new AppError("INVALID_INPUT", {
       message: "A video post carries exactly one clip",
-      userMessage: `Một bài video chỉ nhận một file — đang có ${usable.length}.`,
+      userMessage: `Một bài video chỉ nhận một file — đang có ${kinds.length}.`,
       context: {
         tenant_id: context.tenantId,
         product_code: context.productCode,
         reason: "MULTIPLE_VIDEOS",
-        count: usable.length,
+        count: kinds.length,
       },
     });
   }
