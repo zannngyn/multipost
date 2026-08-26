@@ -33,11 +33,14 @@ import type { TenantId } from "@/core/domain/tenant-context";
  */
 
 /**
- * The MinIO env fields this adapter needs, named exactly like `MinioConfig`
+ * The MinIO env fields this adapter needs, named mostly like `MinioConfig`
  * (src/composition/config.ts) but declared locally rather than imported: the
  * dependency rule (docs/07) forbids adapters importing from composition.
- * `loadMinioConfig()`'s return value satisfies this shape structurally, so
- * composition wiring needs no cast.
+ * Every field but `region` mirrors `MinioConfig` by name, so
+ * `loadMinioConfig()`'s return value can supply them without a cast;
+ * `region` is named without the `MINIO_` prefix on purpose (composition maps
+ * `MINIO_REGION` onto it explicitly) so this type stays legible as "what the
+ * client needs" rather than "what the env var was called".
  */
 export interface MinioBlobStoreConfig {
   readonly MINIO_INTERNAL_ENDPOINT: string;
@@ -46,6 +49,16 @@ export interface MinioBlobStoreConfig {
   readonly MINIO_SECRET_KEY: string;
   readonly MINIO_BUCKET: string;
   readonly MINIO_USE_SSL: boolean;
+  /**
+   * Passed straight into both clients so the SDK never performs a live
+   * `getBucketRegion` lookup against the endpoint before it can sign
+   * anything — `Client.getBucketRegionAsync` returns this value immediately
+   * when set (checked against minio@8.0.7 source). Without it, signing ran a
+   * network call against the endpoint being signed for, and a public
+   * endpoint the app container cannot reach (the tunnel hostname) made every
+   * presign throw instead of just failing when the browser used the URL.
+   */
+  readonly region: string;
 }
 
 export interface MinioBlobStoreOptions {
@@ -58,7 +71,7 @@ const STAGING_PREFIX = "staging/";
 
 export function makeMinioBlobStore(options: MinioBlobStoreOptions): MediaBlobStore {
   const { config, logger } = options;
-  const internal = clientFor(config.MINIO_INTERNAL_ENDPOINT, config);
+  const internal = internalClientFor(config);
   const bucket = config.MINIO_BUCKET;
 
   return {
@@ -143,7 +156,7 @@ export function makeMinioBlobStore(options: MinioBlobStoreOptions): MediaBlobSto
       // Signed with the PUBLIC client: the signature is bound to the hostname,
       // and this URL runs on the operator's machine, not inside the Docker
       // network.
-      const publicClient = clientFor(config.MINIO_PUBLIC_ENDPOINT, config);
+      const publicClient = publicClientFor(config);
       const expiresAt = new Date(Date.now() + expiresIn * 1000);
 
       const policy = publicClient.newPostPolicy();
@@ -247,6 +260,7 @@ export function makeMinioBlobStore(options: MinioBlobStoreOptions): MediaBlobSto
         // sweep job cleans up the leftover staging copy later.
         logger.warn("Promoted the object but could not remove its staging copy", {
           ...AppError.from(error, "INTERNAL", { reason: "STAGING_CLEANUP_FAILED" }).toLogObject(),
+          tenant_id: String(input.tenantId),
           asset_id: input.assetId,
         });
       }
@@ -264,13 +278,15 @@ export function makeMinioBlobStore(options: MinioBlobStoreOptions): MediaBlobSto
       const expiresIn = input?.expiresInSeconds;
       if (typeof expiresIn !== "number" || expiresIn <= 0) return null;
       try {
-        const publicClient = clientFor(config.MINIO_PUBLIC_ENDPOINT, config);
+        const publicClient = publicClientFor(config);
         return await publicClient.presignedGetObject(bucket, SERVE_PREFIX + key, expiresIn);
       } catch (error) {
         // Does not throw: the caller's documented fallback is to stream the
         // bytes itself.
         logger.warn("Could not sign a download URL", {
           ...AppError.from(error, "INTERNAL", { reason: "BLOB_PRESIGN_FAILED" }).toLogObject(),
+          tenant_id: String(input.tenantId),
+          storage_key: key,
         });
         return null;
       }
@@ -280,12 +296,41 @@ export function makeMinioBlobStore(options: MinioBlobStoreOptions): MediaBlobSto
 
 // --- helpers -----------------------------------------------------------------
 
-function clientFor(endpoint: string, config: MinioBlobStoreConfig): Client {
-  const [host, port] = endpoint.replace(/^https?:\/\//, "").split(":");
+/**
+ * `MINIO_INTERNAL_ENDPOINT` is a bare `host[:port]` (no scheme) — the Docker
+ * network has no notion of http vs https, so TLS for this client comes from
+ * `MINIO_USE_SSL` alone.
+ */
+function internalClientFor(config: MinioBlobStoreConfig): Client {
+  const [host, port] = config.MINIO_INTERNAL_ENDPOINT.replace(/^https?:\/\//, "").split(":");
   return new Client({
     endPoint: host,
     port: port ? Number(port) : config.MINIO_USE_SSL ? 443 : 80,
     useSSL: config.MINIO_USE_SSL,
+    region: config.region,
+    accessKey: config.MINIO_ACCESS_KEY,
+    secretKey: config.MINIO_SECRET_KEY,
+  });
+}
+
+/**
+ * `MINIO_PUBLIC_ENDPOINT` is a full `http(s)://host[:port]` URL — config
+ * validation already forces the scheme, so TLS for THIS client comes from
+ * parsing that URL, never from `MINIO_USE_SSL`. That flag only describes the
+ * internal hop; in production it is false (plain HTTP inside the Docker
+ * network) while the public endpoint is `https://` behind the tunnel. Sharing
+ * one flag between both clients previously built the public client with
+ * `useSSL: false` and port 80, so every presigned URL came back as
+ * `http://…` — a browser blocks that as mixed content on an https page.
+ */
+function publicClientFor(config: MinioBlobStoreConfig): Client {
+  const url = new URL(config.MINIO_PUBLIC_ENDPOINT);
+  const useSSL = url.protocol === "https:";
+  return new Client({
+    endPoint: url.hostname,
+    port: url.port ? Number(url.port) : useSSL ? 443 : 80,
+    useSSL,
+    region: config.region,
     accessKey: config.MINIO_ACCESS_KEY,
     secretKey: config.MINIO_SECRET_KEY,
   });
@@ -317,6 +362,7 @@ function safeStorageKey(tenantId: unknown, storageKey: unknown): string | null {
 function safeSegment(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
+  if (trimmed === "." || trimmed === "..") return null;
   return /^[A-Za-z0-9._-]+$/.test(trimmed) ? trimmed : null;
 }
 

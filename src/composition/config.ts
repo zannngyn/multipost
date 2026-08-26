@@ -353,6 +353,15 @@ export const MinioConfigSchema = z.object({
     .union([z.boolean(), z.string()])
     .default(true)
     .transform((value) => (typeof value === "boolean" ? value : value.trim().toLowerCase() !== "false")),
+  /**
+   * Passed to both the internal and public MinIO clients so the SDK never
+   * makes a live `getBucketRegion` lookup against the endpoint before it can
+   * sign a URL (adapters/media/minio-blob-store.ts). A region-less client
+   * signing against an endpoint the app container cannot reach (the public
+   * tunnel hostname) made presigning itself throw, not just the browser's
+   * later request. "us-east-1" is MinIO's own effective default region.
+   */
+  MINIO_REGION: z.string().trim().min(1).default("us-east-1"),
 });
 
 export type MinioConfig = z.infer<typeof MinioConfigSchema>;
