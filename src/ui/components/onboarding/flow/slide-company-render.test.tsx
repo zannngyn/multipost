@@ -6,10 +6,14 @@ import { SlideCompany } from "./SlideCompany";
 
 /**
  * Slide 01 inherited the only two ways out of a screen that has no top bar and
- * no app behind it. Both were pinned here the moment `WizardRail` was deleted,
+ * no app behind it. Both were pinned the moment `WizardRail` was deleted,
  * because losing either is invisible in a type check and fatal in production:
  * an invited employee would be made to found a second company, and an account
  * with no company would be stuck in the browser with no route to /signin.
+ *
+ * The two-column frame split them by column: the invite door stays here, in the
+ * action column, and sign-out moved to the foot of the story column. Its guard
+ * moved WITH it, to `slide-shell-render.test.tsx` — it was not dropped.
  *
  * `renderToStaticMarkup`, like the other render tests in this repo: vitest runs
  * `environment: "node"` with no jsdom, and everything asserted here is in the
@@ -42,16 +46,16 @@ describe("SlideCompany — the mandatory slide", () => {
     expect(html).not.toContain("Đường dẫn</label>");
   });
 
-  it("leaves the slide's single <h1> to SlideShell", () => {
+  it("leaves the slide's single <h1> to the story column", () => {
     // Two top-level headings on one slide breaks the flow's outline (spec §9),
-    // and the rail already says which step this is.
+    // and the story column already carries the title and the step count.
     const html = render();
     expect(html).not.toContain("<h1");
     expect(html).not.toContain("Bước 01 / 02");
   });
 });
 
-describe("SlideCompany — escape 1: the invited employee", () => {
+describe("SlideCompany — the invited employee's door", () => {
   it("keeps the invite-link door that WizardRail used to carry", () => {
     const html = render();
     expect(html).toContain("Đã có người mời bạn?");
@@ -64,15 +68,11 @@ describe("SlideCompany — escape 1: the invited employee", () => {
   });
 });
 
-describe("SlideCompany — escape 2: sign out", () => {
-  it("offers sign-out when the page hands down the action", () => {
-    const html = render({ signOutAction: async () => {} });
-    expect(html).toContain("Đăng xuất");
-  });
-
-  it("draws nothing when there is no session to end (dev fake session)", () => {
-    // `(app)/layout.tsx` withholds the action for a dev fake session; a button
-    // that submits nothing would be a dead control.
+describe("SlideCompany — sign-out belongs to the story column now", () => {
+  it("does not draw a second sign-out inside the form", () => {
+    // Two sign-out controls on one screen is worse than none: the operator
+    // cannot tell whether they do the same thing. `SlideShell` owns the one
+    // that exists, and `slide-shell-render.test.tsx` guards it.
     expect(render()).not.toContain("Đăng xuất");
   });
 });

@@ -10,16 +10,17 @@ import { useCreateTenant, useJoinTenant } from "@/ui/hooks/useTenantOnboarding";
  * Slide 01 — the only mandatory one: without a company every tenant-scoped API
  * answers 409, so there is nothing for the other five slides to do.
  *
- * It also carries the two escapes that used to live on `WizardRail`, and both
- * are load-bearing rather than decorative:
+ * It carries the second door out of this screen, and that door is load-bearing
+ * rather than decorative: an employee whose admin already sent them a link must
+ * not be made to found a second company to get past it — and accepting a link
+ * goes STRAIGHT into the app, skipping the whole slideshow, because the company
+ * they joined was already set up by somebody else.
  *
- *   1. an employee whose admin already sent them a link must not be made to
- *      found a second company to get past this screen — and accepting a link
- *      goes STRAIGHT into the app, skipping the whole slideshow, because the
- *      company they joined was already set up by somebody else;
- *   2. sign-out, because this route sits outside `AppFrame` and there is no top
- *      bar here. Without this line an account with no company is locked in the
- *      browser with no way back to the sign-in screen.
+ * SIGN-OUT MOVED OUT (two-column frame). It used to hang off the bottom of this
+ * form; it now sits at the foot of the story column, where `SlideShell` draws
+ * every way out of the flow. The reason it exists at all is unchanged: this
+ * route is outside `AppFrame`, there is no top bar, and without it an account
+ * that belongs to no company is locked in the browser with no route to /signin.
  *
  * `useCreateTenant` ends in `useAdoptActiveTenant()`: by the time `onCreated`
  * fires the cookie has moved, the cache is dropped and `/api/me` re-read, so the
@@ -42,12 +43,9 @@ import { useCreateTenant, useJoinTenant } from "@/ui/hooks/useTenantOnboarding";
 export function SlideCompany({
   onCreated,
   onJoined,
-  signOutAction,
 }: {
   onCreated: () => void;
   onJoined: () => void;
-  /** Server Action from the page — `src/ui` may not import `src/app`. */
-  signOutAction?: () => Promise<void>;
 }) {
   const create = useCreateTenant();
   const join = useJoinTenant();
@@ -78,7 +76,7 @@ export function SlideCompany({
         Bạn là chủ công ty · múi giờ GMT+7
       </Text>
 
-      {/* Escape 1 — the invited employee.
+      {/* The other door — the invited employee.
 
           A card, not a second column: the slide is one narrow measure, and the
           border is what says "this is the other door" without competing with the
@@ -103,18 +101,6 @@ export function SlideCompany({
           }}
         />
       </section>
-
-      {/* Escape 2 — the way out of a route that has no top bar. */}
-      {signOutAction ? (
-        <form action={signOutAction}>
-          <button
-            type="submit"
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded text-xs underline underline-offset-4 outline-none focus-visible:ring-2"
-          >
-            Đăng xuất
-          </button>
-        </form>
-      ) : null}
     </div>
   );
 }

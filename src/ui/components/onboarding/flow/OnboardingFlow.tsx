@@ -2,7 +2,6 @@
 
 import { LinkProvider, Theme } from "@astryxdesign/core";
 import { InternationalizationProvider } from "@astryxdesign/core/i18n";
-import { AnimatePresence } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
@@ -13,7 +12,6 @@ import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
 import { AppLink } from "@/ui/components/shell/AppLink";
 import { myspTheme } from "@/ui/theme/mysp";
 
-import { ProgressRail } from "./ProgressRail";
 import { SlideCompany } from "./SlideCompany";
 import { SlideShell } from "./SlideShell";
 import {
@@ -117,42 +115,39 @@ export function OnboardingFlow({
         <ApiErrorNotice error={progress.error} onRetry={() => void progress.refetch()} />
       </div>
     ) : (
-      <div className="flex min-h-dvh flex-col gap-8 p-6 sm:p-10">
-        <ProgressRail current={current} />
-
-        <div className="flex min-h-0 flex-1 items-center">
-          <AnimatePresence mode="wait" initial={false}>
-            <SlideShell
-              key={current}
-              id={current}
-              direction={direction}
-              heading={SLIDE_TITLES[current]}
-              lead={LEADS[current]}
-              onSkip={current === "company" || current === "congrats" ? undefined : advance}
-              onBack={current === "company" ? undefined : goBack}
-              exitHref={current === "company" ? undefined : "/"}
-            >
-              {/* Tasks 06-10 replace the remaining five placeholders. */}
-              {current === "company" ? (
-                <SlideCompany
-                  signOutAction={signOutAction}
-                  // Creating the company advances the flow only from the
-                  // mutation's `onSuccess`; a failed create must not move on.
-                  onCreated={advance}
-                  // Someone who accepted an invite joined a company somebody
-                  // else set up — the remaining five slides are not theirs to
-                  // do, so they go straight into the app.
-                  onJoined={() => router.replace("/")}
-                />
-              ) : (
-                <p className="text-muted-foreground text-sm">
-                  Nội dung màn này được lắp ở task sau ({current}).
-                </p>
-              )}
-            </SlideShell>
-          </AnimatePresence>
-        </div>
-      </div>
+      /* ONE shell for the whole flow, NOT one per slide: the story column has
+         to survive the change of slide, or the heading and the rail would slide
+         out and back in on every step. `SlideShell` keys the travelling half on
+         `id` internally. */
+      <SlideShell
+        id={current}
+        direction={direction}
+        heading={SLIDE_TITLES[current]}
+        lead={LEADS[current]}
+        onSkip={current === "company" || current === "congrats" ? undefined : advance}
+        onBack={current === "company" ? undefined : goBack}
+        exitHref={current === "company" ? undefined : "/"}
+        // Only slide 01 needs it: from slide 02 on there is a company, so
+        // "Vào ứng dụng" is the sane way out and sign-out lives in the app.
+        signOutAction={current === "company" ? signOutAction : undefined}
+      >
+        {/* Tasks 06-10 replace the remaining five placeholders. */}
+        {current === "company" ? (
+          <SlideCompany
+            // Creating the company advances the flow only from the mutation's
+            // `onSuccess`; a failed create must not move on.
+            onCreated={advance}
+            // Someone who accepted an invite joined a company somebody else
+            // set up — the remaining five slides are not theirs to do, so they
+            // go straight into the app.
+            onJoined={() => router.replace("/")}
+          />
+        ) : (
+          <p className="text-muted-foreground text-sm">
+            Nội dung màn này được lắp ở task sau ({current}).
+          </p>
+        )}
+      </SlideShell>
     );
 
   /**
