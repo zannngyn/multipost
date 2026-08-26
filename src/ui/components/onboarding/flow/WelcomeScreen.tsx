@@ -1,6 +1,25 @@
 import { ArrowRight } from "lucide-react";
+import type { CSSProperties } from "react";
 
 import { Button } from "@/ui/components/ui/button";
+
+import "./backdrop-motion.css";
+
+/**
+ * When the greeting and its button arrive, relative to the backdrop's marks
+ * (spec 4b: the copy comes in last).
+ *
+ * MULTIPLES OF A TOKEN, not typed numbers: `--duration-fast` is 125ms in this
+ * project's theme, so the heading starts at ~188ms and the button at 250ms.
+ * Deliberately NOT behind the outermost marks, which are still arriving at
+ * ~725ms — Astryx's motion guidance is that motion must never stand between the
+ * user and their next action, and a primary action invisible for most of a
+ * second does exactly that. The whole thing is switched off under
+ * `prefers-reduced-motion: reduce` by the stylesheet, which is why there is no
+ * hook here.
+ */
+const HEADING_DELAY = { "--late-in-delay": "calc(var(--duration-fast) * 1.5)" } as CSSProperties;
+const BUTTON_DELAY = { "--late-in-delay": "calc(var(--duration-fast) * 2)" } as CSSProperties;
 
 /**
  * The greeting. One heading, one way forward, nothing to skip and nothing to go
@@ -32,7 +51,8 @@ export function WelcomeScreen({
       */}
       <h1
         tabIndex={-1}
-        className="text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        style={HEADING_DELAY}
+        className="onboarding-late-in text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
       >
         {/*
           PENDING(welcome-name): spec section 12 asks for the local part of the
@@ -58,7 +78,8 @@ export function WelcomeScreen({
       <Button
         type="button"
         onClick={onStart}
-        className="h-12 gap-2 rounded-md px-6 text-sm font-medium"
+        style={BUTTON_DELAY}
+        className="onboarding-late-in h-12 gap-2 rounded-md px-6 text-sm font-medium"
       >
         Bắt đầu
         <ArrowRight aria-hidden="true" />

@@ -13,6 +13,27 @@ import { StepDots } from "./StepDots";
 import type { OnboardingScreen } from "./onboarding-steps";
 
 /**
+ * The crossfade's timing, taken from Astryx motion (`astryx docs motion`)
+ * rather than chosen: `--duration-medium-min` is the entrance band,
+ * `--duration-fast` the exit — still the ~60% of the entrance that a departure
+ * wants — and `--duration-fast-min` the reduced-motion case. `--ease-standard`
+ * is the system's ONLY curve.
+ *
+ * THE VALUES ARE THIS PROJECT'S, NOT THE LIBRARY'S. `src/ui/theme/mysp.css`
+ * (generated; `pnpm theme:check` guards it) re-values the whole duration scale
+ * faster than `@astryxdesign/core` ships it — 225/125/95ms where the library
+ * says 310/175/130. framer-motion takes numbers, not `var()`, so the resolved
+ * values are written out here; anything CSS can express reads the token
+ * instead (see `backdrop-motion.css`). If the theme moves, these move with it.
+ *
+ * Seconds, because that is the unit framer-motion reads.
+ */
+const ENTER_DURATION = 0.225;
+const EXIT_DURATION = 0.125;
+const REDUCED_DURATION = 0.095;
+const EASE_STANDARD = [0.24, 1, 0.4, 1] as const;
+
+/**
  * The frame every screen of the flow sits in (spec section 3).
  *
  * ONE CENTRED COLUMN, not the two columns the setup slideshow used. Buffer puts
@@ -31,8 +52,8 @@ import type { OnboardingScreen } from "./onboarding-steps";
  * horizontal travel at all. That is why both children are parked in the SAME
  * grid cell and `AnimatePresence` runs in its default overlapping mode; `mode`
  * "wait" would play them one after the other and lose the overlap. Durations
- * are the project's own (in 320ms, out 200ms, 120ms under reduced motion), only
- * the manner is Buffer's.
+ * and curve are Astryx's motion tokens (see the constants above), only the
+ * manner is Buffer's.
  *
  * FOCUS: changing screen is a navigation, so focus moves to the new heading.
  * The heading belongs to `children` — each screen owns its own <h1> — so the
@@ -58,8 +79,8 @@ export function OnboardingFrame({
     if (arriving instanceof HTMLElement) arriving.focus();
   }, [screen]);
 
-  const enterDuration = prefersReduced ? 0.12 : 0.32;
-  const exitDuration = prefersReduced ? 0.12 : 0.2;
+  const enterDuration = prefersReduced ? REDUCED_DURATION : ENTER_DURATION;
+  const exitDuration = prefersReduced ? REDUCED_DURATION : EXIT_DURATION;
   const isWelcome = screen === "welcome";
 
   return (
@@ -73,8 +94,8 @@ export function OnboardingFrame({
             key="backdrop"
             className="absolute inset-0"
             initial={{ opacity: 0 }}
-            animate={{ opacity: 1, transition: { duration: enterDuration, ease: "easeOut" } }}
-            exit={{ opacity: 0, transition: { duration: exitDuration, ease: "easeOut" } }}
+            animate={{ opacity: 1, transition: { duration: enterDuration, ease: EASE_STANDARD } }}
+            exit={{ opacity: 0, transition: { duration: exitDuration, ease: EASE_STANDARD } }}
           >
             <GridBackdrop />
           </motion.div>
@@ -146,8 +167,8 @@ export function OnboardingFrame({
                   "self-center pt-[calc(7rem+6.9dvh)] pb-28",
             )}
             initial={{ opacity: 0 }}
-            animate={{ opacity: 1, transition: { duration: enterDuration, ease: "easeOut" } }}
-            exit={{ opacity: 0, transition: { duration: exitDuration, ease: "easeOut" } }}
+            animate={{ opacity: 1, transition: { duration: enterDuration, ease: EASE_STANDARD } }}
+            exit={{ opacity: 0, transition: { duration: exitDuration, ease: EASE_STANDARD } }}
           >
             <ScreenLayer screen={screen}>{children}</ScreenLayer>
           </motion.div>
