@@ -135,6 +135,10 @@ import {
   type IssueUploadTickets,
 } from "@/core/usecases/issue-upload-tickets";
 import {
+  makeConfirmUpload,
+  type ConfirmUpload,
+} from "@/core/usecases/confirm-upload";
+import {
   makeCancelScheduledJob,
   type CancelScheduledJob,
 } from "@/core/usecases/cancel-scheduled-job";
@@ -250,6 +254,8 @@ export interface Usecases {
    * without touching a byte. Stage 3 (confirm) lands in a later task.
    */
   issueUploadTickets: IssueUploadTickets;
+  /** E9/MinIO — stage 3: sniff the staged bytes, then promote and register. */
+  confirmUpload: ConfirmUpload;
   /** E9.4 — periodic sweep of uploads nobody posted. */
   cleanupUploads: CleanupUploads;
   /** E3.6 — periodic sweep of the Drive byte cache (TTL-based). */
@@ -1051,6 +1057,16 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       logger: deps.logger,
       newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
       ticketTtlSeconds: 30 * 60,
+    }),
+    // Stage 3 of the presigned-upload path: sniffs the staged bytes before
+    // promoting them. Still on the local blob store wired above — Task 11
+    // switches this to MinIO for every usecase at once.
+    confirmUpload: makeConfirmUpload({
+      tickets: uploadTickets,
+      blobs,
+      media,
+      clock: deps.clock,
+      logger: deps.logger,
     }),
     cleanupUploads: makeCleanupUploads({
       media,
