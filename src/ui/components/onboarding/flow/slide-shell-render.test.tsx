@@ -59,6 +59,52 @@ describe("SlideShell — one heading, in the story column", () => {
   });
 });
 
+describe("SlideShell — where the story column puts things", () => {
+  /**
+   * Pinned as CLASSES, not as DOM order, because the defect was purely one of
+   * spacing: the rail sat in the right place in the markup and was then shoved
+   * to the bottom of the viewport, leaving ~600px of nothing in the middle of
+   * the column and dropping the count under Next's dev-tools badge.
+   */
+  function bottomBlock(html: string): string {
+    const match = html.match(/<div class="[^"]*md:mt-auto[^"]*">.*?<\/div><\/div>/);
+    return match?.[0] ?? "";
+  }
+
+  it("keeps the position next to the words it belongs to, not pinned to the floor", () => {
+    const html = render({ exitHref: "/" });
+    expect(bottomBlock(html)).not.toContain("Bước 3/6");
+  });
+
+  it("pushes only the ways out to the foot of the column", () => {
+    const html = render({ exitHref: "/" });
+    expect(bottomBlock(html)).toContain("Vào ứng dụng");
+  });
+
+  it("reads heading, then lead, then position, then the ways out", () => {
+    const html = render({ exitHref: "/" });
+    const order = ["<h1", "Nối fanpage sẽ nhận bài đăng.", "Bước 3/6", "Vào ứng dụng"];
+    const positions = order.map((needle) => html.indexOf(needle));
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(positions.every((index) => index >= 0)).toBe(true);
+  });
+});
+
+describe("SlideShell — where the action column puts things", () => {
+  it("follows its own left margin instead of floating in the middle", () => {
+    // Centring the action column against a left-aligned story column read as a
+    // misalignment: a ~300px dead gutter between the divider and the form.
+    const html = render();
+    const section = html.match(/<section class="([^"]*)"/)?.[1] ?? "";
+    expect(section).not.toContain("mx-auto");
+  });
+
+  it("still caps the measure so a slide never runs edge to edge", () => {
+    const section = render().match(/<section class="([^"]*)"/)?.[1] ?? "";
+    expect(section).toMatch(/max-w-/);
+  });
+});
+
 describe("SlideShell — the two escape routes", () => {
   it("offers sign-out when the page hands down the action", () => {
     // Withheld for a dev fake session by `(app)/layout.tsx`; a button that

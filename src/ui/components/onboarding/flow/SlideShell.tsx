@@ -88,7 +88,7 @@ export function SlideShell({
   return (
     <main className="grid min-h-dvh grid-cols-1 md:grid-cols-[minmax(19rem,32%)_1fr]">
       {/* ── STORY ── persistent across slides; only the words change. ─────── */}
-      <div className="bg-card border-border flex flex-col gap-6 border-b p-6 sm:p-8 md:min-h-dvh md:gap-8 md:border-r md:border-b-0 md:p-10">
+      <div className="bg-card border-border flex flex-col gap-6 border-b p-6 pb-10 sm:p-8 sm:pb-12 md:min-h-dvh md:gap-8 md:border-r md:border-b-0 md:p-10 md:pb-16">
         {/* Decoration, not information: `ProgressRail` below already says
             "Bước n/6" in words, and repeating it here would make a screen
             reader announce the position twice. */}
@@ -115,43 +115,46 @@ export function SlideShell({
           <p className="text-muted-foreground max-w-prose text-sm leading-relaxed">{lead}</p>
         </div>
 
-        {/* `mt-auto` only once the column is full height, i.e. from `md` up.
-            Stacked on a phone the story is a band, and pinning the rail to the
-            bottom of a band just adds a gap. */}
-        <div className="flex flex-col gap-4 md:mt-auto">
-          <ProgressRail current={id} />
+        {/* The position belongs WITH the words it describes. Pinning it to the
+            floor of the column left ~600px of nothing in the middle and dropped
+            "Bước n/6" under Next's dev-tools badge. */}
+        <ProgressRail current={id} />
 
-          {(exitHref ?? signOutAction) ? (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-              {exitHref ? (
-                <Link
-                  href={exitHref}
+        {(exitHref ?? signOutAction) ? (
+          // Only the ways out sink to the foot, and only once the column is
+          // full height (from `md` up) — stacked on a phone the story is a
+          // band, and pinning anything to the bottom of a band just adds a gap.
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 md:mt-auto">
+            {exitHref ? (
+              <Link
+                href={exitHref}
+                className="text-muted-foreground hover:text-card-foreground focus-visible:ring-ring inline-flex min-h-6 items-center rounded text-xs underline underline-offset-4 outline-none focus-visible:ring-2"
+              >
+                Vào ứng dụng
+              </Link>
+            ) : null}
+
+            {signOutAction ? (
+              <form action={signOutAction}>
+                <button
+                  type="submit"
                   className="text-muted-foreground hover:text-card-foreground focus-visible:ring-ring inline-flex min-h-6 items-center rounded text-xs underline underline-offset-4 outline-none focus-visible:ring-2"
                 >
-                  Vào ứng dụng
-                </Link>
-              ) : null}
-
-              {signOutAction ? (
-                <form action={signOutAction}>
-                  <button
-                    type="submit"
-                    className="text-muted-foreground hover:text-card-foreground focus-visible:ring-ring inline-flex min-h-6 items-center rounded text-xs underline underline-offset-4 outline-none focus-visible:ring-2"
-                  >
-                    Đăng xuất
-                  </button>
-                </form>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+                  Đăng xuất
+                </button>
+              </form>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {/* ── ACTION ── the only part that travels. ──────────────────────────── */}
-      {/* Top-aligned, not centred: centring is what produced the ~180px dead
-          band above the form and ~100px below it. Sharing a top edge with the
-          story column also gives the two columns one optical baseline. */}
-      <div className="flex min-h-0 flex-col items-center p-6 sm:p-8 md:p-10">
+      {/* Top-aligned AND left-aligned, on this column's own margin. Centring it
+          — vertically or horizontally — is what produced the dead bands: ~180px
+          above the form, and a ~300px gutter between the divider and the first
+          control while the story column started at its own left edge. Two
+          columns, two margins, one logic: each starts at its own corner. */}
+      <div className="flex min-h-0 flex-col items-start p-6 sm:p-8 md:p-10">
         <AnimatePresence mode="wait" initial={false}>
           <motion.section
             key={id}
@@ -166,7 +169,7 @@ export function SlideShell({
               x: -travel,
               transition: { duration: exitDuration, ease: [0.16, 1, 0.3, 1] },
             }}
-            className="mx-auto flex w-full max-w-xl flex-col gap-6"
+            className="flex w-full max-w-xl flex-col gap-6"
           >
             {children}
 
