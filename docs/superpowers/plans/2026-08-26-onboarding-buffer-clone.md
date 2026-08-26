@@ -76,7 +76,7 @@ TanStack Query · Astryx · Tailwind v4 · framer-motion · Vitest (`environment
 
 | Thứ | Quyết định |
 |---|---|
-| `src/app/api/_lib/oauth-return-cookie.ts` + 4 route OAuth | **GIỮ** — vẫn đúng |
+| `src/app/api/_lib/oauth-return-cookie.ts` + 4 route OAuth | **GIỮ**, nhưng nay là code chết — xem ghi chú dưới |
 | `eslint.config.mjs` bỏ qua `.claude/**` | **GIỮ** |
 | `src/app/(onboarding)/layout.tsx` + `onboarding/page.tsx` | **GIỮ**, sửa nội dung |
 | `flow/onboarding-steps.ts` + test | **VIẾT LẠI** (Task 4) |
@@ -740,6 +740,24 @@ khi có nước là tối ưu hoá sớm. Làm khi có đủ người dùng đ�
 Giữ nguyên `channelCount` mà agent thêm ngoài 3 phép được giao — 2 dòng, cùng code path, và
 "khách quản lý bao nhiêu trang" là phân khúc đáng giá nhất trong bốn câu.
 
+### Lỗi CÓ SẴN tìm được khi đi bộ — không do epic này, chưa sửa
+
+**`/join/<token>` kẹt vĩnh viễn ở "Đang kiểm tra lời mời".** `POST /api/join` trả **200**,
+log ghi `Invite accepted, membership created`, DB có membership thật — nhưng màn hình không
+bao giờ đổi trạng thái (theo dõi 16s, không lỗi JS). Nhánh lỗi (lời mời đã dùng, 404) cũng
+không hiện gì.
+
+Đã A/B: dán lại bản `useAdoptActiveTenant` cũ thì hiện tượng **y hệt** → lỗi có sẵn, không
+do `180f2eb`.
+
+Hậu quả: người được mời vẫn vào được công ty sau khi tải lại trang, nhưng **màn hình nói dối
+họ** — họ tưởng lời mời hỏng. Đây là vi phạm trực tiếp luật "không im lặng bỏ qua lỗi" của
+dự án, chỉ là ở chiều ngược lại: im lặng bỏ qua một *thành công*.
+
+**Không sửa trong epic này** — nằm ngoài phạm vi, có sẵn từ trước, và mở rộng ngay trước lúc
+promote là đúng thứ ta đã tránh ở ba quyết định trước. Cần một task riêng, và nên làm sớm:
+đây là đường vào của **mọi nhân viên được mời**.
+
 ## Việc phát sinh, ngoài phạm vi epic này — ghi lại để không quên
 
 Hai lỗi tương phản **toàn ứng dụng**, do Task 6 đo trong trình duyệt chứ không suy đoán:
@@ -790,6 +808,25 @@ Bốn commit đầu của epic này đã nằm trên `dev` (`53fa2cb`, `2c6ef73`
 tức wizard cũ đã bị gỡ, máy trạng thái đã thay, nhưng **màn khảo sát thật thì chưa**. `dev`
 vẫn xanh (build và test pass) nhưng onboarding trên đó là bản chỗ-giữ-chỗ. **Đừng push `dev`
 lên origin trước khi gộp nốt nhánh này**, nếu không origin sẽ mang một onboarding nửa vời.
+
+### `oauth-return-cookie` giờ là code chết — quyết định: GIỮ, không gỡ lúc này
+
+Task 10 phát hiện: sau khi Task 4 viết lại máy trạng thái, **không màn nào còn truyền
+`?return=onboarding`** (`grep` chỉ còn 2 dòng comment), trong khi `resolveReturnScreen` vẫn
+trỏ `/onboarding?step=data` và `?step=facebook` — **hai id bước không còn tồn tại**.
+
+**Quyết định: không gỡ trước khi lên `stg`.** Ba lý do:
+1. Nhánh đó **không thể chạy được** — không ai set cookie, nên không có đường nào tới nó.
+   Vô hại, không phải bom hẹn giờ.
+2. Đường mặc định (`/sync`, `/channels`) **đang chạy đúng và Task 10 vừa đo xác nhận**. Gỡ
+   nghĩa là sửa 5 file qua 2 domain ngay trước lúc promote, đổi lấy rủi ro làm hỏng đúng thứ
+   đang hoạt động.
+3. Nó nằm trong `src/app/api/catalog/google/**` (data-pipeline) và `src/app/api/channels/**`
+   (fb-publisher) — gỡ cho gọn phải điều phối hai agent cho một thao tác xoá, mà nửa vời còn
+   tệ hơn để nguyên.
+
+**Nhưng phải gỡ ở việc riêng sau `stg`.** Để lâu thì nó thành bẫy cho người đọc code sau này
+tưởng nhánh đó còn sống. Đã ghi vào sổ nợ ở `docs/08`.
 
 ## Rủi ro đã biết
 
