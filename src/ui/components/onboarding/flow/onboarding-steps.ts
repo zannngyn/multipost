@@ -1,110 +1,78 @@
-import { stepFlag, type SetupProgress, type SetupStepId } from "@/ui/schemas/setup-progress.schema";
-
 /**
- * Where the operator is in the slideshow — a PURE function of the six server
- * flags, never of React state.
+ * Where the operator is in the onboarding survey — a PURE function of the URL
+ * and of which questions already have an answer.
  *
- * That is not a style preference. Slide 02 and slide 03 both send the browser
- * away to an OAuth provider; any position held in a component is gone by the
- * time it comes back. The URL carries an INTENT (`?step=`), the server carries
- * the TRUTH, and this file is where the two are reconciled.
+ * NO SERVER FLAG DECIDES POSITION ANY MORE. The screens this file drives are a
+ * profile survey, not a setup wizard: there is no "is Google connected yet" to
+ * reconcile against, and connecting sources moved back to `SetupDock` and the
+ * real routes. What is left is small on purpose — `?step=` carries an INTENT,
+ * the answers carry the truth, and the intent is clamped to the truth here.
  */
 
-export const ONBOARDING_SLIDE_IDS = [
-  "company",
-  "data",
-  "facebook",
-  "group",
-  "invite",
-  "congrats",
-] as const;
+export const ONBOARDING_SCREENS = ["welcome", "seller", "tools", "count", "channels"] as const;
 
-export type OnboardingSlideId = (typeof ONBOARDING_SLIDE_IDS)[number];
+export type OnboardingScreen = (typeof ONBOARDING_SCREENS)[number];
 
-export const SLIDE_TITLES: Record<OnboardingSlideId, string> = {
-  company: "Tạo công ty",
-  data: "Kết nối dữ liệu",
-  facebook: "Kết nối Facebook",
-  group: "Tạo nhóm kênh",
-  invite: "Mời nhân viên",
-  congrats: "Xong rồi",
-};
+/** The four screens that ask a question. `welcome` only greets. */
+const SURVEY_SCREENS = ["seller", "tools", "count", "channels"] as const;
 
-/**
- * Which server flag settles which slide.
- *
- * `data` maps to `source`, not `google`: connecting Drive without pointing at a
- * spreadsheet leaves the tenant with nothing to read, so the slide is only done
- * when the source is chosen.
- *
- * `invite` and `congrats` map to nothing — no flag can ever settle them, which
- * is exactly why `passed` below exists.
- */
-const SLIDE_FLAG: Record<OnboardingSlideId, SetupStepId | null> = {
-  company: "tenant",
-  data: "source",
-  facebook: "facebook",
-  group: "group",
-  invite: null,
-  congrats: null,
-};
+export const SURVEY_STEP_COUNT = SURVEY_SCREENS.length;
 
-export function isOnboardingSlideId(value: unknown): value is OnboardingSlideId {
-  return typeof value === "string" && (ONBOARDING_SLIDE_IDS as readonly string[]).includes(value);
+/** The last survey screen, used as the clamp when everything is answered. */
+const LAST_SURVEY_SCREEN: OnboardingScreen = SURVEY_SCREENS[SURVEY_SCREENS.length - 1]!;
+
+export function isOnboardingScreen(value: unknown): value is OnboardingScreen {
+  return typeof value === "string" && (ONBOARDING_SCREENS as readonly string[]).includes(value);
 }
 
-export function slideOrdinal(id: OnboardingSlideId): number {
-  return ONBOARDING_SLIDE_IDS.indexOf(id) + 1;
+/** 1..4 for the survey steps; `welcome` gets 0 because it draws no dot. */
+export function screenStep(id: OnboardingScreen): 0 | 1 | 2 | 3 | 4 {
+  const index = SURVEY_SCREENS.indexOf(id as (typeof SURVEY_SCREENS)[number]);
+  return index < 0 ? 0 : ((index + 1) as 1 | 2 | 3 | 4);
 }
 
-export interface ResolveSlideInput {
-  /** Null until the company exists — the six flags are tenant-scoped. */
-  readonly progress: SetupProgress | null;
+export interface ResolveScreenInput {
   /** `?step=` off the URL. An INTENT: it is clamped, never trusted. */
   readonly requested: string | null;
   /**
-   * Slides the operator has already walked past, whether by finishing them or
-   * by pressing "Để sau". Not "skipped": the invite slide has no server flag,
-   * so tracking only refusals would leave the flow stuck on it forever.
+   * Which questions already carry an answer. A skipped question counts as
+   * answered — "Bỏ qua" is a decision, and re-asking it would trap the flow.
    */
-  readonly passed: readonly OnboardingSlideId[];
+  readonly answered: Partial<Record<OnboardingScreen, boolean>>;
+  /** True once "Bắt đầu" has been pressed on the welcome screen. */
+  readonly hasStarted: boolean;
 }
 
-function isSettled(
-  id: OnboardingSlideId,
-  progress: SetupProgress,
-  passed: readonly OnboardingSlideId[],
-): boolean {
-  if (passed.includes(id)) return true;
-  const flag = SLIDE_FLAG[id];
-  return flag !== null && stepFlag(progress, flag);
-}
-
-export function resolveSlide({ progress, requested, passed }: ResolveSlideInput): OnboardingSlideId {
+export function resolveScreen({ requested, answered, hasStarted }: ResolveScreenInput): OnboardingScreen {
   // --- Edge cases first ----------------------------------------------------
-  // No company: every other slide talks to a tenant-scoped API that answers 409.
-  if (!progress) return "company";
+  // An answer on file is proof the greeting was passed: closing the tab
+  // mid-survey and coming back must reopen the pending question rather than
+  // replay the greeting (spec section 7.6).
+  const hasAnswer = SURVEY_SCREENS.some((id) => answered[id] === true);
+  if (!hasStarted && !hasAnswer) return "welcome";
 
-  const firstOpen =
-    ONBOARDING_SLIDE_IDS.find((id) => !isSettled(id, progress, passed)) ?? "congrats";
+  const firstOpen: OnboardingScreen =
+    SURVEY_SCREENS.find((id) => answered[id] !== true) ?? LAST_SURVEY_SCREEN;
 
-  if (!isOnboardingSlideId(requested)) return firstOpen;
+  // A hand-typed or stale `?step=` must not blank the screen.
+  if (!isOnboardingScreen(requested)) return firstOpen;
 
-  // Going BACK is allowed — reviewing a finished slide costs nothing. Going
-  // FORWARD past unfinished work is not: the slide would render controls whose
-  // prerequisites do not exist yet.
+  // Going BACK is allowed — re-reading an answered question costs nothing, and
+  // the back arrow depends on it. Going FORWARD past an unanswered question is
+  // not: the flow would skip a step the operator never saw.
   const isBehind =
-    ONBOARDING_SLIDE_IDS.indexOf(requested) <= ONBOARDING_SLIDE_IDS.indexOf(firstOpen);
+    ONBOARDING_SCREENS.indexOf(requested) <= ONBOARDING_SCREENS.indexOf(firstOpen);
 
   return isBehind ? requested : firstOpen;
 }
 
-export function nextSlide(current: OnboardingSlideId): OnboardingSlideId {
-  const index = ONBOARDING_SLIDE_IDS.indexOf(current);
-  return ONBOARDING_SLIDE_IDS[Math.min(index + 1, ONBOARDING_SLIDE_IDS.length - 1)]!;
+/** `'done'` rather than a sixth screen: leaving the flow is the caller's job. */
+export function nextScreen(current: OnboardingScreen): OnboardingScreen | "done" {
+  const index = ONBOARDING_SCREENS.indexOf(current);
+  return ONBOARDING_SCREENS[index + 1] ?? "done";
 }
 
-export function previousSlide(current: OnboardingSlideId): OnboardingSlideId | null {
-  const index = ONBOARDING_SLIDE_IDS.indexOf(current);
-  return index <= 0 ? null : ONBOARDING_SLIDE_IDS[index - 1]!;
+export function previousScreen(current: OnboardingScreen): OnboardingScreen | null {
+  const index = ONBOARDING_SCREENS.indexOf(current);
+  return index <= 0 ? null : ONBOARDING_SCREENS[index - 1]!;
 }

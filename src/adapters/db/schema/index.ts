@@ -25,3 +25,4 @@ export * from "./ai-generation";
 export * from "./ai-prompt-template";
 export * from "./ai-model-policy-override";
 export * from "./platform-setting";
+export * from "./tenant-profile";

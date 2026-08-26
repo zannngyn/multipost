@@ -18,8 +18,7 @@ import {
 } from "@/ui/components/onboarding/first-run.fixtures";
 import { OperatorWaitingCard } from "@/ui/components/onboarding/OperatorWaitingCard";
 import { DockPanel, DockPill } from "@/ui/components/onboarding/SetupDock";
-import { WizardRail } from "@/ui/components/onboarding/WizardRail";
-import { WizardStepCreate } from "@/ui/components/onboarding/WizardStepCreate";
+import { ProgressRail } from "@/ui/components/onboarding/flow/ProgressRail";
 import { WizardStepInvite } from "@/ui/components/onboarding/WizardStepInvite";
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
 import type { SetupProgress, SetupStepId } from "@/ui/schemas/setup-progress.schema";
@@ -208,46 +207,29 @@ export default function OnboardingPreviewPage() {
             <DockPill isInline progress={previewProgress({ tenant: true })} onExpand={() => {}} />
           </Stack>
 
+          {/*
+            CAVEAT for everything below (spec §10): this gallery renders OUTSIDE
+            Astryx's `Theme`, which `OnboardingFlow` mounts in the real app. Text
+            on a dark surface can look fine here and be invisible there, so the
+            survey still has to be checked at /onboarding itself.
+          */}
           <Stack direction="vertical" gap={2}>
             <Text weight="semibold" className="text-sm text-primary">
-              14. Modal first-run — bước 01, cột rail tối bên trái và pane tạo công ty bên phải
+              14. Khảo sát onboarding — thanh tiến độ ở ba vị trí trong luồng
             </Text>
-            {/* The dialog frame is faked here on purpose: a real `purpose=required`
-                Dialog would cover this gallery page and there would be no way to
-                scroll past it. The two panes inside are the real components. */}
-            <div className="border-border overflow-hidden rounded-xl border shadow-lg">
-              <div className="flex min-h-0 flex-col md:h-[34rem] md:flex-row">
-                <WizardRail
-                  milestones={[
-                    { label: "Tạo công ty", detail: "tên và đường dẫn", state: "current" },
-                    { label: "Mời nhân viên", detail: "gửi link theo vai trò", state: "upcoming" },
-                  ]}
-                  join={{ onSubmit: () => {}, isPending: false, error: null }}
-                />
-                <div className="bg-card min-w-0 flex-1 overflow-y-auto p-6 sm:p-8">
-                  <WizardStepCreate onSubmit={() => {}} isPending={false} error={null} />
-                </div>
-              </div>
-            </div>
+            <Stack direction="vertical" gap={4}>
+              <ProgressRail current="seller" />
+              <ProgressRail current="count" />
+              <ProgressRail current="channels" />
+            </Stack>
           </Stack>
 
           <Stack direction="vertical" gap={2}>
             <Text weight="semibold" className="text-sm text-primary">
-              15. Modal first-run — bước 02, mốc đầu đã tick, pane mời nhân viên bên phải
+              15. Mời nhân viên — pane dùng lại ở màn mời
             </Text>
-            <div className="border-border overflow-hidden rounded-xl border shadow-lg">
-              <div className="flex min-h-0 flex-col md:h-[34rem] md:flex-row">
-                <WizardRail
-                  milestones={[
-                    { label: "Tạo công ty", detail: "Nhà Xe An Anh", state: "done" },
-                    { label: "Mời nhân viên", detail: "gửi link theo vai trò", state: "current" },
-                  ]}
-                  join={{ onSubmit: () => {}, isPending: false, error: null }}
-                />
-                <div className="bg-card min-w-0 flex-1 overflow-y-auto p-6 sm:p-8">
-                  <WizardStepInvite onDone={() => {}} />
-                </div>
-              </div>
+            <div className="bg-card border-border rounded-xl border p-6 shadow-lg">
+              <WizardStepInvite onDone={() => {}} />
             </div>
           </Stack>
         </Stack>
