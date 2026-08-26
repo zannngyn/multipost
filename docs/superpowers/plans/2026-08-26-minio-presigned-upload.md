@@ -194,6 +194,11 @@ describe("local blob store — phần mở rộng", () => {
     expect(head).toEqual(new Uint8Array([9, 8]));
   });
 
+  it("statStaging trả cùng kết quả với stat — local không có vùng staging riêng", async () => {
+    expect(await store.statStaging({ tenantId: TENANT, storageKey: `${TENANT}/a1` })).toMatchObject({ sizeBytes: 3 });
+    expect(await store.statStaging({ tenantId: TENANT, storageKey: `${TENANT}/nope` })).toBeNull();
+  });
+
   it("createDownloadUrl trả null — local không ký được", async () => {
     expect(await store.createDownloadUrl({ tenantId: TENANT, storageKey: `${TENANT}/a1`, expiresInSeconds: 300 })).toBeNull();
   });
@@ -250,8 +255,14 @@ export interface MediaBlobStore {
   delete(input: { tenantId: TenantId; storageKey: string }): Promise<boolean>;
   /** Ném khi implementer không ký được (local). */
   createUploadUrl(input: CreateUploadUrlInput): Promise<PresignedUpload>;
-  /** Null khi object không có. */
+  /** Null khi object không có. Nhắm vùng PHỤC VỤ. */
   stat(input: { tenantId: TenantId; storageKey: string }): Promise<BlobStat | null>;
+  /**
+   * Như `stat` nhưng nhắm vùng STAGING. Tồn tại riêng vì `confirm-upload` phải
+   * biết kích thước THẬT của object trước khi promote, mà lúc đó object chưa
+   * có mặt ở vùng phục vụ — `stat` sẽ luôn trả null.
+   */
+  statStaging(input: { tenantId: TenantId; storageKey: string }): Promise<BlobStat | null>;
   /** n byte đầu để sniff. Null khi object không có. */
   readRange(input: { tenantId: TenantId; storageKey: string; length: number }): Promise<Uint8Array | null>;
   /** Chuyển staging → vùng phục vụ. Copy phía server, byte không qua Node. */
@@ -280,6 +291,11 @@ Thêm vào object trả về của `makeLocalBlobStore`, sau `delete`. Import th
         if (isMissing(error)) return null;
         throw AppError.from(error, "INTERNAL", { reason: "BLOB_STAT_FAILED" });
       }
+    },
+
+    async statStaging(input): Promise<BlobStat | null> {
+      // Local ghi thẳng vào vùng phục vụ, không có staging riêng.
+      return this.stat(input);
     },
 
     async readRange(input): Promise<Uint8Array | null> {
@@ -341,7 +357,7 @@ Thêm vào object trả về của `makeLocalBlobStore`, sau `delete`. Import th
 - [ ] **Step 5: Chạy test**
 
 Run: `pnpm vitest run src/adapters/media/local-blob-store.extended.test.ts`
-Expected: PASS (4 test).
+Expected: PASS (5 test).
 
 - [ ] **Step 6: Chạy toàn bộ để chắc không gãy chỗ khác**
 
@@ -655,6 +671,11 @@ describe.skipIf(!endpoint)("MinioBlobStore — presign và promote", () => {
     expect((await fetch(signed.postUrl, { method: "POST", body: tooBig })).ok).toBe(false);
   });
 
+  it("statStaging thấy object ở staging, stat thì chưa", async () => {
+    expect(await store.statStaging({ tenantId: TENANT, storageKey: `${TENANT}/u1` })).toMatchObject({ sizeBytes: 4 });
+    expect(await store.stat({ tenantId: TENANT, storageKey: `${TENANT}/u1` })).toBeNull();
+  });
+
   it("readRange đọc 4 byte đầu của object staging", async () => {
     const head = await store.readRange({ tenantId: TENANT, storageKey: `${TENANT}/u1`, length: 4 });
     expect(head).toEqual(new Uint8Array([137, 80, 78, 71]));
@@ -731,6 +752,18 @@ Thay dòng `// Task 4 điền nốt: ...` bằng:
       if (!key) return null;
       try {
         const info = await internal.statObject(bucket, SERVE_PREFIX + key);
+        return { sizeBytes: info.size, mimeType: info.metaData?.["content-type"] ?? null };
+      } catch (error) {
+        if (isNotFound(error)) return null;
+        throw AppError.from(error, "INTERNAL", { reason: "BLOB_STAT_FAILED" });
+      }
+    },
+
+    async statStaging(input): Promise<BlobStat | null> {
+      const key = safeStorageKey(input?.tenantId, input?.storageKey);
+      if (!key) return null;
+      try {
+        const info = await internal.statObject(bucket, STAGING_PREFIX + key);
         return { sizeBytes: info.size, mimeType: info.metaData?.["content-type"] ?? null };
       } catch (error) {
         if (isNotFound(error)) return null;
@@ -820,7 +853,7 @@ Bỏ `as MediaBlobStore` ở cuối `return { ... }` — object giờ đã đủ
 - [ ] **Step 4: Chạy test tích hợp**
 
 Run: `TEST_MINIO_ENDPOINT=localhost:9000 pnpm vitest run src/adapters/media/minio-blob-store.integration.test.ts`
-Expected: PASS (10 test).
+Expected: PASS (11 test).
 
 - [ ] **Step 5: `pnpm verify`**
 
@@ -1231,6 +1264,23 @@ describe("issueUploadTickets — edge case trước", () => {
     expect((d as never as { tickets: { createMany: { mock: { calls: unknown[] } } } }).tickets.createMany.mock.calls).toHaveLength(0);
   });
 
+  it("sourceIndex trỏ đúng file gốc kể cả khi file trước đó bị từ chối", async () => {
+    const result = await makeIssueUploadTickets(deps())({
+      tenantId: TENANT, productCode: "MG0AD6112",
+      files: [{ fileName: "x.exe", mimeType: "application/x-msdownload", sizeBytes: 10 }, png],
+    });
+    expect(result.issued).toHaveLength(1);
+    expect(result.issued[0].sourceIndex).toBe(1);
+  });
+
+  it("hai file TRÙNG TÊN đều có vé riêng", async () => {
+    const result = await makeIssueUploadTickets(deps())({
+      tenantId: TENANT, productCode: "MG0AD6112", files: [png, { ...png }],
+    });
+    expect(result.issued.map((t) => t.sourceIndex)).toEqual([0, 1]);
+    expect(new Set(result.issued.map((t) => t.assetId)).size).toBe(2);
+  });
+
   it("happy path: ghi vé đúng số lượng và trả postUrl", async () => {
     const d = deps();
     const result = await makeIssueUploadTickets(d)({ tenantId: TENANT, productCode: "mg0ad6112", files: [png] });
@@ -1313,6 +1363,12 @@ export interface IssueUploadTicketsInput {
 export interface IssuedTicket {
   readonly assetId: string;
   readonly fileName: string;
+  /**
+   * Chỉ số vào mảng `files` client gửi lên. UI ghép ticket với File bằng SỐ này,
+   * không bằng tên: hai ảnh trùng tên trong một album là chuyện thường (chụp từ
+   * hai thư mục), và ghép theo tên thì một cái bị nuốt mất mà không ai báo.
+   */
+  readonly sourceIndex: number;
   readonly postUrl: string;
   readonly formFields: Readonly<Record<string, string>>;
   readonly expiresAt: Date;
@@ -1369,9 +1425,9 @@ export function makeIssueUploadTickets(deps: IssueUploadTicketsDeps) {
 
     // --- Cổng theo từng file (dựa trên LỜI KHAI) ----------------------------
     const rejected: UploadRejectionReport[] = [];
-    const usable: { fileName: string; mimeType: string; sizeBytes: number; kind: "image" | "video" }[] = [];
+    const usable: { fileName: string; mimeType: string; sizeBytes: number; kind: "image" | "video"; sourceIndex: number }[] = [];
 
-    for (const candidate of files) {
+    for (const [sourceIndex, candidate] of files.entries()) {
       const verdict = validateUpload({
         fileName: candidate?.fileName,
         mimeType: candidate?.mimeType,
@@ -1396,6 +1452,7 @@ export function makeIssueUploadTickets(deps: IssueUploadTicketsDeps) {
         mimeType: verdict.mimeType,
         sizeBytes: candidate.sizeBytes,
         kind: verdict.kind,
+        sourceIndex,
       });
     }
 
@@ -1425,6 +1482,7 @@ export function makeIssueUploadTickets(deps: IssueUploadTicketsDeps) {
       issued.push({
         assetId,
         fileName: item.fileName,
+        sourceIndex: item.sourceIndex,
         postUrl: signed.postUrl,
         formFields: signed.formFields,
         expiresAt: signed.expiresAt,
@@ -1519,6 +1577,7 @@ export async function POST(request: Request): Promise<Response> {
       issued: result.issued.map((item) => ({
         assetId: item.assetId,
         fileName: item.fileName,
+        sourceIndex: item.sourceIndex,
         postUrl: item.postUrl,
         formFields: item.formFields,
         expiresAt: item.expiresAt.toISOString(),
@@ -1605,7 +1664,7 @@ function deps(over: Record<string, unknown> = {}) {
       deleteMany: vi.fn(async () => 1),
     },
     blobs: {
-      stat: vi.fn(async () => ({ sizeBytes: 8, mimeType: "image/png" })),
+      statStaging: vi.fn(async () => ({ sizeBytes: 8, mimeType: "image/png" })),
       readRange: vi.fn(async () => PNG),
       promote: vi.fn(async ({ assetId }: { assetId: string }) => ({ storageKey: `${TENANT}/${assetId}`, sizeBytes: 8 })),
       delete: vi.fn(async () => true),
@@ -1641,7 +1700,7 @@ describe("confirmUpload — edge case trước", () => {
   });
 
   it("object không có trên storage thì từ chối", async () => {
-    const d = deps({ blobs: { ...(deps() as never as { blobs: object }).blobs, stat: vi.fn(async () => null) } });
+    const d = deps({ blobs: { ...(deps() as never as { blobs: object }).blobs, statStaging: vi.fn(async () => null) } });
     await expect(makeConfirmUpload(d)({ tenantId: TENANT, productCode: "MG0AD6112", assets: [{ assetId: "a1" }] }))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
@@ -1655,6 +1714,13 @@ describe("confirmUpload — edge case trước", () => {
     const blobs = (d as never as { blobs: { promote: { mock: { calls: unknown[] } }; delete: { mock: { calls: unknown[] } } } }).blobs;
     expect(blobs.promote.mock.calls).toHaveLength(0);
     expect(blobs.delete.mock.calls).toHaveLength(1);
+  });
+
+  it("object rỗng hoặc quá 25MB thì từ chối", async () => {
+    const base = deps() as never as { blobs: Record<string, unknown> };
+    const d = deps({ blobs: { ...base.blobs, statStaging: vi.fn(async () => ({ sizeBytes: 0, mimeType: "image/png" })) } });
+    await expect(makeConfirmUpload(d)({ tenantId: TENANT, productCode: "MG0AD6112", assets: [{ assetId: "a1" }] }))
+      .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 
   it("happy path: promote rồi register, sequence theo order", async () => {
@@ -1800,8 +1866,8 @@ export function makeConfirmUpload(deps: ConfirmUploadDeps) {
         continue;
       }
 
-      const info = await deps.blobs.stat({ tenantId, storageKey: ticket.storageKey });
-      const staged = info ?? (await statStaging(deps, tenantId, ticket.storageKey));
+      // Vùng STAGING: object chưa được promote, `stat` sẽ luôn trả null ở đây.
+      const staged = await deps.blobs.statStaging({ tenantId, storageKey: ticket.storageKey });
       if (!staged) {
         log.warn("Confirm refused a file whose object never arrived", { error_code: "INVALID_INPUT", reason: "UPLOAD_OBJECT_MISSING", asset_id: item.assetId, file_name: ticket.fileName });
         rejected.push({ fileName: ticket.fileName, reason: "UNSUPPORTED_TYPE", userMessage: `File "${ticket.fileName}" chưa lên tới nơi — hãy thử lại.` });
@@ -1928,18 +1994,6 @@ function applyOrder(
   return order.map((index) => assets[index]);
 }
 
-/** `stat` nhắm vùng phục vụ; trước promote thì object còn ở staging. */
-async function statStaging(
-  deps: ConfirmUploadDeps,
-  tenantId: TenantId,
-  storageKey: string,
-): Promise<{ sizeBytes: number } | null> {
-  const head = await deps.blobs.readRange({ tenantId, storageKey, length: 1 });
-  if (!head || head.length === 0) return null;
-  // Kích thước thật lấy khi promote; ở đây chỉ cần biết object CÓ mặt và không rỗng.
-  return { sizeBytes: 1 };
-}
-
 /**
  * Dọn object của những file vừa bị từ chối. Lỗi ở đây được log rồi bỏ qua:
  * operator đang chờ kết quả, và sweep giờ sẽ nhặt nốt phần sót.
@@ -2021,7 +2075,7 @@ async function discardPreviousUploads(
 - [ ] **Step 4: Chạy test**
 
 Run: `pnpm vitest run src/core/usecases/confirm-upload.test.ts`
-Expected: PASS (8 test).
+Expected: PASS (9 test).
 
 - [ ] **Step 5: Viết route**
 
@@ -2495,6 +2549,7 @@ import type { UploadCandidate } from "@/ui/hooks/direct-upload-queue";
 export interface IssuedTicketDto {
   readonly assetId: string;
   readonly fileName: string;
+  readonly sourceIndex: number;
   readonly postUrl: string;
   readonly formFields: Record<string, string>;
   readonly expiresAt: string;
@@ -2584,9 +2639,10 @@ export function useDirectUpload() {
           controller.signal,
         );
 
-        const byName = new Map(files.map((file) => [file.name, file]));
+        // Ghép theo sourceIndex, KHÔNG theo tên: hai ảnh trùng tên trong một
+        // album là chuyện thường, và ghép theo tên thì một cái bị nuốt mất.
         const jobs = tickets.issued
-          .map((ticket) => ({ ticket, file: byName.get(ticket.fileName) }))
+          .map((ticket) => ({ ticket, file: files[ticket.sourceIndex] }))
           .filter((job): job is { ticket: (typeof tickets.issued)[number]; file: File } => job.file !== undefined);
 
         let done = 0;
