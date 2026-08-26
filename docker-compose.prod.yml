@@ -11,11 +11,13 @@
 # database, separate Redis, separate uploads, separate MinIO. Set it in the
 # stack's .env.
 #
-# MinIO (E9): each stack's `minio` container is namespaced the same way, but
-# MINIO_PUBLIC_ENDPOINT and MINIO_BUCKET are NOT — set them to a value unique
-# to the stack (its own tunnel hostname, its own bucket name). Two stacks
-# sharing one public endpoint would sign a staging upload with production's
-# hostname, or the reverse.
+# MinIO (E9): each stack's `minio` container is namespaced the same way (its
+# own volume, its own data — a shared MINIO_BUCKET name in both example env
+# files is harmless, since it names a bucket inside TWO SEPARATE instances,
+# not one shared instance). What must NOT be shared is MINIO_PUBLIC_ENDPOINT —
+# set it to THIS stack's own tunnel hostname. Two stacks signing with the same
+# public endpoint would point a staging upload's URL at production's domain,
+# or the reverse.
 #
 # HTTPS is NOT in here. The VPS already runs Caddy under systemd (it serves
 # other sites), and two processes cannot share :443. So each stack publishes its

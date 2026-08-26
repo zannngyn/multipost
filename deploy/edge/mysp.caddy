@@ -12,6 +12,10 @@
 #
 # Ports must match WEB_PORT in the matching .env:
 #   3100 -> /srv/mysp/prod   3110 -> /srv/mysp/stg
+# Same for MinIO's MINIO_API_PORT (E9 — the loopback host port docker-compose.yml
+# publishes `minio` on, never 0.0.0.0: the bucket is private, but the console and
+# API still must not sit on the public interface):
+#   9100 -> /srv/mysp/prod   9110 -> /srv/mysp/stg
 #
 # After editing:  caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
 
@@ -71,4 +75,45 @@ mysp-stg.vannt.asia {
 	# search results.
 	header X-Robots-Tag "noindex, nofollow"
 	import mysp_app 127.0.0.1:3110
+}
+
+(minio_media) {
+	# NOT `mysp_app`: MinIO has no /api/health, so reusing that snippet's
+	# health_uri would mark the upstream permanently unhealthy and refuse
+	# every request. `/minio/health/live` is MinIO's own unauthenticated
+	# liveness endpoint.
+	log {
+		format filter {
+			wrap json
+			fields {
+				# Presigned URLs are AWS SigV4 — possession of X-Amz-Signature is
+				# possession of the file, exactly like `sig=` on the app's own
+				# signed media URLs above. Same redaction discipline.
+				request>uri regexp "([?&]X-Amz-Signature=)[^&]*" "${1}<redacted>"
+				request>headers>Referer regexp "([?&]X-Amz-Signature=)[^&]*" "${1}<redacted>"
+			}
+		}
+	}
+
+	# Generous enough for a large video upload/download to finish inside one
+	# request; short enough that a wedged upstream is not held open forever.
+	reverse_proxy {args[0]} {
+		health_uri /minio/health/live
+		health_interval 30s
+		health_timeout 5s
+
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+}
+
+media.vannt.asia {
+	import minio_media 127.0.0.1:9100
+}
+
+media-stg.vannt.asia {
+	header X-Robots-Tag "noindex, nofollow"
+	import minio_media 127.0.0.1:9110
 }

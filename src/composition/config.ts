@@ -349,9 +349,20 @@ export const MinioConfigSchema = z.object({
   MINIO_ACCESS_KEY: z.string().trim().min(1),
   MINIO_SECRET_KEY: z.string().trim().min(1),
   MINIO_BUCKET: z.string().trim().min(1).default("mysp-media"),
+  /**
+   * Describes ONLY the internal hop (MINIO_INTERNAL_ENDPOINT), never the
+   * public one — `MINIO_PUBLIC_ENDPOINT` carries its own scheme, and TLS for
+   * that client comes from parsing that URL (adapters/media/minio-blob-store.ts).
+   * Defaults to false because compose starts MinIO with `command: server
+   * /data` and no certificate: the internal hop lives entirely inside the
+   * Docker network, and `true` here throws EPROTO on every server-side call
+   * (stat/copy/delete) the moment the adapter dials plain HTTP with TLS
+   * turned on. Set it to true only if something inside the network actually
+   * terminates TLS in front of MinIO.
+   */
   MINIO_USE_SSL: z
     .union([z.boolean(), z.string()])
-    .default(true)
+    .default(false)
     .transform((value) => (typeof value === "boolean" ? value : value.trim().toLowerCase() !== "false")),
   /**
    * Passed to both the internal and public MinIO clients so the SDK never

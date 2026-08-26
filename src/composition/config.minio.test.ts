@@ -12,7 +12,7 @@ describe("loadMinioConfig", () => {
   it("defaults bucket and useSSL", () => {
     const cfg = loadMinioConfig(base);
     expect(cfg.MINIO_BUCKET).toBe("mysp-media");
-    expect(cfg.MINIO_USE_SSL).toBe(true);
+    expect(cfg.MINIO_USE_SSL).toBe(false);
   });
 
   it("rejects when the secret is missing", () => {

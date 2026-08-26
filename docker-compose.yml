@@ -39,7 +39,7 @@ services:
   # / MINIO_PUBLIC_ENDPOINT, see .env.example): this service is reached over the
   # INTERNAL one, `minio:9000`, from every container on this compose network.
   minio:
-    image: minio/minio
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -47,6 +47,14 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
     volumes:
       - miniodata:/data
+    ports:
+      # LOOPBACK ONLY, never 0.0.0.0 — same discipline as WEB_BIND above. The
+      # bucket itself is private, but the API (and the admin console on 9001)
+      # still must not sit on the public interface. This is what the VPS's own
+      # Caddy (deploy/edge/mysp.caddy) proxies media.vannt.asia to; a bare
+      # `docker compose up` with no MINIO_API_PORT set just uses 9000 for
+      # local dev, where nothing else needs to reach it from outside the host.
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -58,7 +66,7 @@ services:
   # after this runs. Do not drop that line: without it the bucket defaults to
   # readable by anyone who guesses (or is handed) an object key.
   minio-init:
-    image: minio/mc
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
     restart: "no"
     depends_on:
       minio:
@@ -150,7 +158,10 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
       MINIO_BUCKET: ${MINIO_BUCKET:-mysp-media}
-      MINIO_USE_SSL: ${MINIO_USE_SSL:-true}
+      # false: MinIO runs plain HTTP inside this Docker network (no cert on
+      # the container) — true here throws EPROTO on every server-side call.
+      # Only describes THIS internal hop, never the public one above.
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       # --- Credentials -------------------------------------------------------
       # Passed through explicitly rather than via env_file: each service should
@@ -225,6 +236,17 @@ services:
       AUTH_URL: http://localhost:${DEMO_WEB_PORT:-3001}
       DEV_FAKE_SESSION: "1"
       SESSION_SECRET: ${SESSION_SECRET:-}
+      # `blobs` is built EAGERLY the first time any request touches
+      # getContainer() (composition/container.ts) — including `next dev`'s
+      # first request to almost any API route — so this profile needs the
+      # same MinIO env as `web`, not just its own upload/catalog volumes.
+      MINIO_INTERNAL_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:?MINIO_PUBLIC_ENDPOINT is required}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      MINIO_BUCKET: ${MINIO_BUCKET:-mysp-media}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
     volumes:
       - ./:/app
       - webdemo_node_modules:/app/node_modules
@@ -237,6 +259,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
 
@@ -278,7 +304,10 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
       MINIO_BUCKET: ${MINIO_BUCKET:-mysp-media}
-      MINIO_USE_SSL: ${MINIO_USE_SSL:-true}
+      # false: MinIO runs plain HTTP inside this Docker network (no cert on
+      # the container) — true here throws EPROTO on every server-side call.
+      # Only describes THIS internal hop, never the public one above.
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       # --- Credentials -------------------------------------------------------
       # Passed through explicitly rather than via env_file: each service should
