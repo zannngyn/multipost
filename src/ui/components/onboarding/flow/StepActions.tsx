@@ -57,7 +57,18 @@ export function StepActions({
   const isLocked = isSaving || isBlocked;
 
   return (
-    <div className={cn("flex w-full flex-col items-center gap-2", className)}>
+    /*
+      20px between the two, not 8px. Measured by scanning `03-count-selected.jpg`
+      pixel by pixel: the foot of the green button sits at image row 589 and the
+      first ink of "Skip" at 618 — 29 image px, and the shot is a 0.9126 print of
+      the real frame, so 31.8 CSS px (spec section 0b: a DISTANCE off the image
+      is divided by the scale, only vertical POSITIONS are compared as ratios).
+      "Bỏ qua" sits in a 32px ghost button whose 14px line leaves ~7px of air
+      above the ink, so 20px of gap lands the ink 30.6px below the button —
+      within a pixel and a half of Buffer. 8px put it at 18.6 and the two
+      controls read as one block.
+    */
+    <div className={cn("flex w-full flex-col items-center gap-5", className)}>
       <Button
         type="button"
         variant={isBlocked ? "secondary" : "default"}

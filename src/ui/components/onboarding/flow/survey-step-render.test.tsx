@@ -1,8 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { SELLER_KINDS, TOOL_KINDS } from "@/ui/schemas/onboarding-profile.schema";
+import {
+  CHANNEL_COUNTS,
+  FOCUS_CHANNELS,
+  SELLER_KINDS,
+  TOOL_KINDS,
+} from "@/ui/schemas/onboarding-profile.schema";
 
+import { StepChannels } from "./StepChannels";
+import { StepCount } from "./StepCount";
 import { StepSeller } from "./StepSeller";
 import { StepTools } from "./StepTools";
 
@@ -167,5 +174,144 @@ describe("StepTools — bước 2, nhiều lựa chọn", () => {
     expect(blank).toContain("Chọn một mục để tiếp tục");
     expect(answered).not.toContain('disabled=""');
     expect(answered).toContain("Tiếp tục");
+  });
+});
+
+describe("StepCount — bước 3, một lựa chọn, thẻ chữ trơn", () => {
+  it("offers exactly the codes the API accepts, in schema order", () => {
+    const html = renderToStaticMarkup(
+      <StepCount value={null} onChange={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(inputValues(html)).toEqual([...CHANNEL_COUNTS]);
+  });
+
+  it("renders the Vietnamese question of spec section 6", () => {
+    const html = renderToStaticMarkup(
+      <StepCount value={null} onChange={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(html).toContain("Bạn đang quản lý bao nhiêu trang?");
+    expect(html).toContain("<h1");
+  });
+
+  it("is dạng C: no emoji well, so the card stands 47px and not 58px", () => {
+    // Spec section 5.3. The well is what makes dạng A taller; step 3 has none,
+    // and a step that grew one would be 11px off the reference shot on every
+    // row of the grid.
+    const html = renderToStaticMarkup(
+      <StepCount value="4-6" onChange={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(html).toContain("min-h-[2.9375rem]");
+    expect(html).not.toContain("min-h-[3.625rem]");
+  });
+
+  it("is one answer at a time", () => {
+    const html = renderToStaticMarkup(
+      <StepCount value="21-50" onChange={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(html).toContain('role="radiogroup"');
+    expect(html.match(/type="radio"/g)).toHaveLength(CHANNEL_COUNTS.length);
+    expect(html).not.toContain('type="checkbox"');
+    expect(html.match(/checked=""/g)).toHaveLength(1);
+  });
+
+  it("keeps the way forward shut until an answer exists", () => {
+    const blank = renderToStaticMarkup(
+      <StepCount value={null} onChange={noop} onContinue={noop} onSkip={noop} />,
+    );
+    const answered = renderToStaticMarkup(
+      <StepCount value="50+" onChange={noop} onContinue={noop} onSkip={noop} />,
+    );
+
+    expect(blank).toContain('disabled=""');
+    expect(blank).toContain("Chọn một mục để tiếp tục");
+    expect(blank).toContain("Bỏ qua");
+    expect(answered).not.toContain('disabled=""');
+    expect(answered).toContain("Tiếp tục");
+  });
+});
+
+describe("StepChannels — bước 4, nhiều lựa chọn", () => {
+  it("offers exactly the codes the API accepts, in schema order", () => {
+    const html = renderToStaticMarkup(
+      <StepChannels values={[]} onToggle={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(inputValues(html)).toEqual([...FOCUS_CHANNELS]);
+  });
+
+  it("renders every channel of spec section 6 by name", () => {
+    const html = renderToStaticMarkup(
+      <StepChannels values={[]} onToggle={noop} onContinue={noop} onSkip={noop} />,
+    );
+    for (const label of [
+      "Facebook",
+      "TikTok",
+      "Instagram",
+      "YouTube",
+      "Threads",
+      "Zalo OA",
+      "Shopee",
+      "Lazada",
+    ]) {
+      expect(html).toContain(label);
+    }
+    expect(html).toContain("Kênh nào bạn đang tập trung?");
+  });
+
+  it("marks every channel but Facebook 'Sắp có', in WORDS", () => {
+    // Spec section 6: phase 1 publishes to Facebook only. A tile that is merely
+    // faded but still pressable is a control that lies about itself, so the
+    // promise is carried by text — one label per unbuilt channel, none on the
+    // channel that works.
+    const html = renderToStaticMarkup(
+      <StepChannels values={[]} onToggle={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(html.match(/Sắp có/g)).toHaveLength(FOCUS_CHANNELS.length - 1);
+
+    const facebookAt = html.indexOf(">Facebook<");
+    const tiktokAt = html.indexOf(">TikTok<");
+    const firstComingSoonAt = html.indexOf("Sắp có");
+    expect(facebookAt).toBeGreaterThan(-1);
+    // The first "Sắp có" belongs to the tile AFTER Facebook's, never inside it.
+    expect(firstComingSoonAt).toBeGreaterThan(facebookAt);
+    expect(firstComingSoonAt).toBeGreaterThan(tiktokAt);
+  });
+
+  it("still lets an unbuilt channel be chosen — the answer is a vote", () => {
+    const html = renderToStaticMarkup(
+      <StepChannels values={["tiktok", "shopee"]} onToggle={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(html.match(/type="checkbox"/g)).toHaveLength(FOCUS_CHANNELS.length);
+    expect(html).not.toContain('type="radio"');
+    expect(html).not.toContain('role="radiogroup"');
+    expect(html.match(/checked=""/g)).toHaveLength(2);
+    // Nothing on this screen is `disabled` once an answer exists — least of all
+    // a tile the operator is being asked to vote with.
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it("keeps the way forward shut until at least one channel is chosen", () => {
+    const blank = renderToStaticMarkup(
+      <StepChannels values={[]} onToggle={noop} onContinue={noop} onSkip={noop} />,
+    );
+    const answered = renderToStaticMarkup(
+      <StepChannels values={["facebook"]} onToggle={noop} onContinue={noop} onSkip={noop} />,
+    );
+
+    expect(blank).toContain('disabled=""');
+    expect(blank).toContain("Chọn một mục để tiếp tục");
+    expect(blank).toContain("Bỏ qua");
+    expect(answered).not.toContain('disabled=""');
+    expect(answered).toContain("Tiếp tục");
+  });
+
+  it("wraps inside the measured 1110px container instead of a fixed grid", () => {
+    // Spec section 5.4: flex-wrap, 12px gutters, centred — that is what puts a
+    // short last row under the middle of the one above it.
+    const html = renderToStaticMarkup(
+      <StepChannels values={[]} onToggle={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(html).toContain("max-w-[69.375rem]");
+    expect(html).toContain("flex-wrap");
+    expect(html).toContain("justify-center");
   });
 });

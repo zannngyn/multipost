@@ -8,10 +8,17 @@ import { useCallback, useEffect, useState } from "react";
 import { AppLink } from "@/ui/components/shell/AppLink";
 import { useActiveTenant, useMe } from "@/ui/hooks/useMe";
 import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
-import type { SellerKind, ToolKind } from "@/ui/schemas/onboarding-profile.schema";
+import type {
+  ChannelCount,
+  FocusChannel,
+  SellerKind,
+  ToolKind,
+} from "@/ui/schemas/onboarding-profile.schema";
 import { myspTheme } from "@/ui/theme/mysp";
 
 import { OnboardingFrame } from "./OnboardingFrame";
+import { StepChannels } from "./StepChannels";
+import { StepCount } from "./StepCount";
 import { StepSeller } from "./StepSeller";
 import { StepTools } from "./StepTools";
 import { WelcomeScreen } from "./WelcomeScreen";
@@ -29,9 +36,9 @@ import { usePassedSlides } from "./usePassedSlides";
  * It holds no idea of "which step am I on". The URL carries an intent, the
  * answers carry the truth, `resolveScreen` reconciles them.
  *
- * TASKS 6-9 FILL THE FOUR QUESTION SCREENS IN. What is here is the frame, the
- * greeting, and the state machine wired up — the four survey screens are still
- * placeholders on purpose.
+ * ALL FIVE SCREENS ARE REAL AS OF TASK 8. What is still missing is task 9:
+ * every answer lives in this component's state and nothing is written to
+ * `tenant_profile` yet, so a reload starts the survey over.
  */
 export function OnboardingFlow({
   // The welcome screen is the only one that shows it, and `src/ui` may not
@@ -54,6 +61,8 @@ export function OnboardingFlow({
    */
   const [sellerKind, setSellerKind] = useState<SellerKind | null>(null);
   const [currentTools, setCurrentTools] = useState<readonly ToolKind[]>([]);
+  const [channelCount, setChannelCount] = useState<ChannelCount | null>(null);
+  const [focusChannels, setFocusChannels] = useState<readonly FocusChannel[]>([]);
 
   // --- Edge case: this flow is not for every role --------------------------
   // The survey describes the tenant, so only an owner or an admin answers it.
@@ -121,6 +130,8 @@ export function OnboardingFlow({
   const skip = useCallback(() => {
     if (current === "seller") setSellerKind(null);
     if (current === "tools") setCurrentTools([]);
+    if (current === "count") setChannelCount(null);
+    if (current === "channels") setFocusChannels([]);
     advance();
   }, [advance, current]);
 
@@ -129,6 +140,14 @@ export function OnboardingFlow({
       if (!isChecked) return previous.filter((tool) => tool !== value);
       // Guard against a double-add: `onToggle` fires per change, but a repeated
       // "checked" would otherwise send the same code twice in the PATCH body.
+      return previous.includes(value) ? previous : [...previous, value];
+    });
+  }, []);
+
+  /** Same shape as `toggleTool`, and same reason for the duplicate guard. */
+  const toggleChannel = useCallback((value: FocusChannel, isChecked: boolean) => {
+    setFocusChannels((previous) => {
+      if (!isChecked) return previous.filter((channel) => channel !== value);
       return previous.includes(value) ? previous : [...previous, value];
     });
   }, []);
@@ -175,9 +194,24 @@ export function OnboardingFlow({
             onSkip={skip}
           />
         );
-      default:
-        // PENDING(task-8): steps 3 and 4 are still stand-ins.
-        return <PlaceholderScreen heading={HEADINGS[current]} onContinue={advance} />;
+      case "count":
+        return (
+          <StepCount
+            value={channelCount}
+            onChange={setChannelCount}
+            onContinue={advance}
+            onSkip={skip}
+          />
+        );
+      case "channels":
+        return (
+          <StepChannels
+            values={focusChannels}
+            onToggle={toggleChannel}
+            onContinue={advance}
+            onSkip={skip}
+          />
+        );
     }
   }
 
@@ -232,36 +266,9 @@ export function OnboardingFlow({
   );
 }
 
-/** Stand-in for a question screen. Tasks 6-8 replace it wholesale. */
-function PlaceholderScreen({ heading, onContinue }: { heading: string; onContinue: () => void }) {
-  return (
-    <div className="flex flex-col items-center gap-8">
-      <h1
-        tabIndex={-1}
-        className="text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
-      >
-        {heading}
-      </h1>
-      <p className="text-muted-foreground text-sm">Các lựa chọn của bước này được lắp ở task sau.</p>
-      <button
-        type="button"
-        onClick={onContinue}
-        className="bg-primary text-primary-foreground focus-visible:ring-ring inline-flex h-12 items-center rounded-md px-6 text-sm font-medium outline-none focus-visible:ring-2"
-      >
-        Tiếp tục
-      </button>
-    </div>
-  );
-}
-
-/**
- * Placeholder headings only. The real wording of each question lands in the
- * step components that tasks 6-8 add, next to the options it belongs with.
+/*
+ * The stand-in screen and its table of headings lived here until task 8. Both
+ * are gone on purpose: every question now owns its own wording, next to the
+ * options that wording belongs with, and a second copy of a question is a
+ * second thing to reword.
  */
-const HEADINGS: Record<OnboardingScreen, string> = {
-  welcome: "Chào mừng tới MYSP",
-  seller: "Bạn đang bán hàng kiểu nào?",
-  tools: "Bạn đang đăng bài bằng gì?",
-  count: "Bạn đang quản lý bao nhiêu trang?",
-  channels: "Kênh nào bạn đang tập trung?",
-};

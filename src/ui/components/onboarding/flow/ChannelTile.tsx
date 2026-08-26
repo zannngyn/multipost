@@ -106,22 +106,34 @@ export function ChannelTileGroup({
               />
 
               {/*
-                A neutral 40px well carrying the channel's own colour, which is
-                the pattern `GridBackdrop` already set in this flow and the one
-                the header of `channel-marks` allows: those literals name
-                somebody else's identity, they are not surfaces of ours.
+                THE 40px WELL IS FILLED WITH THE CHANNEL'S OWN COLOUR, white
+                glyph on top — an app icon, which is what `04-channels.jpg`
+                draws and what the PM opened the token rule for on 26/08/2026
+                (spec section 5.4; scope of the exception in the header of
+                `channel-marks`). An earlier draft kept the well neutral and
+                tinted the glyph; eight neutral wells read as one grey block and
+                lose the half-second recognition the colour is here to buy.
 
-                THE WELL STAYS PALE IN THE DARK THEME. On `--secondary` it does
-                not: TikTok's mark is #010101 and Threads' is #101010, and both
-                disappeared into dyed-dark cloth when this was first drawn.
-                Brand marks are designed against a light ground, so the well
-                keeps one — `--foreground` is the near-white of the dark theme,
-                which is also what an app icon looks like at 40px.
+                THE INK IS FIXED, NOT THEMED. The ground under it is a brand
+                colour that does not change between light and dark, so a token
+                that flips with the scheme would put dark ink on Lazada's navy
+                the moment the operator switches. White clears 3:1 on all eight
+                (Shopee's #EE4D2D is the tightest at 3.66:1).
+
+                THE RING IS THERE FOR THE DARK THEME ONLY. Measured in the
+                running app, TikTok #010101, Threads #101010 and Lazada #0F146D
+                read 1.43:1, 1.30:1 and 1.07:1 against the dark card — the well
+                simply disappears. A 1px inset `--foreground` at 50% composites
+                to 3.2:1 against the card and 4.6:1 against TikTok's black, so
+                the well keeps an edge on both of its sides; 40% cleared the
+                well but only reached 2.3:1 against the card. In the light theme
+                the card is near-white and every brand colour already clears 3:1
+                against it, so no ring is drawn.
               */}
               <span
                 aria-hidden="true"
-                className="bg-secondary dark:bg-foreground flex size-10 shrink-0 items-center justify-center rounded-sm"
-                style={{ color: CHANNEL_BRAND_COLOR[choice.value] }}
+                className="flex size-10 shrink-0 items-center justify-center rounded-sm text-white dark:ring-1 dark:ring-foreground/50 dark:ring-inset"
+                style={{ backgroundColor: CHANNEL_BRAND_COLOR[choice.value] }}
               >
                 <Mark className="size-6" />
               </span>
@@ -130,9 +142,16 @@ export function ChannelTileGroup({
                 <span className="text-foreground text-base leading-[1.3125rem]">
                   {CHANNEL_MARK_LABELS[choice.value]}
                 </span>
-                {choice.isComingSoon === true ? (
-                  <span className="text-muted-foreground text-xs leading-none">Sắp có</span>
-                ) : null}
+                {/*
+                  THE SECOND LINE IS ALWAYS RESERVED, even on the one channel
+                  that has nothing to say there. Without the 12px it holds, the
+                  working channel's tile centres on a shorter stack and its logo
+                  and name sit ~8px lower than the five beside it — measured in
+                  the browser, and plain to see in a row of six.
+                */}
+                <span className="text-muted-foreground min-h-3 text-xs leading-none">
+                  {choice.isComingSoon === true ? "Sắp có" : null}
+                </span>
               </span>
 
               {/* Top-right, always drawn. Same 16px box, clamped 4px corner and

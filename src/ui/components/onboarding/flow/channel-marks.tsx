@@ -13,8 +13,25 @@
  * a token — `CLAUDE.md` and spec section 10 are explicit about that — but a
  * channel's own colour is a fact about somebody else's identity, not a decision
  * this design system gets to make, so no `--color-*` would be correct. They are
- * literals for the same reason a logo file is a literal. NOTHING may read
- * `CHANNEL_BRAND_COLOR` for a UI surface, a border or a piece of text.
+ * literals for the same reason a logo file is a literal.
+ *
+ * WHERE THAT COLOUR MAY BE PAINTED (PM, 26/08/2026 — this REPLACES the earlier
+ * blanket ban this header carried):
+ *
+ *   ALLOWED — the 40px logo well of `ChannelTile` (filled with the brand
+ *   colour, white glyph on top, as `04-channels.jpg` draws it) and the
+ *   decorative marks of the welcome backdrop. On the channel step the colour is
+ *   IDENTIFYING CONTENT, not interface paint: Facebook's blue and TikTok's
+ *   black are how an operator picks a channel out of a grid in a fraction of a
+ *   second, and eight neutral wells read as one grey block.
+ *
+ *   FORBIDDEN — everything else. Card surfaces, borders, text, buttons, status
+ *   and focus rings stay on tokens. `CHANNEL_BRAND_COLOR` is not a palette.
+ *
+ * A well filled with a brand colour needs a visible EDGE in the dark theme:
+ * TikTok is #010101 and Threads #101010, and both vanished into dyed-dark cloth
+ * the first time this was drawn. `ChannelTile` rings it — read the note there
+ * before changing either side.
  *
  * Every mark takes the same props and paints with `currentColor`, so the caller
  * decides how loud it is. All of them are decoration or are labelled by their
@@ -191,8 +208,13 @@ export const CHANNEL_MARK_LABELS: Record<ChannelMarkId, string> = {
 };
 
 /**
- * Somebody else's colour, not a theme role. Read the header before using it.
- * Never as a background for text, never as a border, never as a status colour.
+ * Somebody else's colour, not a theme role. Read the header before using it:
+ * the logo well and the welcome backdrop may paint with it, nothing else may.
+ * Never behind body text, never as a border, never as a status colour.
+ *
+ * Each of the eight is dark enough to carry a white glyph at 3:1 or better —
+ * the lightest, Shopee's #EE4D2D, measures 3.66:1 against white — which is why
+ * `ChannelTile` can draw one ink on all eight instead of choosing per brand.
  */
 export const CHANNEL_BRAND_COLOR: Record<ChannelMarkId, string> = {
   facebook: "#1877F2",
