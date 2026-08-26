@@ -27,14 +27,10 @@ import {
 import type { CaptionTarget } from "@/ui/components/compose/caption-targets";
 import { applyAlbumOrder, shouldClearCaptions } from "@/ui/components/compose/compose-draft";
 import type { QueuedFile } from "@/ui/components/compose/upload-queue";
+import { useDirectUpload } from "@/ui/hooks/useDirectUpload";
 import type { ComposeDraftPayload } from "@/ui/schemas/post-draft.schema";
 import { ApiError } from "@/ui/services/api-error";
-import {
-  composePost,
-  generateCaptions,
-  uploadMedia,
-  type GenerateCaptionsResult,
-} from "@/ui/services/post.api";
+import { composePost, generateCaptions, type GenerateCaptionsResult } from "@/ui/services/post.api";
 
 /**
  * Logic layer of the compose screen (docs/07 §4.1).
@@ -191,26 +187,32 @@ export function useComposeWizard() {
   const [uploadQueue, setUploadQueue] = useState<QueuedFile[]>([]);
   const [uploadedCount, setUploadedCount] = useState(0);
   const [uploadRejections, setUploadRejections] = useState<UploadRejection[]>([]);
+  /** Non-blocking notes from `confirmUpload` (e.g. a corrected album order). */
+  const [uploadWarnings, setUploadWarnings] = useState<string[]>([]);
 
+  const direct = useDirectUpload();
   const upload = useMutation<UploadResponse, ApiError, void>({
     mutationFn: () => {
       const values = form.getValues();
-      return uploadMedia({
-        productCode: values.productCode,
-        files: uploadQueue.map((item) => item.file),
-        // The queue order IS the album order; index 0 is the cover.
-        order: uploadQueue.map((_item, index) => index),
-      });
+      // The queue order IS the album order (index 0 is the cover); tickets
+      // come back tagged with `sourceIndex` into this same array, so sending
+      // it straight through keeps that order without needing a separate
+      // `order` field on confirm.
+      return direct.upload(values.productCode, uploadQueue.map((item) => item.file));
     },
     retry: false,
     onSuccess: (result) => {
       setUploadedCount(result.accepted.length);
       setUploadRejections(result.rejected);
+      setUploadWarnings([...result.warnings]);
       // Accepted files are stored server-side now; keeping them queued would
       // let a second click upload the same album twice.
       setUploadQueue([]);
     },
-    onError: () => setUploadRejections([]),
+    onError: () => {
+      setUploadRejections([]);
+      setUploadWarnings([]);
+    },
   });
 
   const compose = useMutation<ComposeResponse, ApiError, void>({
@@ -484,13 +486,17 @@ export function useComposeWizard() {
     setUploadQueue([]);
     setUploadedCount(0);
     setUploadRejections([]);
+    setUploadWarnings([]);
+    // A stray in-flight direct upload must not keep POSTing to MinIO or hand
+    // back a result once the screen it belonged to no longer exists.
+    direct.cancel();
     // "Xoá nháp" means an empty screen. Typed product text left behind would
     // reattach itself the moment the same code is typed again.
     clearManualProduct();
     compose.reset();
     captions.reset();
     upload.reset();
-  }, [captions, clearManualProduct, compose, form, upload]);
+  }, [captions, clearManualProduct, compose, direct, form, upload]);
 
   /**
    * Deep link from the product list: `/compose?code=MGKVX6310&color=TRẮNG`
@@ -573,6 +579,12 @@ export function useComposeWizard() {
     setUploadQueue,
     uploadedCount,
     uploadRejections,
+    /** Non-blocking notes from the confirm step (e.g. a corrected album order). */
+    uploadWarnings,
+    /** 0..100, real progress of the direct-to-storage POSTs (stage 2 only). */
+    uploadProgress: direct.progress,
+    /** Cuts the in-flight upload's network calls, not just the UI state. */
+    cancelUpload: direct.cancel,
     /** True once every channel has a non-empty caption (the publish gate). */
     hasEveryCaption: COMPOSE_CHANNELS.every(
       (channel) => (captionValues?.[channel.id] ?? "").trim().length > 0,
