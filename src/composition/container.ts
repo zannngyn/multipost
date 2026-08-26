@@ -30,7 +30,7 @@ import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
-import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
+import { makeMinioBlobStore } from "@/adapters/media/minio-blob-store";
 import { makeCsvCatalogTextSource } from "@/adapters/catalog/csv-text-source";
 import { makeSheetCatalogTextSource } from "@/adapters/catalog/sheet-text-source";
 import { makeLocalCatalogFileStore } from "@/adapters/catalog/local-catalog-file-store";
@@ -188,7 +188,7 @@ import {
   loadMediaConfig,
   loadMediaCacheConfig,
   loadCatalogFileConfig,
-  loadUploadConfig,
+  loadMinioConfig,
   loadMetaConfig,
   loadMetaOAuthConfig,
   loadOnboardingConfig,
@@ -790,9 +790,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     tiktok: overrides.publishers?.tiktok ?? makeLazyTikTokPublisher(deps.logger),
   };
   const drive = overrides.drive ?? google.drive;
-  // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
-  // Google sources it needs no lazy wrapper.
-  const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
+  // E9 — mode B bytes, now MinIO (Task 11). `loadMinioConfig()`'s return value
+  // is field-for-field the adapter's own `MinioBlobStoreConfig`, so no mapping
+  // and no cast — see the type doc on that interface for why.
+  const blobs = overrides.blobs ?? makeMinioBlobStore({ config: loadMinioConfig(), logger: deps.logger });
 
   // Phase 3 — a tenant may hand us a CSV instead of connecting a Google Sheet.
   // Its own root, never the upload root: these bytes ARE the product catalog,
@@ -1048,9 +1049,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // so it is a safe path segment for the blob store.
       newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
     }),
-    // Stage 1 of the presigned-upload path. Deliberately keeps `blobs` as
-    // wired above (local store today) — switching it to MinIO is Task 11,
-    // not this one.
+    // Stage 1 of the presigned-upload path. Shares the one `blobs` wired above
+    // (MinIO since Task 11) with every other upload usecase.
     issueUploadTickets: makeIssueUploadTickets({
       blobs,
       tickets: uploadTickets,
@@ -1059,8 +1059,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       ticketTtlSeconds: 30 * 60,
     }),
     // Stage 3 of the presigned-upload path: sniffs the staged bytes before
-    // promoting them. Still on the local blob store wired above — Task 11
-    // switches this to MinIO for every usecase at once.
+    // promoting them, on the same MinIO-backed `blobs` (Task 11).
     confirmUpload: makeConfirmUpload({
       tickets: uploadTickets,
       blobs,
@@ -1071,8 +1070,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     cleanupUploads: makeCleanupUploads({
       media,
       blobs,
-      // Ticket sweep (Task 8): the ticket repo, not a new blob store — Task 11
-      // is what switches `blobs` itself to MinIO.
+      // Ticket sweep (Task 8), on the same MinIO-backed `blobs` (Task 11).
       tickets: uploadTickets,
       clock: deps.clock,
       logger: deps.logger,
