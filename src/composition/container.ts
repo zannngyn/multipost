@@ -23,6 +23,7 @@ import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
 import { makeSecretBox, type SecretBox } from "@/adapters/db/secret-box";
 import { DrizzlePostDraftRepo } from "@/adapters/db/post-draft-repo.drizzle";
 import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
+import { DrizzleUploadTicketRepo } from "@/adapters/db/upload-ticket-repo.drizzle";
 import { DrizzleProductRepo } from "@/adapters/db/product-repo.drizzle";
 import { DrizzleSyncRunRepo } from "@/adapters/db/sync-run-repo.drizzle";
 import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
@@ -129,6 +130,10 @@ import {
 } from "@/core/usecases/cleanup-media-cache";
 import { makeReadMediaBytes, type ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
+import {
+  makeIssueUploadTickets,
+  type IssueUploadTickets,
+} from "@/core/usecases/issue-upload-tickets";
 import {
   makeCancelScheduledJob,
   type CancelScheduledJob,
@@ -240,6 +245,11 @@ export interface Usecases {
   composePost: ComposePost;
   /** E9 — mode B: register operator-supplied files as media assets. */
   uploadMedia: UploadMedia;
+  /**
+   * E9/MinIO — stage 1 of the presigned-upload path: sign upload URLs
+   * without touching a byte. Stage 3 (confirm) lands in a later task.
+   */
+  issueUploadTickets: IssueUploadTickets;
   /** E9.4 — periodic sweep of uploads nobody posted. */
   cleanupUploads: CleanupUploads;
   /** E3.6 — periodic sweep of the Drive byte cache (TTL-based). */
@@ -739,6 +749,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const syncRuns = new DrizzleSyncRunRepo(deps.db, deps.logger);
   const catalogConfig = new DrizzleCatalogConfigRepo(deps.db, deps.logger);
   const postJobs = new DrizzlePostJobRepo(deps.db);
+  // MinIO presigned upload, stage 1 — its own table, its own repo (Task 5).
+  const uploadTickets = new DrizzleUploadTicketRepo(deps.db);
   const channels = new DrizzleChannelConfigRepo(deps.db, {
     box: makeTenantSecretBox(deps.logger),
     logger: deps.logger,
@@ -1029,6 +1041,16 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // Prefixed so an id is recognisable as mode B in a log line, and hex-only
       // so it is a safe path segment for the blob store.
       newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
+    }),
+    // Stage 1 of the presigned-upload path. Deliberately keeps `blobs` as
+    // wired above (local store today) — switching it to MinIO is Task 11,
+    // not this one.
+    issueUploadTickets: makeIssueUploadTickets({
+      blobs,
+      tickets: uploadTickets,
+      logger: deps.logger,
+      newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
+      ticketTtlSeconds: 30 * 60,
     }),
     cleanupUploads: makeCleanupUploads({
       media,

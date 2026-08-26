@@ -150,7 +150,10 @@ export function makeUploadMedia(deps: UploadMediaDeps) {
       });
     }
 
-    assertOneAlbumKind(usable, { tenantId, productCode });
+    assertOneAlbumKind(
+      usable.map((item) => item.kind),
+      { tenantId, productCode },
+    );
 
     // --- Replace, don't merge ----------------------------------------------
     // `sequence` numbers the album from 1 on every call, so a second upload for
@@ -311,14 +314,18 @@ async function discardPreviousUploads(
  * One post is either an album of photos or a single clip — they are different
  * platform endpoints. Refusing here beats discovering it after the AI has
  * already been paid for a caption.
+ *
+ * Exported so `issueUploadTickets` (Task 6, the presigned-ticket path) can run
+ * the same gate before it ever signs a URL — it never holds an `UploadedFile`,
+ * only the client's claimed kind per file, hence the plain `MediaKind[]`.
  */
-function assertOneAlbumKind(
-  usable: ReadonlyArray<{ kind: MediaKind; file: UploadedFile }>,
+export function assertOneAlbumKind(
+  kinds: readonly MediaKind[],
   context: { tenantId: TenantId; productCode: string },
 ): void {
-  const kinds = new Set(usable.map((item) => item.kind));
+  const unique = new Set(kinds);
 
-  if (kinds.size > 1) {
+  if (unique.size > 1) {
     throw new AppError("INVALID_INPUT", {
       message: "An uploaded album mixes photos and video",
       userMessage:
@@ -331,15 +338,15 @@ function assertOneAlbumKind(
     });
   }
 
-  if (usable[0].kind === "video" && usable.length > 1) {
+  if (kinds[0] === "video" && kinds.length > 1) {
     throw new AppError("INVALID_INPUT", {
       message: "A video post carries exactly one clip",
-      userMessage: `Một bài video chỉ nhận một file — đang có ${usable.length}.`,
+      userMessage: `Một bài video chỉ nhận một file — đang có ${kinds.length}.`,
       context: {
         tenant_id: context.tenantId,
         product_code: context.productCode,
         reason: "MULTIPLE_VIDEOS",
-        count: usable.length,
+        count: kinds.length,
       },
     });
   }
