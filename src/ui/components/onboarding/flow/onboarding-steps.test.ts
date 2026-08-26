@@ -1,143 +1,124 @@
 import { describe, expect, it } from "vitest";
 
-import type { SetupProgress, SetupStepId } from "@/ui/schemas/setup-progress.schema";
-
 import {
-  ONBOARDING_SLIDE_IDS,
-  isOnboardingSlideId,
-  nextSlide,
-  previousSlide,
-  resolveSlide,
-  slideOrdinal,
+  ONBOARDING_SCREENS,
+  SURVEY_STEP_COUNT,
+  isOnboardingScreen,
+  nextScreen,
+  previousScreen,
+  resolveScreen,
+  screenStep,
 } from "./onboarding-steps";
 
+import type { OnboardingScreen } from "./onboarding-steps";
+
 /**
- * Position in the flow is derived, never stored: the two middle slides leave
- * the page for OAuth, so any React state would be gone by the time the browser
- * comes back. These tests pin the derivation.
+ * Position in the survey is DERIVED, never stored on the server: there is no
+ * "have you connected Google yet" flag behind these five screens. The URL
+ * carries an intent (`?step=`), the answers carry the truth, and this file
+ * pins how the two are reconciled.
  */
 
-const ALL: readonly SetupStepId[] = [
-  "tenant",
-  "google",
-  "source",
-  "facebook",
-  "group",
-  "firstPost",
-];
+type Answered = Partial<Record<OnboardingScreen, boolean>>;
 
-function progressOf(done: Partial<Record<SetupStepId, boolean>>): SetupProgress {
-  return {
-    tenantId: "00000000-0000-0000-0000-000000000001",
-    steps: ALL.map((id) => ({ id, isDone: done[id] ?? false })),
-    doneCount: ALL.filter((id) => done[id]).length,
-    requiredCount: 5,
-    isReady: Boolean(done.source && done.facebook),
-  };
+function resolve(requested: string | null, answered: Answered, hasStarted = true): OnboardingScreen {
+  return resolveScreen({ requested, answered, hasStarted });
 }
 
-describe("ONBOARDING_SLIDE_IDS", () => {
-  it("lists the six slides in running order", () => {
-    expect(ONBOARDING_SLIDE_IDS).toEqual([
-      "company",
-      "data",
-      "facebook",
-      "group",
-      "invite",
-      "congrats",
-    ]);
+describe("ONBOARDING_SCREENS", () => {
+  it("lists the welcome screen and the four survey steps in running order", () => {
+    expect(ONBOARDING_SCREENS).toEqual(["welcome", "seller", "tools", "count", "channels"]);
   });
 
-  it("numbers them 1..6 for the progress rail", () => {
-    expect(ONBOARDING_SLIDE_IDS.map(slideOrdinal)).toEqual([1, 2, 3, 4, 5, 6]);
+  it("counts four survey steps, which is what the dots draw", () => {
+    expect(SURVEY_STEP_COUNT).toBe(4);
   });
 });
 
-describe("isOnboardingSlideId", () => {
-  it("accepts a real id and rejects anything else", () => {
-    expect(isOnboardingSlideId("data")).toBe(true);
-    expect(isOnboardingSlideId("nonsense")).toBe(false);
-    expect(isOnboardingSlideId(null)).toBe(false);
-    expect(isOnboardingSlideId(2)).toBe(false);
+describe("isOnboardingScreen", () => {
+  it("accepts a real screen and rejects anything else", () => {
+    expect(isOnboardingScreen("tools")).toBe(true);
+    expect(isOnboardingScreen("company")).toBe(false);
+    expect(isOnboardingScreen(null)).toBe(false);
+    expect(isOnboardingScreen(3)).toBe(false);
   });
 });
 
-describe("resolveSlide — edge cases first", () => {
-  it("pins to the company slide when there is no tenant yet", () => {
-    // No company means every tenant-scoped API answers 409; nothing else can run.
-    expect(resolveSlide({ progress: null, requested: "congrats", passed: [] })).toBe("company");
+describe("screenStep", () => {
+  it("gives the welcome screen no step number — it has no dot", () => {
+    expect(screenStep("welcome")).toBe(0);
   });
 
-  it("ignores a requested id that is not a slide", () => {
-    const progress = progressOf({ tenant: true });
-    expect(resolveSlide({ progress, requested: "../../etc/passwd", passed: [] })).toBe("data");
-  });
-
-  it("clamps a requested slide that runs ahead of the first open one", () => {
-    const progress = progressOf({ tenant: true });
-    expect(resolveSlide({ progress, requested: "congrats", passed: [] })).toBe("data");
-  });
-
-  it("allows going BACK to an already settled slide", () => {
-    const progress = progressOf({ tenant: true });
-    expect(resolveSlide({ progress, requested: "company", passed: [] })).toBe("company");
+  it("numbers the four survey steps 1..4", () => {
+    expect(screenStep("seller")).toBe(1);
+    expect(screenStep("tools")).toBe(2);
+    expect(screenStep("count")).toBe(3);
+    expect(screenStep("channels")).toBe(4);
   });
 });
 
-describe("resolveSlide — walking the flow", () => {
-  it("opens the data slide once the company exists", () => {
-    expect(resolveSlide({ progress: progressOf({ tenant: true }), requested: null, passed: [] })).toBe(
-      "data",
-    );
+describe("resolveScreen — edge cases first", () => {
+  it("pins to the welcome screen until the operator has pressed Bắt đầu", () => {
+    // Deep-linking past the greeting would drop somebody into a question with
+    // no idea what they are answering for.
+    expect(resolve("channels", {}, false)).toBe("welcome");
+    expect(resolve(null, {}, false)).toBe("welcome");
   });
 
-  it("moves past a slide the operator chose to do later", () => {
-    // "Để sau" must not bounce the operator back onto the slide they just left.
-    expect(
-      resolveSlide({ progress: progressOf({ tenant: true }), requested: null, passed: ["data"] }),
-    ).toBe("facebook");
+  it("ignores a requested value that is not a screen", () => {
+    expect(resolve("../../etc/passwd", {}, false)).toBe("welcome");
+    expect(resolve("../../etc/passwd", {})).toBe("seller");
   });
 
-  it("moves past a slide the server already reports as done", () => {
-    expect(
-      resolveSlide({
-        progress: progressOf({ tenant: true, source: true }),
-        requested: null,
-        passed: [],
-      }),
-    ).toBe("facebook");
+  it("clamps a request that runs ahead of the first unanswered step", () => {
+    expect(resolve("channels", {})).toBe("seller");
+    expect(resolve("count", { seller: true })).toBe("tools");
   });
 
-  it("still stops on the invite slide, which has no server flag", () => {
-    expect(
-      resolveSlide({
-        progress: progressOf({ tenant: true, source: true, facebook: true, group: true }),
-        requested: null,
-        passed: [],
-      }),
-    ).toBe("invite");
-  });
-
-  it("lands on congrats when everything is settled", () => {
-    expect(
-      resolveSlide({
-        progress: progressOf({ tenant: true, source: true, facebook: true, group: true }),
-        requested: null,
-        passed: ["invite"],
-      }),
-    ).toBe("congrats");
+  it("treats saved answers as proof the flow was started", () => {
+    // Closing the tab mid-survey and coming back must reopen the pending step,
+    // not replay the greeting (spec section 7.6).
+    expect(resolve(null, { seller: true }, false)).toBe("tools");
   });
 });
 
-describe("nextSlide / previousSlide", () => {
-  it("walks forward and stops at congrats", () => {
-    expect(nextSlide("company")).toBe("data");
-    expect(nextSlide("invite")).toBe("congrats");
-    expect(nextSlide("congrats")).toBe("congrats");
+describe("resolveScreen — walking the survey", () => {
+  it("opens the first question once the flow has started", () => {
+    expect(resolve(null, {})).toBe("seller");
   });
 
-  it("walks backward and reports no slide before the first", () => {
-    expect(previousSlide("data")).toBe("company");
-    expect(previousSlide("company")).toBeNull();
+  it("moves on to the next question once one is answered", () => {
+    expect(resolve(null, { seller: true })).toBe("tools");
+    expect(resolve(null, { seller: true, tools: true })).toBe("count");
+  });
+
+  it("allows going BACK to a step that is already answered", () => {
+    expect(resolve("seller", { seller: true, tools: true })).toBe("seller");
+    expect(resolve("welcome", { seller: true })).toBe("welcome");
+  });
+
+  it("stays on the last question when every step is answered", () => {
+    // Finishing is `nextScreen`'s job; resolving must never return a screen
+    // that does not exist.
+    expect(
+      resolve(null, { seller: true, tools: true, count: true, channels: true }),
+    ).toBe("channels");
+  });
+});
+
+describe("nextScreen / previousScreen", () => {
+  it("walks forward from the greeting into the survey", () => {
+    expect(nextScreen("welcome")).toBe("seller");
+    expect(nextScreen("count")).toBe("channels");
+  });
+
+  it("reports the end of the flow instead of a sixth screen", () => {
+    expect(nextScreen("channels")).toBe("done");
+  });
+
+  it("walks backward and reports nothing before the greeting", () => {
+    expect(previousScreen("tools")).toBe("seller");
+    expect(previousScreen("seller")).toBe("welcome");
+    expect(previousScreen("welcome")).toBeNull();
   });
 });

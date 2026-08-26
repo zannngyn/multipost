@@ -19,7 +19,6 @@ import {
 import { OperatorWaitingCard } from "@/ui/components/onboarding/OperatorWaitingCard";
 import { DockPanel, DockPill } from "@/ui/components/onboarding/SetupDock";
 import { ProgressRail } from "@/ui/components/onboarding/flow/ProgressRail";
-import { SlideCompany } from "@/ui/components/onboarding/flow/SlideCompany";
 import { WizardStepInvite } from "@/ui/components/onboarding/WizardStepInvite";
 import { Eyebrow } from "@/ui/components/ui/eyebrow";
 import type { SetupProgress, SetupStepId } from "@/ui/schemas/setup-progress.schema";
@@ -212,33 +211,22 @@ export default function OnboardingPreviewPage() {
             CAVEAT for everything below (spec §10): this gallery renders OUTSIDE
             Astryx's `Theme`, which `OnboardingFlow` mounts in the real app. Text
             on a dark surface can look fine here and be invisible there, so the
-            slideshow still has to be checked at /onboarding itself.
+            survey still has to be checked at /onboarding itself.
           */}
           <Stack direction="vertical" gap={2}>
             <Text weight="semibold" className="text-sm text-primary">
-              14. Slideshow onboarding — thanh tiến độ ở ba vị trí trong luồng
+              14. Khảo sát onboarding — thanh tiến độ ở ba vị trí trong luồng
             </Text>
             <Stack direction="vertical" gap={4}>
-              <ProgressRail current="company" />
-              <ProgressRail current="facebook" />
-              <ProgressRail current="congrats" />
+              <ProgressRail current="seller" />
+              <ProgressRail current="count" />
+              <ProgressRail current="channels" />
             </Stack>
           </Stack>
 
           <Stack direction="vertical" gap={2}>
             <Text weight="semibold" className="text-sm text-primary">
-              15. Slideshow onboarding — slide 01, form tạo công ty và ô dán link mời
-            </Text>
-            {/* No `signOutAction`: there is no session to end on this page, and
-                that is also the branch where the button must not be drawn. */}
-            <div className="border-border rounded-xl border p-6 shadow-lg">
-              <SlideCompany onCreated={() => {}} onJoined={() => {}} />
-            </div>
-          </Stack>
-
-          <Stack direction="vertical" gap={2}>
-            <Text weight="semibold" className="text-sm text-primary">
-              16. Mời nhân viên — pane dùng lại cho slide 05
+              15. Mời nhân viên — pane dùng lại ở màn mời
             </Text>
             <div className="bg-card border-border rounded-xl border p-6 shadow-lg">
               <WizardStepInvite onDone={() => {}} />

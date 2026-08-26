@@ -5,36 +5,34 @@ import { InternationalizationProvider } from "@astryxdesign/core/i18n";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
-import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { useActiveTenant } from "@/ui/hooks/useMe";
-import { useSetupProgress } from "@/ui/hooks/useSetupProgress";
 import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
 import { AppLink } from "@/ui/components/shell/AppLink";
+import { Button } from "@/ui/components/ui/button";
 import { myspTheme } from "@/ui/theme/mysp";
 
-import { SlideCompany } from "./SlideCompany";
 import { SlideShell } from "./SlideShell";
 import {
-  ONBOARDING_SLIDE_IDS,
-  SLIDE_TITLES,
-  nextSlide,
-  previousSlide,
-  resolveSlide,
-  type OnboardingSlideId,
+  nextScreen,
+  previousScreen,
+  resolveScreen,
+  type OnboardingScreen,
 } from "./onboarding-steps";
 import { usePassedSlides } from "./usePassedSlides";
 
 /**
- * The slideshow itself.
+ * The survey flow itself.
  *
- * It holds no idea of "which step am I on". The URL carries an intent, the six
- * server flags carry the truth, `resolveSlide` reconciles them — which is what
- * lets slide 02 and 03 send the browser to an OAuth provider and still come
- * back to the right place.
+ * It holds no idea of "which step am I on". The URL carries an intent, the
+ * answers carry the truth, `resolveScreen` reconciles them.
+ *
+ * TASK 5-9 REBUILD THIS FILE: the welcome screen, the four question screens and
+ * the writes to `tenant_profile` land there. What is here is the state machine
+ * wired up to placeholders, so the route still runs.
  */
 export function OnboardingFlow({
-  // Slide 01 is the only one that shows it, and `src/ui` may not import
-  // `src/app`, so the Server Action arrives as a prop.
+  // The welcome screen is the only one that shows it, and `src/ui` may not
+  // import `src/app`, so the Server Action arrives as a prop.
   signOutAction,
 }: {
   signOutAction?: () => Promise<void>;
@@ -42,41 +40,37 @@ export function OnboardingFlow({
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isResolved, role } = useActiveTenant();
-  const progress = useSetupProgress();
   const { passed, markPassed } = usePassedSlides();
 
   // --- Edge case: this flow is not for every role --------------------------
-  // `useSetupProgress` is gated to owner/admin and the endpoint answers 403 to
-  // anyone else, so an editor who types the URL would get `progress.data ===
-  // undefined` — which reads exactly like "no company yet" and would put a
-  // CREATE COMPANY form in front of somebody who already belongs to one.
-  // The role check has to happen before the position is derived, not after.
+  // The survey describes the tenant, so only an owner or an admin answers it.
+  // The check happens before the position is derived, not after.
   const isAllowedRole = role === "owner" || role === "admin";
   useEffect(() => {
     if (isResolved && !isAllowedRole) router.replace("/");
   }, [isResolved, isAllowedRole, router]);
 
-  // Which way the next slide should enter. State, not a ref: the value is READ
+  // Which way the next screen should enter. State, not a ref: the value is READ
   // WHILE RENDERING to pick the animation, and a ref read during render is both
   // a lint error here and a value React makes no promise about. The extra
   // render rides along with the navigation `goTo` is about to trigger anyway.
   const [direction, setDirection] = useState<1 | -1>(1);
 
-  // --- Edge case: the flags are still in flight ----------------------------
-  // Same trap as above, one beat earlier: on first paint `progress.data` is
-  // undefined for a tenant that IS fully set up. Deriving a slide from that
-  // flashes the create-company form before the real answer arrives.
-  const isAwaitingFlags = isResolved && isAllowedRole && progress.isPending && !progress.data;
+  // PENDING(task-9): `answered` comes from `tenant_profile` once the endpoint
+  // exists. Until then the session note is the only record of what was answered
+  // or skipped, which is enough to walk the flow but not to survive a reload.
+  const answered: Partial<Record<OnboardingScreen, boolean>> = Object.fromEntries(
+    passed.map((id) => [id, true]),
+  );
 
-  const current = resolveSlide({
-    // No tenant yet => no flags exist; slide 01 is the only possible answer.
-    progress: isResolved ? (progress.data ?? null) : null,
+  const current = resolveScreen({
     requested: searchParams.get("step"),
-    passed,
+    answered,
+    hasStarted: passed.includes("welcome"),
   });
 
   const goTo = useCallback(
-    (target: OnboardingSlideId, way: 1 | -1) => {
+    (target: OnboardingScreen, way: 1 | -1) => {
       setDirection(way);
       const params = new URLSearchParams(searchParams.toString());
       params.set("step", target);
@@ -91,64 +85,53 @@ export function OnboardingFlow({
 
   const advance = useCallback(() => {
     markPassed(current);
-    goTo(nextSlide(current), 1);
-  }, [current, goTo, markPassed]);
+    const target = nextScreen(current);
+    // The survey has no sixth screen: finishing it means leaving for the app.
+    if (target === "done") {
+      router.replace("/");
+      return;
+    }
+    goTo(target, 1);
+  }, [current, goTo, markPassed, router]);
 
   const goBack = useCallback(() => {
-    const target = previousSlide(current);
+    const target = previousScreen(current);
     if (target) goTo(target, -1);
   }, [current, goTo]);
 
   if (isResolved && !isAllowedRole) return null;
 
-  // Nothing rather than a skeleton: the wait is a cache read in the common case,
-  // and a frame of the wrong slide is worse than a frame of nothing.
-  if (isAwaitingFlags) return null;
+  /* ONE shell for the whole flow, NOT one per screen: the story column has to
+     survive the change of screen, or the heading and the rail would slide out
+     and back in on every step. `SlideShell` keys the travelling half on `id`
+     internally.
 
-  // --- Edge case: the flags themselves failed to load -----------------------
-  // Guessing a slide here would put the operator in front of controls whose
-  // prerequisites are unknown. Say so and offer the retry instead.
-  const content =
-    isResolved && progress.isError && !progress.data ? (
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-6 sm:p-10">
-        <h1 className="text-foreground text-2xl font-semibold">Chưa đọc được tiến độ thiết lập</h1>
-        <ApiErrorNotice error={progress.error} onRetry={() => void progress.refetch()} />
-      </div>
-    ) : (
-      /* ONE shell for the whole flow, NOT one per slide: the story column has
-         to survive the change of slide, or the heading and the rail would slide
-         out and back in on every step. `SlideShell` keys the travelling half on
-         `id` internally. */
-      <SlideShell
-        id={current}
-        direction={direction}
-        heading={SLIDE_TITLES[current]}
-        lead={LEADS[current]}
-        onSkip={current === "company" || current === "congrats" ? undefined : advance}
-        onBack={current === "company" ? undefined : goBack}
-        exitHref={current === "company" ? undefined : "/"}
-        // Only slide 01 needs it: from slide 02 on there is a company, so
-        // "Vào ứng dụng" is the sane way out and sign-out lives in the app.
-        signOutAction={current === "company" ? signOutAction : undefined}
-      >
-        {/* Tasks 06-10 replace the remaining five placeholders. */}
-        {current === "company" ? (
-          <SlideCompany
-            // Creating the company advances the flow only from the mutation's
-            // `onSuccess`; a failed create must not move on.
-            onCreated={advance}
-            // Someone who accepted an invite joined a company somebody else
-            // set up — the remaining five slides are not theirs to do, so they
-            // go straight into the app.
-            onJoined={() => router.replace("/")}
-          />
-        ) : (
-          <p className="text-muted-foreground text-sm">
-            Nội dung màn này được lắp ở task sau ({current}).
-          </p>
-        )}
-      </SlideShell>
-    );
+     NO SETUP-PROGRESS FETCH ANY MORE: the survey asks about the operator, not
+     about the tenant's six connection flags, so nothing here has to wait on
+     that endpoint — and an unrelated failure of it must not block the survey. */
+  const content = (
+    <SlideShell
+      id={current}
+      direction={direction}
+      heading={HEADINGS[current]}
+      lead={LEADS[current]}
+      // The greeting has nothing to skip and nothing to go back to.
+      onSkip={current === "welcome" ? undefined : advance}
+      onBack={current === "welcome" ? undefined : goBack}
+      exitHref="/"
+      signOutAction={current === "welcome" ? signOutAction : undefined}
+    >
+      {/* Tasks 5-8 replace every placeholder below. */}
+      <p className="text-muted-foreground text-sm">
+        Nội dung màn này được lắp ở task sau ({current}).
+      </p>
+      {current === "welcome" ? (
+        <Button type="button" onClick={advance}>
+          Bắt đầu
+        </Button>
+      ) : null}
+    </SlideShell>
+  );
 
   /**
    * THE SAME THREE PROVIDERS `AppFrame` wraps the app in, for the same reason
@@ -177,14 +160,22 @@ export function OnboardingFlow({
   );
 }
 
-const LEADS: Record<OnboardingSlideId, string> = {
-  company: "Dữ liệu trong MYSP luôn thuộc về một công ty. Tạo công ty là bước duy nhất bắt buộc.",
-  data: "Cho MYSP đọc kho ảnh trong Drive và bảng sản phẩm trong Google Sheet của bạn.",
-  facebook: "Nối fanpage sẽ nhận bài đăng. Nối được nhiều trang cùng lúc.",
-  group: "Gom các trang hay đăng cùng nhau để sau này chọn một lần.",
-  invite: "Gửi link cho người sẽ đăng bài cùng bạn. Mời sau cũng được.",
-  congrats: "Thiết lập xong. Bắt đầu bài đăng đầu tiên thôi.",
+/**
+ * Placeholder copy only. The real wording of each question lives in the step
+ * components that tasks 5-8 add, next to the options it belongs with.
+ */
+const HEADINGS: Record<OnboardingScreen, string> = {
+  welcome: "Chào mừng tới MYSP",
+  seller: "Bạn đang bán hàng kiểu nào?",
+  tools: "Bạn đang đăng bài bằng gì?",
+  count: "Bạn đang quản lý bao nhiêu trang?",
+  channels: "Kênh nào bạn đang tập trung?",
 };
 
-/** Referenced so an unused-import lint never hides a missing slide. */
-void ONBOARDING_SLIDE_IDS;
+const LEADS: Record<OnboardingScreen, string> = {
+  welcome: "Bốn câu hỏi ngắn để MYSP hiểu cách bạn đang bán hàng.",
+  seller: "Chọn mô tả gần đúng nhất với bạn.",
+  tools: "Chọn tất cả những gì bạn đang dùng.",
+  count: "Số trang bạn đang đăng bài, không tính trang cá nhân.",
+  channels: "Hiện MYSP đăng được Facebook; các kênh khác đang làm.",
+};

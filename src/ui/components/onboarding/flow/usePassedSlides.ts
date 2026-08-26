@@ -4,30 +4,31 @@ import { useCallback, useSyncExternalStore } from "react";
 
 import { useActiveTenant } from "@/ui/hooks/useMe";
 
-import { isOnboardingSlideId, type OnboardingSlideId } from "./onboarding-steps";
+import { isOnboardingScreen, type OnboardingScreen } from "./onboarding-steps";
 
 /**
- * Which slides the operator has already walked past, for THIS session.
+ * Which onboarding screens the operator has already walked past, for THIS
+ * session — whether by answering them or by pressing "Bỏ qua".
  *
- * Deliberately `sessionStorage` and not the server: "Để sau" is a decision about
- * the next two minutes, not a fact about the tenant. What is genuinely unfinished
- * is already tracked by the six flags, and `SetupDock` keeps pointing at it long
- * after this flow closes.
+ * Deliberately `sessionStorage` and not the server: it is the ANSWERS that the
+ * server keeps (`tenant_profile`), and a skipped question deliberately stores
+ * nothing there. Without a local note, skipping would leave the flow resolving
+ * back onto the very question it was just told to drop.
  *
  * `useSyncExternalStore`, in the same shape as `useSetupDockState`: web storage
  * IS an external store, the server has no answer for it, and a `setState` inside
- * an effect would paint the wrong slide first and then correct it — the flicker
+ * an effect would paint the wrong screen first and then correct it — the flicker
  * this avoids. It is also what the repo's `react-hooks` rules require.
  *
  * Every access is wrapped: Safari in private mode THROWS on web storage rather
- * than returning null, and a flow that dies to remember a "Để sau" is worse than
+ * than returning null, and a flow that dies to remember a "Bỏ qua" is worse than
  * one that forgets it.
  */
 
 const KEY_PREFIX = "mysp:onboarding:passed:";
 
 /** Stable identity for "nothing yet" — `getSnapshot` is compared by identity. */
-const EMPTY: readonly OnboardingSlideId[] = [];
+const EMPTY: readonly OnboardingScreen[] = [];
 
 /**
  * Subscribers of THIS tab. No `storage` listener: `sessionStorage` is scoped to
@@ -39,16 +40,16 @@ const listeners = new Set<() => void>();
 /**
  * What this tab believes. It WINS over storage once it exists: the list only
  * ever grows, and a browser that refuses to persist must still let the operator
- * move forward. The note is lost on reload, which is acceptable; a "Để sau"
+ * move forward. The note is lost on reload, which is acceptable; a "Bỏ qua"
  * button that does nothing is not.
  */
-const inMemory = new Map<string, readonly OnboardingSlideId[]>();
+const inMemory = new Map<string, readonly OnboardingScreen[]>();
 
 /**
  * Last raw string parsed per key and the array it produced. `getSnapshot` runs
  * on every render and React loops forever if a fresh array comes back each time.
  */
-const snapshots = new Map<string, { raw: string | null; value: readonly OnboardingSlideId[] }>();
+const snapshots = new Map<string, { raw: string | null; value: readonly OnboardingScreen[] }>();
 
 /**
  * Failures are reported ONCE per kind. `getSnapshot` runs on every render, so a
@@ -74,15 +75,15 @@ function subscribe(onStoreChange: () => void): () => void {
   };
 }
 
-function parsePassed(raw: string | null): readonly OnboardingSlideId[] {
+function parsePassed(raw: string | null): readonly OnboardingScreen[] {
   if (!raw) return EMPTY;
   const parsed: unknown = JSON.parse(raw);
   // Unknown ids are dropped rather than trusted: a hand-edited value must not
-  // decide which slide the flow opens on.
-  return Array.isArray(parsed) ? parsed.filter(isOnboardingSlideId) : EMPTY;
+  // decide which screen the flow opens on.
+  return Array.isArray(parsed) ? parsed.filter(isOnboardingScreen) : EMPTY;
 }
 
-function readPassed(storageKey: string): readonly OnboardingSlideId[] {
+function readPassed(storageKey: string): readonly OnboardingScreen[] {
   const believed = inMemory.get(storageKey);
   if (believed) return believed;
 
@@ -90,20 +91,20 @@ function readPassed(storageKey: string): readonly OnboardingSlideId[] {
   try {
     raw = window.sessionStorage.getItem(storageKey);
   } catch (error) {
-    reportOnce("could not read passed slides", { storageKey, error });
+    reportOnce("could not read passed screens", { storageKey, error });
     return EMPTY;
   }
 
   const cached = snapshots.get(storageKey);
   if (cached && cached.raw === raw) return cached.value;
 
-  let value: readonly OnboardingSlideId[];
+  let value: readonly OnboardingScreen[];
   try {
     value = parsePassed(raw);
   } catch (error) {
     // A hand-edited value must not blank the screen: the flow simply starts
-    // from the first open slide.
-    reportOnce("could not parse passed slides", { storageKey, error, raw });
+    // from the first unanswered question.
+    reportOnce("could not parse passed screens", { storageKey, error, raw });
     value = EMPTY;
   }
 
@@ -112,8 +113,8 @@ function readPassed(storageKey: string): readonly OnboardingSlideId[] {
 }
 
 export function usePassedSlides(): {
-  passed: readonly OnboardingSlideId[];
-  markPassed: (id: OnboardingSlideId) => void;
+  passed: readonly OnboardingScreen[];
+  markPassed: (id: OnboardingScreen) => void;
 } {
   const { tenantKey } = useActiveTenant();
   const storageKey = `${KEY_PREFIX}${tenantKey}`;
@@ -127,7 +128,7 @@ export function usePassedSlides(): {
   );
 
   const markPassed = useCallback(
-    (id: OnboardingSlideId) => {
+    (id: OnboardingScreen) => {
       const current = readPassed(storageKey);
       if (current.includes(id)) return;
 
@@ -139,7 +140,7 @@ export function usePassedSlides(): {
       } catch (error) {
         // Storage full or blocked: the flow still advances in memory. Losing
         // the note across a reload is a smaller failure than a dead button.
-        reportOnce("could not persist passed slides", { storageKey, error });
+        reportOnce("could not persist passed screens", { storageKey, error });
       }
       emit();
     },

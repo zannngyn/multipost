@@ -7,7 +7,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { Button } from "@/ui/components/ui/button";
 
 import { ProgressRail } from "./ProgressRail";
-import { ONBOARDING_SLIDE_IDS, slideOrdinal, type OnboardingSlideId } from "./onboarding-steps";
+import { SURVEY_STEP_COUNT, screenStep, type OnboardingScreen } from "./onboarding-steps";
 
 /**
  * The frame every slide sits in: STORY on the left, ACTION on the right.
@@ -54,7 +54,7 @@ export function SlideShell({
   exitHref,
   signOutAction,
 }: {
-  id: OnboardingSlideId;
+  id: OnboardingScreen;
   heading: string;
   lead: string;
   children: ReactNode;
@@ -83,14 +83,15 @@ export function SlideShell({
   const travel = prefersReduced ? 0 : 24 * direction;
   const enterDuration = prefersReduced ? 0.12 : 0.32;
   const exitDuration = prefersReduced ? 0.12 : 0.2;
-  const ordinal = String(slideOrdinal(id)).padStart(2, "0");
+  const step = screenStep(id);
+  const ordinal = String(step).padStart(2, "0");
 
   return (
     <main className="grid min-h-dvh grid-cols-1 md:grid-cols-[minmax(19rem,32%)_1fr]">
       {/* ── STORY ── persistent across slides; only the words change. ─────── */}
       <div className="bg-card border-border flex flex-col gap-6 border-b p-6 pb-10 sm:p-8 sm:pb-12 md:min-h-dvh md:gap-8 md:border-r md:border-b-0 md:p-10 md:pb-16">
         {/* Decoration, not information: `ProgressRail` below already says
-            "Bước n/6" in words, and repeating it here would make a screen
+            "Bước n/4" in words, and repeating it here would make a screen
             reader announce the position twice. */}
         <div aria-hidden="true" className="flex items-center gap-3">
           <span className="text-foreground-subtle font-mono text-xs tracking-widest tabular-nums">
@@ -99,7 +100,7 @@ export function SlideShell({
           <span className="bg-muted block h-px flex-1 overflow-hidden rounded-full">
             <span
               className="bg-primary block h-px w-full origin-left motion-safe:transition-transform motion-safe:duration-300"
-              style={{ transform: `scaleX(${slideOrdinal(id) / ONBOARDING_SLIDE_IDS.length})` }}
+              style={{ transform: `scaleX(${step / SURVEY_STEP_COUNT})` }}
             />
           </span>
         </div>
@@ -117,7 +118,7 @@ export function SlideShell({
 
         {/* The position belongs WITH the words it describes. Pinning it to the
             floor of the column left ~600px of nothing in the middle and dropped
-            "Bước n/6" under Next's dev-tools badge. */}
+            "Bước n/4" under Next's dev-tools badge. */}
         <ProgressRail current={id} />
 
         {(exitHref ?? signOutAction) ? (
