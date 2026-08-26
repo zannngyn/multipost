@@ -1071,6 +1071,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     cleanupUploads: makeCleanupUploads({
       media,
       blobs,
+      // Ticket sweep (Task 8): the ticket repo, not a new blob store — Task 11
+      // is what switches `blobs` itself to MinIO.
+      tickets: uploadTickets,
       clock: deps.clock,
       logger: deps.logger,
     }),
