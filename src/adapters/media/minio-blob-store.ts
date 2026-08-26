@@ -139,6 +139,19 @@ export function makeMinioBlobStore(options: MinioBlobStoreOptions): MediaBlobSto
       }
     },
 
+    async deleteStaging(input: { tenantId: TenantId; storageKey: string }): Promise<boolean> {
+      const key = safeStorageKey(input?.tenantId, input?.storageKey);
+      if (!key) return false;
+      const existed = (await this.statStaging({ tenantId: input.tenantId, storageKey: input.storageKey })) !== null;
+      if (!existed) return false;
+      try {
+        await internal.removeObject(bucket, STAGING_PREFIX + key);
+        return true;
+      } catch (error) {
+        throw AppError.from(error, "INTERNAL", { reason: "BLOB_STAGING_DELETE_FAILED" });
+      }
+    },
+
     async createUploadUrl(input: CreateUploadUrlInput): Promise<PresignedUpload> {
       const key = requireStorageKey(input?.tenantId, input?.assetId);
       const maxBytes = input?.maxBytes;

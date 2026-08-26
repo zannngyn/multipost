@@ -69,6 +69,8 @@ function harness(
     put,
     get: async () => null,
     delete: remove,
+    // Not exercised by this usecase — it never calls deleteStaging.
+    deleteStaging: async () => false,
     createUploadUrl: async () => {
       throw new Error("not used in this test");
     },

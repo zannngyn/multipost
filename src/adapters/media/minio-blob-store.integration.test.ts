@@ -108,6 +108,25 @@ describe.skipIf(!endpoint)("MinioBlobStore — presign and promote", () => {
     expect(head).toEqual(new Uint8Array([137, 80, 78, 71]));
   });
 
+  it("deleteStaging removes only the staged copy — never the serving one (regression for the leak fixed in this round)", async () => {
+    const signed = await store.createUploadUrl({
+      tenantId: TENANT, assetId: "u2", declaredMimeType: "image/png", maxBytes: 8, expiresInSeconds: 60,
+    });
+    const form = new FormData();
+    for (const [k, v] of Object.entries(signed.formFields)) form.append(k, v);
+    form.append("file", new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
+    expect((await fetch(signed.postUrl, { method: "POST", body: form })).ok).toBe(true);
+
+    expect(await store.statStaging({ tenantId: TENANT, storageKey: `${TENANT}/u2` })).toMatchObject({ sizeBytes: 4 });
+
+    expect(await store.deleteStaging({ tenantId: TENANT, storageKey: `${TENANT}/u2` })).toBe(true);
+    expect(await store.statStaging({ tenantId: TENANT, storageKey: `${TENANT}/u2` })).toBeNull();
+    // Never promoted, so it was never in serving either — must still read null there.
+    expect(await store.stat({ tenantId: TENANT, storageKey: `${TENANT}/u2` })).toBeNull();
+    // Second call: nothing left to remove.
+    expect(await store.deleteStaging({ tenantId: TENANT, storageKey: `${TENANT}/u2` })).toBe(false);
+  });
+
   it("promote moves staging into the serving prefix and removes the staged copy", async () => {
     const promoted = await store.promote({ tenantId: TENANT, assetId: "u1" });
     expect(promoted.storageKey).toBe(`${TENANT}/u1`);
@@ -119,6 +138,13 @@ describe.skipIf(!endpoint)("MinioBlobStore — presign and promote", () => {
   it("promote throws UPLOAD_OBJECT_MISSING when nothing is staged", async () => {
     await expect(store.promote({ tenantId: TENANT, assetId: "khongco" }))
       .rejects.toMatchObject({ context: { reason: "UPLOAD_OBJECT_MISSING" } });
+  });
+
+  it("deleteStaging on an already-promoted asset finds nothing and leaves the serving copy alone", async () => {
+    // u1 was promoted above — nothing of it is left in staging.
+    expect(await store.deleteStaging({ tenantId: TENANT, storageKey: `${TENANT}/u1` })).toBe(false);
+    // The serving copy created by promote() must be untouched.
+    expect(await store.get({ tenantId: TENANT, storageKey: `${TENANT}/u1`, maxBytes: 1024 })).not.toBeNull();
   });
 
   it("createDownloadUrl signs a URL that actually fetches", async () => {

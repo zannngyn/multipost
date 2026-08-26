@@ -126,6 +126,8 @@ function harness(options: HarnessOptions = {}) {
     },
     get: getBlob,
     delete: async () => false,
+    // Not exercised by this usecase — it never calls deleteStaging.
+    deleteStaging: async () => false,
     createUploadUrl: async () => {
       throw new Error("not used in this test");
     },

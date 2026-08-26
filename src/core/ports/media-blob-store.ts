@@ -83,7 +83,7 @@ export interface MediaBlobStore {
   put(input: PutBlobInput): Promise<StoredBlob>;
   /** Null when the blob is not there (deleted, never written, wrong tenant). */
   get(input: GetBlobInput): Promise<BlobContent | null>;
-  /** True when a blob was removed, false when there was nothing to remove. */
+  /** True when a blob was removed, false when there was nothing to remove. Targets the SERVING area. */
   delete(input: { tenantId: TenantId; storageKey: string }): Promise<boolean>;
   /** Throws when the implementer cannot sign uploads (local). */
   createUploadUrl(input: CreateUploadUrlInput): Promise<PresignedUpload>;
@@ -104,6 +104,15 @@ export interface MediaBlobStore {
   }): Promise<Uint8Array | null>;
   /** Moves staging -> serving area. Server-side copy, bytes never pass through Node. */
   promote(input: { tenantId: TenantId; assetId: string }): Promise<StoredBlob>;
+  /**
+   * Removes an object from the STAGING area only — never touches the serving
+   * area. A refused upload's bytes are ALWAYS in staging, never promoted, so
+   * `delete` (serving-only) is the wrong call here: it would stat the serving
+   * prefix, find nothing, and silently no-op, leaking the staged object
+   * forever with no row left to name it. True when something was removed,
+   * false when there was nothing to remove.
+   */
+  deleteStaging(input: { tenantId: TenantId; storageKey: string }): Promise<boolean>;
   /** Null when the implementer cannot sign; the caller falls back to streaming itself. */
   createDownloadUrl(input: {
     tenantId: TenantId;

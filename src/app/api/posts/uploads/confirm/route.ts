@@ -55,6 +55,7 @@ export async function POST(request: Request): Promise<Response> {
         sizeBytes: asset.sizeBytes,
       })),
       rejected: result.rejected,
+      warnings: result.warnings,
     });
   } catch (error) {
     return mapAppErrorToHttp(error, { logger, context: { route: ROUTE } });

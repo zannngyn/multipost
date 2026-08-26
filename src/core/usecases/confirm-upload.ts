@@ -24,6 +24,11 @@ import { assertOneAlbumKind, type UploadRejectionReport } from "./upload-media";
  *
  * A bad file is REPORTED, not thrown (business rule 5). A batch where nothing
  * gets through DOES throw — there is no post left to carry on with.
+ *
+ * A refused file lives ONLY under the staging prefix — it was never promoted.
+ * Cleaning it up must call `deleteStaging`, never `delete` (serving-only): a
+ * mismatched call is a silent no-op that leaks the object forever, because
+ * the ticket row that could still name it gets deleted right after.
  */
 
 export interface ConfirmUploadInput {
@@ -37,6 +42,11 @@ export interface ConfirmUploadInput {
 export interface ConfirmUploadResult {
   readonly accepted: readonly MediaAsset[];
   readonly rejected: readonly UploadRejectionReport[];
+  /**
+   * Batch-level notices that are not about any one file — currently just the
+   * "your requested order was ignored" case. Vietnamese, safe to show as-is.
+   */
+  readonly warnings: readonly string[];
 }
 
 export interface ConfirmUploadDeps {
@@ -70,9 +80,42 @@ export function makeConfirmUpload(deps: ConfirmUploadDeps) {
       });
     }
 
+    // A repeated assetId would map two `arranged` entries to the SAME ticket:
+    // under MinIO the first `promote` moves the staging object away, so the
+    // second reads "object never arrived" after the first row is already
+    // registered — a partially-registered batch masquerading as a clean one.
+    const seenAssetIds = new Set<string>();
+    for (const item of assets) {
+      const assetId = item?.assetId;
+      if (typeof assetId === "string" && seenAssetIds.has(assetId)) {
+        throw new AppError("INVALID_INPUT", {
+          message: "confirmUpload was called with a duplicate asset id",
+          userMessage: "Yêu cầu xác nhận có file bị lặp — hãy tải lại trang và thử lại.",
+          context: { tenant_id: tenantId, product_code: productCode, reason: "DUPLICATE_ASSET_ID", asset_id: assetId },
+        });
+      }
+      if (typeof assetId === "string") seenAssetIds.add(assetId);
+    }
+
     const log = deps.logger.child({ tenant_id: tenantId, product_code: productCode });
-    const arranged = applyOrder(assets, input?.order);
     const now = deps.clock.now();
+    const warnings: string[] = [];
+
+    const { arranged, orderIgnored } = applyOrder(assets, input?.order);
+    if (orderIgnored) {
+      // Business rule 5: nothing may silently diverge from what the operator
+      // arranged. The fallback (keep the original order) is safe, but the
+      // divergence itself must be visible, not just logged.
+      log.warn("Confirm ignored a malformed upload order and kept the original arrangement", {
+        error_code: "INVALID_INPUT",
+        reason: "UPLOAD_ORDER_INVALID",
+        asset_count: assets.length,
+        order_length: Array.isArray(input?.order) ? input.order.length : null,
+      });
+      warnings.push(
+        "Thứ tự sắp xếp gửi lên không hợp lệ — ảnh/video được giữ theo thứ tự đã tải lên, không theo thứ tự vừa kéo thả.",
+      );
+    }
 
     const ticketRows = await deps.tickets.findMany(tenantId, arranged.map((item) => item.assetId));
     const byAssetId = new Map(ticketRows.map((row) => [row.assetId, row]));
@@ -83,6 +126,9 @@ export function makeConfirmUpload(deps: ConfirmUploadDeps) {
     const discard: string[] = [];
 
     for (const item of arranged) {
+      // Ports document that `findMany` never returns another tenant's rows
+      // (upload-ticket-repo.ts); a wrong-tenant ticket therefore reads
+      // identically to no ticket at all here, and is refused the same way.
       const ticket = byAssetId.get(item.assetId);
 
       if (!ticket) {
@@ -135,6 +181,13 @@ export function makeConfirmUpload(deps: ConfirmUploadDeps) {
 
       const kind = mediaKindFromMimeType(actual);
       if (!kind) {
+        // Unreachable while the sniffer only recognises whitelisted types
+        // (media-sniff.ts), kept so a future signature added there without a
+        // matching MediaKind mapping fails loudly instead of silently.
+        log.warn("Confirm refused a file whose sniffed type maps to no supported media kind", {
+          error_code: "INVALID_INPUT", reason: "UNSUPPORTED_TYPE",
+          asset_id: item.assetId, file_name: ticket.fileName, sniffed_mime: actual,
+        });
         rejected.push({ fileName: ticket.fileName, reason: "UNSUPPORTED_TYPE", userMessage: `Định dạng file "${ticket.fileName}" không được hỗ trợ.` });
         discard.push(item.assetId);
         continue;
@@ -185,10 +238,25 @@ export function makeConfirmUpload(deps: ConfirmUploadDeps) {
       try {
         await deps.media.registerUpload(tenantId, asset);
       } catch (error) {
-        // The bytes are already in the serving area but no row points at
-        // them — the sweep works off rows, so it would never find this.
-        // Delete right here instead.
-        const removed = await deps.blobs.delete({ tenantId, storageKey: promoted.storageKey }).catch(() => false);
+        // The bytes are already in the serving area (promote succeeded) but
+        // no row points at them — the sweep works off rows, so it would
+        // never find this. Delete right here instead. This IS `delete`, not
+        // `deleteStaging`: by this point the object really is in serving.
+        let removed = false;
+        try {
+          removed = await deps.blobs.delete({ tenantId, storageKey: promoted.storageKey });
+        } catch (rollbackError) {
+          // Never swallow this silently: an operator reading only
+          // `blob_rolled_back: false` cannot tell "nothing to remove" from
+          // "MinIO refused the delete", and an object stuck in serving with
+          // no row is exactly the leak this rollback exists to prevent.
+          log.error("Could not roll back a promoted object after its row failed to register", {
+            ...AppError.from(rollbackError, "INTERNAL", {
+              tenant_id: tenantId, product_code: productCode, asset_id: item.assetId,
+              file_name: item.fileName, storage_key: promoted.storageKey, reason: "PROMOTE_ROLLBACK_FAILED",
+            }).toLogObject(),
+          });
+        }
         const appError = AppError.from(error, "DB_ERROR", {
           tenant_id: tenantId, product_code: productCode, asset_id: item.assetId,
           file_name: item.fileName, reason: "UPLOAD_REGISTER_FAILED", blob_rolled_back: removed,
@@ -207,7 +275,7 @@ export function makeConfirmUpload(deps: ConfirmUploadDeps) {
       media_kind: usable[0].kind, cover_file: accepted[0]?.fileName ?? null,
     });
 
-    return { accepted, rejected };
+    return { accepted, rejected, warnings };
   };
 }
 
@@ -215,23 +283,41 @@ export type ConfirmUpload = ReturnType<typeof makeConfirmUpload>;
 
 // --- helpers -----------------------------------------------------------------
 
+/**
+ * `orderIgnored` is true whenever the supplied `order` could not be trusted
+ * (wrong length, a repeated index, an out-of-range index) — the caller is
+ * responsible for logging and surfacing that, `applyOrder` only decides the
+ * safe fallback (keep the original arrangement).
+ */
 function applyOrder(
   assets: readonly { assetId: string }[],
   order: readonly number[] | undefined,
-): readonly { assetId: string }[] {
-  if (!Array.isArray(order) || order.length !== assets.length) return assets;
+): { arranged: readonly { assetId: string }[]; orderIgnored: boolean } {
+  if (order === undefined || order === null) {
+    return { arranged: assets, orderIgnored: false };
+  }
+  if (!Array.isArray(order) || order.length !== assets.length) {
+    return { arranged: assets, orderIgnored: true };
+  }
   const seen = new Set<number>();
   for (const index of order) {
-    if (!Number.isInteger(index) || index < 0 || index >= assets.length || seen.has(index)) return assets;
+    if (!Number.isInteger(index) || index < 0 || index >= assets.length || seen.has(index)) {
+      return { arranged: assets, orderIgnored: true };
+    }
     seen.add(index);
   }
-  return order.map((index) => assets[index]);
+  return { arranged: order.map((index) => assets[index]), orderIgnored: false };
 }
 
 /**
  * Clean up the object of every file just refused. Errors here are logged and
  * swallowed on purpose: the operator is waiting on a result, and the sweep
  * will pick up whatever is left over.
+ *
+ * MUST use `deleteStaging`: a refused file was never promoted, so its bytes
+ * are only ever in the staging prefix. `delete` targets serving and would
+ * silently no-op, and the ticket row deleted right after is the only other
+ * thing that could ever have named the object again.
  */
 async function discardRefused(
   deps: ConfirmUploadDeps,
@@ -245,10 +331,10 @@ async function discardRefused(
     const storageKey = byAssetId.get(assetId)?.storageKey;
     if (!storageKey) continue;
     try {
-      await deps.blobs.delete({ tenantId, storageKey });
+      await deps.blobs.deleteStaging({ tenantId, storageKey });
     } catch (error) {
-      log.warn("Could not remove a refused upload's bytes", {
-        ...AppError.from(error, "INTERNAL", { reason: "REFUSED_BLOB_DELETE_FAILED" }).toLogObject(),
+      log.warn("Could not remove a refused upload's staged bytes", {
+        ...AppError.from(error, "INTERNAL", { reason: "REFUSED_STAGING_DELETE_FAILED" }).toLogObject(),
         asset_id: assetId,
       });
     }
@@ -267,6 +353,10 @@ async function discardRefused(
  * upload batch for the same code would collide with the first and compose
  * would return a scrambled album. Only uploads no post job references yet
  * are removed.
+ *
+ * These rows are already-promoted uploads (they made it into `media_asset`
+ * on an earlier confirm), so their bytes live in the SERVING area — `delete`
+ * is correct here, unlike `discardRefused` above.
  */
 async function discardPreviousUploads(
   deps: ConfirmUploadDeps,

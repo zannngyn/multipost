@@ -162,6 +162,13 @@ export function makeLocalBlobStore(options: LocalBlobStoreOptions): MediaBlobSto
       return this.stat(input);
     },
 
+    async deleteStaging(input: { tenantId: TenantId; storageKey: string }): Promise<boolean> {
+      // Same reasoning as statStaging above: the local store has no separate
+      // staging area, so cleaning up a refused upload is the same delete as a
+      // promoted one.
+      return this.delete(input);
+    },
+
     async readRange(input: {
       tenantId: TenantId;
       storageKey: string;

@@ -60,6 +60,8 @@ function harness(
     put: async () => ({ storageKey: "", sizeBytes: 0 }),
     get: async () => null,
     delete: removeBlob,
+    // Not exercised by this usecase — it never calls deleteStaging.
+    deleteStaging: async () => false,
     createUploadUrl: async () => {
       throw new Error("not used in this test");
     },
