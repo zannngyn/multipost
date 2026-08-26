@@ -327,7 +327,7 @@ function SurveyCardGallery() {
           name="preview-count-chosen"
           legend="Bạn đang quản lý bao nhiêu trang?"
           choices={COUNT_PREVIEW}
-          value="1_3"
+          value="1-3"
           onChange={noop}
         />
       </Stack>
@@ -374,26 +374,38 @@ const SELLER_PREVIEW = [
 ];
 
 const TOOLS_PREVIEW = [
-  { value: "manual_facebook", label: "Tự đăng tay trên Facebook", emoji: "💻" },
-  { value: "meta_business_suite", label: "Meta Business Suite", emoji: "🔵" },
+  { value: "manual_facebook", label: "Tự đăng tay trên Facebook", emoji: "💻", tone: "sky" as const },
+  { value: "meta_business_suite", label: "Meta Business Suite", emoji: "🔵", tone: "indigo" as const },
   {
-    value: "social_suite",
+    value: "smm_tool",
     label: "Công cụ quản lý mạng xã hội",
     hint: "vd: Hootsuite, Later",
     emoji: "🛠️",
+    tone: "leaf" as const,
   },
-  { value: "single_platform_tool", label: "Công cụ chuyên một nền tảng", emoji: "🧁" },
-  { value: "ai_platform", label: "Nền tảng AI", hint: "ChatGPT/Claude…", emoji: "🤖" },
-  { value: "other", label: "Khác", emoji: "🦄" },
+  {
+    value: "platform_specific_tool",
+    label: "Công cụ chuyên một nền tảng",
+    emoji: "🧩",
+    tone: "turmeric" as const,
+  },
+  {
+    value: "ai_platform",
+    label: "Nền tảng AI",
+    hint: "ChatGPT/Claude…",
+    emoji: "🤖",
+    tone: "madder" as const,
+  },
+  { value: "other", label: "Khác", emoji: "🦄", tone: "neutral" as const },
 ];
 
 const COUNT_PREVIEW = [
-  { value: "1_3", label: "1-3" },
-  { value: "4_6", label: "4-6" },
-  { value: "7_10", label: "7-10" },
-  { value: "11_20", label: "11-20" },
-  { value: "21_50", label: "21-50" },
-  { value: "50_plus", label: "50+" },
+  { value: "1-3", label: "1-3" },
+  { value: "4-6", label: "4-6" },
+  { value: "7-10", label: "7-10" },
+  { value: "11-20", label: "11-20" },
+  { value: "21-50", label: "21-50" },
+  { value: "50+", label: "50+" },
 ];
 
 const CHANNELS_PREVIEW = [
