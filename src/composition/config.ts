@@ -334,6 +334,35 @@ export const UploadConfigSchema = z.object({
 export type UploadConfig = z.infer<typeof UploadConfigSchema>;
 
 /**
+ * MinIO. Hai endpoint chứ không phải một: URL presigned được KÝ kèm hostname,
+ * nên URL đưa ra browser phải ký bằng host công khai, còn stat/copy/delete
+ * phía server đi bằng host nội bộ trong mạng Docker. Ký nhầm host là lỗi im
+ * lặng — chỉ lộ khi chạy thật qua tunnel.
+ */
+export const MinioConfigSchema = z.object({
+  MINIO_INTERNAL_ENDPOINT: z.string().trim().min(1),
+  MINIO_PUBLIC_ENDPOINT: z.string().trim()
+    .refine(
+      (value) => value.startsWith("https://") || value.startsWith("http://"),
+      "MINIO_PUBLIC_ENDPOINT must be an http(s) URL",
+    ),
+  MINIO_ACCESS_KEY: z.string().trim().min(1),
+  MINIO_SECRET_KEY: z.string().trim().min(1),
+  MINIO_BUCKET: z.string().trim().min(1).default("mysp-media"),
+  MINIO_USE_SSL: z
+    .union([z.boolean(), z.string()])
+    .default(true)
+    .transform((value) => (typeof value === "boolean" ? value : value.trim().toLowerCase() !== "false")),
+});
+
+export type MinioConfig = z.infer<typeof MinioConfigSchema>;
+
+export function loadMinioConfig(env: EnvRecord = process.env): MinioConfig {
+  return parseEnv(MinioConfigSchema, env, "minio");
+}
+
+
+/**
  * Catalog files an operator uploaded instead of connecting a Google Sheet
  * (phase 3). Its own group rather than a key of the upload group on purpose:
  * these bytes are the tenant's ONLY product data, so they must never be swept
