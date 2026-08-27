@@ -119,15 +119,14 @@ export function CelebrateScreen({
         <span className="block">
           {name === null ? "Xong rồi 🎉" : `Xong rồi, ${name} 🎉`}
         </span>
-        <span className="block">MYSP đã hiểu xưởng của bạn</span>
+        <span className="block">Chào mừng bạn đến với MYSP</span>
       </h1>
 
       <p
         style={enterDelay(ENTER_DELAY_SUBHEAD)}
         className="onboarding-enter-fade text-muted-foreground max-w-[34rem] text-center text-sm"
       >
-        Câu trả lời của bạn đã được lưu. Từ giờ MYSP sẽ gợi ý caption và kênh
-        đăng theo đúng mặt hàng bạn bán.
+        Hãy cùng bắt đầu xây dựng nội dung cho kênh của bạn ngay nhé!
       </p>
 
       {/* Ẩn cả khối khi không có dữ liệu — không skeleton, không câu lỗi. Một

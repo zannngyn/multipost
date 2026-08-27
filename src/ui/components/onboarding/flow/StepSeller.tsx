@@ -56,7 +56,7 @@ const CHOICES: readonly OptionChoice[] = SELLER_KINDS.map((value) => ({
   ...SELLER_LABEL[value],
 }));
 
-const QUESTION = "Bạn đang bán hàng kiểu nào?";
+const QUESTION = "Mô tả đúng nhất về công việc của bạn?";
 
 /** Narrowing at the boundary: the group hands back a `string`, not a `SellerKind`. */
 function isSellerKind(value: string): value is SellerKind {
