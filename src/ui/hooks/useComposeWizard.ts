@@ -240,69 +240,6 @@ export function useComposeWizard() {
     onError: () => setDetection(null),
   });
 
-  const upload = useMutation<UploadResponse, ApiError, void>({
-    mutationFn: () => {
-      const values = form.getValues();
-      // The queue order IS the album order (index 0 is the cover); tickets
-      // come back tagged with `sourceIndex` into this same array, so sending
-      // it straight through keeps that order without needing a separate
-      // `order` field on confirm.
-      return direct.upload(values.productCode, uploadQueue.map((item) => item.file));
-    },
-    retry: false,
-    onSuccess: (result) => {
-      setUploadedCount(result.accepted.length);
-      setUploadedAssets(result.accepted);
-      setUploadRejections(result.rejected);
-      setUploadWarnings([...result.warnings]);
-      // Accepted files are stored server-side now; keeping them queued would
-      // let a second click upload the same album twice.
-      setUploadQueue([]);
-      // The detected code was about THIS queue; an empty queue has none, and a
-      // leftover error state must not resurface against the next batch.
-      setDetection(null);
-      detect.reset();
-    },
-    onError: () => {
-      setUploadRejections([]);
-      setUploadWarnings([]);
-    },
-  });
-
-  /**
-   * Wraps the raw queue setter so the decision to re-ask detection is made at
-   * the one place queue changes actually originate (drop, remove, reorder),
-   * rather than reacted to a tick later from a `useEffect` watching
-   * `uploadQueue`: this project's lint forbids a synchronous `setState` call
-   * in an effect body (`react-hooks/set-state-in-effect`) and ref reads/writes
-   * during render (`react-hooks/refs`), both of which an effect-based version
-   * of this would need.
-   *
-   * E9 T7 review round 1, Important 2: re-fires on ANY change to the set of
-   * file NAMES, not only the empty→non-empty edge — dropping file B on top of
-   * an already-detected file A (or removing down to one of a conflicting
-   * pair) must not leave the old verdict on screen describing a queue that no
-   * longer exists (rule 5). Compared by name fingerprint, not array identity
-   * or length, so a pure drag-reorder — same names, same count — does not
-   * re-fire a request nobody asked for.
-   */
-  const handleUploadQueueChange = useCallback(
-    (next: QueuedFile[]) => {
-      const previousFingerprint = queueNameFingerprint(uploadQueue);
-      setUploadQueue(next);
-      if (next.length === 0) {
-        setDetection(null);
-        // Otherwise a later file dropped back in re-triggers `onError`'s old
-        // verdict-clearing path against a stale error/data pair from before
-        // the queue emptied.
-        detect.reset();
-        return;
-      }
-      if (queueNameFingerprint(next) !== previousFingerprint) detect.mutate(next);
-    },
-    [uploadQueue, detect],
-  );
-
   const compose = useMutation<ComposeResponse, ApiError, void>({
     mutationFn: () => {
       const values = form.getValues();
@@ -356,6 +293,104 @@ export function useComposeWizard() {
   });
 
   /**
+   * Validates ONLY the lookup fields — the caption is not filled in yet and
+   * must not be reported as missing — then composes. On failure the focus moves
+   * to the first invalid field so a keyboard user is not left guessing.
+   */
+  const submitProductStep = useCallback(async (): Promise<ProductStepOutcome> => {
+    const valid = await form.trigger([...STEP_PRODUCT_FIELDS]);
+    if (!valid) {
+      const firstInvalid = STEP_PRODUCT_FIELDS.find((field) => form.getFieldState(field).invalid);
+      if (firstInvalid) form.setFocus(firstInvalid);
+      return { ok: false, reason: "invalid" };
+    }
+    try {
+      // `mutateAsync`, so the caller can await the answer. The mutation's own
+      // `onError` still runs; the throw is caught here rather than left to
+      // become an unhandled rejection.
+      return { ok: true, composed: await compose.mutateAsync() };
+    } catch (error) {
+      // The error is HANDED BACK, not just swallowed into a boolean: the caller
+      // pins the server's own sentence on the colour chip that caused it, and
+      // reading it from `compose.error` instead would be a stale closure — the
+      // callback was created before this failure existed.
+      return {
+        ok: false,
+        reason: "failed",
+        error: ApiError.is(error) ? error : null,
+      };
+    }
+  }, [compose, form]);
+
+  const upload = useMutation<UploadResponse, ApiError, void>({
+    mutationFn: () => {
+      const values = form.getValues();
+      // The queue order IS the album order (index 0 is the cover); tickets
+      // come back tagged with `sourceIndex` into this same array, so sending
+      // it straight through keeps that order without needing a separate
+      // `order` field on confirm.
+      return direct.upload(values.productCode, uploadQueue.map((item) => item.file));
+    },
+    retry: false,
+    onSuccess: (result) => {
+      setUploadedCount(result.accepted.length);
+      setUploadedAssets(result.accepted);
+      setUploadRejections(result.rejected);
+      setUploadWarnings([...result.warnings]);
+      // Accepted files are stored server-side now; keeping them queued would
+      // let a second click upload the same album twice.
+      setUploadQueue([]);
+      // The detected code was about THIS queue; an empty queue has none, and a
+      // leftover error state must not resurface against the next batch.
+      setDetection(null);
+      detect.reset();
+      // C1 — the media the operator just arranged is now on the server, so
+      // compose can succeed for real. Composing any earlier (e.g. straight off
+      // "Dùng mã này") would hit MEDIA_NOT_FOUND against a post with nothing
+      // uploaded yet; this is the one place after that where it is safe.
+      if (result.accepted.length > 0) void submitProductStep();
+    },
+    onError: () => {
+      setUploadRejections([]);
+      setUploadWarnings([]);
+    },
+  });
+
+  /**
+   * Wraps the raw queue setter so the decision to re-ask detection is made at
+   * the one place queue changes actually originate (drop, remove, reorder),
+   * rather than reacted to a tick later from a `useEffect` watching
+   * `uploadQueue`: this project's lint forbids a synchronous `setState` call
+   * in an effect body (`react-hooks/set-state-in-effect`) and ref reads/writes
+   * during render (`react-hooks/refs`), both of which an effect-based version
+   * of this would need.
+   *
+   * E9 T7 review round 1, Important 2: re-fires on ANY change to the set of
+   * file NAMES, not only the empty→non-empty edge — dropping file B on top of
+   * an already-detected file A (or removing down to one of a conflicting
+   * pair) must not leave the old verdict on screen describing a queue that no
+   * longer exists (rule 5). Compared by name fingerprint, not array identity
+   * or length, so a pure drag-reorder — same names, same count — does not
+   * re-fire a request nobody asked for.
+   */
+  const handleUploadQueueChange = useCallback(
+    (next: QueuedFile[]) => {
+      const previousFingerprint = queueNameFingerprint(uploadQueue);
+      setUploadQueue(next);
+      if (next.length === 0) {
+        setDetection(null);
+        // Otherwise a later file dropped back in re-triggers `onError`'s old
+        // verdict-clearing path against a stale error/data pair from before
+        // the queue emptied.
+        detect.reset();
+        return;
+      }
+      if (queueNameFingerprint(next) !== previousFingerprint) detect.mutate(next);
+    },
+    [uploadQueue, detect],
+  );
+
+  /**
    * Tông giọng asked of the writer. State, not form state: it is not part of
    * the post — it only shapes the next request, and it never travels to the
    * publish payload or into a draft.
@@ -407,36 +442,6 @@ export function useComposeWizard() {
   });
 
   /**
-   * Validates ONLY the lookup fields — the caption is not filled in yet and
-   * must not be reported as missing — then composes. On failure the focus moves
-   * to the first invalid field so a keyboard user is not left guessing.
-   */
-  const submitProductStep = useCallback(async (): Promise<ProductStepOutcome> => {
-    const valid = await form.trigger([...STEP_PRODUCT_FIELDS]);
-    if (!valid) {
-      const firstInvalid = STEP_PRODUCT_FIELDS.find((field) => form.getFieldState(field).invalid);
-      if (firstInvalid) form.setFocus(firstInvalid);
-      return { ok: false, reason: "invalid" };
-    }
-    try {
-      // `mutateAsync`, so the caller can await the answer. The mutation's own
-      // `onError` still runs; the throw is caught here rather than left to
-      // become an unhandled rejection.
-      return { ok: true, composed: await compose.mutateAsync() };
-    } catch (error) {
-      // The error is HANDED BACK, not just swallowed into a boolean: the caller
-      // pins the server's own sentence on the colour chip that caused it, and
-      // reading it from `compose.error` instead would be a stale closure — the
-      // callback was created before this failure existed.
-      return {
-        ok: false,
-        reason: "failed",
-        error: ApiError.is(error) ? error : null,
-      };
-    }
-  }, [compose, form]);
-
-  /**
    * E9 T7 — "Dùng mã này" / "Nhập mã BG0SQ9999" / one code from a conflict.
    * Fills the field with the code the button carries and, unless it is blank
    * ("Nhập mã sản phẩm" only opens the field for typing), looks it up right
@@ -455,9 +460,17 @@ export function useComposeWizard() {
         return;
       }
       form.setValue("productCode", code, { shouldDirty: true });
+      // C1 — mode B, no file on the server yet: `compose-post` gates on media
+      // BEFORE anything read the code, so composing right now would always
+      // answer MEDIA_NOT_FOUND. Fill the field and stop; `upload.onSuccess`
+      // runs the real compose once the queued files actually land.
+      if (form.getValues("source") === "upload" && uploadedAssets.length === 0) {
+        form.setFocus("productCode");
+        return;
+      }
       void submitProductStep();
     },
-    [form, submitProductStep],
+    [form, submitProductStep, uploadedAssets],
   );
 
   /**

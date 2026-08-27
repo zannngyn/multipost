@@ -252,7 +252,10 @@ export function UploadPanel(props: UploadPanelProps) {
         disabled={disabled}
         itemName={(item) => item.file.name}
         renderContent={(item) => (
-          <div className="flex min-w-0 items-center gap-3">
+          // M2 — `AlbumArranger`'s list layout wraps this in a `<span>`; a
+          // `<div>` directly inside it was flow content inside inline content
+          // (invalid HTML). Same classes, so the rendered box is unchanged.
+          <span className="flex min-w-0 items-center gap-3">
             {/* Fixed-size tile so the list never shifts once the image
                 decodes (CLS = 0). `aria-hidden`: the filename right next to
                 it already names the file — reading both would be noise for
@@ -278,7 +281,7 @@ export function UploadPanel(props: UploadPanelProps) {
               <span className="block truncate text-sm">{item.file.name}</span>
               <span className="text-muted-foreground text-xs">{formatBytes(item.file.size)}</span>
             </div>
-          </div>
+          </span>
         )}
         renderActions={(item, index) => (
           <Button

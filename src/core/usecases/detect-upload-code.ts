@@ -6,6 +6,7 @@ import {
   detectUploadProductCode,
   type UploadCodeDetection,
 } from "@/core/domain/upload-candidate-code";
+import { MAX_UPLOADS_PER_POST } from "@/core/domain/uploaded-media";
 import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
 import type { ProductRepo } from "@/core/ports/product-repo";
@@ -55,9 +56,6 @@ export interface DetectUploadCodeDeps {
   logger: Logger;
 }
 
-/** Cùng trần với một bài (MAX_UPLOADS_PER_POST) — đợt này 1 lô = 1 bài. */
-const MAX_FILES = 10;
-
 export function makeDetectUploadCode(deps: DetectUploadCodeDeps) {
   return async function detectUploadCode(
     input: DetectUploadCodeInput,
@@ -72,11 +70,11 @@ export function makeDetectUploadCode(deps: DetectUploadCodeDeps) {
         context: { tenant_id: rawTenantId || null, file_count: files.length },
       });
     }
-    if (files.length > MAX_FILES) {
+    if (files.length > MAX_UPLOADS_PER_POST) {
       throw new AppError("INVALID_INPUT", {
-        message: `detectUploadCode takes at most ${MAX_FILES} file names`,
-        userMessage: `Một bài chỉ nhận tối đa ${MAX_FILES} file — hiện đang có ${files.length}.`,
-        context: { file_count: files.length, max: MAX_FILES },
+        message: `detectUploadCode takes at most ${MAX_UPLOADS_PER_POST} file names`,
+        userMessage: `Một bài chỉ nhận tối đa ${MAX_UPLOADS_PER_POST} file — hiện đang có ${files.length}.`,
+        context: { file_count: files.length, max: MAX_UPLOADS_PER_POST },
       });
     }
     const tenantId = normalizeTenantId(input.tenantId);
@@ -120,9 +118,10 @@ export function makeDetectUploadCode(deps: DetectUploadCodeDeps) {
         reason: "MULTIPLE_CODES_IN_ONE_BATCH",
         codes,
       });
-      warnings.push(
-        `Các file đang mang ${codes.length} mã khác nhau (${codes.join(", ")}) — hãy chọn mã cho bài này, hoặc tách ra tải lên từng mã.`,
-      );
+      // I3 — NOT pushed into `warnings`: `describeDetection`'s conflict `title`
+      // already says this (and names the codes on the buttons below it), and
+      // `DetectedCodeNotice` draws both `title` and `warnings` in the same
+      // block. A second copy here would print the same sentence twice.
       return { verdict: { status: "conflict", codes }, files: fileView, warnings };
     }
 

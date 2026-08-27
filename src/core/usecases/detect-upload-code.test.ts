@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { testTenantId } from "@/core/domain/tenant-context.testing";
+import { MAX_UPLOADS_PER_POST } from "@/core/domain/uploaded-media";
 
 import { makeDetectUploadCode } from "./detect-upload-code";
 
@@ -95,6 +96,16 @@ describe("detectUploadCode", () => {
     await expect(
       detect({ tenantId: testTenantId("not-a-uuid"), files: [] }),
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("refuses more files than a post's ceiling (MAX_UPLOADS_PER_POST)", async () => {
+    const detect = makeDetectUploadCode(makeDeps());
+    const files = Array.from({ length: MAX_UPLOADS_PER_POST + 1 }, (_, index) => ({
+      fileName: `BG0SQ6083-AI (${index + 1}).png`,
+    }));
+    await expect(detect({ tenantId: TENANT, files })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
   });
 
   it("keeps working when the catalog config cannot be read", async () => {
