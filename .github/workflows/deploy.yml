@@ -212,18 +212,33 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Per-environment, so staging and production hold DIFFERENT MinIO root
+          # credentials. remote-deploy.sh writes them into the stack's own
+          # .ci-secrets.env; they are deliberately NOT in the operator's .env,
+          # which CI never touches.
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
         run: |
           set -euo pipefail
 
+          # Fail here, with a name, rather than 200 lines later inside a compose
+          # interpolation error that only says a variable "is missing a value".
+          for v in MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
+            test -n "${!v}" || {
+              echo "::error::$v is not set on this environment's secrets"; exit 1; }
+          done
+
           # The variables are prepended to the script on stdin rather than put in
           # the ssh command line: argv is world-readable through `ps` on the
-          # server, and one of these is a registry token.
+          # server, and three of these are credentials.
           {
             printf 'export DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
             printf 'export IMAGE_PREFIX=%q\n' "$IMAGE_PREFIX"
             printf 'export IMAGE_TAG=%q\n' "$IMAGE_TAG"
             printf 'export GHCR_USER=%q\n' "$GHCR_USER"
             printf 'export GHCR_TOKEN=%q\n' "$GHCR_TOKEN"
+            printf 'export MINIO_ACCESS_KEY=%q\n' "$MINIO_ACCESS_KEY"
+            printf 'export MINIO_SECRET_KEY=%q\n' "$MINIO_SECRET_KEY"
             cat deploy/remote-deploy.sh
           } | ssh -o BatchMode=yes deploy-target 'bash -s'
 

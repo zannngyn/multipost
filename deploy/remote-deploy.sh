@@ -6,12 +6,14 @@
 # read it out of `ps`).
 #
 # Required: DEPLOY_PATH IMAGE_PREFIX IMAGE_TAG GHCR_USER GHCR_TOKEN
+#           MINIO_ACCESS_KEY MINIO_SECRET_KEY
 #
 # Safe to re-run: every step is idempotent, and a failed health check leaves the
 # previous containers' logs on stdout rather than a silent green tick.
 set -euo pipefail
 
-for var in DEPLOY_PATH IMAGE_PREFIX IMAGE_TAG GHCR_USER GHCR_TOKEN; do
+for var in DEPLOY_PATH IMAGE_PREFIX IMAGE_TAG GHCR_USER GHCR_TOKEN \
+           MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
   if [ -z "${!var:-}" ]; then
     echo "remote-deploy: $var is not set" >&2
     exit 1
@@ -36,6 +38,27 @@ trap cleanup EXIT
 
 echo "--- login to ghcr.io"
 printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+echo "--- write CI-held secrets"
+# The MinIO root credential lives in GitHub Secrets, not in the operator's .env.
+# It is written to its OWN file rather than merged into .env, because .env
+# belongs to whoever set the box up and CI must never rewrite it.
+#
+# Written before `stack pull`, because compose interpolates the whole file for
+# EVERY subcommand — pull included — and docker-compose.yml refuses an empty
+# MINIO_ACCESS_KEY with `:?` rather than letting MinIO fall back to
+# minioadmin:minioadmin on a published port.
+#
+# 600 before the content: a `cat >` creates the file with the umask's mode, so
+# setting the mode afterwards leaves a window where the credential is readable.
+umask 077
+cat > .ci-secrets.env <<EOF
+# Written by CI on every deploy. Do not edit by hand — the next deploy
+# overwrites it. Operator settings belong in .env.
+MINIO_ACCESS_KEY=$MINIO_ACCESS_KEY
+MINIO_SECRET_KEY=$MINIO_SECRET_KEY
+EOF
+umask 022
 
 echo "--- pin release $IMAGE_TAG"
 # Written, not appended: this file IS the record of what is deployed.
