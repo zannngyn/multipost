@@ -51,6 +51,13 @@ function request(query: string, nonce?: string): Request {
   return new Request(`http://localhost/api/catalog/google/callback${query}`, { headers });
 }
 
+/** A callback arriving the way the proxy actually delivers it on the VPS. */
+function requestFromBehindProxy(query: string, nonce?: string): Request {
+  const headers = new Headers();
+  if (nonce !== undefined) headers.set("cookie", `${GOOGLE_OAUTH_STATE_COOKIE}=${nonce}`);
+  return new Request(`https://0.0.0.0:3000/api/catalog/google/callback${query}`, { headers });
+}
+
 function location(response: Response): URL {
   return new URL(response.headers.get("location") ?? "", "http://localhost");
 }
@@ -264,5 +271,27 @@ describe("GET /api/catalog/google/callback — return target", () => {
     expect(
       cookies.some((c) => c.startsWith(`${OAUTH_RETURN_COOKIE}=;`) && c.includes("Max-Age=0")),
     ).toBe(true);
+  });
+});
+
+/**
+ * Staging sent the operator to `https://0.0.0.0:3000/sync` after a SUCCESSFUL
+ * connect: the container's own bind arrives as the request Host through the
+ * tunnel, and the redirect was built from it. The credential was already
+ * stored, so the only symptom was a browser SSL error on a page that should
+ * have said "đã kết nối".
+ */
+describe("the redirect never trusts the request Host", () => {
+  it("sends the browser to AUTH_URL even when the request arrived as 0.0.0.0:3000", async () => {
+    vi.stubEnv("AUTH_URL", "https://mysp-stg.vannt.asia");
+
+    const response = await GET(requestFromBehindProxy("?error=access_denied", NONCE));
+
+    const target = new URL(response.headers.get("location") ?? "");
+    expect(target.origin).toBe("https://mysp-stg.vannt.asia");
+    expect(target.pathname).toBe("/sync");
+    expect(response.headers.get("location")).not.toContain("0.0.0.0");
+
+    vi.unstubAllEnvs();
   });
 });

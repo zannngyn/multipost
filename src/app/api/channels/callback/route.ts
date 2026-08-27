@@ -1,5 +1,6 @@
 import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
+import { resolveRedirectOrigin } from "@/app/api/_lib/redirect-origin";
 import { type ErrorLogger } from "@/app/api/_lib/http-errors";
 import { buildOauthReturnCookie, resolveReturnScreen } from "@/app/api/_lib/oauth-return-cookie";
 import { clearStateCookie, readStateCookie } from "@/app/api/channels/_lib/oauth-state-cookie";
@@ -55,7 +56,7 @@ export async function GET(request: Request): Promise<Response> {
         oauth_error_reason: url.searchParams.get("error_reason"),
         error_code: "CONNECT_CANCELLED",
       });
-      return redirect(request, url, "connect=cancelled", secure);
+      return redirect(request, url, "connect=cancelled", secure, logger);
     }
 
     if (!nonce) {
@@ -64,7 +65,7 @@ export async function GET(request: Request): Promise<Response> {
         error_code: "UNAUTHORIZED",
         reason: "STATE_COOKIE_ABSENT",
       });
-      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure);
+      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure, logger);
     }
 
     // Single-use claim — the row is burned HERE, before any external call, so
@@ -76,7 +77,7 @@ export async function GET(request: Request): Promise<Response> {
         error_code: "UNAUTHORIZED",
         reason: "STATE_CLAIM_REFUSED",
       });
-      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure);
+      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure, logger);
     }
 
     /**
@@ -93,7 +94,7 @@ export async function GET(request: Request): Promise<Response> {
         reason: "STATE_ACCOUNT_MISMATCH",
         alert: "OPERATOR_ATTENTION",
       });
-      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure);
+      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure, logger);
     }
     // Throws TENANT_NOT_FOUND / FORBIDDEN when the membership or role is gone.
     const ctx = await container.usecases.requireTenant(session, claimed.tenantId, {
@@ -120,6 +121,7 @@ export async function GET(request: Request): Promise<Response> {
       `connected=${result.imported + result.updated}&new=${result.imported}` +
         `&skipped=${result.skipped}`,
       secure,
+      logger,
     );
   } catch (error) {
     // The browser is mid-navigation: an error BODY would be a dead end. Log with
@@ -136,7 +138,7 @@ export async function GET(request: Request): Promise<Response> {
       appError.code === "TENANT_NOT_FOUND" || appError.code === "FORBIDDEN"
         ? "STATE_MISMATCH"
         : appError.code;
-    return redirect(request, url, `connect=error&reason=${encodeURIComponent(reason)}`, secure);
+    return redirect(request, url, `connect=error&reason=${encodeURIComponent(reason)}`, secure, logger);
   }
 }
 
@@ -149,7 +151,13 @@ export async function GET(request: Request): Promise<Response> {
  * `/channels` and drops the operator out of the slideshow. With one exit there
  * is no branch left to forget.
  */
-function redirect(request: Request, current: URL, query: string, secure: boolean): Response {
+function redirect(
+  request: Request,
+  current: URL,
+  query: string,
+  secure: boolean,
+  logger: ErrorLogger,
+): Response {
   const target = resolveReturnScreen({
     request,
     defaultScreen: SCREEN,
@@ -157,7 +165,7 @@ function redirect(request: Request, current: URL, query: string, secure: boolean
     query,
   });
   const headers = new Headers({
-    location: new URL(target, current.origin).toString(),
+    location: new URL(target, resolveRedirectOrigin(current, logger, ROUTE)).toString(),
     "cache-control": "no-store",
   });
   // Two cookies, so `Headers.append` — an object literal would keep only one.
