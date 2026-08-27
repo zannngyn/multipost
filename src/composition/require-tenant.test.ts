@@ -56,6 +56,14 @@ function harness(records = [accountRecord()], ttlMs = 60_000) {
 
 const SESSION = { accountId: "acc-1", email: "worker@gmail.com" };
 
+/**
+ * A tenant id this account holds no row in — the shape of an active-tenant
+ * cookie left behind by whoever used this browser before (sign-out clears it
+ * since `_auth/signout-action.ts`, but a cookie already in the wild outlives
+ * that fix by up to 30 days).
+ */
+const STRANGER_TENANT = "00000000-0000-0000-0000-00000000000c";
+
 // --- Refusals first (doc 10 §3) ----------------------------------------------
 
 describe("requireTenant — refusals", () => {
@@ -98,11 +106,38 @@ describe("requireTenant — refusals", () => {
     });
   });
 
-  it("404s a cookie pointing at a tenant with no membership — indistinguishable from absent", async () => {
-    const { gate } = harness();
-    await expect(gate.requireTenant(SESSION, TENANT_Y, { tier: "S" })).rejects.toMatchObject({
-      code: "TENANT_NOT_FOUND",
-    });
+  /**
+   * A selector naming a tenant this account holds NO row in is somebody else's
+   * leftover — the sign-out before this session did not take the cookie with
+   * it. It is answered the same way an absent cookie is (409 → the picker),
+   * never 404: a 404 here locked a whole account out of an app it is a member
+   * of, on every single route at once.
+   */
+  it("409s a stranger's cookie when the account belongs to SEVERAL companies — the picker decides", async () => {
+    const { gate } = harness([
+      accountRecord({
+        memberships: [membershipRow(), membershipRow({ tenantId: TENANT_Y, role: "owner" })],
+      }),
+    ]);
+    await expect(
+      gate.requireTenant(SESSION, STRANGER_TENANT, { tier: "S" }),
+    ).rejects.toMatchObject({ code: "TENANT_NOT_SELECTED" });
+  });
+
+  it("409s a stranger's cookie when the account belongs nowhere yet — first-run provisioning", async () => {
+    const { gate } = harness([accountRecord({ memberships: [] })]);
+    await expect(
+      gate.requireTenant(SESSION, STRANGER_TENANT, { tier: "S" }),
+    ).rejects.toMatchObject({ code: "TENANT_NOT_SELECTED" });
+  });
+
+  it("never resurrects a REMOVED membership to answer a stranger's cookie", async () => {
+    const { gate } = harness([
+      accountRecord({ memberships: [membershipRow({ status: "removed" })] }),
+    ]);
+    await expect(
+      gate.requireTenant(SESSION, STRANGER_TENANT, { tier: "S" }),
+    ).rejects.toMatchObject({ code: "TENANT_NOT_SELECTED" });
   });
 
   it("404s a removed membership", async () => {
@@ -148,6 +183,18 @@ describe("requireTenant — grants", () => {
   it("auto-selects the single company when there is no cookie", async () => {
     const { gate } = harness();
     const context = await gate.requireTenant(SESSION, null, { tier: "R" });
+    expect(context).toEqual({ tenantId: TENANT_X, role: "editor", membershipVersion: 1 });
+  });
+
+  /**
+   * The bug this branch exists for: the browser still carried the PREVIOUS
+   * account's company, so every tenant-scoped route answered 404 while
+   * `/api/me` cheerfully reported the one company this account does have.
+   * Both halves of the server now give the same answer.
+   */
+  it("adopts the account's only company when the cookie names a company it is not in", async () => {
+    const { gate } = harness();
+    const context = await gate.requireTenant(SESSION, STRANGER_TENANT, { tier: "S" });
     expect(context).toEqual({ tenantId: TENANT_X, role: "editor", membershipVersion: 1 });
   });
 
@@ -219,8 +266,11 @@ describe("requireTenant — cache tiers", () => {
 
   it("a denial is never cached — an approval in between is seen immediately", async () => {
     const { gate, accounts } = harness([accountRecord({ memberships: [] })]);
+    // 409, not 404: this account holds no row in the selected tenant, so the
+    // selector reads as unchosen (see "a stranger's cookie" above). What the
+    // case pins is the CACHE — the refusal must not outlive the approval.
     await expect(gate.requireTenant(SESSION, TENANT_X, { tier: "R" })).rejects.toMatchObject({
-      code: "TENANT_NOT_FOUND",
+      code: "TENANT_NOT_SELECTED",
     });
 
     const record = [...accounts.records.values()][0];
@@ -280,9 +330,12 @@ describe("requireTenant — support sessions (doc 10 §8.1: read-only)", () => {
     const { gate, findSupportSession } = harness([accountRecord({ memberships: [] })]);
     findSupportSession.mockResolvedValue(null);
 
+    // The staffer holds no membership anywhere, so the normal refusal for them
+    // is "pick a company" (409) — and there is none to pick. Nothing is granted
+    // either way; that, not the digit, is what a dead visit has to guarantee.
     await expect(
       gate.requireTenant(SESSION, TENANT_Y, { tier: "R", supportSessionId: SUPPORT_SESSION }),
-    ).rejects.toMatchObject({ code: "TENANT_NOT_FOUND" });
+    ).rejects.toMatchObject({ code: "TENANT_NOT_SELECTED" });
   });
 
   it("a REAL membership wins: the visit is never consulted on a membership hit", async () => {
@@ -299,13 +352,22 @@ describe("requireTenant — support sessions (doc 10 §8.1: read-only)", () => {
     expect(findSupportSession).not.toHaveBeenCalled();
   });
 
-  it("the visit is NOT a skeleton key: a selector for a THIRD tenant still 404s", async () => {
+  /**
+   * The one that must not soften when a stale selector stops being a 404: the
+   * stranger-cookie branch re-resolves from the account's OWN memberships and
+   * never re-enters the support fallback, so a visit covering TENANT_Y cannot
+   * be reached by naming TENANT_X. Refused, and refused without a context.
+   */
+  it("the visit is NOT a skeleton key: a selector for a THIRD tenant is still refused", async () => {
     const { gate, findSupportSession } = harness([accountRecord({ memberships: [] })]);
     findSupportSession.mockResolvedValue(liveVisit); // visit covers TENANT_Y
 
     await expect(
       gate.requireTenant(SESSION, TENANT_X, { tier: "R", supportSessionId: SUPPORT_SESSION }),
-    ).rejects.toMatchObject({ code: "TENANT_NOT_FOUND" });
+    ).rejects.toMatchObject({ code: "TENANT_NOT_SELECTED" });
+    // Consulted for the named selector and refused there — never re-asked with
+    // an empty one, which would have handed over TENANT_Y.
+    expect(findSupportSession).toHaveBeenCalledTimes(1);
   });
 
   it("no support cookie → the fallback never queries", async () => {

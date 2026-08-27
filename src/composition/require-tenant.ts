@@ -243,12 +243,61 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
       // exactly that tenant may still answer (read-only, M3.3).
       const support = await supportFallback(selected);
       if (support) return support;
-      // No membership, removed membership, suspended tenant, nonexistent
-      // tenant: ONE indistinguishable 404, so this cannot probe what exists.
+
+      /**
+       * NO ROW AT ALL: the selector names a company this account was never in.
+       * That is not a refusal to deliver — it is a cookie somebody else left in
+       * this browser (sign-out did not clear it until `_auth/signout-action.ts`,
+       * and one already in the wild outlives that fix by up to 30 days).
+       *
+       * Answering 404 here locked an account out of EVERY route at once while
+       * `/api/me` — reading the very same cookie — reported the company it does
+       * belong to and drew the app around it. Two halves of one server giving
+       * two answers is the bug; the selector simply does not count when it
+       * points nowhere this account can go, exactly as a malformed one does
+       * not. Nothing is revealed about the named tenant either way.
+       *
+       * NOT reached through the support fallback a second time: `supportFallback`
+       * above already refused this selector, and re-asking it with "" would turn
+       * a visit covering tenant A into a skeleton key for a selector naming B.
+       */
+      if (membership === null) {
+        // Contract: this repo call returns ACTIVE memberships only, so a
+        // membership that was REMOVED cannot come back through this door.
+        const usable = (await deps.accounts.listMembershipsWithTenant(accountId)).filter(
+          (candidate) => candidate.tenantStatus === "active",
+        );
+        if (usable.length === 1) {
+          log.info("Selector named a company this account is not in — using its only company", {
+            tenant_id: usable[0].tenantId,
+            selector_tenant_id: selected,
+            stale_selector: true,
+          });
+          return toContext(usable[0], options.minRole, log);
+        }
+        log.warn("Selector named a company this account is not in — asking for a choice", {
+          selector_tenant_id: selected,
+          error_code: "TENANT_NOT_SELECTED",
+          membership_count: usable.length,
+          tier,
+        });
+        throw new AppError("TENANT_NOT_SELECTED", {
+          message:
+            usable.length === 0
+              ? "Selected tenant holds no membership, and the account has none anywhere"
+              : "Selected tenant holds no membership; the account belongs to several others",
+          context: { account_id: accountId, membership_count: usable.length },
+        });
+      }
+
+      // A row EXISTS and is unusable: a REMOVED membership or a SUSPENDED
+      // tenant — both real decisions about this account, not a stale cookie.
+      // ONE indistinguishable 404, so this cannot probe what exists.
       log.warn("Tenant resolution refused", {
         tenant_id: selected,
         error_code: "TENANT_NOT_FOUND",
-        membership_found: membership !== null,
+        membership_status: membership.status,
+        tenant_status: membership.tenantStatus,
         tier,
       });
       throw new AppError("TENANT_NOT_FOUND", {
