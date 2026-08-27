@@ -73,6 +73,27 @@ place_env() {
 place_env "$ROOT/prod/.env" "$here/env/prod.env.example"
 place_env "$ROOT/stg/.env"  "$here/env/stg.env.example"
 
+say "CI-secret placeholders"
+# CI overwrites these on every deploy. They exist now so deploy/stack.sh gives a
+# useful error instead of a compose interpolation crash before the first
+# pipeline. EMPTY OF KEYS, not empty of file: a placeholder carrying
+# `MINIO_ACCESS_KEY=` would override the real value from .env with the empty
+# string, which is exactly what docker-compose.yml's `:?` refuses.
+for stack in prod stg; do
+  file="$ROOT/$stack/.ci-secrets.env"
+  if [ -f "$file" ]; then
+    echo "  $file already exists, left untouched"
+  else
+    (umask 077; cat > "$file" <<'EOF'
+# Written by CI on every deploy from the environment's GitHub Secrets
+# (MINIO_ACCESS_KEY, MINIO_SECRET_KEY). Placeholder until the first pipeline
+# runs — deliberately declares nothing, so it cannot override .env with a blank.
+EOF
+    )
+    echo "  $file created"
+  fi
+done
+
 say "image-tag placeholders"
 # CI overwrites these on the first deploy. They exist now only so that
 # deploy/stack.sh gives a useful error instead of a compose interpolation crash
@@ -131,6 +152,11 @@ cat <<EOF
        openssl rand -hex 24         # POSTGRES_PASSWORD — hex, not base64:
                                     # it goes inside DATABASE_URL, where a
                                     # base64 "/" makes the URL invalid
+
+     MINIO_ACCESS_KEY / MINIO_SECRET_KEY are NOT filled in here. They live in
+     each GitHub environment's secrets, and CI writes them to
+     $ROOT/<stack>/.ci-secrets.env on every deploy. Leave the two lines in
+     .env blank — .ci-secrets.env is loaded after .env and wins.
 
   2. Check DNS resolves here — two type-A records, both "DNS only" on
      Cloudflare (grey cloud), both to this box's public IP:
