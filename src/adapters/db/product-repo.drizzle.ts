@@ -400,6 +400,32 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
   }
 
   /**
+   * Every product code of the tenant, so the upload file-name parser can
+   * recognise a code shape `PRODUCT_CODE_PATTERN` cannot guess (E9). Distinct
+   * because `products.code` is not guaranteed unique at the SQL level for
+   * every origin (`sheet` vs `manual` rows may briefly share one code between
+   * a sync and its conflict resolution).
+   */
+  async listCodes(tenantId: TenantId): Promise<readonly string[]> {
+    const scope = forTenant(this.db, tenantId);
+    try {
+      const rows = await scope.db
+        .selectDistinct({ code: products.code })
+        .from(products)
+        .where(scope.where(products));
+      return rows
+        .map((row) => (typeof row.code === "string" ? row.code.trim() : ""))
+        .filter((code) => code.length > 0);
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "tenantId",
+        operation: "product.listCodes",
+      });
+    }
+  }
+
+  /**
    * Removes the rows this sync did not see. Scoped to `origin = 'sheet'`: a
    * manual product belongs to no run, so without the guard every sync would
    * delete the products an operator typed (`ne(NULL, ...)` is NULL anyway, but
