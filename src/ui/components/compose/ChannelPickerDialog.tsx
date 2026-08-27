@@ -209,7 +209,11 @@ export function ChannelPickerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         aria-labelledby={titleId}
-        className="bg-card text-foreground max-w-160 gap-0 overflow-hidden rounded-xl border-0 p-0"
+        /* `overflow-clip`, NOT `overflow-hidden`: `hidden` is a scroll
+           container — it shows no scrollbar but still moves under the browser's
+           own `scrollIntoView`, which is how ticking a Page used to scroll the
+           whole frame off itself. `clip` creates no scroll container at all. */
+        className="bg-card text-foreground max-w-160 gap-0 overflow-clip rounded-xl border-0 p-0"
       >
         <div className="px-6 py-5 shadow-[inset_0_-1px_0_var(--border)]">
           {/* `text-lg` (18px), a step of the ramp — the 19px it used to carry
@@ -222,7 +226,14 @@ export function ChannelPickerDialog({
           </DialogDescription>
         </div>
 
-        <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto px-6 py-5">
+        {/* `relative` is load-bearing: every row hides its checkbox with
+            `sr-only`, which is `position: absolute`. Without a positioned
+            ancestor here those inputs anchor to the fixed DialogContent
+            instead, escape this box's clipping, and hand the dialog ~1500px of
+            invisible scrollable overflow once "Xem thêm N page" is pressed.
+            Clicking a row then focuses its hidden input and the browser scrolls
+            THE DIALOG into view, leaving an empty card. */}
+        <div className="relative flex max-h-[60vh] flex-col gap-4 overflow-y-auto px-6 py-5">
           <label htmlFor={`${titleId}-q`} className="sr-only">
             Tìm page
           </label>
