@@ -9,6 +9,18 @@
         "rule": "design-system-font-size",
         "value": "1.75rem",
         "createdAt": "2026-08-26T07:38:51.712Z"
+      },
+      {
+        "rule": "bounce-easing",
+        "value": "var(--ease-spring)",
+        "createdAt": "2026-08-27T00:53:37.231Z",
+        "reason": "spec §3 chỉ định; chỉ dùng cho check badge + CTA pop"
+      },
+      {
+        "rule": "bounce-easing",
+        "value": "cubic-bezier(0.34, 1.56, 0.64, 1)",
+        "createdAt": "2026-08-27T00:53:51.639Z",
+        "reason": "giá trị nguyên văn --ease-spring, spec §3"
       }
     ]
   }
