@@ -1,0 +1,564 @@
+/**
+ * Motion for the onboarding survey — entrance choreography, card feedback and
+ * the CTA (animation spec sections 3-5, 7, 9).
+ *
+ * WHY PLAIN CSS AND NOT THE LIBRARY ALREADY IN THIS FOLDER: the same reason
+ * `backdrop-motion.css` gives. Everything here is either a state transition or
+ * a one-shot keyframe on an element that is already in the document, which is
+ * exactly what CSS does natively (`web-motion` section 1: start from CSS, reach
+ * for the library only for orchestration it cannot express). framer-motion is
+ * kept for the ONE thing CSS cannot do here: animating a whole screen OUT of
+ * the document (`OnboardingFrame`).
+ *
+ * EVERY MOVING DECLARATION SITS INSIDE `prefers-reduced-motion: no-preference`,
+ * the shape `backdrop-motion.css` established. Not slowed down under `reduce` —
+ * ABSENT. No animation and no transition is declared at all, so the screen is
+ * finished and usable on the first frame and `getAnimations()` comes back
+ * empty. The spec's own `animation-duration: .01ms !important` block is NOT
+ * used: it still starts every animation and then guillotines it, which is a
+ * different (and worse) thing than never starting one.
+ *
+ * STATE, HOWEVER, IS NOT MOTION. The dimming of the cards that were not chosen,
+ * the border, the check badge and the focus ring are painted by utility classes
+ * on the elements themselves, OUTSIDE this file. A reduced-motion visitor sees
+ * every one of them, instantly — "giảm chuyển động" is not "no feedback"
+ * (core-motion, section on reduced motion).
+ *
+ * TWO PROPERTY FAMILIES, ON PURPOSE. Keyframes here animate `transform` and
+ * `opacity`; hover/press/dim states use the separate `translate`, `scale` and
+ * `opacity` properties (which is what Tailwind v4's `translate-*`/`scale-*`
+ * utilities compile to). They compose instead of overwriting each other, so a
+ * card can be arriving and be hovered at the same time without one wiping the
+ * other out — the same trick `backdrop-motion.css` uses for its four layers.
+ * Nothing here touches `width`, `height`, `top`, `left` or `margin`.
+ */
+
+/**
+ * The spec's five duration names, MAPPED ONTO THIS PROJECT'S SCALE rather than
+ * copied as numbers. `src/ui/theme/mysp.css` is generated and `pnpm theme:check`
+ * guards it; a hardcoded 180ms would drift away from it silently the day the
+ * theme moves.
+ *
+ *   spec name     token                    resolved   spec asked for
+ *   --dur-micro   --duration-fast-max      165ms      180ms  (band 150-250)
+ *   --dur-state   --duration-medium        300ms      300ms  (exact)
+ *   --dur-enter   --duration-slow-min      525ms      500ms  (band 400-600)
+ *   --dur-exit    --duration-medium        300ms      320ms  (band 300-400)
+ *   --dur-screen  --duration-medium-max    400ms      380ms  (band 300-400)
+ *
+ * The one rule that had to survive the mapping is section 6's "exit is quicker
+ * than enter, so the flow feels like going forward": 300 < 400, and both stay
+ * inside section 2's 300-400ms band for a screen change.
+ *
+ * `--dur-exit` has no declaration below because nothing in CSS reads it: a
+ * screen leaves the DOCUMENT, which only `OnboardingFrame` can animate, and
+ * framer-motion takes numbers rather than `var()`. The same two tokens are
+ * cited there, resolved.
+ *
+ * These are declarations, not animations, so they live OUTSIDE the reduced
+ * motion query — under `reduce` nothing reads them, and a value that is never
+ * read costs nothing.
+ *
+ * ON THE THEME ROOT, AND `:root` WOULD BE SILENTLY WRONG. This is the trap that
+ * makes the selector worth a paragraph.
+ *
+ * A custom property's value is substituted on the element it is DECLARED on,
+ * using that element's own properties — descendants inherit the finished value
+ * and never re-resolve it. `src/ui/theme/mysp.css` declares `--duration-*`
+ * inside `@scope ([data-astryx-theme="mysp"])`, i.e. on the `<Theme>` wrapper.
+ * `@astryxdesign/core` ALSO declares them, on `:root`, at the library's own
+ * slower values (`--duration-fast-max: 230ms`, `--duration-slow-min: 730ms`).
+ *
+ * So an alias declared on `:root` resolves against the LIBRARY's scale, not
+ * this project's: `--dur-enter` would be 730ms instead of 525ms and the stagger
+ * 87.5ms instead of 62.5 — over the 80ms section 9 forbids, with the last card
+ * landing at 1427ms instead of 1097. Every number in the table above would be
+ * wrong, nothing would fail, and it would look approximately right on screen.
+ * Declared here, the substitution happens where the project's values are.
+ *
+ * The attribute rather than a class of our own, so that anything drawn under
+ * the theme is covered — including the dev preview page at
+ * `/onboarding-preview`, where these cards are reviewed outside the frame. An
+ * earlier draft scoped the aliases to the frame's `<main>`, and every card on
+ * that page lost its transitions without a word.
+ */
+[data-astryx-theme] {
+  --dur-micro: var(--duration-fast-max);
+  --dur-state: var(--duration-medium);
+  --dur-enter: var(--duration-slow-min);
+  --dur-screen: var(--duration-medium-max);
+
+  /* The stagger between cards, DERIVED from a token rather than typed as a
+     number — the idiom `backdrop-motion.css` already uses for its own step
+     (`calc(var(--duration-fast) / 3)`). `--duration-fast` is 125ms in this
+     project, so half of it is 62.5ms: close to the 60ms the spec asks for and
+     under the 80ms that section 9 calls "queueing". */
+  --stagger: calc(var(--duration-fast) / 2);
+
+  /* How far an arriving element travels (spec section 3). Distances, not
+     durations — the token scale has nothing to say about them. */
+  --dist-rise: 18px;
+  --dist-drop: 8px;
+
+  /* THE ONE CURVE OUTSIDE THE SCALE. Astryx ships exactly one easing token,
+     `--ease-standard`, and it does not overshoot — correctly, because entrances
+     must not (spec section 9). But the spec's selection feedback (check badge,
+     CTA pop) is defined BY its overshoot, and there is no token for that, so it
+     is written out here with the reason attached, the way `backdrop-motion.css`
+     writes out the curves of its decorative loops. Used for selection feedback
+     ONLY; every entrance and exit in this flow reads `--ease-standard`. */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /*
+   * THE SIX EMOJI WELLS (animation spec section 5.1; prototype
+   * `mysp-onboarding-animation.html`, `.e-yellow` … `.e-purple`).
+   *
+   * A DELIBERATE EXCEPTION TO THE "NO LITERAL COLOURS" RULE, narrowly scoped
+   * and written down rather than smuggled in — the same standing the brand
+   * colours in `channel-marks.tsx` already have, and the same shape
+   * `backdrop-motion.css` uses for values the token scale does not describe.
+   *
+   * WHY THE THEME CANNOT SUPPLY THESE. They were tried first. The theme's
+   * semantic colours are a dye plus status roles, and three of the six have no
+   * counterpart in it: measured in the running app, the yellow well rendered
+   * `#e8d9ba` (dull), the blue `#dde1e2` (the blue gone entirely) and the
+   * purple `#f4e8cf` — beige where the prototype is lilac. The purple is the
+   * proof: the prototype's hue is 310°, and the theme holds nothing near it —
+   * `--primary` is indigo at 262°, and the status roles sit at green, amber and
+   * red. No mix of existing tokens produces a 310° tint, so mixing would mean
+   * choosing a different colour and calling it the same.
+   *
+   * THEY CARRY NO MEANING. Six tints so a column of cards does not read as one
+   * grey block; nothing is decoded from them, and the emoji they sit behind is
+   * `aria-hidden`. That is what keeps this a decorative exception rather than a
+   * hole in the semantic layer.
+   *
+   * OKLCH, NOT THE PROTOTYPE'S HEX, because that is the space `globals.css`
+   * writes colour in and it is what keeps the dark variant a lightness move
+   * rather than a second guess. The light values are the prototype's own
+   * colours converted exactly.
+   *
+   * DARK IS NOT THE SAME COLOUR. These are pale tints made for pale paper; on
+   * the dark card (L 0.28) they would be six glowing chips. The dark set keeps
+   * each hue and drops it to L 0.33 — just above the card, the same way a
+   * raised surface is built in the dark theme.
+   *
+   * WITH ONE HONEST CAVEAT, measured rather than claimed. Flattening every
+   * chroma to roughly one value costs the pair that was already closest:
+   * yellow (C 0.059, H 93.5) and orange (C 0.043, H 78.5) are 15° apart in hue
+   * and, at equal lightness and near-equal chroma, their separation falls from
+   * ΔEok 0.023 in light to 0.0144 in dark — around the threshold of "just
+   * noticeable". The other 14 of the 15 pairs sit at 0.044 or more and are
+   * plainly distinct.
+   *
+   * Left as it is, deliberately: these six carry NO meaning — nothing is
+   * decoded from them and the emoji above them is `aria-hidden` — so their only
+   * job is to stop a column of cards reading as one block, which 14 clear pairs
+   * already do. Pushing the two apart would mean either moving a hue away from
+   * the prototype or raising chroma at L 0.33, where sRGB starts clipping and
+   * clipping moves lightness. If it ever needs fixing, that is the trade to
+   * make consciously, not by nudging a number.
+   *
+   * SWITCHED BY THE `.dark` CLASS, NOT BY `light-dark()`. The first version used
+   * `light-dark()` on the argument that `globals.css` sets `color-scheme` on
+   * `:root` and `.dark`. That argument was wrong, and it was measured wrong:
+   * in dark mode five of the six wells stayed at their light values while the
+   * sixth — the one on a plain `bg-secondary` token — inverted correctly.
+   *
+   * The reason is an element in between. Astryx's `<Theme>` puts its own class
+   * on `[data-astryx-theme]` carrying `color-scheme: light dark`, which means
+   * "follow the USER AGENT", not "follow the app's `.dark` class". Every
+   * descendant inherits that, so `light-dark()` resolved against the operating
+   * system's preference and ignored the theme the operator actually chose.
+   * `mysp-theme.ts` had already written this trap down for a different token —
+   * "a [light, dark] tuple would compile to light-dark(), which follows
+   * color-scheme and would ignore the class" — and it applies here verbatim.
+   *
+   * A class-scoped override is what the rest of the palette in `globals.css`
+   * already uses, so these now switch by the same rule as every other colour.
+   *
+   * PATH OUT: if these ever need to be reused outside onboarding, they belong
+   * in the theme as a named decorative ramp, not copied to a second file.
+   */
+  --well-yellow: oklch(0.955 0.059 93.5);
+  --well-green: oklch(0.933 0.036 149.1);
+  --well-blue: oklch(0.928 0.024 248.1);
+  --well-orange: oklch(0.945 0.043 78.5);
+  --well-pink: oklch(0.934 0.027 26.2);
+  --well-purple: oklch(0.933 0.029 310.1);
+}
+
+/* The dark set. Same six hues, sunk to L 0.33 — a step above the dark card
+   (L 0.28), which is how a raised surface is built in this theme. `.dark` is on
+   <html>, the wells are declared on the theme root below it, so this is the
+   same element being re-valued rather than a second place they are defined. */
+.dark [data-astryx-theme],
+[data-astryx-theme].dark {
+  --well-yellow: oklch(0.33 0.055 93.5);
+  --well-green: oklch(0.33 0.055 149.1);
+  --well-blue: oklch(0.33 0.039 248.1);
+  --well-orange: oklch(0.33 0.055 78.5);
+  --well-pink: oklch(0.33 0.043 26.2);
+  --well-purple: oklch(0.33 0.047 310.1);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /*
+    ENTRANCE CHOREOGRAPHY (spec section 4).
+
+    Three shapes, one timeline. Each element states WHEN it starts through
+    `--enter-delay`, and elements that arrive as a series add their place in it
+    through `--enter-index`.
+
+    DELAYS ARE WRITTEN IN ms AND THAT IS DELIBERATE. The token scale is a scale
+    of DURATIONS — how long a thing takes. A delay is a position on a timeline,
+    which the scale does not describe, so forcing it through a duration token
+    would be a false citation. `backdrop-motion.css` made the same call for its
+    drift periods. Where a delay IS a multiple of the rhythm (the CTA, "Bỏ
+    qua"), it is written as that multiple rather than as its result.
+
+    THE ORDER IS THE SPEC'S; THE TAIL IS COMPRESSED. Section 2 caps the whole
+    entrance at 1.2s while section 4's own delay table runs to 1.4s, and section
+    10's first acceptance line is the 1.2s. So the order of section 4 is kept
+    exactly and the last two elements are pulled in:
+
+      element        delay                       duration   ends at
+      back + brand   0ms                         400ms      400ms
+      dots           80ms                        400ms      480ms
+      theme toggle   120ms                       400ms      520ms
+      heading        100ms                       525ms      625ms
+      card 1..6      260ms + n x 62.5ms          525ms      1097.5ms  (n=5)
+      CTA            260ms + 6 x 62.5 = 635ms    525ms      1160ms
+      "Bỏ qua"       260ms + 7 x 62.5 = 697.5ms  400ms      1097.5ms
+
+    The last pixel lands at 1160ms. "Bỏ qua" takes the shorter band because
+    section 4 gives it a fade and no travel, and duration follows distance
+    (core-motion): nothing moves, so nothing needs the long band. That is what
+    buys the ceiling without breaking the 62.5ms rhythm.
+
+    `backwards` holds the from-state through the delay, so an element waiting
+    its turn is invisible rather than visible-then-popping.
+
+    AND THE ELEMENT WEARING THIS CLASS MUST OWN NOTHING ELSE. That is the real
+    rule, and it took two attempts to state correctly.
+
+    A running animation's value comes from the ANIMATION origin, which outranks
+    every author declaration — utility classes, inline styles, `!important` —
+    for as long as the animation is live. Put this class on a card that also
+    carries `opacity-45`, and the dim simply does not exist while the card
+    arrives. Measured in Chrome on the Back-to-an-answered-step path, opacity of
+    the five unchosen cards:
+
+        t=608   [0,    0,    0,    0,    0   ]
+        t=908   [0.96, 0.78, 0.55, 0.18, 0   ]
+        t=1208  [0.45, 1,    1,    0.98, 0.95]
+        t=1608  [0.45, 0.45, 0.45, 0.45, 0.45]
+
+    Each card fades UP to full and only drops to .45 as its own animation ends —
+    out of phase, over about 1.1 seconds, plainly visible. `scale-[0.985]`
+    applied at once because the dim uses the standalone `scale` property while
+    these keyframes animate `transform`, so the cards sat shrunk but bright.
+
+    `animation-fill-mode` CANNOT FIX THIS. An earlier pass changed `both` to
+    `backwards` believing it would; `backwards` only frees the property AFTER
+    the animation, and the whole problem is DURING it. The fix is structural:
+    the entrance goes on a wrapper `<div>` and the state stays on the `<label>`
+    inside it, so the two never contend for one property on one element. Every
+    call site does this — see `OptionCard`, and `StepActions` for the CTA and
+    for "Bỏ qua". `onboarding-motion.test.ts` fails the build if an element ever
+    carries this class and an opacity/scale utility at the same time.
+
+    `backwards` is still right, for the smaller reason it was always right:
+    nothing should be pinned after the animation ends either.
+
+    NOTHING HERE BLOCKS A CLICK (spec section 2, section 9). No overlay, no
+    `pointer-events`, and opacity does not affect hit-testing: a card can be
+    pressed while it is still arriving.
+  */
+  .onboarding-enter,
+  .onboarding-enter-drop,
+  .onboarding-enter-fade {
+    animation-delay: calc(
+      var(--enter-delay, 0ms) + var(--enter-index, 0) * var(--stagger)
+    );
+    /* NOT `both` — see the paragraph above. `both` would additionally pin the
+       keyframe's final `opacity: 1` after the animation ends. Note this is the
+       lesser half of the problem: during the animation the origin wins either
+       way, which is why the entrance lives on a wrapper. */
+    animation-fill-mode: backwards;
+    animation-timing-function: var(--ease-standard);
+  }
+
+  /* Content: fade + rise (spec section 4, rows 4-6). */
+  .onboarding-enter {
+    animation-name: onboarding-enter-rise;
+    animation-duration: var(--dur-enter);
+  }
+
+  /* Top bar: fade + a short drop FROM above (spec section 4, rows 1-2). */
+  .onboarding-enter-drop {
+    animation-name: onboarding-enter-drop;
+    animation-duration: var(--dur-screen);
+  }
+
+  /* Fade only, no travel (spec section 4, rows 3 and 7). */
+  .onboarding-enter-fade {
+    animation-name: onboarding-enter-fade;
+    animation-duration: var(--dur-screen);
+  }
+
+  /*
+    THE CARD (spec sections 5.1-5.2).
+
+    Written here rather than as utilities because the two halves of it want
+    different clocks: hover and press are micro-interactions and have to answer
+    within the 150-250ms band, while the dimming of the five cards that were not
+    chosen is a state change on the 300ms one. A single utility duration cannot
+    say both.
+
+    The one compromise, stated rather than hidden: `scale` carries both the
+    press (0.98) and the dim (0.985), so it takes the micro clock. A 1.5% scale
+    settling 135ms earlier than the opacity beside it is not visible; a press
+    that answers in 300ms is.
+  */
+  .onboarding-card {
+    transition-property:
+      translate, scale, box-shadow, border-color, background-color, opacity;
+    transition-duration:
+      var(--dur-micro), var(--dur-micro), var(--dur-micro), var(--dur-micro),
+      var(--dur-micro), var(--dur-state);
+    transition-timing-function: var(--ease-standard);
+  }
+
+  /* `--shadow-med` is the theme's own elevation token — the shadow scale exists
+     precisely so that a lift is not written as a literal rgba (design-tokens).
+     An earlier note in `OptionCard` recorded "no shadow, ever" off the Buffer
+     shots; the PM reversed that on 26/08/2026 in favour of this spec. */
+  .onboarding-card:hover {
+    translate: 0 -3px;
+    box-shadow: var(--shadow-med);
+  }
+
+  .onboarding-card:active {
+    translate: 0 -1px;
+    scale: 0.98;
+  }
+
+  /* A dimmed card still answers the pointer — it is still choosable — but it
+     does not LIFT, because lifting would put it back in front of the card that
+     was actually chosen (spec section 5.2, point 3). */
+  .onboarding-card[data-dimmed="true"]:hover {
+    translate: 0 0;
+    box-shadow: none;
+  }
+
+  .onboarding-card[data-dimmed="true"]:active {
+    translate: 0 0;
+    scale: 0.985;
+  }
+
+  /* The emoji answers the hover with the only overshoot on the card, and holds
+     a slightly larger size once its card is the chosen one (spec section 5.1
+     row 2, section 5.2 point 4). */
+  /* 225ms, NOT the 300ms this first shipped with. The dominant use of this
+     transition is HOVER, and spec section 9 forbids a hover over 250ms outright
+     (section 5.1 asks for 250). `--duration-medium-min` is the token inside
+     that band. The chosen-card hold below rides the same transition and is
+     therefore 225ms too — one property cannot carry two clocks, and the rule
+     with a hard ceiling wins. */
+  .onboarding-card-emoji {
+    transition:
+      scale var(--duration-medium-min) var(--ease-spring),
+      rotate var(--duration-medium-min) var(--ease-spring);
+  }
+
+  .onboarding-card:hover .onboarding-card-emoji {
+    scale: 1.12;
+    rotate: -6deg;
+  }
+
+  .onboarding-card[data-chosen="true"] .onboarding-card-emoji {
+    scale: 1.06;
+  }
+
+  /*
+    THE CHECK, on the card just chosen (spec section 5.2, point 2).
+
+    Mount only. A radio group never un-chooses — picking another card unmounts
+    this one and mounts the next — so there is no "out" to animate, and adding
+    one would mean keeping a badge in the document that nothing can reach.
+
+    The overshoot is the spec's own curve: it peaks at ~1.09 of the target,
+    inside the 15% section 10 allows.
+  */
+  .onboarding-check-in {
+    /* `backwards`, not `both`. Same audit as the entrance: a fill that outlasts
+       the animation keeps `scale: 1` in the animation origin forever, above any
+       utility. Nothing sets `scale` on the badge today, which is the only
+       reason `both` had not bitten — and "nothing does yet" is not a property
+       worth relying on. The resting state IS this keyframe's destination
+       (`scale: 1`, i.e. no scale at all), so handing it back changes nothing. */
+    animation: onboarding-check-in var(--dur-state) var(--ease-spring) backwards;
+  }
+
+  /*
+    THE CTA (spec section 5.3).
+
+    The pop fires ONCE, when the step goes from having no answer to having one,
+    and it is `StepActions` that decides that — a class that is added on an edge
+    cannot replay on an unrelated re-render, because React does not remount the
+    button and CSS does not restart an animation whose name did not change.
+
+    It sits on the button while the ENTRANCE sits on a wrapper around it: two
+    `animation-name` declarations on one element would silently overwrite each
+    other rather than run together.
+  */
+  .onboarding-cta-pop {
+    /* The spec asks for 350ms, which falls between two steps of the scale.
+       `--dur-state` wins the tie because section 3 files "CTA bật" under that
+       name itself, which keeps the whole ready sequence — badge, label, arrow,
+       pop — on one clock.
+
+       NO FILL AT ALL, and that is the point rather than an omission. This
+       keyframe starts and ends on `scale: 1`, so there is nothing a fill could
+       usefully hold — but a fill would put that `scale: 1` in the animation
+       origin, which outranks every author rule. Two things break when it does:
+       `.onboarding-cta-ready:active { scale: .97 }` stops answering the press
+       while the class is on, and if `animationend` never fires — a background
+       tab is the ordinary way that happens — `isPopping` stays true and the
+       button is pinned at `scale: 1` for good. Same family of bug as the
+       entrance fill above, found by the same review. */
+    animation: onboarding-cta-pop var(--dur-state) var(--ease-spring);
+  }
+
+  .onboarding-cta-ready:hover {
+    translate: 0 -2px;
+  }
+
+  .onboarding-cta-ready:active {
+    scale: 0.97;
+  }
+
+  /*
+    THE ARROW ARRIVES WITH THE READY STATE — WITHOUT ANIMATING ITS WIDTH.
+
+    Spec section 5.3 asks for `width: 0 -> 16px`, which section 2.4 of the same
+    spec forbids outright and core-motion forbids again: it is a layout property,
+    so every frame re-measures the button's contents. The reading of the spec
+    that survives both is what the width was FOR — the arrow sliding out from
+    behind the label — and that is `translateX` + `opacity`, which is free.
+
+    The arrow's 16px box is reserved from the first frame, so the label beside it
+    does not shift while the arrow arrives.
+  */
+  .onboarding-cta-arrow {
+    /* `backwards` for the reason given on `.onboarding-check-in`, and here it
+       is load-bearing rather than precautionary: the hover nudge below animates
+       the separate `translate` property precisely so it does not collide with
+       this keyframe's `transform`. Freeing `transform` afterwards keeps that
+       separation honest even if the nudge is ever rewritten as a transform. */
+    animation: onboarding-cta-arrow-in var(--dur-state) var(--ease-standard)
+      backwards;
+    transition: translate var(--dur-micro) var(--ease-standard);
+  }
+
+  .onboarding-cta-ready:hover .onboarding-cta-arrow {
+    translate: 4px 0;
+  }
+
+  /* The answer to pressing "Tiếp tục" with nothing chosen: a sentence fades in
+     (spec section 5.3, last row). No shake — a control that shudders reads as
+     broken, and it is unpleasant for exactly the people this query is for. */
+  .onboarding-hint-in {
+    /* `backwards`: the sentence's resting state is fully opaque, which is this
+       keyframe's destination, so nothing is lost by releasing `opacity` back to
+       the cascade — and the hint is re-keyed on every press, so each new node
+       runs the fade from its own start rather than inheriting a pinned value. */
+    animation: onboarding-hint-in var(--dur-state) var(--ease-standard)
+      backwards;
+  }
+}
+
+/* Keyframes live outside the query, as in `backdrop-motion.css`: an
+   unreferenced `@keyframes` animates nothing, and keeping them out here lets
+   the query above read as one list of what `reduce` switches off. */
+
+@keyframes onboarding-enter-rise {
+  from {
+    opacity: 0;
+    transform: translateY(var(--dist-rise, 18px));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes onboarding-enter-drop {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--dist-drop, 8px)));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes onboarding-enter-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes onboarding-check-in {
+  from {
+    scale: 0;
+  }
+
+  to {
+    scale: 1;
+  }
+}
+
+@keyframes onboarding-cta-pop {
+  0% {
+    scale: 1;
+  }
+
+  40% {
+    scale: 1.045;
+  }
+
+  100% {
+    scale: 1;
+  }
+}
+
+@keyframes onboarding-cta-arrow-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes onboarding-hint-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}

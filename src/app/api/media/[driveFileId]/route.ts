@@ -51,6 +51,22 @@ export async function GET(
       signature: query.get(MEDIA_QUERY_PARAMS.signature) ?? "",
     });
 
+    // Uploaded asset + a store that can sign: hand out the short-lived signed
+    // URL instead of streaming. This only ever happens AFTER the signature
+    // check above passed — the usecase never calls createDownloadUrl for a
+    // request that failed it. Covers the UI preview only: publish-post.ts
+    // uploads photo bytes to Graph directly and never reaches this route.
+    if (result.redirectUrl) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: result.redirectUrl,
+          // The target expires in minutes — no shared cache may keep it.
+          "cache-control": "no-store",
+        },
+      });
+    }
+
     return new Response(new Uint8Array(result.bytes), {
       status: 200,
       headers: {

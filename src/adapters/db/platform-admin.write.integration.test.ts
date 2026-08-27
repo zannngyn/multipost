@@ -12,6 +12,7 @@ import { DrizzleAccountRepo } from "./account-repo.drizzle";
 import { makeDbHandle } from "./client";
 import { DrizzleInviteRepo } from "./invite-repo.drizzle";
 import { DrizzlePlatformTenantRepo } from "./platform-tenant-repo.drizzle";
+import { DrizzleTenantProfileRepo } from "./tenant-profile-repo.drizzle";
 import { accounts, auditLogs, invites, memberships, tenants, users } from "./schema";
 
 /**
@@ -22,7 +23,12 @@ import { accounts, auditLogs, invites, memberships, tenants, users } from "./sch
  *     read every platform op makes) refuses immediately;
  *   - platform tenant provisioning: no creator membership, an owner invite
  *     that actually claims, and the audit trail;
- *   - idempotent status switches with mandatory-reason audits.
+ *   - idempotent status switches with mandatory-reason audits;
+ *   - the onboarding-survey LEFT JOIN on the platform list (E10): a tenant
+ *     with no `tenant_profile` row must still be listed, and `[]` must come
+ *     back as `[]` — no stub can prove either, because both depend on real
+ *     postgres (outer-join nulls, `text[]` round trip, and the GROUP BY on two
+ *     primary keys that lets the profile columns be selected at all).
  *
  * Runs only when TEST_DATABASE_URL points at a MIGRATED database.
  */
@@ -47,6 +53,7 @@ describe.skipIf(!url)("Platform admin — the write path", () => {
   const accountRepo = new DrizzleAccountRepo(handle.db, { logger: silentLogger() });
   const platformRepo = new DrizzlePlatformTenantRepo(handle.db, { logger: silentLogger() });
   const inviteRepo = new DrizzleInviteRepo(handle.db, { logger: silentLogger() });
+  const profileRepo = new DrizzleTenantProfileRepo(handle.db);
 
   // Creates account rows (global) — serialise with the other global-table files.
   const globalLock = makeGlobalIdentityTestLock(url ?? "postgres://unused");
@@ -252,5 +259,53 @@ describe.skipIf(!url)("Platform admin — the write path", () => {
         actorEmail: null,
       }),
     ).rejects.toMatchObject({ code: "TENANT_NOT_FOUND" });
+  });
+
+  // --- E10: the survey join ---------------------------------------------------
+
+  it("lists a tenant with NO survey row, and keeps [] apart from null on one that has", async () => {
+    const bare = await platformRepo.createTenant({
+      name: `Chưa khảo sát ${suffix}`,
+      slug: `chua-ks-${suffix}`,
+      plan: "standard",
+      actorAccountId: adminId,
+      actorEmail: null,
+    });
+    createdTenantIds.push(bare.id);
+
+    const answered = await platformRepo.createTenant({
+      name: `Đã khảo sát ${suffix}`,
+      slug: `da-ks-${suffix}`,
+      plan: "standard",
+      actorAccountId: adminId,
+      actorEmail: null,
+    });
+    createdTenantIds.push(answered.id);
+
+    await profileRepo.upsert(answered.id, {
+      sellerKind: "shop_owner",
+      // The pair the whole feature rests on, written for real and read back.
+      currentTools: [],
+      focusChannels: ["tiktok", "facebook"],
+      channelCount: null,
+    });
+
+    const list = await platformRepo.listTenants();
+
+    // The OUTER join: a tenant that never answered must not fall out.
+    const withoutProfile = list.find((item) => item.id === bare.id);
+    expect(withoutProfile).toBeDefined();
+    expect(withoutProfile?.survey).toBeNull();
+    // ...and the join must not have multiplied the member count either.
+    expect(withoutProfile?.memberCount).toBe(0);
+
+    const withProfile = list.find((item) => item.id === answered.id);
+    expect(withProfile?.survey).toEqual({
+      sellerKind: "shop_owner",
+      currentTools: [],
+      channelCount: null,
+      focusChannels: ["tiktok", "facebook"],
+      completedAt: null,
+    });
   });
 });

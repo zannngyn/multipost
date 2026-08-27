@@ -27,18 +27,7 @@ import { useActiveTenant, useMe } from "@/ui/hooks/useMe";
  *   empty   — signed in, member of nothing → "chờ được mời" (M2.1 adds "tạo")
  * Anything else renders the screen.
  */
-export function TenantBoundary({
-  children,
-  signOutAction,
-}: {
-  children: ReactNode;
-  /**
-   * Passed straight through to the first-run wizard, whose dialog blocks the
-   * top bar — sign-out included. Without it an account with no company has no
-   * way back to the sign-in screen (spec §8).
-   */
-  signOutAction?: () => Promise<void>;
-}) {
+export function TenantBoundary({ children }: { children: ReactNode }) {
   const me = useMe();
   const pathname = usePathname();
   const { mustPickTenant, tenants } = useActiveTenant();
@@ -99,11 +88,12 @@ export function TenantBoundary({
 
   /**
    * Signed in and a member of nothing is no longer a state that REPLACES the
-   * app (M2.4). The gate renders the screen and puts the first-run wizard over
-   * it — see `FirstRunGate` for why it, not this boundary, owns when the
-   * dialog closes.
+   * app (M2.4). The gate sends that account to the full-screen `/onboarding`
+   * flow — see `FirstRunGate` for why the redirect is latched, and why the
+   * sign-out action now belongs to the onboarding page rather than to this
+   * boundary.
    *
    * Anyone who already has a company falls straight through it.
    */
-  return <FirstRunGate signOutAction={signOutAction}>{children}</FirstRunGate>;
+  return <FirstRunGate>{children}</FirstRunGate>;
 }

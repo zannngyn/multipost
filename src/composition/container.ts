@@ -13,6 +13,7 @@ import { DrizzlePlatformTenantRepo } from "@/adapters/db/platform-tenant-repo.dr
 import { DrizzleSupportSessionRepo } from "@/adapters/db/support-session-repo.drizzle";
 import { DrizzleOAuthStateStore } from "@/adapters/db/oauth-state-store.drizzle";
 import { DrizzleTenantOnboardingRepo } from "@/adapters/db/tenant-onboarding-repo.drizzle";
+import { DrizzleTenantProfileRepo } from "@/adapters/db/tenant-profile-repo.drizzle";
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
@@ -23,13 +24,14 @@ import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
 import { makeSecretBox, type SecretBox } from "@/adapters/db/secret-box";
 import { DrizzlePostDraftRepo } from "@/adapters/db/post-draft-repo.drizzle";
 import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
+import { DrizzleUploadTicketRepo } from "@/adapters/db/upload-ticket-repo.drizzle";
 import { DrizzleProductRepo } from "@/adapters/db/product-repo.drizzle";
 import { DrizzleSyncRunRepo } from "@/adapters/db/sync-run-repo.drizzle";
 import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
-import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
+import { makeMinioBlobStore } from "@/adapters/media/minio-blob-store";
 import { makeCsvCatalogTextSource } from "@/adapters/catalog/csv-text-source";
 import { makeSheetCatalogTextSource } from "@/adapters/catalog/sheet-text-source";
 import { makeLocalCatalogFileStore } from "@/adapters/catalog/local-catalog-file-store";
@@ -69,6 +71,10 @@ import {
   type CheckOperatorAccess,
 } from "@/core/usecases/check-operator-access";
 import { makeCreateTenant, type CreateTenant } from "@/core/usecases/create-tenant";
+import {
+  makeEnsureDefaultTenant,
+  type EnsureDefaultTenant,
+} from "@/core/usecases/ensure-default-tenant";
 import {
   makeGetOperatorOverview,
   type GetOperatorOverview,
@@ -130,6 +136,14 @@ import {
 import { makeReadMediaBytes, type ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
 import {
+  makeIssueUploadTickets,
+  type IssueUploadTickets,
+} from "@/core/usecases/issue-upload-tickets";
+import {
+  makeConfirmUpload,
+  type ConfirmUpload,
+} from "@/core/usecases/confirm-upload";
+import {
   makeCancelScheduledJob,
   type CancelScheduledJob,
 } from "@/core/usecases/cancel-scheduled-job";
@@ -143,6 +157,14 @@ import {
 } from "@/core/usecases/reschedule-post-job";
 import { makeGetCatalogSource, type GetCatalogSource } from "@/core/usecases/get-catalog-source";
 import { makeGetSetupProgress, type GetSetupProgress } from "@/core/usecases/get-setup-progress";
+import {
+  makeCompleteOnboarding,
+  makeGetOnboardingProfile,
+  makeSaveOnboardingProfile,
+  type CompleteOnboarding,
+  type GetOnboardingProfile,
+  type SaveOnboardingProfile,
+} from "@/core/usecases/onboarding-profile";
 import {
   makeProfileCatalogSource,
   type ProfileCatalogSource,
@@ -179,11 +201,12 @@ import {
   loadMediaConfig,
   loadMediaCacheConfig,
   loadCatalogFileConfig,
-  loadUploadConfig,
+  loadMinioConfig,
   loadMetaConfig,
   loadMetaOAuthConfig,
   loadOnboardingConfig,
   loadSecretsConfig,
+  loadUploadConfig,
   loadVideoConfig,
   type Config,
   type EnvRecord,
@@ -235,11 +258,26 @@ export interface Usecases {
    * ONE request so the dock can ride in the shell without costing five.
    */
   getSetupProgress: GetSetupProgress;
+  /**
+   * E10 — the onboarding survey (spec §8). Three verbs on one row: read it so a
+   * half-finished flow reopens where it stopped, save ONE step at a time, and
+   * stamp `completed_at` once — that stamp is what stops the flow reappearing.
+   */
+  getOnboardingProfile: GetOnboardingProfile;
+  saveOnboardingProfile: SaveOnboardingProfile;
+  completeOnboarding: CompleteOnboarding;
   /** E2/E3 — catalog screen: products with their composable/blocked verdict. */
   listCatalogProducts: ListCatalogProducts;
   composePost: ComposePost;
   /** E9 — mode B: register operator-supplied files as media assets. */
   uploadMedia: UploadMedia;
+  /**
+   * E9/MinIO — stage 1 of the presigned-upload path: sign upload URLs
+   * without touching a byte. Stage 3 (confirm) lands in a later task.
+   */
+  issueUploadTickets: IssueUploadTickets;
+  /** E9/MinIO — stage 3: sniff the staged bytes, then promote and register. */
+  confirmUpload: ConfirmUpload;
   /** E9.4 — periodic sweep of uploads nobody posted. */
   cleanupUploads: CleanupUploads;
   /** E3.6 — periodic sweep of the Drive byte cache (TTL-based). */
@@ -313,6 +351,11 @@ export interface Usecases {
   oauthStates: OAuthStateService;
   /** M2.1 — self-service company creation; the creator becomes owner. */
   createTenant: CreateTenant;
+  /**
+   * E10 — first entry without a company provisions one (spec §1). Idempotent:
+   * an account that already belongs somewhere gets that company back.
+   */
+  ensureDefaultTenant: EnsureDefaultTenant;
   /** M2.2 — invite links: list / create (role ladder) / revoke. */
   invites: ManageInvites;
   /** M2.2 — `POST /api/join`: token → membership (NoMembership state's door). */
@@ -739,6 +782,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const syncRuns = new DrizzleSyncRunRepo(deps.db, deps.logger);
   const catalogConfig = new DrizzleCatalogConfigRepo(deps.db, deps.logger);
   const postJobs = new DrizzlePostJobRepo(deps.db);
+  // MinIO presigned upload, stage 1 — its own table, its own repo (Task 5).
+  const uploadTickets = new DrizzleUploadTicketRepo(deps.db);
   const channels = new DrizzleChannelConfigRepo(deps.db, {
     box: makeTenantSecretBox(deps.logger),
     logger: deps.logger,
@@ -746,6 +791,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const channelGroups = new DrizzleChannelGroupRepo(deps.db);
   // E10 — one open compose draft per operator per tenant.
   const postDrafts = new DrizzlePostDraftRepo(deps.db);
+  // E10 — the onboarding survey answers; one row per tenant.
+  const tenantProfiles = new DrizzleTenantProfileRepo(deps.db);
   // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
   const users = new DrizzleUserRepo(deps.db);
   // E1.4 — who may sign in. Read on every request through `operatorAccess`.
@@ -772,9 +819,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     tiktok: overrides.publishers?.tiktok ?? makeLazyTikTokPublisher(deps.logger),
   };
   const drive = overrides.drive ?? google.drive;
-  // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
-  // Google sources it needs no lazy wrapper.
-  const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
+  // E9 — mode B bytes, now MinIO (Task 11). `loadMinioConfig()`'s return value
+  // is field-for-field the adapter's own `MinioBlobStoreConfig`, so no mapping
+  // and no cast — see the type doc on that interface for why.
+  const blobs = overrides.blobs ?? makeMinioBlobStore({ config: loadMinioConfig(), logger: deps.logger });
 
   // Phase 3 — a tenant may hand us a CSV instead of connecting a Google Sheet.
   // Its own root, never the upload root: these bytes ARE the product catalog,
@@ -895,6 +943,22 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     },
     randomSuffix: () => randomBytes(2).toString("hex"),
   });
+  /**
+   * Creating a company mints a NEW membership — every cache over accounts and
+   * memberships is stale the same instant, so they drop HERE (the same
+   * discipline as decideAccessRequest below). Without this, /api/me and
+   * requireTenant would not see the new company for up to a TTL.
+   *
+   * Named rather than inlined into `usecases.createTenant` because
+   * `ensureDefaultTenant` delegates to the SAME wrapper: a company it
+   * provisions must invalidate exactly as much.
+   */
+  const createTenant: CreateTenant = async (input) => {
+    const result = await baseCreateTenant(input);
+    operatorAccounts.invalidateAll();
+    tenantGate.invalidateAll();
+    return result;
+  };
   const inviteRepo = new DrizzleInviteRepo(deps.db, { logger: deps.logger });
   const baseJoinWithInvite = makeJoinWithInvite({
     invites: inviteRepo,
@@ -1007,6 +1071,15 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       postJobs,
       logger: deps.logger,
     }),
+    getOnboardingProfile: makeGetOnboardingProfile({ profiles: tenantProfiles, logger: deps.logger }),
+    saveOnboardingProfile: makeSaveOnboardingProfile({ profiles: tenantProfiles, logger: deps.logger }),
+    completeOnboarding: makeCompleteOnboarding({
+      profiles: tenantProfiles,
+      // Injected, not `new Date()`: `completed_at` is the one value that decides
+      // whether the flow ever appears again, so a test must be able to pin it.
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
     listCatalogProducts: makeListCatalogProducts({
       catalog: products,
       // Without this the stock verdict always runs in `numeric` mode, so a
@@ -1030,11 +1103,34 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // so it is a safe path segment for the blob store.
       newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
     }),
+    // Stage 1 of the presigned-upload path. Shares the one `blobs` wired above
+    // (MinIO since Task 11) with every other upload usecase.
+    issueUploadTickets: makeIssueUploadTickets({
+      blobs,
+      tickets: uploadTickets,
+      logger: deps.logger,
+      newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
+      ticketTtlSeconds: 30 * 60,
+    }),
+    // Stage 3 of the presigned-upload path: sniffs the staged bytes before
+    // promoting them, on the same MinIO-backed `blobs` (Task 11).
+    confirmUpload: makeConfirmUpload({
+      tickets: uploadTickets,
+      blobs,
+      media,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
     cleanupUploads: makeCleanupUploads({
       media,
       blobs,
+      // Ticket sweep (Task 8), on the same MinIO-backed `blobs` (Task 11).
+      tickets: uploadTickets,
       clock: deps.clock,
       logger: deps.logger,
+      // I4: was never wired — the worker enqueued an empty payload and the
+      // usecase silently fell back to its own default every tick.
+      ttlHours: loadUploadConfig().UPLOAD_ORPHAN_TTL_HOURS,
     }),
     cleanupMediaCache: makeCleanupMediaCache({
       cache: mediaCache,
@@ -1130,18 +1226,17 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       store: new DrizzleOAuthStateStore(deps.db, { logger: deps.logger }),
       clock: deps.clock,
     }),
+    createTenant,
     /**
-     * Both onboarding writes mint a NEW membership — every cache over accounts
-     * and memberships is stale the same instant, so the caches drop HERE (the
-     * same discipline as decideAccessRequest above). Without this, /api/me and
-     * requireTenant would not see the new company for up to a TTL.
+     * E10 — lazy provisioning on first entry. It reads memberships through the
+     * RAW repo, not `operatorAccounts`: a cached "no memberships" would
+     * provision a second company for someone who already has one.
      */
-    createTenant: async (input) => {
-      const result = await baseCreateTenant(input);
-      operatorAccounts.invalidateAll();
-      tenantGate.invalidateAll();
-      return result;
-    },
+    ensureDefaultTenant: makeEnsureDefaultTenant({
+      accounts: accountRepo,
+      createTenant,
+      logger: deps.logger,
+    }),
     invites: makeManageInvites({
       invites: inviteRepo,
       clock: deps.clock,

@@ -61,6 +61,15 @@ export interface MediaContentResult {
   readonly bytes: Uint8Array;
   /** Suggested `Cache-Control: private, max-age=...` for the route handler. */
   readonly cacheSeconds: number;
+  /**
+   * Set only for an uploaded asset when the blob store could sign a
+   * short-lived URL. When present, `bytes` is EMPTY (`new Uint8Array(0)`) and
+   * MUST be ignored — the route answers 302 with this as `Location` instead
+   * of streaming. This covers the UI preview only; publish-post.ts uploads
+   * photo bytes to Graph directly and never reaches this route (see the
+   * module doc above and the note on `ReadTenantMediaInput.allowRedirect`).
+   */
+  readonly redirectUrl?: string | null;
 }
 
 /** Which path served the bytes; `bypass` = mode B, whose bytes are already local. */
@@ -96,6 +105,11 @@ const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
 /** Meta re-fetches on its own schedule; a short cache is enough and safe. */
 const CACHE_SECONDS = 300;
 const FALLBACK_MIME = "application/octet-stream";
+/**
+ * TTL for a signed download URL handed out as a redirect target. Short on
+ * purpose: the URL itself is a bearer token (nothing else guards the object).
+ */
+export const MEDIA_REDIRECT_TTL_SECONDS = 300;
 
 export function makeGetMediaContent(deps: GetMediaContentDeps) {
   return async function getMediaContent(
@@ -123,7 +137,20 @@ export function makeGetMediaContent(deps: GetMediaContentDeps) {
       tenantId,
       assetId,
       surface: "signed_url",
+      allowRedirect: true,
     });
+
+    if (result.redirectUrl) {
+      // No mime_type/bytes here: this call never read the blob, so those
+      // fields on `result` are placeholders, not what the client will see.
+      deps.logger.child({ tenant_id: tenantId }).debug("Serving an uploaded asset by redirect", {
+        drive_file_id: assetId,
+        product_code: asset.productCode,
+        file_name: asset.fileName,
+        // Never log redirectUrl — it is a short-lived bearer token.
+      });
+      return result;
+    }
 
     deps.logger.child({ tenant_id: tenantId }).info("Signed media request served", {
       drive_file_id: assetId,
@@ -154,6 +181,14 @@ export interface ReadTenantMediaInput {
    * away). Keeps "who may see what" in the caller instead of leaking it here.
    */
   readonly accept?: (asset: MediaAsset) => void;
+  /**
+   * Opt-in, and OFF by default. Only `getMediaContent` (tier P, the public
+   * signed bridge) sets this — a signed download URL is a bearer token, and
+   * `getMediaPreview` (tier R) hands bytes to the operator's own `<img>` tag,
+   * where putting a bearer token in `src=` would leak it into browser
+   * history and `Referer` (doc 10 §2). Preview must always stream.
+   */
+  readonly allowRedirect?: boolean;
 }
 
 export interface TenantMediaContent {
@@ -213,6 +248,36 @@ export async function readTenantMediaContent(
   let content: MediaBytes;
 
   if (asset.origin === "upload") {
+    // Signature verification already ran (top of getMediaContent, before this
+    // function is ever reached) — only a request that already passed it can
+    // get a signed download URL out of this branch.
+    if (input.allowRedirect && asset.storageKey) {
+      const redirectUrl = await deps.blobs.createDownloadUrl({
+        tenantId,
+        storageKey: asset.storageKey,
+        expiresInSeconds: MEDIA_REDIRECT_TTL_SECONDS,
+      });
+      // Null means "this store cannot sign" (local dev) — fall through to the
+      // normal blob read below. A real signing failure is not swallowed here:
+      // it propagates like any other adapter error.
+      if (redirectUrl) {
+        return {
+          asset,
+          cacheOutcome,
+          result: {
+            driveFileId: assetId,
+            fileName: asset.fileName,
+            productCode: asset.productCode,
+            kind: asset.kind,
+            mimeType: pickMime(null, asset.mimeType),
+            sizeBytes: asset.sizeBytes ?? 0,
+            bytes: new Uint8Array(0),
+            cacheSeconds: CACHE_SECONDS,
+            redirectUrl,
+          },
+        };
+      }
+    }
     content = await readUploadedBlob(deps, { tenantId, assetId, asset, maxBytes });
   } else {
     const cached = await readCache(deps, { tenantId, assetId, maxBytes });

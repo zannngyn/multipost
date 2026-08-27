@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   CreatePlatformTenantFormSchema,
   CreatePlatformTenantResponseSchema,
+  OnboardingSurveySummarySchema,
   PlatformTenantListResponseSchema,
+  PlatformTenantSurveySchema,
   SUSPEND_REASON_MIN,
   TenantStatusReasonFormSchema,
   canAdministerPlatform,
@@ -28,6 +30,14 @@ import {
  *    parse instead of reaching an input and a clipboard.
  */
 
+const SURVEY_ROW = {
+  sellerKind: "shop_owner",
+  currentTools: ["meta_business_suite"],
+  channelCount: "4-6",
+  focusChannels: [],
+  completedAt: "2026-08-26T10:00:00.000Z",
+};
+
 const TENANT_ROW = {
   id: "00000000-0000-0000-0000-000000000001",
   name: "MysP Nội Bộ",
@@ -36,18 +46,45 @@ const TENANT_ROW = {
   status: "active",
   memberCount: 5,
   createdAt: "2026-08-19T10:13:28.916Z",
+  survey: SURVEY_ROW,
 };
+
+const EMPTY_BREAKDOWN = { total: 0, answered: 0, noAnswer: 0, unreadable: 0, byCode: [] };
+const EMPTY_MULTI = { ...EMPTY_BREAKDOWN, answeredNone: 0, unreadableVotes: 0, votes: 0 };
+const SUMMARY = {
+  total: 1,
+  completed: 1,
+  notCompleted: 0,
+  sellerKind: { ...EMPTY_BREAKDOWN, total: 1, answered: 1, byCode: [{ code: "shop_owner", count: 1 }] },
+  channelCount: { ...EMPTY_BREAKDOWN, total: 1, answered: 1, byCode: [{ code: "4-6", count: 1 }] },
+  currentTools: { ...EMPTY_MULTI, total: 1, answered: 1, votes: 1, byCode: [{ code: "meta_business_suite", count: 1 }] },
+  focusChannels: { ...EMPTY_MULTI, total: 1, answeredNone: 1 },
+};
+
+const listBody = (items: unknown[]) => ({ items, surveySummary: SUMMARY });
 
 describe("PlatformTenantListResponseSchema", () => {
   it("accepts a company list", () => {
-    expect(PlatformTenantListResponseSchema.safeParse({ items: [TENANT_ROW] }).success).toBe(true);
+    expect(PlatformTenantListResponseSchema.safeParse(listBody([TENANT_ROW])).success).toBe(true);
   });
 
   it("accepts a company with no slug and no members yet", () => {
-    const parsed = PlatformTenantListResponseSchema.safeParse({
-      items: [{ ...TENANT_ROW, slug: null, memberCount: 0 }],
-    });
+    const parsed = PlatformTenantListResponseSchema.safeParse(
+      listBody([{ ...TENANT_ROW, slug: null, memberCount: 0 }]),
+    );
     expect(parsed.success).toBe(true);
+  });
+
+  it("accepts a company that never answered the survey — most of them have not", () => {
+    // LEFT JOIN: `survey: null` is the ordinary case, not an error case.
+    const parsed = PlatformTenantListResponseSchema.safeParse(
+      listBody([{ ...TENANT_ROW, survey: null }]),
+    );
+    expect(parsed.success).toBe(true);
+  });
+
+  it("refuses a list with no summary — the strip would render numbers it invented", () => {
+    expect(PlatformTenantListResponseSchema.safeParse({ items: [TENANT_ROW] }).success).toBe(false);
   });
 
   it("rejects a status the UI cannot render", () => {
@@ -57,6 +94,11 @@ describe("PlatformTenantListResponseSchema", () => {
       PlatformTenantListResponseSchema.safeParse({ items: [{ ...TENANT_ROW, status: "archived" }] })
         .success,
     ).toBe(false);
+  });
+
+  it("keeps the survey row on the parsed company, not just in the summary", () => {
+    const parsed = PlatformTenantListResponseSchema.safeParse(listBody([TENANT_ROW]));
+    expect(parsed.success && parsed.data.items[0].survey).toEqual(SURVEY_ROW);
   });
 
   it("rejects a negative member count and an unparseable createdAt", () => {
@@ -213,5 +255,80 @@ describe("support sessions (M3.3)", () => {
         tenant: { id: "t-2", name: "X", slug: null },
       }).success,
     ).toBe(false);
+  });
+});
+
+// --- The survey mirror ------------------------------------------------------
+
+describe("PlatformTenantSurveySchema", () => {
+  it("keeps [] and null apart — the whole feature rests on this", () => {
+    const parsed = PlatformTenantSurveySchema.safeParse({
+      sellerKind: null,
+      currentTools: [],
+      channelCount: null,
+      focusChannels: null,
+      completedAt: null,
+    });
+
+    expect(parsed.success).toBe(true);
+    // "không chọn gì" (answered) and "bỏ qua" (not answered) must not arrive as
+    // the same value, or the count of skips becomes fiction.
+    expect(parsed.success && parsed.data.currentTools).toEqual([]);
+    expect(parsed.success && parsed.data.focusChannels).toBeNull();
+  });
+
+  it("accepts a code this bundle has never heard of", () => {
+    // A company answered before an option was retired. Under z.enum this one
+    // row would fail the parse and blank the WHOLE platform table.
+    const parsed = PlatformTenantSurveySchema.safeParse({
+      ...SURVEY_ROW,
+      sellerKind: "retired_in_2027",
+      focusChannels: ["a_channel_added_later"],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("refuses a blank code — an empty string is corrupt data, not 'bỏ qua'", () => {
+    expect(PlatformTenantSurveySchema.safeParse({ ...SURVEY_ROW, sellerKind: "" }).success).toBe(false);
+    expect(
+      PlatformTenantSurveySchema.safeParse({ ...SURVEY_ROW, currentTools: [""] }).success,
+    ).toBe(false);
+  });
+
+  it("refuses a completedAt that is not a real moment", () => {
+    expect(
+      PlatformTenantSurveySchema.safeParse({ ...SURVEY_ROW, completedAt: "hôm qua" }).success,
+    ).toBe(false);
+  });
+});
+
+describe("OnboardingSurveySummarySchema", () => {
+  it("accepts the shape the server sends", () => {
+    expect(OnboardingSurveySummarySchema.safeParse(SUMMARY).success).toBe(true);
+  });
+
+  it("requires BOTH no-answer buckets on a many-choice question", () => {
+    for (const missing of ["noAnswer", "answeredNone"] as const) {
+      const broken = { ...SUMMARY, currentTools: { ...SUMMARY.currentTools } };
+      delete (broken.currentTools as Record<string, unknown>)[missing];
+      expect(OnboardingSurveySummarySchema.safeParse(broken).success).toBe(false);
+    }
+  });
+
+  it("rejects a negative tally — a count that cannot exist must not reach a screen", () => {
+    const broken = {
+      ...SUMMARY,
+      sellerKind: { ...SUMMARY.sellerKind, byCode: [{ code: "agency", count: -1 }] },
+    };
+    expect(OnboardingSurveySummarySchema.safeParse(broken).success).toBe(false);
+  });
+
+  it("keeps a zero tally — an offered option nobody picked is a real answer", () => {
+    const zeroed = {
+      ...SUMMARY,
+      focusChannels: { ...SUMMARY.focusChannels, byCode: [{ code: "instagram", count: 0 }] },
+    };
+    const parsed = OnboardingSurveySummarySchema.safeParse(zeroed);
+    expect(parsed.success && parsed.data.focusChannels.byCode[0].count).toBe(0);
   });
 });

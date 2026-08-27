@@ -1,0 +1,157 @@
+/**
+ * Motion for the welcome screen's backdrop (spec section 4b).
+ *
+ * WHY PLAIN CSS AND NOT THE ANIMATION LIBRARY ALREADY IN THIS FOLDER: an
+ * earlier attempt drove the same 21 marks with framer-motion and, measured in
+ * the running app, wrote `transform: none` for 900ms and never moved. Twenty-one
+ * library instances are twenty-one JS loops that can fail silently; a keyframe
+ * either shows up in `getAnimations()` or it does not. Per-mark parameters ride
+ * in as custom properties so one rule serves every mark.
+ *
+ * EVERY LAYER SITS INSIDE `prefers-reduced-motion: no-preference`. Not slowed
+ * down under `reduce` — absent: no animation is declared, and the parallax
+ * `transform` is not declared either, so a reduced-motion visitor gets the
+ * finished picture and an empty `getAnimations()`. The JS half checks the same
+ * query before it starts a frame loop (see `GridBackdrop`).
+ *
+ * ONLY `transform`, `translate`, `scale` AND `opacity`. `translate` and `scale`
+ * are separate properties from `transform`, which is the whole trick here: one
+ * element can carry the entrance (opacity + scale), the ambient drift
+ * (translate) and the cursor parallax (transform) at once without three
+ * wrappers fighting over one `transform`.
+ *
+ * TOKENS, AND WHERE THE TOKENS RUN OUT. Astryx motion (`astryx docs motion`)
+ * covers TRANSITIONS: `--duration-*` and the single `--ease-standard`. The
+ * entrances below are transitions and use them. The ambient drift, the
+ * breathing grid and the parallax are decorative LOOPS, which that scale does
+ * not describe and for which inventing a token name would be worse than saying
+ * so — each one is hardcoded with the reason written next to it.
+ */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* LAYER 4 — the ruled ground breathes. One composited property on one
+     element; the edge gradients are painted in the page's own ground colour, so
+     what actually reads is the grid lines lifting and settling.
+
+     26s and `ease-in-out` are hardcoded: Astryx motion covers transitions only,
+     this is a decorative loop outside that scale. `ease-in-out` rather than
+     `--ease-standard` because a loop is joined end to end — an ease-out curve
+     arrives fast and would kick at the seam, while ease-in-out reaches nought
+     velocity at 0/50/100% and reads as a sine. */
+  .onboarding-ground {
+    animation: onboarding-ground-breathe 26s ease-in-out infinite;
+  }
+
+  /*
+    LAYER 3b — the cursor's halo. `--near` (0 far, 1 under the cursor) is written
+    per cell by the same frame loop; see `GridBackdrop`, and note that CSS
+    `:hover` is unavailable here because the whole backdrop is
+    `pointer-events-none` so that it cannot steal a click from "Bắt đầu".
+
+    IT LIFTS THE OPACITY, which is the depth scale the picture already uses: a
+    faint mark surfacing as the cursor passes reads as "that one is closer now"
+    rather than as a new effect bolted on. At `--near: 0` the calc resolves to
+    exactly `--depth`, i.e. the inline value React already wrote, so nothing
+    moves until the pointer does.
+
+    `!important` EARNS ITS PLACE, once. The base opacity is an inline style —
+    it has to be, it is the one thing the markup must state for a
+    reduced-motion visitor and for a server render — and a stylesheet cannot
+    outrank inline any other way. Under `reduce` this whole block does not
+    exist, so the inline value stands untouched, which is precisely the point.
+  */
+  .onboarding-cell {
+    opacity: calc(var(--depth, 1) + (1 - var(--depth, 1)) * var(--near, 0) * 0.6) !important;
+    /* A hair of lift. Decorative loop, no token covers it; 6% is the largest
+       value that still reads as depth rather than as a button responding. */
+    scale: calc(1 + var(--near, 0) * 0.06);
+  }
+
+  .onboarding-mark {
+    /* The stagger step, DERIVED from a token rather than typed as a number.
+       `--duration-fast` is 125ms IN THIS PROJECT — `src/ui/theme/mysp.css`
+       re-values Astryx's whole duration scale faster than the library default,
+       and the token is what has to be honoured, not the number in the library's
+       docs — so a third of it is ~42ms, inside the 30–50ms the spec asks for.
+       `--mark-in-rank` is the mark's distance from the middle of the field, in
+       cells: 4 nearest, 12 furthest, so the field lands between 167ms and
+       ~725ms. */
+    --mark-in-step: calc(var(--duration-fast) / 3);
+
+    animation:
+      /* LAYER 1 — entrance. A transition, so it is on the token scale:
+         `--duration-medium-min` is Astryx's entrance band, `--ease-standard`
+         its only curve. `both` holds the from-state through the delay, so a
+         mark waiting its turn is invisible rather than popping. */
+      onboarding-mark-in var(--duration-medium-min) var(--ease-standard)
+        calc(var(--mark-in-step) * var(--mark-in-rank, 0)) both,
+      /* LAYER 2 — ambient drift. Decorative loop, no token covers it: the 8–20s
+         period and `ease-in-out` are hardcoded for the reason given on layer 4.
+         The phase is NEGATIVE on purpose — a positive delay would leave every
+         mark frozen for up to 20s and then move the whole field in lockstep. */
+      onboarding-mark-drift var(--drift-duration, 14s) ease-in-out var(--drift-phase, 0s)
+        infinite;
+
+    /* LAYER 3 — cursor parallax, also a decorative loop with no token behind
+       it. `--parallax-x/y` are written ONCE per frame on the backdrop root by a
+       single rAF loop and inherit down to every mark; `--depth` is the mark's
+       own opacity, so a mark that is barely there barely moves and a solid one
+       leads. Depth is not a second invented scale: it is the depth the picture
+       already had. */
+    transform: translate3d(
+      calc(var(--parallax-x, 0px) * var(--depth, 0)),
+      calc(var(--parallax-y, 0px) * var(--depth, 0)),
+      0
+    );
+  }
+
+  /*
+    THE GREETING AND ITS BUTTON ARE NOT ANIMATED FROM HERE ANY MORE. They moved
+    onto the flow's one shared entrance timeline on 26/08/2026 —
+    `onboarding-motion.css`, `.onboarding-enter` — so that the welcome screen
+    and the four questions arrive by the same rule instead of by two.
+
+    What that timeline had to keep from the rule that used to live here is the
+    finding, not the numbers: the copy comes in AFTER the field has started
+    landing (spec 4b) but does NOT wait for the outermost marks, which are still
+    arriving at ~725ms. Parking the only way forward behind them would leave the
+    primary action invisible for most of a second. It now lands at 785ms.
+  */
+}
+
+/* Keyframes live outside the query: unreferenced ones cost nothing, and keeping
+   them here means the query above reads as one list of what is switched off. */
+
+@keyframes onboarding-mark-in {
+  from {
+    opacity: 0;
+    scale: 0.84;
+  }
+
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes onboarding-mark-drift {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+
+  50% {
+    translate: var(--drift-x, 0px) var(--drift-y, 0px);
+  }
+}
+
+@keyframes onboarding-ground-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.86;
+  }
+}
