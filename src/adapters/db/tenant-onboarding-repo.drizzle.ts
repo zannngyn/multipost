@@ -10,7 +10,7 @@ import type {
 
 import type { Database } from "./client";
 import { findPgError, wrapDbError } from "./db-errors";
-import { auditLogs, memberships, tenants, users } from "./schema";
+import { auditLogs, accounts, memberships, tenants, users } from "./schema";
 
 /**
  * Self-service tenant creation (M2.1, docs/09 §3.7).
@@ -56,33 +56,41 @@ export class DrizzleTenantOnboardingRepo implements TenantOnboardingRepo {
           sql`select pg_advisory_xact_lock(hashtext(${`tenant_create:${accountId}`}))`,
         );
 
-        const [{ total }] = await tx
-          .select({ total: count() })
-          .from(tenants)
-          .where(eq(tenants.createdByAccountId, accountId));
-        const [{ lastHour }] = await tx
-          .select({ lastHour: count() })
-          .from(tenants)
-          .where(
-            and(
-              eq(tenants.createdByAccountId, accountId),
-              gte(tenants.createdAt, new Date(input.now.getTime() - HOUR_MS)),
-            ),
-          );
+        const accountRows = await tx
+          .select({ platformRole: accounts.platformRole })
+          .from(accounts)
+          .where(eq(accounts.id, accountId));
+        const isSuperAdmin = accountRows[0]?.platformRole === "super_admin";
 
-        if (total >= input.maxCreatedTotal || lastHour >= input.maxCreatedPerHour) {
-          const limit = total >= input.maxCreatedTotal ? "TOTAL" : "PER_HOUR";
-          this.deps.logger.warn("Tenant creation refused: abuse limit reached", {
-            account_id: accountId,
-            error_code: "TENANT_LIMIT_REACHED",
-            limit,
-            created_total: total,
-            created_last_hour: lastHour,
-          });
-          throw new AppError("TENANT_LIMIT_REACHED", {
-            message: `Tenant creation cap hit (${limit})`,
-            context: { account_id: accountId, limit },
-          });
+        if (!isSuperAdmin) {
+          const [{ total }] = await tx
+            .select({ total: count() })
+            .from(tenants)
+            .where(eq(tenants.createdByAccountId, accountId));
+          const [{ lastHour }] = await tx
+            .select({ lastHour: count() })
+            .from(tenants)
+            .where(
+              and(
+                eq(tenants.createdByAccountId, accountId),
+                gte(tenants.createdAt, new Date(input.now.getTime() - HOUR_MS)),
+              ),
+            );
+
+          if (total >= input.maxCreatedTotal || lastHour >= input.maxCreatedPerHour) {
+            const limit = total >= input.maxCreatedTotal ? "TOTAL" : "PER_HOUR";
+            this.deps.logger.warn("Tenant creation refused: abuse limit reached", {
+              account_id: accountId,
+              error_code: "TENANT_LIMIT_REACHED",
+              limit,
+              created_total: total,
+              created_last_hour: lastHour,
+            });
+            throw new AppError("TENANT_LIMIT_REACHED", {
+              message: `Tenant creation cap hit (${limit})`,
+              context: { account_id: accountId, limit },
+            });
+          }
         }
 
         const tenantRows = await tx
