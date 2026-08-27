@@ -73,7 +73,7 @@ const IMPORT_SYSTEM_TENANT_ID = {
 };
 const IMPORT_TESTING_TENANT_ID = {
   selector: "ImportDeclaration[source.value='@/core/domain/tenant-context.testing']",
-  message: "testTenantId chỉ dùng trong *.test.ts / __fixtures__ (docs/11 §3).",
+  message: "testTenantId chỉ dùng trong __tests__/ / __fixtures__ (docs/11 §3).",
 };
 const IMPORT_PLATFORM_TENANT_ID = {
   selector: "ImportDeclaration[source.value='@/composition/platform-tenant-id']",
@@ -332,7 +332,7 @@ const eslintConfig = defineConfig([
   // 4. Tests + fixtures are exempt from all of the above (they brand freely and
   //    wire across layers on purpose — mirrors dependency-cruiser's test exclude).
   {
-    files: ["src/**/*.test.ts", "src/**/__fixtures__/**"],
+    files: ["src/**/__tests__/**", "src/**/*.test.{ts,tsx}", "src/**/__fixtures__/**"],
     rules: { "no-restricted-syntax": "off", "no-restricted-imports": "off" },
   },
 ]);
