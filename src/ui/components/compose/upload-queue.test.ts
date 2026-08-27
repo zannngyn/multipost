@@ -133,7 +133,7 @@ describe("syncPreviewUrls", () => {
     expect(revoked).toEqual([]);
   });
 
-  it("is safe to run twice with the same input (StrictMode double-invoke)", () => {
+  it("reuses existing urls when the ids are unchanged (guards reorder/add-remove, not mount)", () => {
     const createUrl = () => "blob:only-call";
     const queue = [queuedImage("a")];
 

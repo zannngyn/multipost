@@ -77,11 +77,14 @@ export function isPreviewable(file: File): boolean {
  * any React state or DOM API call itself — `createUrl` is injected so this
  * stays testable in the node environment, no jsdom required.
  *
- * MUST be idempotent: calling it twice in a row with the same `queue` and the
- * same `current` map returns a `next` map with the exact same URLs (no new
- * `createUrl` calls) and an empty `revoked` list. That property is what makes
- * StrictMode's setup→cleanup→setup double-invoke harmless — the second setup
- * sees nothing changed and does nothing.
+ * MUST be idempotent: given a `queue` whose ids are unchanged from `current`
+ * — even when the array itself is a new reference, as a drag-reorder or an
+ * add-then-remove produces — it returns the exact same URLs (no new
+ * `createUrl` calls) and an empty `revoked` list. That is what keeps a
+ * reorder from tearing down and rebuilding every preview in the panel.
+ * (React StrictMode's mount-time double-invoke is guarded separately, by the
+ * mount-only effect in `UploadPanel` clearing the ref before its second
+ * setup runs — not by this function.)
  */
 export function syncPreviewUrls(
   current: ReadonlyMap<string, string>,

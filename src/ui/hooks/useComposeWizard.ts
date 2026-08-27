@@ -13,6 +13,7 @@ import {
   STEP_PRODUCT_FIELDS,
   type ComposeResponse,
   type ComposeWizardValues,
+  type DetectCodeResponse,
   type UploadRejection,
   type UploadResponse,
 } from "@/ui/schemas/compose.schema";
@@ -31,6 +32,7 @@ import { useDirectUpload } from "@/ui/hooks/useDirectUpload";
 import type { ComposeDraftPayload } from "@/ui/schemas/post-draft.schema";
 import { ApiError } from "@/ui/services/api-error";
 import { composePost, generateCaptions, type GenerateCaptionsResult } from "@/ui/services/post.api";
+import { detectUploadCode } from "@/ui/services/upload.api";
 
 /**
  * Logic layer of the compose screen (docs/07 §4.1).
@@ -191,6 +193,25 @@ export function useComposeWizard() {
   const [uploadWarnings, setUploadWarnings] = useState<string[]>([]);
 
   const direct = useDirectUpload();
+
+  /**
+   * E9 T7 — which product code the file names in the queue carry. Fires the
+   * moment the queue goes from empty to non-empty, BEFORE anything uploads
+   * (spec §4.1: the operator is not required to type a code first).
+   */
+  const [detection, setDetection] = useState<DetectCodeResponse | null>(null);
+
+  const detect = useMutation<DetectCodeResponse, ApiError, readonly QueuedFile[]>({
+    mutationFn: (files) =>
+      detectUploadCode({ files: files.map((item) => ({ fileName: item.file.name })) }),
+    retry: false,
+    onSuccess: (result) => setDetection(result),
+    // Detection failing must NOT block the compose screen — the operator can
+    // still type the code by hand. It still has to be visible (rule 5), and
+    // that is what `detect.error` is for; a stale verdict must not linger.
+    onError: () => setDetection(null),
+  });
+
   const upload = useMutation<UploadResponse, ApiError, void>({
     mutationFn: () => {
       const values = form.getValues();
@@ -208,12 +229,38 @@ export function useComposeWizard() {
       // Accepted files are stored server-side now; keeping them queued would
       // let a second click upload the same album twice.
       setUploadQueue([]);
+      // The detected code was about THIS queue; an empty queue has none.
+      setDetection(null);
     },
     onError: () => {
       setUploadRejections([]);
       setUploadWarnings([]);
     },
   });
+
+  /**
+   * Wraps the raw queue setter so the empty↔non-empty edge is decided at the
+   * one place queue changes actually originate (drop, remove, reorder),
+   * rather than reacted to a tick later from a `useEffect` watching
+   * `uploadQueue`: this project's lint forbids a synchronous `setState` call
+   * in an effect body (`react-hooks/set-state-in-effect`) and ref reads/writes
+   * during render (`react-hooks/refs`), both of which an effect-based version
+   * of this would need.
+   */
+  const handleUploadQueueChange = useCallback(
+    (next: QueuedFile[]) => {
+      const wasEmpty = uploadQueue.length === 0;
+      setUploadQueue(next);
+      if (next.length === 0) {
+        setDetection(null);
+        return;
+      }
+      // Only the empty→non-empty edge asks — adding more files to an
+      // already-detected batch, or reordering it, must not re-fire.
+      if (wasEmpty) detect.mutate(next);
+    },
+    [uploadQueue, detect],
+  );
 
   const compose = useMutation<ComposeResponse, ApiError, void>({
     mutationFn: () => {
@@ -347,6 +394,20 @@ export function useComposeWizard() {
       };
     }
   }, [compose, form]);
+
+  /**
+   * E9 T7 — "Dùng mã này" / "Nhập mã BG0SQ9999" / one code from a conflict.
+   * Fills the field with the code the button carries and, unless it is blank
+   * ("Nhập mã sản phẩm" only opens the field for typing), looks it up right
+   * away — spec §8.2 forbids making the operator retype it.
+   */
+  const applyDetectedCode = useCallback(
+    (code: string) => {
+      form.setValue("productCode", code, { shouldDirty: true });
+      if (code.trim().length > 0) void submitProductStep();
+    },
+    [form, submitProductStep],
+  );
 
   /**
    * E10 — puts a stored draft back on screen.
@@ -487,6 +548,9 @@ export function useComposeWizard() {
     setUploadedCount(0);
     setUploadRejections([]);
     setUploadWarnings([]);
+    // "Xoá nháp" clears the queue directly, bypassing `handleUploadQueueChange`
+    // — the detected code has to go with it.
+    setDetection(null);
     // A stray in-flight direct upload must not keep POSTing to MinIO or hand
     // back a result once the screen it belonged to no longer exists.
     direct.cancel();
@@ -496,7 +560,8 @@ export function useComposeWizard() {
     compose.reset();
     captions.reset();
     upload.reset();
-  }, [captions, clearManualProduct, compose, direct, form, upload]);
+    detect.reset();
+  }, [captions, clearManualProduct, compose, detect, direct, form, upload]);
 
   /**
    * Deep link from the product list: `/compose?code=MGKVX6310&color=TRẮNG`
@@ -576,9 +641,14 @@ export function useComposeWizard() {
     toneDropped,
     upload,
     uploadQueue,
-    setUploadQueue,
+    /** Routes every queue change through detection (E9 T7) as well as state. */
+    setUploadQueue: handleUploadQueueChange,
     uploadedCount,
     uploadRejections,
+    /** E9 T7 — the code(s) read from the queued file names, and the request behind it. */
+    detection,
+    detect,
+    applyDetectedCode,
     /** Non-blocking notes from the confirm step (e.g. a corrected album order). */
     uploadWarnings,
     /** 0..100, real progress of the direct-to-storage POSTs (stage 2 only). */
