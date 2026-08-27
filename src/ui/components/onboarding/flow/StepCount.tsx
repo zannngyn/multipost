@@ -3,6 +3,7 @@
 import { CHANNEL_COUNTS, type ChannelCount } from "@/ui/schemas/onboarding-profile.schema";
 
 import { OptionCardGroup, type OptionChoice } from "./OptionCard";
+import { ENTER_DELAY_HEADING, enterDelay } from "./onboarding-motion";
 import { StepActions } from "./StepActions";
 
 /**
@@ -88,7 +89,8 @@ export function StepCount({
           `OnboardingFrame` moves focus to the arriving screen's <h1>. */}
       <h1
         tabIndex={-1}
-        className="text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        style={enterDelay(ENTER_DELAY_HEADING)}
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
       >
         {QUESTION}
       </h1>

@@ -3,6 +3,7 @@
 import { TOOL_KINDS, type ToolKind } from "@/ui/schemas/onboarding-profile.schema";
 
 import { CheckOptionCardGroup, type CheckOptionChoice } from "./CheckOptionCard";
+import { ENTER_DELAY_HEADING, enterDelay } from "./onboarding-motion";
 import { StepActions } from "./StepActions";
 
 /**
@@ -30,17 +31,38 @@ const TOOL_LABEL: Record<
   ToolKind,
   { label: string; hint?: string; emoji: string; tone: CheckOptionChoice["tone"] }
 > = {
-  manual_facebook: { label: "Tự đăng tay trên Facebook", emoji: "💻", tone: "sky" },
-  meta_business_suite: { label: "Meta Business Suite", emoji: "🔵", tone: "indigo" },
+  // Six different tones, because six wells in one grey family read as one
+  // block. The prototype has no step 2 to copy, so the only fixed points are
+  // 🔵 on blue (it IS a blue circle) and 🦄 on purple, which is what the
+  // prototype paints that same unicorn on in step 1.
+  manual_facebook: {
+    label: "Tự đăng tay trên Facebook",
+    emoji: "💻",
+    tone: "yellow",
+  },
+  meta_business_suite: {
+    label: "Meta Business Suite",
+    emoji: "🔵",
+    tone: "blue",
+  },
   smm_tool: {
     label: "Công cụ quản lý mạng xã hội",
     hint: "vd: Hootsuite, Later",
     emoji: "🛠️",
-    tone: "leaf",
+    tone: "green",
   },
-  platform_specific_tool: { label: "Công cụ chuyên một nền tảng", emoji: "🧩", tone: "turmeric" },
-  ai_platform: { label: "Nền tảng AI", hint: "ChatGPT/Claude…", emoji: "🤖", tone: "madder" },
-  other: { label: "Khác", emoji: "🦄", tone: "neutral" },
+  platform_specific_tool: {
+    label: "Công cụ chuyên một nền tảng",
+    emoji: "🧩",
+    tone: "orange",
+  },
+  ai_platform: {
+    label: "Nền tảng AI",
+    hint: "ChatGPT/Claude…",
+    emoji: "🤖",
+    tone: "pink",
+  },
+  other: { label: "Khác", emoji: "🦄", tone: "purple" },
 };
 
 const CHOICES: readonly CheckOptionChoice[] = TOOL_KINDS.map((value) => ({
@@ -75,11 +97,14 @@ export function StepTools({
     // Same reasoning as `StepSeller`: a code the schema does not know must not
     // reach the store, where it would be rejected on the next read instead.
     if (!isToolKind(raw)) {
-      console.warn("[onboarding] tools step received a code outside the schema", {
-        error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
-        step: "tools",
-        answer: raw,
-      });
+      console.warn(
+        "[onboarding] tools step received a code outside the schema",
+        {
+          error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
+          step: "tools",
+          answer: raw,
+        },
+      );
       return;
     }
     onToggle(raw, isChecked);
@@ -89,7 +114,8 @@ export function StepTools({
     <div className="flex w-full flex-col items-center gap-8">
       <h1
         tabIndex={-1}
-        className="text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        style={enterDelay(ENTER_DELAY_HEADING)}
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
       >
         {QUESTION}
       </h1>

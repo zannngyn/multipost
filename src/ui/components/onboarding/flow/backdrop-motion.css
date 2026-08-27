@@ -106,21 +106,17 @@
   }
 
   /*
-    The greeting and its button arrive after the field has started landing
-    (spec 4b: "chữ và nút vào sau cùng").
+    THE GREETING AND ITS BUTTON ARE NOT ANIMATED FROM HERE ANY MORE. They moved
+    onto the flow's one shared entrance timeline on 26/08/2026 —
+    `onboarding-motion.css`, `.onboarding-enter` — so that the welcome screen
+    and the four questions arrive by the same rule instead of by two.
 
-    THEY DO NOT WAIT FOR THE LAST MARK, and that is a deliberate reading of
-    Astryx's "motion should never stand between the user and their next
-    action". The outermost marks are still arriving at ~725ms; parking "Bắt
-    đầu" behind them would mean a third of a second of invisible primary
-    action. The delays are multiples of `--duration-fast` (125ms here): the
-    heading starts at ~188ms and the button at 250ms, both finished by ~475ms.
-    Late enough to read as last, early enough not to be an obstacle.
+    What that timeline had to keep from the rule that used to live here is the
+    finding, not the numbers: the copy comes in AFTER the field has started
+    landing (spec 4b) but does NOT wait for the outermost marks, which are still
+    arriving at ~725ms. Parking the only way forward behind them would leave the
+    primary action invisible for most of a second. It now lands at 785ms.
   */
-  .onboarding-late-in {
-    animation: onboarding-late-in var(--duration-medium-min) var(--ease-standard)
-      var(--late-in-delay, 0ms) both;
-  }
 }
 
 /* Keyframes live outside the query: unreferenced ones cost nothing, and keeping
@@ -157,17 +153,5 @@
 
   50% {
     opacity: 0.86;
-  }
-}
-
-@keyframes onboarding-late-in {
-  from {
-    opacity: 0;
-    translate: 0 10px;
-  }
-
-  to {
-    opacity: 1;
-    translate: 0 0;
   }
 }

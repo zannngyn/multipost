@@ -89,14 +89,80 @@ describe("StepSeller — bước 1, một lựa chọn", () => {
       <StepSeller value="agency" onChange={noop} onContinue={noop} onSkip={noop} />,
     );
 
-    expect(blank).toContain('disabled=""');
+    // BLOCKED IS `aria-disabled`, NOT `disabled` (animation spec section 5.3,
+    // PM 26/08/2026). The way forward is still shut — the flow does not move —
+    // but the press reaches the button so it can answer with the reason. A
+    // truly disabled control swallows the press and explains nothing.
+    expect(blank).toContain('aria-disabled="true"');
     expect(blank).toContain("Chọn một mục để tiếp tục");
     // "Bỏ qua" is never shut: skipping is an answer too (spec section 7.2).
     expect(blank).toContain("Bỏ qua");
-    expect(blank.match(/disabled=""/g)).toHaveLength(1);
+    // Nothing on the step is really disabled while it merely lacks an answer;
+    // `disabled` is kept for the one case where a second press costs an answer.
+    expect(blank.match(/ disabled=""/g)).toBeNull();
 
-    expect(answered).not.toContain('disabled=""');
+    expect(answered).not.toContain('aria-disabled="true"');
+    expect(answered).not.toContain(' disabled=""');
     expect(answered).toContain("Tiếp tục");
+  });
+});
+
+describe("the emoji wells match the prototype, card for card", () => {
+  /**
+   * THE BUG THIS EXISTS FOR. The six tones were renamed from theme dye names to
+   * the colours they actually paint, and the values were repointed at the
+   * prototype's tints — but the screens went on choosing the OLD names. A tone
+   * called `indigo` was painting a 310° purple, so 👋 came out lilac where the
+   * prototype has it yellow, and four of the six cards were wrong. Nothing
+   * failed: every name still type-checked, and no test looked at which card got
+   * which colour.
+   *
+   * Asserted in ORDER, because that is the only form the bug could not survive.
+   */
+
+  /**
+   * The wash of each emoji well, in render order.
+   *
+   * SCOPED TO THE WELL'S OWN CLASS LIST. A first version scanned the whole
+   * document for `bg-…` and picked up the blocked CTA's `bg-secondary` as a
+   * seventh and eighth card. Reading the well spans and nothing else is what
+   * makes the result mean "the colours of the six cards".
+   *
+   * A well with no wash answers "none" rather than vanishing — that is the
+   * exact shape of the bug being guarded: a tone name the map no longer knows
+   * resolves to `undefined` and paints nothing at all.
+   */
+  function wells(html: string): string[] {
+    return [...html.matchAll(/class="onboarding-card-emoji[^"]*"/g)].map((match) => {
+      const wash = /--well-([a-z]+)\)|bg-(secondary)\b/.exec(match[0]);
+      return wash?.[1] ?? wash?.[2] ?? "none";
+    });
+  }
+
+  it("step 1 is the prototype's own six, in the prototype's order", () => {
+    // `mysp-onboarding-animation.html`, the six `.card` of screen 1:
+    // 👋 yellow · 💪 green · 👥 blue · ✨ orange · 🎯 pink · 🦄 purple.
+    const html = renderToStaticMarkup(
+      <StepSeller value={null} onChange={noop} onContinue={noop} onSkip={noop} />,
+    );
+    expect(wells(html)).toEqual(["yellow", "green", "blue", "orange", "pink", "purple"]);
+    // The emoji are the prototype's too — it uses ✨, not 🌟.
+    expect(html).toContain("✨");
+    expect(html).not.toContain("🌟");
+  });
+
+  it("step 2 gives six distinct tones, so the grid never reads as one block", () => {
+    // The prototype has no step 2 to copy. What is fixed: six different tones,
+    // 🔵 on blue, and 🦄 on purple to match the unicorn in step 1.
+    const html = renderToStaticMarkup(
+      <StepTools values={[]} onToggle={noop} onContinue={noop} onSkip={noop} />,
+    );
+    const tones = wells(html);
+    expect(tones).toHaveLength(6);
+    expect(new Set(tones).size).toBe(6);
+    expect(tones.at(-1)).toBe("purple");
+    // No well may fall back to the neutral beige while the prototype is colour.
+    expect(tones).not.toContain("secondary");
   });
 });
 
@@ -170,9 +236,10 @@ describe("StepTools — bước 2, nhiều lựa chọn", () => {
       <StepTools values={["meta_business_suite"]} onToggle={noop} onContinue={noop} onSkip={noop} />,
     );
 
-    expect(blank).toContain('disabled=""');
+    // `aria-disabled`, not `disabled` — see the note on step 1.
+    expect(blank).toContain('aria-disabled="true"');
     expect(blank).toContain("Chọn một mục để tiếp tục");
-    expect(answered).not.toContain('disabled=""');
+    expect(answered).not.toContain('aria-disabled="true"');
     expect(answered).toContain("Tiếp tục");
   });
 });
@@ -222,10 +289,11 @@ describe("StepCount — bước 3, một lựa chọn, thẻ chữ trơn", () =>
       <StepCount value="50+" onChange={noop} onContinue={noop} onSkip={noop} />,
     );
 
-    expect(blank).toContain('disabled=""');
+    // `aria-disabled`, not `disabled` — see the note on step 1.
+    expect(blank).toContain('aria-disabled="true"');
     expect(blank).toContain("Chọn một mục để tiếp tục");
     expect(blank).toContain("Bỏ qua");
-    expect(answered).not.toContain('disabled=""');
+    expect(answered).not.toContain('aria-disabled="true"');
     expect(answered).toContain("Tiếp tục");
   });
 });
@@ -286,7 +354,8 @@ describe("StepChannels — bước 4, nhiều lựa chọn", () => {
     expect(html.match(/checked=""/g)).toHaveLength(2);
     // Nothing on this screen is `disabled` once an answer exists — least of all
     // a tile the operator is being asked to vote with.
-    expect(html).not.toContain('disabled=""');
+    expect(html).not.toContain(' disabled=""');
+    expect(html).not.toContain('aria-disabled="true"');
   });
 
   it("keeps the way forward shut until at least one channel is chosen", () => {
@@ -297,10 +366,11 @@ describe("StepChannels — bước 4, nhiều lựa chọn", () => {
       <StepChannels values={["facebook"]} onToggle={noop} onContinue={noop} onSkip={noop} />,
     );
 
-    expect(blank).toContain('disabled=""');
+    // `aria-disabled`, not `disabled` — see the note on step 1.
+    expect(blank).toContain('aria-disabled="true"');
     expect(blank).toContain("Chọn một mục để tiếp tục");
     expect(blank).toContain("Bỏ qua");
-    expect(answered).not.toContain('disabled=""');
+    expect(answered).not.toContain('aria-disabled="true"');
     expect(answered).toContain("Tiếp tục");
   });
 

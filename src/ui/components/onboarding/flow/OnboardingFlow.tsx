@@ -24,7 +24,7 @@ import type {
 import { ApiError } from "@/ui/services/api-error";
 import { myspTheme } from "@/ui/theme/mysp";
 
-import { OnboardingFrame } from "./OnboardingFrame";
+import { OnboardingFrame, type FlowDirection } from "./OnboardingFrame";
 import { StepChannels } from "./StepChannels";
 import { StepCount } from "./StepCount";
 import { StepSeller } from "./StepSeller";
@@ -41,6 +41,7 @@ import {
   nextScreen,
   previousScreen,
   resolveScreen,
+  screenStep,
   type OnboardingScreen,
 } from "./onboarding-steps";
 import { usePassedSlides } from "./usePassedSlides";
@@ -164,6 +165,32 @@ export function OnboardingFlow({
     answered,
     hasStarted: passed.includes("welcome"),
   });
+
+  /**
+   * WHICH WAY THE FLOW JUST MOVED, for the frame to slide the screens by
+   * (animation spec section 6: forward comes in from the right, back from the
+   * left).
+   *
+   * DERIVED FROM THE POSITIONS, NOT FROM `goBack`. Setting a flag inside
+   * `goBack` would be the obvious way and it would be wrong for the case that
+   * actually happens: the browser's own Back button changes `?step=` without
+   * going anywhere near this component's handlers, so the flow would slide
+   * FORWARDS while going backwards. Comparing where the screen was with where
+   * it is answers for every cause — the arrow, the browser, a typed URL.
+   *
+   * Adjusted during render rather than in an effect, which is the supported
+   * shape for "state derived from a prop that changed": an effect would commit
+   * the new screen with the OLD direction first, and the slide would be wrong
+   * for one frame every time.
+   */
+  const [previousRenderedScreen, setPreviousRenderedScreen] = useState<OnboardingScreen>(current);
+  const [direction, setDirection] = useState<FlowDirection>(1);
+  if (previousRenderedScreen !== current) {
+    setPreviousRenderedScreen(current);
+    // `screenStep` is 0 on the greeting and 1..4 on the questions, i.e. the
+    // reading order of the flow.
+    setDirection(screenStep(current) >= screenStep(previousRenderedScreen) ? 1 : -1);
+  }
 
   const goTo = useCallback(
     (target: OnboardingScreen) => {
@@ -415,6 +442,7 @@ export function OnboardingFlow({
     return (
       <OnboardingFrame
         screen={current}
+        direction={direction}
         // The greeting has nothing behind it to go back to.
         onBack={current === "welcome" ? undefined : goBack}
       >

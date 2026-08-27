@@ -1,25 +1,34 @@
 import { ArrowRight } from "lucide-react";
-import type { CSSProperties } from "react";
 
 import { Button } from "@/ui/components/ui/button";
 
 import "./backdrop-motion.css";
+import {
+  ENTER_DELAY_CARDS,
+  ENTER_DELAY_HEADING,
+  enterDelay,
+} from "./onboarding-motion";
+import "./onboarding-motion.css";
 
 /**
- * When the greeting and its button arrive, relative to the backdrop's marks
- * (spec 4b: the copy comes in last).
+ * WHEN THE GREETING AND ITS BUTTON ARRIVE.
  *
- * MULTIPLES OF A TOKEN, not typed numbers: `--duration-fast` is 125ms in this
- * project's theme, so the heading starts at ~188ms and the button at 250ms.
- * Deliberately NOT behind the outermost marks, which are still arriving at
- * ~725ms — Astryx's motion guidance is that motion must never stand between the
- * user and their next action, and a primary action invisible for most of a
- * second does exactly that. The whole thing is switched off under
- * `prefers-reduced-motion: reduce` by the stylesheet, which is why there is no
- * hook here.
+ * They ride the SAME timeline as the four questions (animation spec section 4),
+ * not a private one: the heading takes row 4 at 100ms, the button takes the
+ * slot where the first card would be at 260ms, and both use the shapes and the
+ * token-mapped durations of `onboarding-motion.css`. It finishes at 785ms, well
+ * inside the 1.2s ceiling section 2 puts on entering a screen.
+ *
+ * WHY THE BUTTON TAKES A CARD'S SLOT AND NOT THE CTA'S. The CTA slot is 635ms
+ * because six cards come before it; this screen has no cards, so the slot is
+ * empty and putting the button there would be waiting for a queue that does not
+ * exist. It also keeps the earlier finding intact: the backdrop's outermost
+ * marks are still arriving at ~725ms, and parking the only way forward behind
+ * them would leave the primary action invisible for most of a second.
+ *
+ * The whole thing is switched off under `prefers-reduced-motion: reduce` by the
+ * stylesheets, which is why there is no hook here.
  */
-const HEADING_DELAY = { "--late-in-delay": "calc(var(--duration-fast) * 1.5)" } as CSSProperties;
-const BUTTON_DELAY = { "--late-in-delay": "calc(var(--duration-fast) * 2)" } as CSSProperties;
 
 /**
  * The greeting. One heading, one way forward, nothing to skip and nothing to go
@@ -51,8 +60,8 @@ export function WelcomeScreen({
       */}
       <h1
         tabIndex={-1}
-        style={HEADING_DELAY}
-        className="onboarding-late-in text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        style={enterDelay(ENTER_DELAY_HEADING)}
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
       >
         {/*
           PENDING(welcome-name): spec section 12 asks for the local part of the
@@ -61,29 +70,44 @@ export function WelcomeScreen({
           is nullable. So a nameless account gets a greeting with no name rather
           than an invented one.
         */}
-        <span className="block">{name === null ? "Chào bạn 👋" : `Chào ${name} 👋`}</span>
+        <span className="block">
+          {name === null ? "Chào bạn 👋" : `Chào ${name} 👋`}
+        </span>
         <span className="block">Chào mừng tới MYSP</span>
       </h1>
 
       {/*
         48px tall, 12px corners, 0 24px of padding — measured (spec 2.4), and
         every one of them past what the local `Button` scale reaches, which tops
-        out at 36px. `rounded-md` is the token nearest 12px (`--radius` * 0.8 =
-        12.8px); a literal 12px would mean hardcoding a radius against the
-        theme's own scale.
+        out at 36px. `rounded-lg` IS `--radius` (16px), the prototype's corner.
+
+        INK, NOT THE DYE, like the CTA on every question — this is the same
+        primary action and it may not be a different colour from the four
+        screens after it. `--foreground`/`--background`, so the dark theme
+        inverts it correctly.
 
         It HUGS its label (~139px measured) instead of stretching: no `w-full`
         here, and the column above centres rather than stretches it.
       */}
-      <Button
-        type="button"
-        onClick={onStart}
-        style={BUTTON_DELAY}
-        className="onboarding-late-in h-12 gap-2 rounded-md px-6 text-sm font-medium"
-      >
-        Bắt đầu
-        <ArrowRight aria-hidden="true" />
-      </Button>
+      {/*
+        THE ENTRANCE RIDES A WRAPPER, like every other call site. This one was
+        the last holdout: `buttonVariants` puts `disabled:opacity-50`,
+        `active:…translate-y-px` and `transition-all` on the element itself, and
+        a running keyframe outranks all three for as long as it runs. It has
+        never actually broken — this button is never `disabled` — but "the one
+        place we did it the old way" is how the bug comes back, and the guard in
+        `option-card-render.test.tsx` now watches this screen too.
+      */}
+      <div style={enterDelay(ENTER_DELAY_CARDS)} className="onboarding-enter">
+        <Button
+          type="button"
+          onClick={onStart}
+          className="bg-foreground text-background hover:bg-foreground/90 h-12 gap-2 rounded-lg px-6 text-sm font-medium"
+        >
+          Bắt đầu
+          <ArrowRight aria-hidden="true" />
+        </Button>
+      </div>
     </div>
   );
 }
