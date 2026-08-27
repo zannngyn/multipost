@@ -109,10 +109,18 @@ describe("backdrop motion markup", () => {
     expect(Math.max(...ranks) - Math.min(...ranks)).toBeGreaterThanOrEqual(6);
   });
 
-  it("brings the greeting and its button in on delays derived from a token", () => {
+  it("brings the greeting and its button in on the flow's shared entrance timeline", () => {
+    // They used to have a private rule in this stylesheet. Since 26/08/2026
+    // they ride `onboarding-motion.css` like the four questions do — the
+    // heading on row 4 of the spec's table, the button in the slot where the
+    // first card would be. What had to survive the move is the FINDING, not the
+    // numbers: the copy arrives after the field has started landing but does
+    // NOT wait for the outermost marks at ~725ms, which would leave the only
+    // way forward invisible for most of a second. 260ms + 525ms = 785ms.
     const html = renderToStaticMarkup(<WelcomeScreen name="Vân" onStart={() => {}} />);
-    expect(html).toContain("onboarding-late-in");
-    expect(html).toContain("--late-in-delay:calc(var(--duration-fast) * 1.5)");
-    expect(html).toContain("--late-in-delay:calc(var(--duration-fast) * 2)");
+    expect(html).toContain("onboarding-enter");
+    expect(html).not.toContain("onboarding-late-in");
+    expect(html).toContain("--enter-delay:100ms");
+    expect(html).toContain("--enter-delay:260ms");
   });
 });

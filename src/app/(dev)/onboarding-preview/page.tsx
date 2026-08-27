@@ -365,38 +365,38 @@ function SurveyCardGallery() {
 }
 
 const SELLER_PREVIEW = [
-  { value: "solo_seller", label: "Bán lẻ cá nhân", emoji: "👋", tone: "indigo" as const },
-  { value: "shop_owner", label: "Chủ shop nhỏ", emoji: "💪", tone: "leaf" as const },
-  { value: "marketing_team", label: "Trong đội marketing", emoji: "🧑‍💻", tone: "sky" as const },
-  { value: "freelancer", label: "Cộng tác viên/freelancer", emoji: "⭐", tone: "turmeric" as const },
-  { value: "agency", label: "Agency", emoji: "🏆", tone: "madder" as const },
-  { value: "other", label: "Khác", emoji: "🦄", tone: "neutral" as const },
+  { value: "solo_seller", label: "Bán lẻ cá nhân", emoji: "👋", tone: "yellow" as const },
+  { value: "shop_owner", label: "Chủ shop nhỏ", emoji: "💪", tone: "green" as const },
+  { value: "marketing_team", label: "Trong đội marketing", emoji: "🧑‍💻", tone: "blue" as const },
+  { value: "freelancer", label: "Cộng tác viên/freelancer", emoji: "⭐", tone: "orange" as const },
+  { value: "agency", label: "Agency", emoji: "🏆", tone: "pink" as const },
+  { value: "other", label: "Khác", emoji: "🦄", tone: "purple" as const },
 ];
 
 const TOOLS_PREVIEW = [
-  { value: "manual_facebook", label: "Tự đăng tay trên Facebook", emoji: "💻", tone: "sky" as const },
-  { value: "meta_business_suite", label: "Meta Business Suite", emoji: "🔵", tone: "indigo" as const },
+  { value: "manual_facebook", label: "Tự đăng tay trên Facebook", emoji: "💻", tone: "yellow" as const },
+  { value: "meta_business_suite", label: "Meta Business Suite", emoji: "🔵", tone: "blue" as const },
   {
     value: "smm_tool",
     label: "Công cụ quản lý mạng xã hội",
     hint: "vd: Hootsuite, Later",
     emoji: "🛠️",
-    tone: "leaf" as const,
+    tone: "green" as const,
   },
   {
     value: "platform_specific_tool",
     label: "Công cụ chuyên một nền tảng",
     emoji: "🧩",
-    tone: "turmeric" as const,
+    tone: "orange" as const,
   },
   {
     value: "ai_platform",
     label: "Nền tảng AI",
     hint: "ChatGPT/Claude…",
     emoji: "🤖",
-    tone: "madder" as const,
+    tone: "pink" as const,
   },
-  { value: "other", label: "Khác", emoji: "🦄", tone: "neutral" as const },
+  { value: "other", label: "Khác", emoji: "🦄", tone: "purple" as const },
 ];
 
 const COUNT_PREVIEW = [

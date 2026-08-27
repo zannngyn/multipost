@@ -3,6 +3,7 @@
 import { FOCUS_CHANNELS, type FocusChannel } from "@/ui/schemas/onboarding-profile.schema";
 
 import { ChannelTileGroup, type ChannelTileChoice } from "./ChannelTile";
+import { ENTER_DELAY_HEADING, enterDelay } from "./onboarding-motion";
 import { StepActions } from "./StepActions";
 
 /**
@@ -84,7 +85,8 @@ export function StepChannels({
     <div className="flex w-full flex-col items-center gap-8">
       <h1
         tabIndex={-1}
-        className="text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        style={enterDelay(ENTER_DELAY_HEADING)}
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
       >
         {QUESTION}
       </h1>

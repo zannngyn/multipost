@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { FOCUS_CHANNELS } from "@/ui/schemas/onboarding-profile.schema";
+
 import { ChannelTileGroup } from "./ChannelTile";
 
 /**
@@ -172,5 +174,31 @@ describe("ChannelTileGroup — dạng D", () => {
         />,
       ),
     ).toBe("");
+  });
+
+  it("caps the entrance stagger, so eight tiles cannot push past the 1.2s ceiling", () => {
+    /**
+     * THIS IS WHERE THE CAP ACTUALLY BITES. Every other step draws six cards
+     * and never reaches it; step 4 draws eight, and an uncapped seventh tile
+     * would start at 697.5ms and land at 1222.5ms — past the ceiling that
+     * section 10 makes an acceptance criterion. Without this test, deleting
+     * `enterIndex` from `ChannelTile` breaks the entrance and nothing goes red.
+     */
+    const html = renderToStaticMarkup(
+      <ChannelTileGroup
+        name="channels"
+        legend="Kênh nào bạn đang tập trung?"
+        choices={FOCUS_CHANNELS.map((value) => ({ value }))}
+        values={[]}
+        onToggle={noop}
+      />,
+    );
+
+    const indexes = [...html.matchAll(/--enter-index:(\d+)/g)].map((match) => Number(match[1]));
+    expect(indexes).toHaveLength(FOCUS_CHANNELS.length);
+    expect(FOCUS_CHANNELS.length).toBeGreaterThan(6);
+    // 0,1,2,3,4,5 then the tail arrives together on 5.
+    expect(indexes).toEqual([0, 1, 2, 3, 4, 5, 5, 5]);
+    expect(Math.max(...indexes)).toBe(5);
   });
 });

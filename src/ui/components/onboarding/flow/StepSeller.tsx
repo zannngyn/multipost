@@ -3,13 +3,14 @@
 import { SELLER_KINDS, type SellerKind } from "@/ui/schemas/onboarding-profile.schema";
 
 import { OptionCardGroup, type OptionChoice } from "./OptionCard";
+import { ENTER_DELAY_HEADING, enterDelay } from "./onboarding-motion";
 import { StepActions } from "./StepActions";
 
 /**
  * Step 1 of the survey: how the tenant sells (spec section 6, reference shot
  * `01-seller-selected.jpg`).
  *
- * ONE ANSWER. Dạng A cards — a 32px emoji well, a label, 58px tall, two columns
+ * ONE ANSWER. Dạng A cards — a 40px emoji well, a label, 65px tall, two columns
  * — drawn by `OptionCardGroup`, which is a real `<fieldset role="radiogroup">`
  * of real radios, so the arrow keys walk the group without any code here.
  *
@@ -32,15 +33,23 @@ import { StepActions } from "./StepActions";
  * cards does not read as one grey block — it carries no meaning, which is why
  * nothing is coloured by it except the well behind the emoji.
  */
-const SELLER_LABEL: Record<SellerKind, { label: string; emoji: string; tone: OptionChoice["tone"] }> =
-  {
-    solo_seller: { label: "Bán lẻ cá nhân", emoji: "👋", tone: "indigo" },
-    shop_owner: { label: "Chủ shop nhỏ", emoji: "💪", tone: "leaf" },
-    marketing_team: { label: "Trong đội marketing", emoji: "👥", tone: "sky" },
-    freelancer: { label: "Cộng tác viên/freelancer", emoji: "🌟", tone: "turmeric" },
-    agency: { label: "Agency", emoji: "🎯", tone: "madder" },
-    other: { label: "Khác", emoji: "🦄", tone: "neutral" },
-  };
+const SELLER_LABEL: Record<
+  SellerKind,
+  { label: string; emoji: string; tone: OptionChoice["tone"] }
+> = {
+  // Colours and emoji are the prototype's, card for card
+  // (`mysp-onboarding-animation.html`, the six `.card` elements of screen 1).
+  solo_seller: { label: "Bán lẻ cá nhân", emoji: "👋", tone: "yellow" },
+  shop_owner: { label: "Chủ shop nhỏ", emoji: "💪", tone: "green" },
+  marketing_team: { label: "Trong đội marketing", emoji: "👥", tone: "blue" },
+  freelancer: {
+    label: "Cộng tác viên/freelancer",
+    emoji: "✨",
+    tone: "orange",
+  },
+  agency: { label: "Agency", emoji: "🎯", tone: "pink" },
+  other: { label: "Khác", emoji: "🦄", tone: "purple" },
+};
 
 const CHOICES: readonly OptionChoice[] = SELLER_KINDS.map((value) => ({
   value,
@@ -75,11 +84,14 @@ export function StepSeller({
     // build. Passing it on would put a value in `tenant_profile` that the route
     // rejects on the next read, so it is refused loudly and never forwarded.
     if (!isSellerKind(raw)) {
-      console.warn("[onboarding] seller step received a code outside the schema", {
-        error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
-        step: "seller",
-        answer: raw,
-      });
+      console.warn(
+        "[onboarding] seller step received a code outside the schema",
+        {
+          error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
+          step: "seller",
+          answer: raw,
+        },
+      );
       return;
     }
     onChange(raw);
@@ -94,7 +106,8 @@ export function StepSeller({
       */}
       <h1
         tabIndex={-1}
-        className="text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        style={enterDelay(ENTER_DELAY_HEADING)}
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
       >
         {QUESTION}
       </h1>
