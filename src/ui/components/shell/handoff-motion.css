@@ -1,0 +1,46 @@
+/**
+ * Nửa sau của cú bàn giao onboarding → app.
+ *
+ * Nửa trước nằm ở `onboarding/flow/onboarding-motion.css`
+ * (`.onboarding-handoff`): nội dung khảo sát mờ đi trên nền `--background`.
+ * Ở đây app mờ lên từ đúng nền đó. Hai nền giống nhau nên đường nối vô hình —
+ * và đó là lý do không có lớp phủ (veil) nào trong thiết kế này. Một veil mà
+ * lệnh gỡ không chạy (tab nền là cách thường gặp nhất) sẽ khoá cả app lại;
+ * hỏng ở đây thì tệ nhất là "không có hiệu ứng".
+ *
+ * KHÔNG framer-motion. `motion-import-sweep.test.ts` giữ thư viện ấy ở đúng
+ * một route, và đây không phải route đó.
+ *
+ * TRẠNG THÁI NGHỈ LÀ `opacity: 1`, KHÔNG CÓ LUẬT TĨNH NÀO ĐẶT NÓ VỀ 0. Nếu
+ * keyframe không bao giờ chạy — `reduce`, một trình duyệt lạ, hay class được
+ * đặt nhầm — app hiện bình thường. Đặt `opacity: 0` ở luật tĩnh rồi trông chờ
+ * animation gỡ nó ra là cách để một hôm nào đó app vô hình.
+ *
+ * TOKEN ĐỌC THẲNG, KHÔNG QUA ALIAS. `--duration-medium-max` và `--ease-standard`
+ * được `mysp.css` khai trong `@scope ([data-astryx-theme="mysp"])`, tức trên
+ * thẻ <Theme>; element mang class này nằm bên dưới đó nên nó KẾ THỪA giá trị
+ * của dự án. Một alias khai ở `:root` thì ngược lại — nó sẽ resolve theo thang
+ * chậm hơn của `@astryxdesign/core`, và không có gì báo.
+ */
+
+@media (prefers-reduced-motion: no-preference) {
+  .app-handoff-in {
+    animation: app-handoff-in var(--duration-medium-max) var(--ease-standard)
+      backwards;
+  }
+}
+
+/* 6px, không phải 18px như entrance của onboarding: đây là cả một màn ứng dụng
+   dịch chuyển, không phải một thẻ card. Quãng đường theo kích thước của vật
+   (core-motion), và một khung app trượt 18px trông như bị xô. */
+@keyframes app-handoff-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

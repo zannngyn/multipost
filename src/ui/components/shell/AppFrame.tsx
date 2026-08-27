@@ -4,6 +4,9 @@ import { AppShell, LinkProvider, Theme } from "@astryxdesign/core";
 import { InternationalizationProvider } from "@astryxdesign/core/i18n";
 import type { ReactNode } from "react";
 
+import { cn } from "@/shared/utils";
+
+import { useHandoffArrival } from "@/ui/hooks/useHandoffArrival";
 import { ASTRYX_LOCALE, ASTRYX_VI } from "@/ui/i18n/astryx-vi";
 import { SetupDock } from "@/ui/components/onboarding/SetupDock";
 import { AppLink } from "@/ui/components/shell/AppLink";
@@ -14,6 +17,8 @@ import { SupportModeBanner } from "@/ui/components/shell/SupportModeBanner";
 // runtime theme injects its tokens after hydration, so the first paint would
 // show the neutral ink and swap. Its CSS is imported once, in globals.css.
 import { myspTheme } from "@/ui/theme/mysp";
+
+import "./handoff-motion.css";
 
 /**
  * The app's single client boundary for the shell (web-layout-shell). Pages stay
@@ -50,6 +55,16 @@ export function AppFrame({
    */
   navDefaultCollapsed: boolean;
 }) {
+  /**
+   * VỪA TỪ ONBOARDING BƯỚC VÀO. Đọc TRONG LÚC RENDER, không phải trong effect:
+   * class phải có mặt ở khung hình đầu tiên, nếu không app hiện đủ nét một
+   * khung rồi mới mờ vào — đúng cái nháy mà cú bàn giao để tránh.
+   *
+   * `false` ở mọi lần tải trang thật, nên không có hydration mismatch và không
+   * có hiệu ứng nào phát lại khi người dùng chỉ đơn giản là mở lại tab.
+   */
+  const isHandoffArrival = useHandoffArrival();
+
   return (
     // Every Astryx link in the app goes through AppLink — see the note there
     // for the `to` attribute it exists to swallow.
@@ -91,7 +106,20 @@ export function AppFrame({
                 symptom was a scrollbar with nothing in it.
                 `h-full`, not auto: screens size themselves with `h-full` against
                 this box, exactly as they did against the content element. */}
-            <div className="relative h-full min-h-0">{children}</div>
+            {/* Cú mờ lên của bàn giao nằm ở ĐÂY, trên vùng nội dung, chứ
+                không bọc quanh `AppShell`. `Layout` của Astryx cao `100%` của
+                thẻ cha, nên chèn thêm một lớp bọc giữa nó và <body> là đụng vào
+                mô hình cuộn của cả app để lấy 400ms hiệu ứng — đổi sai. Thanh
+                nav và thanh trên hiện ngay: khung app đứng yên, nội dung là thứ
+                đi tới. */}
+            <div
+              className={cn(
+                "relative h-full min-h-0",
+                isHandoffArrival && "app-handoff-in",
+              )}
+            >
+              {children}
+            </div>
             {/* The setup pointer lives in the SHELL, not on a screen: the steps
                 it lists are spread across /sync, /channels and /compose, and an
                 operator sent to one of them would otherwise lose the list they

@@ -50,10 +50,13 @@
  * than enter, so the flow feels like going forward": 300 < 400, and both stay
  * inside section 2's 300-400ms band for a screen change.
  *
- * `--dur-exit` has no declaration below because nothing in CSS reads it: a
- * screen leaves the DOCUMENT, which only `OnboardingFrame` can animate, and
- * framer-motion takes numbers rather than `var()`. The same two tokens are
- * cited there, resolved.
+ * `--dur-exit` DOES have a declaration below, and it did not always. A screen
+ * leaving the DOCUMENT is `OnboardingFrame`'s job and framer-motion takes
+ * numbers rather than `var()`, so for a while nothing in CSS read this name at
+ * all. The handoff changed that: the celebration screen does not leave the
+ * document when the operator goes into the app — the whole ROUTE does — so what
+ * fades there is a state on an element that stays put until the navigation
+ * lands, which is a transition, which is CSS. It reads this alias.
  *
  * These are declarations, not animations, so they live OUTSIDE the reduced
  * motion query — under `reduce` nothing reads them, and a value that is never
@@ -86,6 +89,7 @@
   --dur-micro: var(--duration-fast-max);
   --dur-state: var(--duration-medium);
   --dur-enter: var(--duration-slow-min);
+  --dur-exit: var(--duration-medium);
   --dur-screen: var(--duration-medium-max);
 
   /* The stagger between cards, DERIVED from a token rather than typed as a
@@ -105,8 +109,15 @@
      must not (spec section 9). But the spec's selection feedback (check badge,
      CTA pop) is defined BY its overshoot, and there is no token for that, so it
      is written out here with the reason attached, the way `backdrop-motion.css`
-     writes out the curves of its decorative loops. Used for selection feedback
-     ONLY; every entrance and exit in this flow reads `--ease-standard`. */
+     writes out the curves of its decorative loops.
+
+     USED FOR CONFIRMATION FEEDBACK ONLY — every entrance and exit in this flow
+     reads `--ease-standard`. "Confirmation" was "selection" until 27/08/2026,
+     when the celebration seal joined the check badge and the CTA pop. It is the
+     same gesture as the badge, one screen later and one size bigger: a mark
+     that appears to say a choice has landed. The line that must not move is the
+     other one — an ENTRANCE may not overshoot, and `.onboarding-enter*` is
+     guarded against this curve in `onboarding-motion.test.ts`. */
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
   /*
@@ -200,6 +211,28 @@
   --well-orange: oklch(0.33 0.055 78.5);
   --well-pink: oklch(0.33 0.043 26.2);
   --well-purple: oklch(0.33 0.047 310.1);
+}
+
+/*
+  THE HALO'S RESTING STATE, AND WHY IT IS THE ONLY PAINTED RULE OUTSIDE THE
+  QUERY BELOW.
+
+  The ring behind the celebration seal expands once and is gone. "Gone" is its
+  resting state, not its from-state — so it is declared here, statically, and
+  the keyframe only ever borrows the property back for the half second it runs.
+
+  THAT IS WHAT LETS IT USE `backwards` LIKE EVERYTHING ELSE IN THIS FILE. The
+  alternative was `forwards`, which would pin `opacity: 0` in the ANIMATION
+  origin for the life of the element — the exact thing the rest of this file
+  refuses, and the thing `onboarding-motion.test.ts` fails the build over.
+
+  IT IS ALSO THE REDUCED-MOTION ANSWER, for free. Under `reduce` the animation
+  below is never declared, so the ring simply never appears — which is right: it
+  carries no meaning, the seal beside it does. A decorative ring that popped
+  into view and stayed would be worse than no ring at all.
+*/
+.onboarding-halo {
+  opacity: 0;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -477,6 +510,73 @@
     animation: onboarding-hint-in var(--dur-state) var(--ease-standard)
       backwards;
   }
+
+  /*
+    THE CELEBRATION SEAL (màn chúc mừng).
+
+    The same gesture as `.onboarding-check-in` one screen earlier — a mark that
+    appears to say something has landed — so it reads the same curve, and the
+    overshoot comes from the curve rather than from a middle keyframe. Measured:
+    the spring peaks at ~1.09 of its progress, so a travel of 0.5 → 1 tops out
+    around 1.045. Well inside the 15% section 10 allows, and it does not need a
+    percentage keyframe to get there.
+
+    IT DOES NOT USE `.onboarding-enter`. The entrances in this file are forbidden
+    this curve (guarded in `onboarding-motion.test.ts`), and rightly — an
+    entrance that overshoots is section 9's own anti-pattern. This is not an
+    entrance, it is confirmation feedback that happens to arrive on the entrance
+    timeline, so it takes the delay variable and nothing else.
+  */
+  .onboarding-seal-in {
+    animation: onboarding-seal-in var(--dur-enter) var(--ease-spring) backwards;
+    animation-delay: var(--enter-delay, 0ms);
+  }
+
+  /* The ring behind it. Rides the seal's own delay so the two are one event,
+     not two. Resting state is declared outside this query — see the note there,
+     it is what keeps this `backwards` rather than `forwards`. */
+  .onboarding-halo {
+    animation: onboarding-halo-out var(--dur-enter) var(--ease-standard)
+      backwards;
+    animation-delay: var(--enter-delay, 0ms);
+  }
+
+  /*
+    THE HANDOFF OUT — the celebration fading as the app is navigated to.
+
+    A TRANSITION, NOT A KEYFRAME, and the distinction is the whole design. The
+    screens of this flow leave the DOCUMENT, which is why `OnboardingFrame`
+    keeps framer-motion. This one does not: when the operator goes into the app
+    the whole ROUTE unmounts, so there is no exit for a presence group to
+    animate. What actually happens is that an element which is still mounted
+    changes state — visible to invisible — and then the navigation lands
+    underneath it. That is a state change, and state changes are transitions.
+
+    IT ALSO MEANS NO FILL-MODE TO GET WRONG. A keyframe here would have needed
+    `forwards` to hold the faded-out value until the route swapped, and
+    `forwards` is what this file forbids everywhere else. A transition simply
+    arrives at its declared value and stays there because the value IS declared.
+
+    `--dur-exit` is 300ms, the same clock `OnboardingFrame` gives a screen
+    leaving sideways, and the JS timer that fires the navigation reads the same
+    token through `HANDOFF_FADE_MS` — pinned against the theme in
+    `onboarding-motion.test.ts`, because a resolved number is exactly what goes
+    stale in silence.
+
+    The two properties are the STATE family (`opacity`, `scale`), not the
+    keyframe family (`transform`), so the seal above can still be settling while
+    this begins without either wiping the other out.
+  */
+  .onboarding-handoff {
+    transition-property: opacity, scale;
+    transition-duration: var(--dur-exit);
+    transition-timing-function: var(--ease-standard);
+  }
+
+  .onboarding-handoff[data-leaving="true"] {
+    opacity: 0;
+    scale: 0.98;
+  }
 }
 
 /* Keyframes live outside the query, as in `backdrop-motion.css`: an
@@ -560,5 +660,29 @@
 
   to {
     opacity: 1;
+  }
+}
+
+@keyframes onboarding-seal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes onboarding-halo-out {
+  from {
+    opacity: 0.5;
+    transform: scale(0.75);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(1.5);
   }
 }

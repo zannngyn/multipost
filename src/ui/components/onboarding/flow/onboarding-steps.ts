@@ -13,6 +13,22 @@ export const ONBOARDING_SCREENS = ["welcome", "seller", "tools", "count", "chann
 
 export type OnboardingScreen = (typeof ONBOARDING_SCREENS)[number];
 
+/**
+ * Màn hình + màn chúc mừng ở cuối.
+ *
+ * `celebrate` KHÔNG nằm trong `ONBOARDING_SCREENS`, và đó là quyết định chứ
+ * không phải sự lười. Thêm nó vào mảng trên sẽ đổi hành vi của `screenStep`,
+ * `nextScreen`, `previousScreen` và `isOnboardingScreen` cùng một lúc — và cái
+ * cuối cùng sẽ khiến `?step=celebrate` gõ tay lập tức thành hợp lệ, tức là một
+ * cách để nhảy qua bốn câu hỏi. `?step=` mô tả CÂU HỎI; màn chúc mừng không
+ * phải câu hỏi, nó là thứ xảy ra sau khi hết câu hỏi.
+ *
+ * Nó vẫn cần một tên trong kiểu vì `OnboardingFrame` dùng giá trị này làm key
+ * của `AnimatePresence` — nhờ vậy cú trượt ngang sang màn chúc mừng là đúng cú
+ * trượt đã có, không phải một hiệu ứng thứ hai.
+ */
+export type OnboardingStage = OnboardingScreen | "celebrate";
+
 /** The four screens that ask a question. `welcome` only greets. */
 const SURVEY_SCREENS = ["seller", "tools", "count", "channels"] as const;
 

@@ -1,6 +1,11 @@
 import { cn } from "@/shared/utils";
 
-import { SURVEY_STEP_COUNT, screenStep, type OnboardingScreen } from "./onboarding-steps";
+import {
+  SURVEY_STEP_COUNT,
+  screenStep,
+  type OnboardingScreen,
+  type OnboardingStage,
+} from "./onboarding-steps";
 
 /**
  * Four 6px dots at the top of the frame — "where am I in the survey".
@@ -30,8 +35,20 @@ const SURVEY_SCREENS: readonly Exclude<OnboardingScreen, "welcome">[] = [
   "channels",
 ];
 
-export function StepDots({ current }: { current: OnboardingScreen }) {
-  const position = screenStep(current);
+export function StepDots({ stage }: { stage: OnboardingStage }) {
+  /**
+   * THE CELEBRATION FILLS ALL FOUR. It is not a fifth step and it draws no
+   * fifth dot — it is the survey finished, so every dot is behind the operator.
+   *
+   * Read here rather than through `screenStep`, which stays a function of the
+   * four QUESTIONS and answers 0 for anything that is not one. Widening it
+   * would have meant a fifth position in its return type and a fifth dot
+   * everywhere that type is read.
+   */
+  const isComplete = stage === "celebrate";
+  const position = isComplete
+    ? SURVEY_STEP_COUNT
+    : screenStep(stage as OnboardingScreen);
 
   // --- Edge case first: the greeting has no position to report --------------
   if (position === 0) return null;
@@ -39,7 +56,9 @@ export function StepDots({ current }: { current: OnboardingScreen }) {
   return (
     <div className="flex items-center">
       <span className="sr-only">
-        Bước {position}/{SURVEY_STEP_COUNT}
+        {isComplete
+          ? `Hoàn tất ${SURVEY_STEP_COUNT}/${SURVEY_STEP_COUNT} bước`
+          : `Bước ${position}/${SURVEY_STEP_COUNT}`}
       </span>
 
       {/* 6px dots, 6px apart — measured (spec section 2.4). Decoration beside
@@ -51,7 +70,9 @@ export function StepDots({ current }: { current: OnboardingScreen }) {
             key={id}
             className={cn(
               "block size-1.5 rounded-full motion-safe:transition-colors motion-safe:duration-300",
-              screenStep(id) === position ? "bg-foreground" : "bg-foreground/25",
+              isComplete || screenStep(id) === position
+                ? "bg-foreground"
+                : "bg-foreground/25",
             )}
           />
         ))}

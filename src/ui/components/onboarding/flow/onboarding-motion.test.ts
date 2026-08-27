@@ -6,10 +6,13 @@ import { describe, expect, it } from "vitest";
 import {
   ENTER_DELAY_BRAND,
   ENTER_DELAY_CARDS,
+  ENTER_DELAY_CELEBRATE_CTA,
   ENTER_DELAY_CTA,
   ENTER_DELAY_DOTS,
   ENTER_DELAY_HEADING,
+  ENTER_DELAY_SEAL,
   ENTER_DELAY_SKIP,
+  ENTER_DELAY_SUBHEAD,
   ENTER_DELAY_THEME,
   enterIndex,
 } from "./onboarding-motion";
@@ -39,6 +42,21 @@ const RULES = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
  *  only needs two numbers. Same idiom as the stylesheet above. */
 const FRAME = readFileSync(
   fileURLToPath(new URL("./OnboardingFrame.tsx", import.meta.url)),
+  "utf8",
+);
+
+/** The handoff hook's source, read as TEXT for the same reason as the frame's:
+ *  it needs one number out of a file that would otherwise drag the router, the
+ *  query client and framer-motion into a test that has neither. */
+const HANDOFF = readFileSync(
+  fileURLToPath(new URL("./useCelebrateHandoff.ts", import.meta.url)),
+  "utf8",
+);
+
+/** The app-side half of the handoff. A different file, in a different folder,
+ *  and it has to obey the same two rules as everything here. */
+const APP_HANDOFF_CSS = readFileSync(
+  fileURLToPath(new URL("../../shell/handoff-motion.css", import.meta.url)),
   "utf8",
 );
 
@@ -340,5 +358,134 @@ describe("onboarding entrance timeline", () => {
     // would drop the delay and land the whole series at once.
     expect(enterIndex(-1)).toEqual({ "--enter-index": 0 });
     expect(enterIndex(Number.NaN)).toEqual({ "--enter-index": 0 });
+  });
+});
+
+describe("the celebration and the handoff", () => {
+  it("puts the celebration's own rows in reading order", () => {
+    // The seal says "xong" — it comes before the heading that says it in words.
+    // The sentence follows the heading, and the way into the app comes last.
+    expect(delayMs(ENTER_DELAY_SEAL)).toBeLessThan(
+      delayMs(ENTER_DELAY_HEADING),
+    );
+    expect(delayMs(ENTER_DELAY_HEADING)).toBeLessThan(
+      delayMs(ENTER_DELAY_SUBHEAD),
+    );
+    expect(delayMs(ENTER_DELAY_SUBHEAD)).toBeLessThan(
+      delayMs(ENTER_DELAY_CARDS),
+    );
+    expect(delayMs(ENTER_DELAY_CARDS)).toBeLessThan(
+      delayMs(ENTER_DELAY_CELEBRATE_CTA),
+    );
+  });
+
+  it("finishes inside the same 1.2s ceiling the questions keep", () => {
+    // The celebration has three rows where a question has six cards, so its CTA
+    // sits three stagger steps in rather than six. That is what buys the
+    // headroom — and it is also why it may not simply borrow `ENTER_DELAY_CTA`.
+    const seal = delayMs(ENTER_DELAY_SEAL) + RISE_MS;
+    const lastRow = delayMs(ENTER_DELAY_CARDS) + 2 * STAGGER_MS + RISE_MS;
+    const cta = delayMs(ENTER_DELAY_CELEBRATE_CTA) + RISE_MS;
+
+    expect(Math.max(seal, lastRow, cta)).toBeLessThanOrEqual(1200);
+  });
+
+  it("waits for its own queue, not the questions' — the CTA is three steps in", () => {
+    // The trap this pins: reaching for `ENTER_DELAY_CTA` because it is called
+    // "the CTA delay". 635ms is where a button lands behind SIX cards; there
+    // are three rows here, so it would be waiting for a queue that does not
+    // exist — the same reading `WelcomeScreen` makes for its own button.
+    expect(delayMs(ENTER_DELAY_CELEBRATE_CTA)).toBeLessThan(
+      delayMs(ENTER_DELAY_CTA),
+    );
+    expect(delayMs(ENTER_DELAY_CELEBRATE_CTA)).toBe(
+      delayMs(ENTER_DELAY_CARDS) + 3 * STAGGER_MS,
+    );
+  });
+
+  it("keeps the handoff's hardcoded fade on the theme's scale", () => {
+    /**
+     * `setTimeout` takes a number and CSS takes a token, so this one is
+     * resolved by hand — exactly the kind of value that goes stale in silence
+     * the day the generated theme moves. It is the timer that fires the
+     * navigation, so if the two drift the screen either navigates while still
+     * visible or sits blank waiting.
+     */
+    const fade = /const HANDOFF_FADE_MS = (\d+);/.exec(HANDOFF);
+    expect(fade).not.toBeNull();
+    expect(Number(fade?.[1])).toBe(token("duration-medium"));
+    // And that IS what `--dur-exit` resolves to, which is what the CSS reads.
+    expect(CSS).toContain("--dur-exit: var(--duration-medium)");
+  });
+
+  it("fades the celebration out with a TRANSITION, so there is no fill to get wrong", () => {
+    /**
+     * A keyframe here would have needed `forwards` to hold the faded-out value
+     * until the route swapped — and `forwards` is what this whole file forbids,
+     * because it pins a value in the animation origin above every author rule.
+     * A transition simply arrives at a value that is declared, and stays.
+     */
+    expect(RULES).toContain(".onboarding-handoff {");
+    const state =
+      /\.onboarding-handoff\[data-leaving="true"\]\s*\{([^}]*)\}/.exec(RULES);
+    expect(state).not.toBeNull();
+    expect(state?.[1]).toContain("opacity: 0");
+    // Not `animation`, and therefore no fill-mode in sight.
+    expect(state?.[1]).not.toContain("animation");
+  });
+
+  it("declares the halo's resting state, which is what keeps it off `forwards`", () => {
+    /**
+     * The ring expands once and is gone. "Gone" being its RESTING state — a
+     * static rule outside the query — is the only reason its keyframe can use
+     * `backwards` like everything else here. It is also the reduced-motion
+     * answer for free: no animation is declared under `reduce`, so the ring
+     * never appears at all rather than appearing and staying.
+     */
+    const queryAt = RULES.indexOf(
+      "@media (prefers-reduced-motion: no-preference)",
+    );
+    const outsideQuery = RULES.slice(0, queryAt);
+    expect(
+      /\.onboarding-halo\s*\{\s*opacity:\s*0;\s*\}/.test(outsideQuery),
+    ).toBe(true);
+  });
+});
+
+describe("the app side of the handoff", () => {
+  it("never leaves the app invisible when the animation does not run", () => {
+    /**
+     * THE ONE FAILURE MODE THAT WOULD MATTER. If a static rule set
+     * `opacity: 0` and the keyframe were relied on to lift it, then a browser
+     * that never started the animation — or a class left on by a bug — would
+     * hide the entire application behind a 400ms effect.
+     *
+     * Resting state is `opacity: 1`, i.e. nothing declared. The worst case is
+     * "no fade", which is why this is a fade and not a veil.
+     */
+    const rules = APP_HANDOFF_CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+    const keyframesAt = rules.indexOf("@keyframes");
+    expect(keyframesAt).toBeGreaterThan(-1);
+    expect(rules.slice(0, keyframesAt)).not.toMatch(/opacity:\s*0/);
+  });
+
+  it("switches off entirely under reduced motion, like every other layer here", () => {
+    const rules = APP_HANDOFF_CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+    const queryAt = rules.indexOf(
+      "@media (prefers-reduced-motion: no-preference)",
+    );
+    expect(queryAt).toBeGreaterThan(-1);
+    expect(rules.slice(0, queryAt)).not.toContain("animation");
+  });
+
+  it("reads the theme's tokens rather than typed numbers, and never through :root", () => {
+    // Same trap as the aliases in this folder: `--duration-*` is declared on the
+    // <Theme> wrapper, so a descendant inherits THIS project's values. A `:root`
+    // alias would resolve against the library's slower scale, silently.
+    expect(APP_HANDOFF_CSS).toContain("var(--duration-medium-max)");
+    expect(APP_HANDOFF_CSS).toContain("var(--ease-standard)");
+    const rules = APP_HANDOFF_CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(rules).not.toMatch(/:root\s*\{/);
+    expect(rules).not.toMatch(/animation:[^;]*\d+m?s/);
   });
 });

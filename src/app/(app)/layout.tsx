@@ -3,8 +3,8 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { readActiveTenantLabel } from "@/app/(app)/tenant-name";
-import { signOut } from "@/app/_auth/auth";
 import { getOperatorSession } from "@/app/_auth/session";
+import { signOutOperator } from "@/app/_auth/signout-action";
 import { AppFrame } from "@/ui/components/shell/AppFrame";
 import { NAV_COLLAPSED_COOKIE, isNavCollapsedCookie } from "@/ui/components/shell/nav-collapse";
 import { TenantBoundary } from "@/ui/components/tenant/TenantBoundary";
@@ -21,15 +21,6 @@ import { TenantBoundary } from "@/ui/components/tenant/TenantBoundary";
 
 /** Session-dependent: never prerendered, never cached by a proxy. */
 export const dynamic = "force-dynamic";
-
-async function signOutOperator(): Promise<void> {
-  "use server";
-  // signOut() throws NEXT_REDIRECT — keep it out of try/catch.
-  // NOTE (JWT stateless, see _auth/auth.config.ts): this clears the cookie in
-  // THIS browser only. Other devices keep working until the token expires —
-  // "đăng xuất mọi thiết bị" is not built yet.
-  await signOut({ redirectTo: "/signin" });
-}
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const session = await getOperatorSession("layout:(app)");
