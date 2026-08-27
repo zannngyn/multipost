@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { UploadResponseSchema, type UploadResponse } from "@/ui/schemas/compose.schema";
+import {
+  UploadResponseSchema,
+  type UploadResponse,
+  DetectCodeResponseSchema,
+  type DetectCodeResponse,
+} from "@/ui/schemas/compose.schema";
 
 import type { UploadCandidate } from "@/ui/hooks/direct-upload-queue";
 import { ApiError, CLIENT_ERROR_CODES } from "./api-error";
@@ -69,6 +74,24 @@ export function requestUploadTickets(
     signal,
     malformedMessage:
       "Kết quả xin vé tải lên không đúng định dạng. Hãy báo quản trị viên kiểm tra máy chủ.",
+  });
+}
+
+/**
+ * Hỏi máy chủ tên file này mang mã nào. Gọi được ngay khi operator thả file:
+ * request chỉ mang TÊN, không mang byte nào.
+ */
+export async function detectUploadCode(
+  params: { files: readonly { fileName: string }[] },
+  signal?: AbortSignal,
+): Promise<DetectCodeResponse> {
+  return apiRequest("/api/posts/uploads/detect-code", {
+    method: "POST",
+    body: { files: params.files.map((file) => ({ fileName: file.fileName })) },
+    schema: DetectCodeResponseSchema,
+    signal,
+    malformedMessage:
+      "Kết quả nhận diện mã không đúng định dạng. Hãy báo quản trị viên kiểm tra máy chủ.",
   });
 }
 
