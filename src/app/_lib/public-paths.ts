@@ -23,6 +23,7 @@ const PUBLIC_PREFIXES = [
 const PUBLIC_MEDIA_PATH = /^\/api\/media\/[^/]+$/;
 
 export function isPublicPath(pathname: string): boolean {
+  if (pathname === "/") return true;
   // The session-backed compose bridge lives UNDER /api/media — carve the whole
   // subtree out before the one-segment shape can claim `/api/media/preview`
   // itself ("preview" is, after all, one segment).

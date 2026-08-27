@@ -1,4 +1,5 @@
 import type { PlatformRole } from "@/core/domain/account";
+import { isTenantId } from "@/core/domain/tenant";
 import type { AccountRepo } from "@/core/ports/account-repo";
 import type { Logger } from "@/core/ports/infra";
 import type { OperatorRole } from "@/shared/operator-access";
@@ -66,6 +67,7 @@ export function makeGetOperatorOverview(deps: GetOperatorOverviewDeps): GetOpera
     if (!summary) return { isBootstrapAdmin, account: null, tenants: [], activeTenantId: null };
 
     const memberships = await deps.accounts.listMembershipsWithTenant(summary.accountId);
+    const isSuperAdmin = summary.platformRole === "super_admin";
     // A suspended tenant is not offered as a workplace (docs/09 §3.7).
     const tenants = memberships
       .filter((membership) => membership.tenantStatus === "active")
@@ -74,7 +76,7 @@ export function makeGetOperatorOverview(deps: GetOperatorOverviewDeps): GetOpera
         name: membership.tenantName,
         slug: membership.tenantSlug,
         plan: membership.tenantPlan,
-        role: membership.role,
+        role: isSuperAdmin ? ("owner" as OperatorRole) : membership.role,
       }));
 
     /**
@@ -84,7 +86,7 @@ export function makeGetOperatorOverview(deps: GetOperatorOverviewDeps): GetOpera
      */
     const cookie = typeof input?.cookieTenantId === "string" ? input.cookieTenantId.trim() : "";
     const activeTenantId =
-      cookie.length > 0 && tenants.some((tenant) => tenant.id === cookie)
+      cookie.length > 0 && ((isSuperAdmin && isTenantId(cookie)) || tenants.some((tenant) => tenant.id === cookie))
         ? cookie
         : tenants.length === 1
           ? tenants[0].id

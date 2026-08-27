@@ -55,7 +55,7 @@ import { useMe } from "@/ui/hooks/useMe";
  * shipping.
  */
 export const NAV_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
-  "/": LayoutDashboard,
+  "/overview": LayoutDashboard,
   "/compose": PenLine,
   "/bulk": Layers,
   "/posts": ScrollText,

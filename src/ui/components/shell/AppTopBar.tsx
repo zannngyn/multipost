@@ -29,7 +29,7 @@ export function AppTopBar({
   return (
     <TopNav
       label="Thanh trên cùng"
-      heading={<TopNavHeading heading="MYSP" headingHref="/" />}
+      heading={<TopNavHeading heading="MYSP" headingHref="/overview" />}
       // The company is no longer a label but a control (M2.3): it says where
       // you are AND is the way out of it, plus the only door to "tạo công ty".
       //

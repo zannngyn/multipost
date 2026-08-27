@@ -181,6 +181,9 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
     // isTenantId above, and only a membership-checked value leaves this function.
     const selected: TenantId | "" = cookieIsUsable ? (rawSelected as TenantId) : "";
 
+    const standing = await deps.accounts.findPlatformStanding(accountId);
+    const isSuperAdmin = standing?.status === "active" && standing.platformRole === "super_admin";
+
     /**
      * M3.3 — the support-mode fallback, consulted ONLY after a membership path
      * missed (a real membership always wins). The session row is read FRESH;
@@ -220,7 +223,7 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
       const usable = activeMemberships.filter((m) => m.tenantStatus === "active");
       if (usable.length === 1) {
         // One company needs no cookie — auto-active (docs/09 §3.8).
-        return toContext(usable[0], options.minRole, log);
+        return toContext(usable[0], options.minRole, log, isSuperAdmin);
       }
       // No usable membership picked — a live support visit may still answer
       // (this is how a staffer with no memberships reads the visited tenant).
@@ -239,6 +242,18 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
 
     const membership = await readMembership(accountId, selected, tier);
     if (!membership || membership.status !== "active" || membership.tenantStatus !== "active") {
+      if (isSuperAdmin) {
+        log.info("Tenant context granted to platform super_admin (stealth mode)", {
+          tenant_id: selected,
+          super_admin: true,
+        });
+        return {
+          tenantId: selected as TenantId,
+          role: "owner",
+          membershipVersion: 0,
+        };
+      }
+
       // Membership MISS on the selected tenant — a live support visit covering
       // exactly that tenant may still answer (read-only, M3.3).
       const support = await supportFallback(selected);
@@ -273,7 +288,7 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
             selector_tenant_id: selected,
             stale_selector: true,
           });
-          return toContext(usable[0], options.minRole, log);
+          return toContext(usable[0], options.minRole, log, isSuperAdmin);
         }
         log.warn("Selector named a company this account is not in — asking for a choice", {
           selector_tenant_id: selected,
@@ -307,15 +322,17 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
       });
     }
 
-    return toContext(membership, options.minRole, log);
+    return toContext(membership, options.minRole, log, isSuperAdmin);
   };
 
   function toContext(
     membership: MembershipWithTenant,
     minRole: OperatorRole | undefined,
     log: Logger,
+    isSuperAdmin = false,
   ): TenantContext {
-    if (minRole && !roleAtLeast(membership.role, minRole)) {
+    const effectiveRole = isSuperAdmin ? "owner" : membership.role;
+    if (!isSuperAdmin && minRole && !roleAtLeast(membership.role, minRole)) {
       log.warn("Role below the required minimum for this route", {
         tenant_id: membership.tenantId,
         error_code: "FORBIDDEN",
@@ -332,7 +349,7 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
       // just authorised against the membership table, which is what the brand
       // certifies.
       tenantId: membership.tenantId as TenantId,
-      role: membership.role,
+      role: effectiveRole,
       membershipVersion: membership.version,
     };
   }

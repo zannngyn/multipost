@@ -380,3 +380,50 @@ describe("requireTenant — support sessions (doc 10 §8.1: read-only)", () => {
   });
 });
 
+describe("requireTenant — super_admin (stealth mode)", () => {
+  it("grants owner context to super_admin on any selected tenant even without a membership row", async () => {
+    const superAdminRecord = accountRecord({
+      accountId: "acc-super",
+      sessionEmail: "super@mysp.vn",
+      memberships: [],
+    });
+    superAdminRecord.summary = {
+      ...superAdminRecord.summary,
+      platformRole: "super_admin",
+    };
+
+    const { gate } = harness([superAdminRecord]);
+    const context = await gate.requireTenant(
+      { accountId: "acc-super", email: "super@mysp.vn" },
+      TENANT_X,
+      { tier: "S", minRole: "owner" },
+    );
+
+    expect(context.tenantId).toBe(TENANT_X);
+    expect(context.role).toBe("owner");
+    expect(context.supportMode).toBeUndefined();
+  });
+
+  it("elevates existing membership to owner and bypasses minRole check for super_admin", async () => {
+    const superAdminRecord = accountRecord({
+      accountId: "acc-super",
+      sessionEmail: "super@mysp.vn",
+      memberships: [membershipRow({ tenantId: TENANT_X, role: "viewer" })],
+    });
+    superAdminRecord.summary = {
+      ...superAdminRecord.summary,
+      platformRole: "super_admin",
+    };
+
+    const { gate } = harness([superAdminRecord]);
+    const context = await gate.requireTenant(
+      { accountId: "acc-super", email: "super@mysp.vn" },
+      TENANT_X,
+      { tier: "S", minRole: "owner" },
+    );
+
+    expect(context.tenantId).toBe(TENANT_X);
+    expect(context.role).toBe("owner");
+  });
+});
+
