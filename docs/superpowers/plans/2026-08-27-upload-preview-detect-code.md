@@ -465,6 +465,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 3. Một mã duy nhất → hỏi `findByCode` → `matched` hoặc `not_found`.
 4. Không file nào cho ra mã → `no_code`.
 
+**Bổ sung sau review T1 (phán quyết của orchestrator, bắt buộc):** khi mã thắng cuộc đến từ **tầng candidate** *và* Catalog trả `not_found`, phải đẩy thêm một câu vào `warnings` nói rõ mã này là **đoán từ tên file**, có thể sai. Lý do: parser tầng 1 đọc được mã là chuyện chắc chắn; tầng 2 cắt ở dấu `-` đầu tiên, nên với một tenant khai mã chứa dấu `-` mà hồ sơ tên file lại đang để mặc định, `SP-001-AI (1).png` sẽ ra candidate `SP`. Trình bày một mã đoán bằng đúng giọng văn của một mã đọc chắc chắn là kiểu sai âm thầm mà rule nghiệp vụ 5 cấm. Không đổi contract của T4/T5/T7 — `warnings` đã có sẵn đường ra màn hình.
+
 - [ ] **Step 1: Viết test thất bại**
 
 ```ts
@@ -517,6 +519,20 @@ describe("detectUploadCode", () => {
     const detect = makeDetectUploadCode(makeDeps());
     const result = await detect({ tenantId: TENANT, files: [{ fileName: "XYZ9999-AI.png" }] });
     expect(result.verdict).toEqual({ status: "not_found", productCode: "XYZ9999" });
+  });
+
+  it("says out loud that an unmatched candidate code was GUESSED from the file name", async () => {
+    const detect = makeDetectUploadCode(makeDeps());
+    const result = await detect({ tenantId: TENANT, files: [{ fileName: "XYZ9999-AI.png" }] });
+    expect(result.warnings.join(" ")).toMatch(/đoán/i);
+  });
+
+  it("does not call a PARSED code a guess", async () => {
+    const detect = makeDetectUploadCode(makeDeps());
+    // The parser reads this one confidently; it simply is not in the catalog.
+    const result = await detect({ tenantId: TENANT, files: [{ fileName: "BG0SQ6083-AI (1).png" }] });
+    expect(result.verdict).toEqual({ status: "not_found", productCode: "BG0SQ6083" });
+    expect(result.warnings.join(" ")).not.toMatch(/đoán/i);
   });
 
   it("answers no_code when nothing usable is in any name", async () => {
@@ -701,15 +717,27 @@ export function makeDetectUploadCode(deps: DetectUploadCodeDeps) {
 
     // --- Một mã duy nhất: hỏi Catalog ---------------------------------------
     const productCode = codes[0];
+    const fromParser = parsedCodes.length > 0;
     const product = await deps.products.findByCode(tenantId, productCode);
     const verdict: UploadCodeVerdict = product
       ? { status: "matched", productCode }
       : { status: "not_found", productCode };
 
+    // Một mã ĐOÁN mà catalog không có phải được nói là đoán. Tầng 1 đọc được mã
+    // là chuyện chắc chắn; tầng 2 chỉ cắt ở dấu `-` đầu tiên, nên với tenant
+    // khai mã chứa dấu `-` mà hồ sơ tên file đang để mặc định, "SP-001-AI (1)"
+    // ra candidate "SP". Trình bày nó bằng đúng giọng của một mã đọc chắc chắn
+    // là kiểu sai âm thầm rule nghiệp vụ 5 cấm.
+    if (!product && !fromParser) {
+      warnings.push(
+        `Mã "${productCode}" là hệ thống ĐOÁN từ tên file (phần đứng trước dấu "-"), có thể không đúng — hãy kiểm tra lại trước khi dùng.`,
+      );
+    }
+
     log.info("Upload code detection finished", {
       product_code: productCode,
       verdict: verdict.status,
-      from: parsedCodes.length > 0 ? "parser" : "candidate",
+      from: fromParser ? "parser" : "candidate",
       file_count: files.length,
     });
     return { verdict, files: fileView, warnings };
@@ -786,7 +814,7 @@ async function readKnownCodes(
 - [ ] **Step 4: Chạy test, xác nhận PASS**
 
 Run: `pnpm exec vitest run src/core/usecases/detect-upload-code.test.ts`
-Expected: PASS 8/8.
+Expected: PASS 10/10.
 
 - [ ] **Step 5: Wire vào container**
 
