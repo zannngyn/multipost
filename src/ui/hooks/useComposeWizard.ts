@@ -14,6 +14,7 @@ import {
   type ComposeResponse,
   type ComposeWizardValues,
   type DetectCodeResponse,
+  type UploadedAsset,
   type UploadRejection,
   type UploadResponse,
 } from "@/ui/schemas/compose.schema";
@@ -202,6 +203,19 @@ export function useComposeWizard() {
   // is not serialisable, and react-hook-form would try to clone it.
   const [uploadQueue, setUploadQueue] = useState<QueuedFile[]>([]);
   const [uploadedCount, setUploadedCount] = useState(0);
+  /**
+   * E9 T8 — the stored files themselves, not just their count. The queue is
+   * cleared on `onSuccess` (a second click must not re-upload the same
+   * album), so this is the only thing left on screen the operator can look
+   * at; drawn through `MediaThumb` against the preview route, never from the
+   * object URLs that just got revoked with the queue.
+   *
+   * `UploadedAsset`, not `MediaAsset`: a just-uploaded file has no colour, no
+   * sync warnings and no review flag — those belong to a catalogue entry the
+   * Drive sync produced, and this is neither. `UploadedAsset.assetId` is the
+   * `upload_<hex>` id `MediaThumb`'s preview route already accepts.
+   */
+  const [uploadedAssets, setUploadedAssets] = useState<UploadedAsset[]>([]);
   const [uploadRejections, setUploadRejections] = useState<UploadRejection[]>([]);
   /** Non-blocking notes from `confirmUpload` (e.g. a corrected album order). */
   const [uploadWarnings, setUploadWarnings] = useState<string[]>([]);
@@ -238,6 +252,7 @@ export function useComposeWizard() {
     retry: false,
     onSuccess: (result) => {
       setUploadedCount(result.accepted.length);
+      setUploadedAssets(result.accepted);
       setUploadRejections(result.rejected);
       setUploadWarnings([...result.warnings]);
       // Accepted files are stored server-side now; keeping them queued would
@@ -582,6 +597,7 @@ export function useComposeWizard() {
     setToneDropped(false);
     setUploadQueue([]);
     setUploadedCount(0);
+    setUploadedAssets([]);
     setUploadRejections([]);
     setUploadWarnings([]);
     // "Xoá nháp" clears the queue directly, bypassing `handleUploadQueueChange`
@@ -680,6 +696,8 @@ export function useComposeWizard() {
     /** Routes every queue change through detection (E9 T7) as well as state. */
     setUploadQueue: handleUploadQueueChange,
     uploadedCount,
+    /** E9 T8 — the stored files, drawn through `MediaThumb` once the queue is gone. */
+    uploadedAssets,
     uploadRejections,
     /** E9 T7 — the code(s) read from the queued file names, and the request behind it. */
     detection,

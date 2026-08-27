@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { AlbumArranger } from "@/ui/components/compose/AlbumArranger";
+import { MediaThumb } from "@/ui/components/compose/MediaThumb";
 import {
   formatBytes,
   isPreviewable,
@@ -16,6 +17,7 @@ import {
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_FILE_BYTES,
   UPLOAD_ACCEPT,
+  type UploadedAsset,
   type UploadRejection,
 } from "@/ui/schemas/compose.schema";
 
@@ -46,6 +48,12 @@ export interface UploadPanelProps {
   /** Set once the upload succeeded, so the operator sees the album is stored. */
   uploadedCount: number;
   /**
+   * The stored files themselves (E9 T8). Optional so this panel keeps
+   * rendering — with the count line only — if a caller has not been updated
+   * to pass it yet; defaults to none, never a guess at what got stored.
+   */
+  uploadedAssets?: readonly UploadedAsset[];
+  /**
    * Non-blocking notes from the confirm step — e.g. a malformed album order
    * that was silently corrected server-side. Business rule 5 (không im lặng
    * bỏ qua): these MUST reach the operator, not just the server log.
@@ -62,6 +70,7 @@ export function UploadPanel(props: UploadPanelProps) {
 
   const { queue, onQueueChange, disabled } = props;
   const full = queue.length >= MAX_UPLOAD_FILES;
+  const uploadedAssets = props.uploadedAssets ?? [];
 
   /**
    * One object URL per image still waiting to upload, built from the File
@@ -283,6 +292,27 @@ export function UploadPanel(props: UploadPanelProps) {
           </Button>
         )}
       />
+
+      {/* E9 T8 — what got stored, drawn AFTER the queue empties. The queue's own
+          thumbnails die with it (their object URLs are revoked the moment the
+          file leaves the browser); these come from the server's preview
+          route instead, through the same `MediaThumb` the rest of the screen
+          uses (component-reuse) — no second loading/ready/failed state to
+          maintain here. */}
+      {uploadedAssets.length > 0 && !props.isUploading ? (
+        <ul className="flex flex-wrap gap-2" aria-label="File đã lưu cho bài này">
+          {uploadedAssets.map((asset) => (
+            <li key={asset.assetId} className="w-16">
+              <div className="bg-muted relative h-16 w-16 overflow-hidden rounded">
+                <MediaThumb asset={{ ...asset, driveFileId: asset.assetId }} alt="" />
+              </div>
+              <span className="text-muted-foreground mt-1 block truncate text-xs">
+                {asset.fileName}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       {/* The confirmation lives OUTSIDE the queue check on purpose: a successful
           upload empties the queue, and hiding the receipt with it would leave
