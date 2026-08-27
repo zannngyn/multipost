@@ -70,8 +70,18 @@ describe("the shared Layout scroll box is positioned by the theme", () => {
 describe("page-level scroll containers are positioned", () => {
   it("AppFrame gives every screen a positioned box to hang absolutes on", () => {
     const code = stripComments(readSource("./AppFrame.tsx"));
-    // The wrapper AppShell's own content element does not provide.
-    expect(code).toMatch(/className="relative h-full min-h-0"/);
+    /*
+      The wrapper AppShell's own content element does not provide.
+
+      MATCHED ON THE CLASSES, NOT ON THE WHOLE ATTRIBUTE. It used to be a bare
+      `className="relative h-full min-h-0"`; since the onboarding handoff it is
+      a `cn()` call whose FIRST argument is that same string plus one optional
+      class. The three that matter are still stated literally and still on the
+      element that wraps `{children}` — which is the entire claim. Pinning the
+      old exact-attribute form would have failed on a change that kept every
+      property it exists to protect.
+    */
+    expect(code).toMatch(/"relative h-full min-h-0"/);
     expect(code).toContain("{children}");
   });
 
