@@ -550,6 +550,7 @@ export function ComposeFocus() {
                   onCancel={wizard.cancelUpload}
                   rejected={wizard.uploadRejections}
                   uploadedCount={wizard.uploadedCount}
+                  uploadedAssets={wizard.uploadedAssets}
                   warnings={wizard.uploadWarnings}
                   disabled={compose.isPending}
                 />

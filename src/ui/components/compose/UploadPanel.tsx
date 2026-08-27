@@ -48,11 +48,13 @@ export interface UploadPanelProps {
   /** Set once the upload succeeded, so the operator sees the album is stored. */
   uploadedCount: number;
   /**
-   * The stored files themselves (E9 T8). Optional so this panel keeps
-   * rendering — with the count line only — if a caller has not been updated
-   * to pass it yet; defaults to none, never a guess at what got stored.
+   * The stored files themselves (E9 T8). Required, not optional with a
+   * `[]` fallback: an optional prop here would let a caller silently render
+   * only the "Đã lưu N file" sentence with the album quietly missing, which
+   * is exactly the "xanh nhưng hỏng" regression this task exists to fix —
+   * `tsc` must refuse to compile a caller that forgets it.
    */
-  uploadedAssets?: readonly UploadedAsset[];
+  uploadedAssets: readonly UploadedAsset[];
   /**
    * Non-blocking notes from the confirm step — e.g. a malformed album order
    * that was silently corrected server-side. Business rule 5 (không im lặng
@@ -68,9 +70,8 @@ export function UploadPanel(props: UploadPanelProps) {
   const [announcement, setAnnouncement] = useState("");
   const [localErrors, setLocalErrors] = useState<string[]>([]);
 
-  const { queue, onQueueChange, disabled } = props;
+  const { queue, onQueueChange, disabled, uploadedAssets } = props;
   const full = queue.length >= MAX_UPLOAD_FILES;
-  const uploadedAssets = props.uploadedAssets ?? [];
 
   /**
    * One object URL per image still waiting to upload, built from the File
