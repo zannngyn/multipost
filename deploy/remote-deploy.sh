@@ -6,12 +6,14 @@
 # read it out of `ps`).
 #
 # Required: DEPLOY_PATH IMAGE_PREFIX IMAGE_TAG GHCR_USER GHCR_TOKEN
+#           MINIO_ACCESS_KEY MINIO_SECRET_KEY
 #
 # Safe to re-run: every step is idempotent, and a failed health check leaves the
 # previous containers' logs on stdout rather than a silent green tick.
 set -euo pipefail
 
-for var in DEPLOY_PATH IMAGE_PREFIX IMAGE_TAG GHCR_USER GHCR_TOKEN; do
+for var in DEPLOY_PATH IMAGE_PREFIX IMAGE_TAG GHCR_USER GHCR_TOKEN \
+           MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
   if [ -z "${!var:-}" ]; then
     echo "remote-deploy: $var is not set" >&2
     exit 1
@@ -36,6 +38,70 @@ trap cleanup EXIT
 
 echo "--- login to ghcr.io"
 printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+echo "--- write CI-held secrets"
+# The MinIO root credential lives in GitHub Secrets, not in the operator's .env.
+# It is written to its OWN file rather than merged into .env, because .env
+# belongs to whoever set the box up and CI must never rewrite it.
+#
+# Written before `stack pull`, because compose interpolates the whole file for
+# EVERY subcommand — pull included — and docker-compose.yml refuses an empty
+# MINIO_ACCESS_KEY with `:?` rather than letting MinIO fall back to
+# minioadmin:minioadmin on a published port.
+#
+# 600 before the content: a `cat >` creates the file with the umask's mode, so
+# setting the mode afterwards leaves a window where the credential is readable.
+umask 077
+cat > .ci-secrets.env <<EOF
+# Written by CI on every deploy. Do not edit by hand — the next deploy
+# overwrites it. Operator settings belong in .env.
+MINIO_ACCESS_KEY=$MINIO_ACCESS_KEY
+MINIO_SECRET_KEY=$MINIO_SECRET_KEY
+EOF
+umask 022
+
+echo "--- preflight: required variables"
+# WHY THIS EXISTS: compose stops at the FIRST unresolved `:?` variable, so a
+# stack whose .env predates a feature reveals its gaps one deploy at a time —
+# fix MINIO_ACCESS_KEY, redeploy, discover MINIO_PUBLIC_ENDPOINT, redeploy.
+# This reports every one of them in a single run, before anything is pulled.
+#
+# The list is DERIVED from the compose files, never typed here: a hardcoded copy
+# is a second source of truth that drifts the moment someone adds a variable.
+required="$(grep -oh '\${[A-Z_][A-Z0-9_]*:?' \
+              docker-compose.yml docker-compose.prod.yml \
+            | sed 's/\${//; s/:?$//' | sort -u)"
+
+# Resolution order mirrors stack.sh exactly, later wins; a value already
+# exported into this shell (the CI-held secrets) counts as set.
+resolve() {
+  _v=""
+  for _f in .env .ci-secrets.env .image-tag.env; do
+    [ -f "$_f" ] || continue
+    _line="$(grep -E "^[[:space:]]*$1=" "$_f" | tail -n 1 || true)"
+    [ -n "$_line" ] && _v="${_line#*=}"
+  done
+  # The exported value wins over every file, same as compose treats it.
+  eval "_e=\${$1:-}"
+  [ -n "$_e" ] && _v="$_e"
+  printf '%s' "$_v"
+}
+
+missing=""
+for var in $required; do
+  [ -n "$(resolve "$var")" ] || missing="$missing $var"
+done
+
+if [ -n "$missing" ]; then
+  echo "remote-deploy: $DEPLOY_PATH/.env is missing required values:" >&2
+  for var in $missing; do echo "    $var" >&2; done
+  echo "  Add them to $DEPLOY_PATH/.env — the template with the current full set" >&2
+  echo "  is deploy/env/{prod,stg}.env.example in the repo. MINIO_ACCESS_KEY and" >&2
+  echo "  MINIO_SECRET_KEY are the exception: they come from this environment's" >&2
+  echo "  GitHub Secrets and are written to .ci-secrets.env by this script." >&2
+  exit 1
+fi
+echo "  all $(echo "$required" | wc -w | tr -d ' ') required variables resolve"
 
 echo "--- pin release $IMAGE_TAG"
 # Written, not appended: this file IS the record of what is deployed.
