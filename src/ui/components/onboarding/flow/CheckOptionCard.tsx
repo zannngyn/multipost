@@ -77,18 +77,13 @@ export function CheckOptionCardGroup({
     return null;
   }
 
-  const unknown = values.filter(
-    (value) => !choices.some((choice) => choice.value === value),
-  );
+  const unknown = values.filter((value) => !choices.some((choice) => choice.value === value));
   if (unknown.length > 0) {
-    console.warn(
-      "[onboarding] stored answers are outside the current vocabulary",
-      {
-        error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
-        step: name,
-        answers: unknown,
-      },
-    );
+    console.warn("[onboarding] stored answers are outside the current vocabulary", {
+      error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
+      step: name,
+      answers: unknown,
+    });
   }
 
   return (

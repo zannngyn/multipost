@@ -84,14 +84,11 @@ export function StepSeller({
     // build. Passing it on would put a value in `tenant_profile` that the route
     // rejects on the next read, so it is refused loudly and never forwarded.
     if (!isSellerKind(raw)) {
-      console.warn(
-        "[onboarding] seller step received a code outside the schema",
-        {
-          error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
-          step: "seller",
-          answer: raw,
-        },
-      );
+      console.warn("[onboarding] seller step received a code outside the schema", {
+        error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
+        step: "seller",
+        answer: raw,
+      });
       return;
     }
     onChange(raw);

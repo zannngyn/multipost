@@ -246,9 +246,7 @@ describe("OptionCardGroup — dạng A và C, một lựa chọn", () => {
       />,
     );
     expect(html).toContain("<label");
-    expect(html.match(/sr-only/g)?.length ?? 0).toBeGreaterThanOrEqual(
-      COUNT_CHOICES.length,
-    );
+    expect(html.match(/sr-only/g)?.length ?? 0).toBeGreaterThanOrEqual(COUNT_CHOICES.length);
   });
 
   it("draws the shorter plain card when a choice carries no emoji (dạng C)", () => {
@@ -295,13 +293,7 @@ describe("OptionCardGroup — dạng A và C, một lựa chọn", () => {
     // empty radiogroup would announce a group with no members.
     expect(
       renderToStaticMarkup(
-        <OptionCardGroup
-          name="seller"
-          legend="Câu hỏi"
-          choices={[]}
-          value={null}
-          onChange={noop}
-        />,
+        <OptionCardGroup name="seller" legend="Câu hỏi" choices={[]} value={null} onChange={noop} />,
       ),
     ).toBe("");
   });
@@ -616,9 +608,7 @@ describe("StepActions", () => {
   });
 
   it("offers the way forward once something is chosen", () => {
-    const html = renderToStaticMarkup(
-      <StepActions canContinue onContinue={noop} onSkip={noop} />,
-    );
+    const html = renderToStaticMarkup(<StepActions canContinue onContinue={noop} onSkip={noop} />);
     expect(html).toContain("Tiếp tục");
     expect(html).not.toContain("Chọn một mục để tiếp tục");
     expect(html).not.toContain(' disabled=""');

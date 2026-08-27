@@ -234,9 +234,7 @@ export function OnboardingFrame({
               <ArrowLeft aria-hidden="true" />
             </Button>
           ) : null}
-          <span className="text-foreground font-heading text-lg leading-none font-bold">
-            MYSP
-          </span>
+          <span className="text-foreground font-heading text-lg leading-none font-bold">MYSP</span>
         </div>
 
         {/* The wrapper stays even when `StepDots` draws nothing on the greeting.

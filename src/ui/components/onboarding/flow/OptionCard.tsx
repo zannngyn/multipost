@@ -267,14 +267,11 @@ export function OptionCardGroup({
   // nothing is ticked — but it means the vocabulary changed under saved data,
   // and that has to be visible without a debugger.
   if (value !== null && !choices.some((choice) => choice.value === value)) {
-    console.warn(
-      "[onboarding] stored answer is outside the current vocabulary",
-      {
-        error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
-        step: name,
-        answer: value,
-      },
-    );
+    console.warn("[onboarding] stored answer is outside the current vocabulary", {
+      error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
+      step: name,
+      answer: value,
+    });
   }
 
   const hasEmoji = choices.some((choice) => choice.emoji !== undefined);

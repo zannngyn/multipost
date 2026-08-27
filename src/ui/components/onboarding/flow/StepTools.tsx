@@ -97,14 +97,11 @@ export function StepTools({
     // Same reasoning as `StepSeller`: a code the schema does not know must not
     // reach the store, where it would be rejected on the next read instead.
     if (!isToolKind(raw)) {
-      console.warn(
-        "[onboarding] tools step received a code outside the schema",
-        {
-          error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
-          step: "tools",
-          answer: raw,
-        },
-      );
+      console.warn("[onboarding] tools step received a code outside the schema", {
+        error_code: "ONBOARDING_UNKNOWN_ANSWER_CODE",
+        step: "tools",
+        answer: raw,
+      });
       return;
     }
     onToggle(raw, isChecked);
