@@ -30,6 +30,28 @@ export const ENTER_DELAY_CTA = "calc(260ms + 6 * var(--stagger))";
 /** Row 7: one step past the CTA, on the shorter band (it only fades). */
 export const ENTER_DELAY_SKIP = "calc(260ms + 7 * var(--stagger))";
 
+/*
+ * THE CELEBRATION SCREEN'S OWN THREE ROWS.
+ *
+ * Same timeline, same rhythm, same `--stagger` — not a private clock. What
+ * changes is only WHAT is in the queue: this screen has a seal, a heading, a
+ * sentence and three rows of work, where a question has six cards.
+ */
+
+/** The seal. FIRST, before the heading — it is the thing that says "xong". */
+export const ENTER_DELAY_SEAL = "60ms";
+/** The sentence under the heading. */
+export const ENTER_DELAY_SUBHEAD = "180ms";
+/**
+ * "Vào MYSP": one beat after the third row of work.
+ *
+ * NOT `ENTER_DELAY_CTA` (635ms), which is where a CTA lands when six cards
+ * arrive before it. Three rows arrive here, so 635ms would be waiting for a
+ * queue that does not exist — the same reading `WelcomeScreen` makes when it
+ * puts its button in a card's slot rather than the CTA's.
+ */
+export const ENTER_DELAY_CELEBRATE_CTA = "calc(260ms + 3 * var(--stagger))";
+
 /**
  * WHERE THE STAGGER STOPS.
  *
