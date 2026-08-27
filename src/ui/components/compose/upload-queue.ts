@@ -71,3 +71,40 @@ export function isPreviewable(file: File): boolean {
   const type = typeof file?.type === "string" ? file.type.toLowerCase() : "";
   return type.startsWith("image/");
 }
+
+/**
+ * Reconciles the preview-URL map against the current queue, without creating
+ * any React state or DOM API call itself — `createUrl` is injected so this
+ * stays testable in the node environment, no jsdom required.
+ *
+ * MUST be idempotent: calling it twice in a row with the same `queue` and the
+ * same `current` map returns a `next` map with the exact same URLs (no new
+ * `createUrl` calls) and an empty `revoked` list. That property is what makes
+ * StrictMode's setup→cleanup→setup double-invoke harmless — the second setup
+ * sees nothing changed and does nothing.
+ */
+export function syncPreviewUrls(
+  current: ReadonlyMap<string, string>,
+  queue: readonly QueuedFile[],
+  createUrl: (file: File) => string,
+): { next: Map<string, string>; revoked: string[] } {
+  const next = new Map<string, string>();
+  const liveIds = new Set<string>();
+
+  for (const item of queue) {
+    liveIds.add(item.id);
+    const existing = current.get(item.id);
+    if (existing) {
+      next.set(item.id, existing);
+    } else if (isPreviewable(item.file)) {
+      next.set(item.id, createUrl(item.file));
+    }
+  }
+
+  const revoked: string[] = [];
+  for (const [id, url] of current) {
+    if (!liveIds.has(id)) revoked.push(url);
+  }
+
+  return { next, revoked };
+}

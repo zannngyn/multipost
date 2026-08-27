@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { AlbumArranger } from "@/ui/components/compose/AlbumArranger";
 import {
   formatBytes,
   isPreviewable,
   removeAt,
+  syncPreviewUrls,
   type QueuedFile,
 } from "@/ui/components/compose/upload-queue";
 import { Button } from "@/ui/components/ui/button";
@@ -64,23 +65,45 @@ export function UploadPanel(props: UploadPanelProps) {
 
   /**
    * One object URL per image still waiting to upload, built from the File
-   * already in memory — costs 0 bytes on the wire. Revoked on cleanup: not
-   * revoking is a memory leak every time the operator picks files again
-   * (web-file-upload §3).
+   * already in memory — costs 0 bytes on the wire. `previewsRef` is the
+   * source of truth read/written by effects; `previews` state is only what
+   * gets rendered.
    */
-  const previews = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const item of queue) {
-      if (isPreviewable(item.file)) map.set(item.id, URL.createObjectURL(item.file));
-    }
-    return map;
+  const previewsRef = useRef<Map<string, string>>(new Map());
+  const [previews, setPreviews] = useState<Map<string, string>>(new Map());
+
+  /**
+   * Reconciles previews against `queue`: reuses the url of any id still
+   * present, creates one for every new image, and revokes exactly the urls
+   * whose id left the queue — never the ones still on screen. Doing this in
+   * the effect BODY (not a returned cleanup) matters: React StrictMode
+   * double-invokes effects once right after mount, and a cleanup that
+   * revokes "whatever's current" would revoke the very url the <img> just
+   * painted is pointing at (web-file-upload §3).
+   */
+  useEffect(() => {
+    const { next, revoked } = syncPreviewUrls(previewsRef.current, queue, (file) =>
+      URL.createObjectURL(file),
+    );
+    for (const url of revoked) URL.revokeObjectURL(url);
+    previewsRef.current = next;
+    setPreviews(next);
   }, [queue]);
 
+  /**
+   * Mount-only: revokes whatever remains when the panel truly leaves the
+   * tree. Its cleanup ALSO fires once during StrictMode's dev-only
+   * setup→cleanup→setup dance right after mount — clearing the ref there is
+   * what makes that dance harmless: the sync effect's second run then sees
+   * an empty map and creates fresh urls instead of reusing ones this
+   * cleanup just revoked.
+   */
   useEffect(() => {
     return () => {
-      for (const url of previews.values()) URL.revokeObjectURL(url);
+      for (const url of previewsRef.current.values()) URL.revokeObjectURL(url);
+      previewsRef.current = new Map();
     };
-  }, [previews]);
+  }, []);
 
   /**
    * Client-side triage is UX, not security: it saves a pointless round trip.

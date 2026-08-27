@@ -8,6 +8,8 @@ import {
   makeCover,
   moveItem,
   removeAt,
+  syncPreviewUrls,
+  type QueuedFile,
 } from "@/ui/components/compose/upload-queue";
 
 const items = ["a", "b", "c"];
@@ -107,5 +109,82 @@ describe("isPreviewable", () => {
   it("says no rather than throwing on a file with no type", () => {
     expect(isPreviewable(new File([""], "a"))).toBe(false);
     expect(isPreviewable(undefined as unknown as File)).toBe(false);
+  });
+});
+
+describe("syncPreviewUrls", () => {
+  function queuedImage(id: string): QueuedFile {
+    return { id, file: new File([""], `${id}.png`, { type: "image/png" }) };
+  }
+
+  function queuedVideo(id: string): QueuedFile {
+    return { id, file: new File([""], `${id}.mp4`, { type: "video/mp4" }) };
+  }
+
+  it("creates a url for every previewable file in a fresh queue", () => {
+    let calls = 0;
+    const createUrl = () => `blob:${++calls}`;
+
+    const { next, revoked } = syncPreviewUrls(new Map(), [queuedImage("a"), queuedImage("b")], createUrl);
+
+    expect(calls).toBe(2);
+    expect(next.get("a")).toBe("blob:1");
+    expect(next.get("b")).toBe("blob:2");
+    expect(revoked).toEqual([]);
+  });
+
+  it("is safe to run twice with the same input (StrictMode double-invoke)", () => {
+    const createUrl = () => "blob:only-call";
+    const queue = [queuedImage("a")];
+
+    const first = syncPreviewUrls(new Map(), queue, createUrl);
+
+    let secondCallCount = 0;
+    const secondCreateUrl = () => {
+      secondCallCount += 1;
+      return "blob:should-not-happen";
+    };
+    const second = syncPreviewUrls(first.next, queue, secondCreateUrl);
+
+    expect(secondCallCount).toBe(0);
+    expect(second.next.get("a")).toBe("blob:only-call");
+    expect(second.revoked).toEqual([]);
+  });
+
+  it("reports the url of a file dropped from the queue for revocation", () => {
+    const current = new Map([
+      ["a", "blob:a"],
+      ["b", "blob:b"],
+    ]);
+
+    const { next, revoked } = syncPreviewUrls(current, [queuedImage("a")], () => "blob:new");
+
+    expect(next.has("b")).toBe(false);
+    expect(revoked).toEqual(["blob:b"]);
+    // Untouched entry keeps its existing url rather than getting a new one.
+    expect(next.get("a")).toBe("blob:a");
+  });
+
+  it("only creates a url for the file that is new, leaving the rest untouched", () => {
+    const current = new Map([["a", "blob:a"]]);
+    let calls = 0;
+    const createUrl = () => `blob:${++calls}`;
+
+    const { next, revoked } = syncPreviewUrls(current, [queuedImage("a"), queuedImage("c")], createUrl);
+
+    expect(calls).toBe(1);
+    expect(next.get("a")).toBe("blob:a");
+    expect(next.get("c")).toBe("blob:1");
+    expect(revoked).toEqual([]);
+  });
+
+  it("never creates a url for a video — there is no still to show", () => {
+    let calls = 0;
+    const createUrl = () => `blob:${++calls}`;
+
+    const { next } = syncPreviewUrls(new Map(), [queuedVideo("v")], createUrl);
+
+    expect(calls).toBe(0);
+    expect(next.has("v")).toBe(false);
   });
 });
