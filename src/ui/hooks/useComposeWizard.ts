@@ -110,6 +110,20 @@ function emptyCaptions(): Record<string, string> {
   return Object.fromEntries(COMPOSE_CHANNELS.map((channel) => [channel.id, ""]));
 }
 
+/**
+ * Order-insensitive fingerprint of a queue's file names (E9 T7 review round 1,
+ * Important 2). A drag-reorder must not look like a new batch to detect, but
+ * adding or removing a file — even keeping the same count — must: compares
+ * the SET of names, not the array reference and not position.
+ */
+function queueNameFingerprint(queue: readonly QueuedFile[]): string {
+  return queue
+    .map((item) => item.file.name)
+    .slice()
+    .sort()
+    .join("\0");
+}
+
 export function useComposeWizard() {
   const searchParams = useSearchParams();
 
@@ -229,8 +243,10 @@ export function useComposeWizard() {
       // Accepted files are stored server-side now; keeping them queued would
       // let a second click upload the same album twice.
       setUploadQueue([]);
-      // The detected code was about THIS queue; an empty queue has none.
+      // The detected code was about THIS queue; an empty queue has none, and a
+      // leftover error state must not resurface against the next batch.
       setDetection(null);
+      detect.reset();
     },
     onError: () => {
       setUploadRejections([]);
@@ -239,25 +255,35 @@ export function useComposeWizard() {
   });
 
   /**
-   * Wraps the raw queue setter so the empty↔non-empty edge is decided at the
-   * one place queue changes actually originate (drop, remove, reorder),
+   * Wraps the raw queue setter so the decision to re-ask detection is made at
+   * the one place queue changes actually originate (drop, remove, reorder),
    * rather than reacted to a tick later from a `useEffect` watching
    * `uploadQueue`: this project's lint forbids a synchronous `setState` call
    * in an effect body (`react-hooks/set-state-in-effect`) and ref reads/writes
    * during render (`react-hooks/refs`), both of which an effect-based version
    * of this would need.
+   *
+   * E9 T7 review round 1, Important 2: re-fires on ANY change to the set of
+   * file NAMES, not only the empty→non-empty edge — dropping file B on top of
+   * an already-detected file A (or removing down to one of a conflicting
+   * pair) must not leave the old verdict on screen describing a queue that no
+   * longer exists (rule 5). Compared by name fingerprint, not array identity
+   * or length, so a pure drag-reorder — same names, same count — does not
+   * re-fire a request nobody asked for.
    */
   const handleUploadQueueChange = useCallback(
     (next: QueuedFile[]) => {
-      const wasEmpty = uploadQueue.length === 0;
+      const previousFingerprint = queueNameFingerprint(uploadQueue);
       setUploadQueue(next);
       if (next.length === 0) {
         setDetection(null);
+        // Otherwise a later file dropped back in re-triggers `onError`'s old
+        // verdict-clearing path against a stale error/data pair from before
+        // the queue emptied.
+        detect.reset();
         return;
       }
-      // Only the empty→non-empty edge asks — adding more files to an
-      // already-detected batch, or reordering it, must not re-fire.
-      if (wasEmpty) detect.mutate(next);
+      if (queueNameFingerprint(next) !== previousFingerprint) detect.mutate(next);
     },
     [uploadQueue, detect],
   );
@@ -400,11 +426,21 @@ export function useComposeWizard() {
    * Fills the field with the code the button carries and, unless it is blank
    * ("Nhập mã sản phẩm" only opens the field for typing), looks it up right
    * away — spec §8.2 forbids making the operator retype it.
+   *
+   * Review round 1, Important 3: a BLANK code (the `no_code` verdict's manual
+   * button) must NOT overwrite the field — the operator may already have
+   * typed something there. It only moves focus to it, same as an invalid
+   * lookup does in `submitProductStep`.
    */
   const applyDetectedCode = useCallback(
     (code: string) => {
+      const trimmed = code.trim();
+      if (trimmed.length === 0) {
+        form.setFocus("productCode");
+        return;
+      }
       form.setValue("productCode", code, { shouldDirty: true });
-      if (code.trim().length > 0) void submitProductStep();
+      void submitProductStep();
     },
     [form, submitProductStep],
   );

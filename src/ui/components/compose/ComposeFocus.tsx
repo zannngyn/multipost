@@ -568,6 +568,20 @@ export function ComposeFocus() {
                     wizard.applyDetectedCode(action.code);
                   }}
                 />
+                {wizard.detect.isError ? (
+                  // Review round 1, Critical: a failed detection must say so —
+                  // silently falling back to `null` left an empty screen with
+                  // no explanation for why nothing showed up after the drop.
+                  <ApiErrorNotice
+                    error={wizard.detect.error}
+                    source="Nhận diện mã"
+                    onRetry={
+                      wizard.uploadQueue.length > 0
+                        ? () => wizard.detect.mutate(wizard.uploadQueue)
+                        : undefined
+                    }
+                  />
+                ) : null}
                 {wizard.upload.isError ? (
                   <ApiErrorNotice
                     error={wizard.upload.error}
