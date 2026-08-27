@@ -17,6 +17,13 @@ vi.mock("@/composition/container", async (importOriginal) => {
 });
 vi.mock("@/app/api/_lib/require-tenant-context", () => ({ requireTenantContext }));
 
+// Hoisted out of every `it()`: the route imports `@/composition/container`
+// through `importOriginal`, so the first import pulls in the real container
+// (drizzle, redis, bullmq, googleapis, ffprobe). Doing that once at module
+// scope keeps the cost in the "collect" phase; doing it inside a test eats
+// the 5s default test timeout on a loaded machine.
+const { POST } = await import("./route");
+
 const TENANT = "11111111-1111-4111-8111-111111111111";
 
 function post(body: unknown): Request {
@@ -31,7 +38,6 @@ describe("POST /api/posts/uploads/detect-code", () => {
   it("authorises as editor at tier M before reading the body", async () => {
     requireTenantContext.mockResolvedValue({ ctx: { tenantId: TENANT }, session: { email: "a@b.c" } });
     detectUploadCode.mockResolvedValue({ verdict: { status: "no_code" }, files: [], warnings: [] });
-    const { POST } = await import("./route");
 
     await POST(post({ files: [{ fileName: "x.png" }] }));
 
@@ -46,7 +52,6 @@ describe("POST /api/posts/uploads/detect-code", () => {
     detectUploadCode.mockResolvedValue({
       verdict: { status: "matched", productCode: "BG0SQ6083" }, files: [], warnings: [],
     });
-    const { POST } = await import("./route");
 
     const response = await POST(post({ tenantId: "22222222-2222-4222-8222-222222222222", files: [{ fileName: "BG0SQ6083-AI (1).png" }] }));
 
@@ -58,7 +63,6 @@ describe("POST /api/posts/uploads/detect-code", () => {
 
   it("rejects an empty file list with 400", async () => {
     requireTenantContext.mockResolvedValue({ ctx: { tenantId: TENANT }, session: { email: "a@b.c" } });
-    const { POST } = await import("./route");
 
     const response = await POST(post({ files: [] }));
 
@@ -67,7 +71,6 @@ describe("POST /api/posts/uploads/detect-code", () => {
 
   it("rejects more than MAX_UPLOADS_PER_POST files with 400", async () => {
     requireTenantContext.mockResolvedValue({ ctx: { tenantId: TENANT }, session: { email: "a@b.c" } });
-    const { POST } = await import("./route");
 
     const files = Array.from({ length: 11 }, (_, index) => ({ fileName: `file-${index}.png` }));
     const response = await POST(post({ files }));
