@@ -4,6 +4,7 @@ import {
   describeMove,
   formatBytes,
   indexOfId,
+  isPreviewable,
   makeCover,
   moveItem,
   removeAt,
@@ -89,5 +90,22 @@ describe("formatBytes", () => {
   it("never renders a negative or non-finite size", () => {
     expect(formatBytes(-1)).toBe("0 MB");
     expect(formatBytes(Number.NaN)).toBe("0 MB");
+  });
+});
+
+describe("isPreviewable", () => {
+  it("says yes to the image types the album accepts", () => {
+    expect(isPreviewable(new File([""], "a.png", { type: "image/png" }))).toBe(true);
+    expect(isPreviewable(new File([""], "a.jpg", { type: "image/jpeg" }))).toBe(true);
+    expect(isPreviewable(new File([""], "a.webp", { type: "image/webp" }))).toBe(true);
+  });
+
+  it("says no to a video — there is no still to show", () => {
+    expect(isPreviewable(new File([""], "a.mp4", { type: "video/mp4" }))).toBe(false);
+  });
+
+  it("says no rather than throwing on a file with no type", () => {
+    expect(isPreviewable(new File([""], "a"))).toBe(false);
+    expect(isPreviewable(undefined as unknown as File)).toBe(false);
   });
 });

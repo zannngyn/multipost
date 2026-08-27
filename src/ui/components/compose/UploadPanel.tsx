@@ -1,9 +1,14 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import { AlbumArranger } from "@/ui/components/compose/AlbumArranger";
-import { formatBytes, removeAt, type QueuedFile } from "@/ui/components/compose/upload-queue";
+import {
+  formatBytes,
+  isPreviewable,
+  removeAt,
+  type QueuedFile,
+} from "@/ui/components/compose/upload-queue";
 import { Button } from "@/ui/components/ui/button";
 import { Progress } from "@/ui/components/ui/progress";
 import {
@@ -56,6 +61,26 @@ export function UploadPanel(props: UploadPanelProps) {
 
   const { queue, onQueueChange, disabled } = props;
   const full = queue.length >= MAX_UPLOAD_FILES;
+
+  /**
+   * One object URL per image still waiting to upload, built from the File
+   * already in memory — costs 0 bytes on the wire. Revoked on cleanup: not
+   * revoking is a memory leak every time the operator picks files again
+   * (web-file-upload §3).
+   */
+  const previews = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of queue) {
+      if (isPreviewable(item.file)) map.set(item.id, URL.createObjectURL(item.file));
+    }
+    return map;
+  }, [queue]);
+
+  useEffect(() => {
+    return () => {
+      for (const url of previews.values()) URL.revokeObjectURL(url);
+    };
+  }, [previews]);
 
   /**
    * Client-side triage is UX, not security: it saves a pointless round trip.
@@ -194,10 +219,33 @@ export function UploadPanel(props: UploadPanelProps) {
         disabled={disabled}
         itemName={(item) => item.file.name}
         renderContent={(item) => (
-          <>
-            <span className="block truncate text-sm">{item.file.name}</span>
-            <span className="text-muted-foreground text-xs">{formatBytes(item.file.size)}</span>
-          </>
+          <div className="flex min-w-0 items-center gap-3">
+            {/* Fixed-size tile so the list never shifts once the image
+                decodes (CLS = 0). `aria-hidden`: the filename right next to
+                it already names the file — reading both would be noise for
+                a screen reader (web-accessibility — decorative image). */}
+            <div className="bg-muted relative h-12 w-12 shrink-0 overflow-hidden rounded">
+              {previews.get(item.id) ? (
+                /* next/image cannot optimize a blob: URL — it never leaves the
+                   browser, so there is nothing for the optimizer to fetch. */
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={previews.get(item.id)}
+                  alt=""
+                  aria-hidden="true"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="text-muted-foreground flex h-full w-full items-center justify-center text-xs">
+                  {isPreviewable(item.file) ? "…" : "Video"}
+                </span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <span className="block truncate text-sm">{item.file.name}</span>
+              <span className="text-muted-foreground text-xs">{formatBytes(item.file.size)}</span>
+            </div>
+          </div>
         )}
         renderActions={(item, index) => (
           <Button

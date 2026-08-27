@@ -61,3 +61,13 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/**
+ * An image can be shown from the File itself; a video cannot — grabbing its
+ * first frame needs a <video> + canvas, and that is Phase 2 work. Returns
+ * `false` instead of throwing: the caller is a component mid-render.
+ */
+export function isPreviewable(file: File): boolean {
+  const type = typeof file?.type === "string" ? file.type.toLowerCase() : "";
+  return type.startsWith("image/");
+}
