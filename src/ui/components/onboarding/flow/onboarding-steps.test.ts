@@ -21,13 +21,23 @@ import type { OnboardingScreen } from "./onboarding-steps";
 
 type Answered = Partial<Record<OnboardingScreen, boolean>>;
 
-function resolve(requested: string | null, answered: Answered, hasStarted = true): OnboardingScreen {
+function resolve(
+  requested: string | null,
+  answered: Answered,
+  hasStarted = true,
+): OnboardingScreen {
   return resolveScreen({ requested, answered, hasStarted });
 }
 
 describe("ONBOARDING_SCREENS", () => {
   it("lists the welcome screen and the four survey steps in running order", () => {
-    expect(ONBOARDING_SCREENS).toEqual(["welcome", "seller", "tools", "count", "channels"]);
+    expect(ONBOARDING_SCREENS).toEqual([
+      "welcome",
+      "seller",
+      "tools",
+      "count",
+      "channels",
+    ]);
   });
 
   it("counts four survey steps, which is what the dots draw", () => {
@@ -120,5 +130,61 @@ describe("nextScreen / previousScreen", () => {
     expect(previousScreen("tools")).toBe("seller");
     expect(previousScreen("seller")).toBe("welcome");
     expect(previousScreen("welcome")).toBeNull();
+  });
+});
+
+describe("the celebration is deliberately NOT one of these screens", () => {
+  /**
+   * REGRESSION GUARD FOR A DESIGN DECISION, not for a bug that happened.
+   *
+   * The obvious way to add a celebration is to append it to
+   * `ONBOARDING_SCREENS`. That single edit changes the answer of `screenStep`,
+   * `nextScreen`, `previousScreen` AND `isOnboardingScreen` at once — and the
+   * last of those is the one that bites: it would make `?step=celebrate`
+   * a valid, hand-typable URL, i.e. a way to skip all four questions and land
+   * on "xong rồi". The celebration is a consequence of a mutation succeeding,
+   * not a position in a URL.
+   */
+  it("keeps the URL vocabulary at five screens", () => {
+    expect(ONBOARDING_SCREENS).toEqual([
+      "welcome",
+      "seller",
+      "tools",
+      "count",
+      "channels",
+    ]);
+    expect(ONBOARDING_SCREENS).not.toContain("celebrate");
+  });
+
+  it("refuses `?step=celebrate` rather than honouring it", () => {
+    const answered = { seller: true, tools: true, count: true, channels: true };
+    expect(isOnboardingScreen("celebrate")).toBe(false);
+    // A hand-typed one clamps to the flow's own answer, exactly like any other
+    // stale or invented value.
+    expect(
+      resolveScreen({ requested: "celebrate", answered, hasStarted: true }),
+    ).toBe("channels");
+    expect(
+      resolveScreen({
+        requested: "celebrate",
+        answered: {},
+        hasStarted: false,
+      }),
+    ).toBe("welcome");
+  });
+
+  it("still ends the survey at `done` after the last question", () => {
+    // `nextScreen` is what `runAttempt` reads to decide whether to call
+    // `finish`. A sixth entry in the array above would turn this into
+    // `"celebrate"` and the survey would never write `completed_at` at all.
+    expect(nextScreen("channels")).toBe("done");
+  });
+
+  it("gives the celebration no position among the dots", () => {
+    // `screenStep` answers for the four QUESTIONS. `StepDots` handles the
+    // finished state itself — a fifth position here would mean a fifth dot
+    // everywhere this type is read.
+    expect(screenStep("welcome")).toBe(0);
+    expect(screenStep("channels")).toBe(4);
   });
 });

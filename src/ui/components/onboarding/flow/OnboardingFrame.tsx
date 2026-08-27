@@ -1,6 +1,12 @@
 "use client";
 
-import { AnimatePresence, motion, useIsPresent, useReducedMotion, type Variants } from "framer-motion";
+import {
+  AnimatePresence,
+  motion,
+  useIsPresent,
+  useReducedMotion,
+  type Variants,
+} from "framer-motion";
 import { ArrowLeft } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
 
@@ -17,7 +23,7 @@ import {
   enterDelay,
 } from "./onboarding-motion";
 import "./onboarding-motion.css";
-import type { OnboardingScreen } from "./onboarding-steps";
+import type { OnboardingStage } from "./onboarding-steps";
 
 /**
  * THE SCREEN CHANGE's timing — the backdrop has its own, further down.
@@ -151,7 +157,7 @@ const STILL_VARIANTS: Variants = {
  * was a real bug under `mode="wait"`.
  */
 export function OnboardingFrame({
-  screen,
+  stage,
   /**
    * Which way the flow just moved. Decided by `OnboardingFlow`, because the
    * frame only ever sees the destination and a screen change on its own does
@@ -162,7 +168,7 @@ export function OnboardingFrame({
   onBack,
   children,
 }: {
-  screen: OnboardingScreen;
+  stage: OnboardingStage;
   direction?: FlowDirection;
   onBack?: () => void;
   children: ReactNode;
@@ -177,13 +183,24 @@ export function OnboardingFrame({
   const backdropExitDuration = isStill
     ? BACKDROP_REDUCED_DURATION
     : BACKDROP_EXIT_DURATION;
-  const isWelcome = screen === "welcome";
+  const isWelcome = stage === "welcome";
 
   return (
     <main className="text-foreground relative min-h-dvh overflow-hidden">
       {/* The ruled ground belongs to the GREETING only — the four question
           screens stand on plain cloth in the reference shots. It fades with the
-          screen it belongs to rather than vanishing under it. */}
+          screen it belongs to rather than vanishing under it.
+
+          AND THE CELEBRATION IS NOT AN EXCEPTION, though it was built as one
+          first. Bookending the flow — ground under the greeting, ground under
+          the goodbye — is a tidy idea and it measured badly: `GridBackdrop`
+          leaves a clearing sized for the greeting's two lines and one button,
+          and the celebration is three times as tall. At 1400x900 its third
+          row of work landed on top of the TikTok mark at (568, 622) and the
+          Facebook mark sat level with the list. The rule the reference shots
+          already state turns out to be about CONTENT WEIGHT, not about
+          position in the flow: a screen carrying a heading, a list and a
+          button stands on plain cloth. */}
       <AnimatePresence initial={false}>
         {isWelcome ? (
           <motion.div
@@ -234,7 +251,9 @@ export function OnboardingFrame({
               <ArrowLeft aria-hidden="true" />
             </Button>
           ) : null}
-          <span className="text-foreground font-heading text-lg leading-none font-bold">MYSP</span>
+          <span className="text-foreground font-heading text-lg leading-none font-bold">
+            MYSP
+          </span>
         </div>
 
         {/* The wrapper stays even when `StepDots` draws nothing on the greeting.
@@ -250,7 +269,7 @@ export function OnboardingFrame({
           style={enterDelay(ENTER_DELAY_DOTS)}
           className="onboarding-enter-drop justify-self-center"
         >
-          <StepDots current={screen} />
+          <StepDots stage={stage} />
         </div>
 
         {/* THE app's light/dark control, imported, not rebuilt (spec 12): it
@@ -278,7 +297,7 @@ export function OnboardingFrame({
         */}
         <AnimatePresence initial={false} mode="wait" custom={direction}>
           <motion.div
-            key={screen}
+            key={stage}
             custom={direction}
             variants={isStill ? STILL_VARIANTS : SCREEN_VARIANTS}
             initial="arriving"
@@ -304,7 +323,7 @@ export function OnboardingFrame({
                   "self-center pt-[calc(7rem+6.9dvh)] pb-28",
             )}
           >
-            <ScreenLayer screen={screen}>{children}</ScreenLayer>
+            <ScreenLayer stage={stage}>{children}</ScreenLayer>
           </motion.div>
         </AnimatePresence>
       </div>
@@ -337,10 +356,10 @@ export function OnboardingFrame({
  * the frame, which never leaves.
  */
 function ScreenLayer({
-  screen,
+  stage,
   children,
 }: {
-  screen: OnboardingScreen;
+  stage: OnboardingStage;
   children: ReactNode;
 }) {
   const isPresent = useIsPresent();
@@ -360,7 +379,7 @@ function ScreenLayer({
       ref={layerRef}
       // Focusable only as the fallback above, never by tabbing to it.
       tabIndex={-1}
-      data-onboarding-screen={screen}
+      data-onboarding-screen={stage}
       aria-hidden={isPresent ? undefined : true}
       inert={!isPresent}
       className="flex flex-col items-center outline-none"

@@ -223,9 +223,9 @@ export default function OnboardingPreviewPage() {
               14. Khảo sát onboarding — chấm tiến độ ở ba vị trí trong luồng
             </Text>
             <Stack direction="vertical" gap={4}>
-              <StepDots current="seller" />
-              <StepDots current="count" />
-              <StepDots current="channels" />
+              <StepDots stage="seller" />
+              <StepDots stage="count" />
+              <StepDots stage="channels" />
             </Stack>
           </Stack>
 
