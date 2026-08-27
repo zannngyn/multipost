@@ -1222,7 +1222,7 @@ Trong `UploadPanel.tsx`:
                   className="h-full w-full object-cover"
                 />
               ) : (
-                <span className="text-muted-foreground flex h-full w-full items-center justify-center text-[10px]">
+                <span className="text-muted-foreground flex h-full w-full items-center justify-center text-xs">
                   {isPreviewable(item.file) ? "…" : "Video"}
                 </span>
               )}
@@ -1738,7 +1738,7 @@ và khai báo `const [uploadedAssets, setUploadedAssets] = useState<MediaAsset[]
               <div className="bg-muted relative h-16 w-16 overflow-hidden rounded">
                 <MediaThumb asset={asset} alt="" />
               </div>
-              <span className="text-muted-foreground mt-1 block truncate text-[10px]">
+              <span className="text-muted-foreground mt-1 block truncate text-xs">
                 {asset.fileName}
               </span>
             </li>
