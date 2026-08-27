@@ -119,7 +119,8 @@ export function CelebrateScreen({
         <span className="block">
           {name === null ? "Xong rồi 🎉" : `Xong rồi, ${name} 🎉`}
         </span>
-        <span className="block">Chào mừng bạn đến với MYSP</span>
+        <span className="block">Chào mừng bạn đến với MYSPViệc cần chú ý
+        </span>
       </h1>
 
       <p

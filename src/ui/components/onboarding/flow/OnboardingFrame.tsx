@@ -309,7 +309,7 @@ export function OnboardingFrame({
                  measured position of the greeting. A share of the window, not a
                  pixel count, so it holds its proportion on a taller screen. */
               isWelcome
-                ? "self-start pt-[23.5dvh] pb-16"
+                ? "self-start pt-[40dvh] pb-16"
                 : /* THE QUESTIONS ARE NOT ON THE WINDOW'S CENTRE LINE. Both
                      reference shots put the block — top of the heading to the
                      foot of "Bỏ qua" — on y≈459.5 of 867, i.e. 53.0%, and they
@@ -320,7 +320,7 @@ export function OnboardingFrame({
                      which is the missing 3%. A share of the window rather than
                      a pixel count, because vertical position is compared by
                      ratio (spec section 0b). */
-                  "self-center pt-[calc(7rem+6.9dvh)] pb-28",
+                "self-center pt-[calc(7rem+6.9dvh)] pb-28",
             )}
           >
             <ScreenLayer stage={stage}>{children}</ScreenLayer>

@@ -255,15 +255,15 @@ export function StepActions({
           onAnimationEnd={handleAnimationEnd}
           className={cn(
             // 352x48, 0 24px of padding, corners off the token (spec section 2.4).
-            "h-12 w-[22rem] max-w-full gap-2 rounded-lg px-6 text-sm font-medium",
+            "h-12 w-[22rem] max-w-full gap-2 rounded-lg px-6 text-sm font-bold",
             // THE READY CTA IS INK ON CREAM, not the dye. `#2e2820` in the
             // prototype IS this app's `--foreground`; using the token rather
             // than the hex is also what makes it invert correctly in the dark
             // theme, which the prototype has no answer for. Measured after the
             // swap: 12.85:1 light, 13.82:1 dark.
             !isBlockedLook &&
-              !isSaving &&
-              "bg-foreground text-background hover:bg-foreground/90",
+            !isSaving &&
+            "bg-foreground text-background hover:bg-foreground/90",
             // Keeps the explanation legible instead of fading it to half.
             isBlockedLook && "text-muted-foreground",
             // The lift, the press and the arrow's nudge hang off this marker;
@@ -281,7 +281,7 @@ export function StepActions({
               Đang lưu…
             </>
           ) : isBlockedLook ? (
-            "Chọn một mục để tiếp tục"
+            "Chọn một để tiếp tục"
           ) : (
             <>
               {continueLabel}

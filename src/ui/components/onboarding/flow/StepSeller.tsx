@@ -56,7 +56,7 @@ const CHOICES: readonly OptionChoice[] = SELLER_KINDS.map((value) => ({
   ...SELLER_LABEL[value],
 }));
 
-const QUESTION = "Mô tả đúng nhất về công việc của bạn?";
+const QUESTION = "Mô tả đúng nhất về bạn?";
 
 /** Narrowing at the boundary: the group hands back a `string`, not a `SellerKind`. */
 function isSellerKind(value: string): value is SellerKind {
@@ -95,7 +95,7 @@ export function StepSeller({
   };
 
   return (
-    <div className="flex w-full flex-col items-center gap-8">
+    <div className="flex w-full flex-col items-center gap-8 font-bold" >
       {/*
         28px / 35px, measured (spec section 2.3), neither of them on the type
         scale. `tabIndex={-1}` because changing step is a navigation and
@@ -104,7 +104,7 @@ export function StepSeller({
       <h1
         tabIndex={-1}
         style={enterDelay(ENTER_DELAY_HEADING)}
-        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-bold text-balance outline-none"
       >
         {QUESTION}
       </h1>
