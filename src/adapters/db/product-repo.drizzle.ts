@@ -401,10 +401,11 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
 
   /**
    * Every product code of the tenant, so the upload file-name parser can
-   * recognise a code shape `PRODUCT_CODE_PATTERN` cannot guess (E9). Distinct
-   * because `products.code` is not guaranteed unique at the SQL level for
-   * every origin (`sheet` vs `manual` rows may briefly share one code between
-   * a sync and its conflict resolution).
+   * recognise a code shape `PRODUCT_CODE_PATTERN` cannot guess (E9).
+   * `(tenant_id, code)` already carries a UNIQUE constraint at the DB level
+   * (`product_tenant_code_uq`), so `selectDistinct` never removes a real
+   * duplicate here — it is a cheap defensive layer, matching `countAll`'s
+   * plain `select` in every other way.
    */
   async listCodes(tenantId: TenantId): Promise<readonly string[]> {
     const scope = forTenant(this.db, tenantId);
