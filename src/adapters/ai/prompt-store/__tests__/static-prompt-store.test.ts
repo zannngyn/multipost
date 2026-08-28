@@ -9,6 +9,7 @@ import {
 import {
   FACEBOOK_CONTENT_TEMPLATE_V1,
   FACEBOOK_CONTENT_TEMPLATE_V2,
+  FACEBOOK_CONTENT_TEMPLATE_V3,
 } from "@/adapters/ai/prompt-store/templates/facebook-content";
 import { extractVariables } from "@/core/ai/prompt-render";
 import { SHEET_COLUMNS } from "@/core/domain/product";
@@ -19,7 +20,7 @@ describe("static prompt store — catalog integrity", () => {
   it("rejects a template missing a required variable", () => {
     expect(() =>
       makeStaticPromptStore([
-        { ...FACEBOOK_CONTENT_TEMPLATE_V2, userPromptTemplate: "Không có biến nào" },
+        { ...FACEBOOK_CONTENT_TEMPLATE_V3, userPromptTemplate: "Không có biến nào" },
       ]),
     ).toThrowError(AppError);
   });
@@ -27,24 +28,24 @@ describe("static prompt store — catalog integrity", () => {
   it("rejects two active templates for the same (tenant, task, platform)", () => {
     expect(() =>
       makeStaticPromptStore([
-        FACEBOOK_CONTENT_TEMPLATE_V2,
-        { ...FACEBOOK_CONTENT_TEMPLATE_V2, id: "other", version: 3 },
+        FACEBOOK_CONTENT_TEMPLATE_V3,
+        { ...FACEBOOK_CONTENT_TEMPLATE_V3, id: "other", version: 4 },
       ]),
     ).toThrowError(AppError);
   });
 
   it("ignores draft and retired versions", async () => {
     const store = makeStaticPromptStore([
-      { ...FACEBOOK_CONTENT_TEMPLATE_V2, version: 3, status: "draft" },
-      FACEBOOK_CONTENT_TEMPLATE_V2,
-      { ...FACEBOOK_CONTENT_TEMPLATE_V2, version: 0, status: "retired" },
+      { ...FACEBOOK_CONTENT_TEMPLATE_V3, version: 4, status: "draft" },
+      FACEBOOK_CONTENT_TEMPLATE_V3,
+      { ...FACEBOOK_CONTENT_TEMPLATE_V3, version: 0, status: "retired" },
     ]);
     const template = await store.getActive({
       tenantId: testTenantId("tenant-1"),
       task: "facebook_content",
       platform: "facebook",
     });
-    expect(template?.version).toBe(2);
+    expect(template?.version).toBe(3);
   });
 
   it("returns null for a task without an active template", async () => {
@@ -56,8 +57,8 @@ describe("static prompt store — catalog integrity", () => {
 
   it("prefers a tenant-owned template over the built-in one", async () => {
     const store = makeStaticPromptStore([
-      FACEBOOK_CONTENT_TEMPLATE_V2,
-      { ...FACEBOOK_CONTENT_TEMPLATE_V2, id: "tenant-1-fb", tenantId: testTenantId("tenant-1"), version: 9 },
+      FACEBOOK_CONTENT_TEMPLATE_V3,
+      { ...FACEBOOK_CONTENT_TEMPLATE_V3, id: "tenant-1-fb", tenantId: testTenantId("tenant-1"), version: 9 },
     ]);
     const template = await store.getActive({
       tenantId: testTenantId("tenant-1"),

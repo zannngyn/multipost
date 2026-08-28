@@ -308,6 +308,19 @@ function splitExtension(name: string): ExtensionSplit {
   return { base: name, extension: null, warning: "MISSING_EXTENSION" };
 }
 
+/**
+ * Tên file đã chuẩn hoá khoảng trắng và bỏ phần đuôi — phần "stem" mà tầng
+ * candidate của upload (core/domain/upload-candidate-code) cần.
+ *
+ * Dùng chung `normalizeWhitespace` + `splitExtension` với parser chính, để hai
+ * bên không thể lệch nhau về "đuôi file là gì" (`.jpg`, `JPG` dính liền,
+ * `.2025` bị nhầm là đuôi).
+ */
+export function mediaFileStem(raw: string): string {
+  if (typeof raw !== "string") return "";
+  return splitExtension(normalizeWhitespace(raw)).base.trim();
+}
+
 /** Extension -> kind. Unknown/absent extension is treated as an image. */
 export function mediaKindFromExtension(extension: string | null): MediaKind {
   if (extension && (VIDEO_EXTENSIONS as readonly string[]).includes(extension)) return "video";

@@ -23,6 +23,14 @@ const PREVIEW_BASE = "/api/media/preview";
 export function mediaPreviewUrl(driveFileId: string | null | undefined): string | null {
   const id = (driveFileId ?? "").trim();
   if (id.length === 0) return null;
+  if (
+    id.startsWith("blob:") ||
+    id.startsWith("data:") ||
+    id.startsWith("http://") ||
+    id.startsWith("https://")
+  ) {
+    return id;
+  }
   // Drive ids are URL-safe in practice, but an uploaded asset id is minted
   // server-side and this path segment must survive whatever lands in it.
   return `${PREVIEW_BASE}/${encodeURIComponent(id)}`;

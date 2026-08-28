@@ -11,9 +11,7 @@ import {
   PenLine,
   Plus,
   Shield,
-  Upload,
   UserPlus,
-  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";

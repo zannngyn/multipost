@@ -1,49 +1,51 @@
 "use client";
 
-import { Input } from "@/ui/components/ui/input";
+import { useState, useMemo, useRef, useEffect } from "react";
+import {
+  Calendar as CalendarIcon,
+  Clock,
+  ChevronLeft,
+  ChevronRight,
+  Flame,
+  Sun,
+  Utensils,
+  Moon,
+  Sparkles,
+} from "lucide-react";
+
+import { cn } from "@/shared/utils";
 import {
   MAX_SCHEDULE_AHEAD_DAYS,
   formatCountdown,
   formatScheduledAt,
-  scheduleInputBounds,
   timeZoneLabel,
   validateScheduleInput,
+  toDateTimeLocalValue,
 } from "@/ui/schemas/scheduled.schema";
 
-/**
- * THE publish-time field. One component for the compose wizard, the bulk screen
- * and the "đổi giờ" dialog (core-component-reuse: three copies of a date field
- * is three places to get the timezone wrong).
- *
- * Native `<input type="datetime-local">` on purpose (web-form-inputs rule 5):
- * the operator can TYPE the time, the mobile keyboard is the right one, and the
- * value is local wall time — which is exactly what "đăng lúc 20h" means.
- *
- * WHY NOT A COMPONENT-LIBRARY PICKER. This field was briefly swapped to Astryx
- * `DateTimeInput`, which parses a typed date string instead of using segments.
- * Measured against that parser (`utils/dateParser.ts`), two defects land
- * squarely on Vietnamese operators:
- *
- *   1. It picks day-vs-month order by HEURISTIC — the number above 12 wins —
- *      and falls back to the CLIENT's locale when both are ≤ 12. On a machine
- *      left at en-US, "1/9/2026" is read as 9 January: no error, no red field,
- *      just a batch scheduled eight months early. Roughly 40% of the days in a
- *      year are ambiguous that way, and business rule 5 forbids exactly this
- *      kind of silent wrong answer.
- *   2. On a machine set to Vietnamese it renders the chosen value as
- *      "15 tháng 9, 2026" and then cannot re-parse its own output, so editing
- *      the field by keyboard marks it invalid and silently reverts on blur.
- *
- * `DateTimeInput` exposes no `format`/`locale`/`parse` prop to correct either.
- * The native control has neither problem: the browser renders segments in the
- * OS locale (dd/mm/yyyy on a Vietnamese machine), typing digits advances
- * between segments, and no free-text date string is ever parsed.
- *
- * The window is stated BEFORE a choice is made (core-booking-scheduling rule 5):
- * `min`/`max` on the field, and the same sentence in the hint for anyone whose
- * browser ignores them. The client check is a courtesy — the server re-validates
- * and has the final say.
- */
+export interface ScheduleTimeFieldProps {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  disabledReason?: string;
+  error?: string | null;
+  nowMs: number;
+}
+
+const GOLDEN_HOURS = [
+  { label: "08:00 (Sáng)", hour: 8, minute: 0, icon: Sun },
+  { label: "11:30 (Trưa)", hour: 11, minute: 30, icon: Utensils },
+  { label: "15:30 (Chiều)", hour: 15, minute: 30, icon: Sparkles },
+  { label: "19:30 (Tối vàng)", hour: 19, minute: 30, icon: Flame },
+  { label: "20:30 (Tối)", hour: 20, minute: 30, icon: Moon },
+];
+
+const HOURS = Array.from({ length: 24 }, (_, i) => i);
+const MINUTES = Array.from({ length: 12 }, (_, i) => i * 5); // 00, 05, 10, ... 55
+const ALL_MINUTES = Array.from({ length: 60 }, (_, i) => i);
+
 export function ScheduleTimeField({
   id,
   label,
@@ -53,83 +55,461 @@ export function ScheduleTimeField({
   disabledReason,
   error,
   nowMs,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  disabled?: boolean;
-  /**
-   * WHY the field is locked. Rendered as VISIBLE text beside the field, not as
-   * a tooltip: a disabled native control swallows hover, so a tooltip would be
-   * mouse-only — and invisible to the keyboard user who most needs the reason.
-   */
-  disabledReason?: string;
-  /** Message from the last submit attempt or from the server. */
-  error?: string | null;
-  /** 0 before the browser clock is known — the preview then stays quiet. */
-  nowMs: number;
-}) {
+}: ScheduleTimeFieldProps) {
   const zone = timeZoneLabel();
-  const bounds = nowMs > 0 ? scheduleInputBounds(nowMs) : null;
-  // One trim, reused: a value of "   " is not a value, and must not be handed
-  // to the validator as if it were a datetime.
   const trimmed = typeof value === "string" ? value.trim() : "";
   const verdict = nowMs > 0 && trimmed.length > 0 ? validateScheduleInput(trimmed, nowMs) : null;
 
-  const hintId = `${id}-hint`;
-  const previewId = `${id}-preview`;
-  const errorId = `${id}-error`;
-  const lockedId = `${id}-locked`;
-  const showLocked = Boolean(disabled && disabledReason);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [isTimeDropdownOpen, setIsTimeDropdownOpen] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // Parse current date & time from value
+  const parsedDate = useMemo(() => {
+    if (!trimmed) return new Date(nowMs > 0 ? nowMs + 3600000 : Date.now() + 3600000);
+    const d = new Date(trimmed);
+    return Number.isNaN(d.getTime()) ? new Date(nowMs > 0 ? nowMs + 3600000 : Date.now() + 3600000) : d;
+  }, [trimmed, nowMs]);
+
+  const [viewYear, setViewYear] = useState(parsedDate.getFullYear());
+  const [viewMonth, setViewMonth] = useState(parsedDate.getMonth()); // 0-indexed
+
+  // Close popovers on click outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (popoverRef.current && !popoverRef.current.contains(event.target as Node)) {
+        setIsCalendarOpen(false);
+        setIsTimeDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const selectedYear = parsedDate.getFullYear();
+  const selectedMonth = parsedDate.getMonth();
+  const selectedDay = parsedDate.getDate();
+  const curHour = parsedDate.getHours();
+  const curMinute = parsedDate.getMinutes();
+  const selectedHoursStr = curHour.toString().padStart(2, "0");
+  const selectedMinutesStr = curMinute.toString().padStart(2, "0");
+  const timeString = `${selectedHoursStr}:${selectedMinutesStr}`;
+
+  const [customHourInput, setCustomHourInput] = useState(selectedHoursStr);
+  const [customMinuteInput, setCustomMinuteInput] = useState(selectedMinutesStr);
+
+  useEffect(() => {
+    setCustomHourInput(selectedHoursStr);
+    setCustomMinuteInput(selectedMinutesStr);
+  }, [selectedHoursStr, selectedMinutesStr]);
+
+  const setDatePart = (year: number, month: number, day: number) => {
+    const updated = new Date(year, month, day, parsedDate.getHours(), parsedDate.getMinutes());
+    onChange(toDateTimeLocalValue(updated));
+    setIsCalendarOpen(false);
+  };
+
+  const setTimePart = (hours: number, minutes: number) => {
+    const validH = Math.max(0, Math.min(23, hours));
+    const validM = Math.max(0, Math.min(59, minutes));
+    const updated = new Date(
+      parsedDate.getFullYear(),
+      parsedDate.getMonth(),
+      parsedDate.getDate(),
+      validH,
+      validM,
+    );
+    onChange(toDateTimeLocalValue(updated));
+  };
+
+  // Calendar calculations
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const firstDayOfWeek = (new Date(viewYear, viewMonth, 1).getDay() + 6) % 7; // Monday = 0
+  const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+  const prevMonth = () => {
+    if (viewMonth === 0) {
+      setViewMonth(11);
+      setViewYear(viewYear - 1);
+    } else {
+      setViewMonth(viewMonth - 1);
+    }
+  };
+
+  const nextMonth = () => {
+    if (viewMonth === 11) {
+      setViewMonth(0);
+      setViewYear(viewYear + 1);
+    } else {
+      setViewMonth(viewMonth + 1);
+    }
+  };
+
+  const today = new Date(nowMs > 0 ? nowMs : Date.now());
+  const maxDate = new Date((nowMs > 0 ? nowMs : Date.now()) + MAX_SCHEDULE_AHEAD_DAYS * 86400000);
+
+  const isDayDisabled = (day: number) => {
+    const checkDate = new Date(viewYear, viewMonth, day, 23, 59, 59);
+    const checkDateStart = new Date(viewYear, viewMonth, day, 0, 0, 0);
+    return checkDate.getTime() < today.getTime() || checkDateStart.getTime() > maxDate.getTime();
+  };
+
+  const isDaySelected = (day: number) => {
+    return (
+      viewYear === selectedYear &&
+      viewMonth === selectedMonth &&
+      day === selectedDay
+    );
+  };
+
+  const isToday = (day: number) => {
+    return (
+      viewYear === today.getFullYear() &&
+      viewMonth === today.getMonth() &&
+      day === today.getDate()
+    );
+  };
+
+  const formatSelectedDateLabel = () => {
+    const d = parsedDate;
+    const days = ["Chủ Nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"];
+    const dayName = days[d.getDay()];
+    return `${dayName}, ${d.getDate().toString().padStart(2, "0")}/${(d.getMonth() + 1).toString().padStart(2, "0")}/${d.getFullYear()}`;
+  };
+
+  const displayError = error || (!verdict?.ok ? verdict?.message : null);
+  const isInvalidTime = Boolean(!verdict?.ok && trimmed.length > 0);
+
+  const handleGoldenHourClick = (slotHour: number, slotMinute: number) => {
+    const isCurDayToday = isToday(selectedDay);
+    const now = new Date(nowMs > 0 ? nowMs : Date.now());
+    const slotTimeToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), slotHour, slotMinute);
+
+    // If currently on "Today" and this golden hour has already passed today, roll over to Tomorrow
+    if (isCurDayToday && slotTimeToday.getTime() <= now.getTime() + 60_000) {
+      const tomorrow = new Date(now.getTime() + 86_400_000);
+      const updated = new Date(
+        tomorrow.getFullYear(),
+        tomorrow.getMonth(),
+        tomorrow.getDate(),
+        slotHour,
+        slotMinute,
+      );
+      onChange(toDateTimeLocalValue(updated));
+    } else {
+      setTimePart(slotHour, slotMinute);
+    }
+  };
 
   return (
-    <div className="max-w-xs space-y-1.5">
-      <label htmlFor={id} className="text-sm font-medium">
+    <div ref={popoverRef} className="flex flex-col gap-2.5 w-full">
+      <label htmlFor={id} className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
         {label}
       </label>
 
-      <Input
-        id={id}
-        type="datetime-local"
-        value={value}
-        step={60}
-        min={bounds?.min}
-        max={bounds?.max}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={
-          `${hintId}` +
-          `${showLocked ? ` ${lockedId}` : ""}` +
-          `${verdict?.ok ? ` ${previewId}` : ""}` +
-          `${error ? ` ${errorId}` : ""}`
-        }
-      />
+      {/* Modern Date & Time Picker Controls */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Date Button (Opens Calendar Popover) */}
+        <div className="relative">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              setIsCalendarOpen(!isCalendarOpen);
+              setIsTimeDropdownOpen(false);
+            }}
+            className={cn(
+              "flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-input bg-card px-3.5 text-xs font-semibold text-foreground shadow-xs transition-all hover:border-primary/50 hover:bg-muted/30 outline-none focus:ring-2 focus:ring-primary/30",
+              isCalendarOpen && "border-primary ring-2 ring-primary/20",
+              isInvalidTime && "border-destructive/60 bg-destructive/5 text-destructive",
+              disabled && "opacity-50 cursor-not-allowed",
+            )}
+          >
+            <CalendarIcon className={cn("size-4 shrink-0", isInvalidTime ? "text-destructive" : "text-primary")} />
+            <span>{formatSelectedDateLabel()}</span>
+          </button>
 
-      {showLocked ? (
-        <p id={lockedId} className="text-muted-foreground text-xs">
-          {disabledReason}
-        </p>
-      ) : null}
+          {/* Calendar Popover (Opens UPWARD) */}
+          {isCalendarOpen && (
+            <div className="absolute bottom-full mb-2 left-0 z-50 w-72 rounded-2xl border border-border bg-card p-3.5 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-150">
+              {/* Quick Date Presets */}
+              <div className="flex items-center justify-between gap-1 mb-3 border-b border-border/60 pb-2">
+                <button
+                  type="button"
+                  onClick={() => setDatePart(today.getFullYear(), today.getMonth(), today.getDate())}
+                  className="rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
+                >
+                  Hôm nay
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const t = new Date(today.getTime() + 86400000);
+                    setDatePart(t.getFullYear(), t.getMonth(), t.getDate());
+                  }}
+                  className="rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
+                >
+                  Ngày mai
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const t = new Date(today.getTime() + 2 * 86400000);
+                    setDatePart(t.getFullYear(), t.getMonth(), t.getDate());
+                  }}
+                  className="rounded-lg px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer"
+                >
+                  Ngày mốt
+                </button>
+              </div>
 
-      <p id={hintId} className="text-muted-foreground text-xs">
-        Giờ tính theo múi giờ máy bạn ({zone}). Hẹn được trong vòng {MAX_SCHEDULE_AHEAD_DAYS} ngày,
-        và phải là thời điểm trong tương lai.
-      </p>
+              {/* Month / Year Navigator */}
+              <div className="flex items-center justify-between mb-2.5 px-1">
+                <span className="text-xs font-bold text-foreground">
+                  Tháng {viewMonth + 1}, {viewYear}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={prevMonth}
+                    className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <ChevronLeft className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={nextMonth}
+                    className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <ChevronRight className="size-4" />
+                  </button>
+                </div>
+              </div>
 
+              {/* Day Headers (T2 - CN) */}
+              <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-muted-foreground mb-1">
+                <span>T2</span>
+                <span>T3</span>
+                <span>T4</span>
+                <span>T5</span>
+                <span>T6</span>
+                <span>T7</span>
+                <span className="text-amber-500">CN</span>
+              </div>
+
+              {/* Calendar Days Grid */}
+              <div className="grid grid-cols-7 gap-1">
+                {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+                  <div key={`empty-${i}`} className="size-8" />
+                ))}
+
+                {daysArray.map((day) => {
+                  const isDisabled = isDayDisabled(day);
+                  const isSelected = isDaySelected(day);
+                  const isCurToday = isToday(day);
+
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={() => setDatePart(viewYear, viewMonth, day)}
+                      className={cn(
+                        "flex size-8 cursor-pointer items-center justify-center rounded-lg text-xs font-medium transition-all select-none",
+                        isSelected
+                          ? "bg-primary text-primary-foreground font-bold shadow-xs scale-105"
+                          : isCurToday
+                            ? "border border-primary text-primary font-semibold hover:bg-primary/10"
+                            : "text-foreground hover:bg-muted/70",
+                        isDisabled && "opacity-25 cursor-not-allowed hover:bg-transparent text-muted-foreground",
+                      )}
+                    >
+                      {day}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Detailed Time Selector Popover (Hour & Minute Selector) */}
+        <div className="relative">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              setIsTimeDropdownOpen(!isTimeDropdownOpen);
+              setIsCalendarOpen(false);
+            }}
+            className={cn(
+              "flex h-10 cursor-pointer items-center gap-2 rounded-xl border border-input bg-card px-3.5 text-xs font-semibold text-foreground shadow-xs transition-all hover:border-primary/50 hover:bg-muted/30 outline-none focus:ring-2 focus:ring-primary/30",
+              isTimeDropdownOpen && "border-primary ring-2 ring-primary/20",
+              isInvalidTime && "border-destructive/60 bg-destructive/5 text-destructive",
+              disabled && "opacity-50 cursor-not-allowed",
+            )}
+          >
+            <Clock className={cn("size-4 shrink-0", isInvalidTime ? "text-destructive" : "text-primary")} />
+            <span className="font-mono text-sm">{timeString}</span>
+          </button>
+
+          {/* Time Picker 2-Column Popover (Opens UPWARD with strict overflow control) */}
+          {isTimeDropdownOpen && (
+            <div className="absolute bottom-full mb-2 left-0 z-50 w-60 overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-150">
+              {/* Direct Hour:Minute Input Bar */}
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-border/70">
+                <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
+                  Giờ hẹn
+                </span>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={customHourInput}
+                    onChange={(e) => {
+                      setCustomHourInput(e.target.value);
+                      const val = parseInt(e.target.value, 10);
+                      if (!Number.isNaN(val) && val >= 0 && val <= 23) {
+                        setTimePart(val, curMinute);
+                      }
+                    }}
+                    className="w-10 h-7 rounded-md border border-input bg-background text-center text-xs font-bold font-mono outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  />
+                  <span className="font-bold text-muted-foreground">:</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={59}
+                    value={customMinuteInput}
+                    onChange={(e) => {
+                      setCustomMinuteInput(e.target.value);
+                      const val = parseInt(e.target.value, 10);
+                      if (!Number.isNaN(val) && val >= 0 && val <= 59) {
+                        setTimePart(curHour, val);
+                      }
+                    }}
+                    className="w-10 h-7 rounded-md border border-input bg-background text-center text-xs font-bold font-mono outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setIsTimeDropdownOpen(false)}
+                    className="ml-1.5 rounded-md bg-primary px-2.5 py-1 text-[11px] font-bold text-primary-foreground hover:opacity-90 cursor-pointer shadow-xs"
+                  >
+                    Xong
+                  </button>
+                </div>
+              </div>
+
+              {/* 2 Scroll Columns: Hours (00-23) & Minutes (00-59) */}
+              <div className="grid grid-cols-2 gap-2 h-44 max-h-44 min-h-0 overflow-hidden">
+                {/* Hours Column */}
+                <div className="flex flex-col min-h-0 h-full border border-border/50 rounded-xl bg-muted/20 p-1">
+                  <span className="text-[10px] font-bold text-muted-foreground uppercase text-center py-0.5 border-b border-border/40 shrink-0">
+                    Giờ
+                  </span>
+                  <div className="flex flex-col gap-0.5 overflow-y-auto flex-1 p-0.5 min-h-0">
+                    {HOURS.map((h) => {
+                      const isCur = curHour === h;
+                      return (
+                        <button
+                          key={h}
+                          type="button"
+                          onClick={() => setTimePart(h, curMinute)}
+                          className={cn(
+                            "rounded-lg py-1 text-xs font-mono font-medium transition-colors cursor-pointer text-center shrink-0",
+                            isCur
+                              ? "bg-primary text-primary-foreground font-bold shadow-xs scale-100"
+                              : "text-foreground hover:bg-muted",
+                          )}
+                        >
+                          {h.toString().padStart(2, "0")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Minutes Column (00 - 59) */}
+                <div className="flex flex-col min-h-0 h-full border border-border/50 rounded-xl bg-muted/20 p-1">
+                  <span className="text-[10px] font-bold text-muted-foreground uppercase text-center py-0.5 border-b border-border/40 shrink-0">
+                    Phút
+                  </span>
+                  <div className="flex flex-col gap-0.5 overflow-y-auto flex-1 p-0.5 min-h-0">
+                    {ALL_MINUTES.map((m) => {
+                      const isCur = curMinute === m;
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => setTimePart(curHour, m)}
+                          className={cn(
+                            "rounded-lg py-1 text-xs font-mono font-medium transition-colors cursor-pointer text-center shrink-0",
+                            isCur
+                              ? "bg-primary text-primary-foreground font-bold shadow-xs scale-100"
+                              : "text-foreground hover:bg-muted",
+                          )}
+                        >
+                          {m.toString().padStart(2, "0")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Quick Golden Hours Chips (Single clean row, no cramped wrapping) */}
+      <div className="flex flex-col gap-1.5 pt-0.5 w-full">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+          Khung giờ vàng gợi ý
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {GOLDEN_HOURS.map((slot) => {
+            const isMatch = curHour === slot.hour && curMinute === slot.minute;
+            const Icon = slot.icon;
+
+            return (
+              <button
+                key={slot.label}
+                type="button"
+                disabled={disabled}
+                onClick={() => handleGoldenHourClick(slot.hour, slot.minute)}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-all cursor-pointer",
+                  isMatch
+                    ? "border-primary bg-primary/10 text-primary font-bold shadow-xs ring-1 ring-primary/30"
+                    : "border-border/70 bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                )}
+              >
+                <Icon className="size-3 text-amber-500" />
+                <span>{slot.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Feedback sentence or live error warning */}
       {verdict?.ok ? (
-        // `role="status"`: the sentence changes as the operator picks, and a
-        // screen-reader user should hear the result of their own choice.
-        <p id={previewId} role="status" aria-live="polite" className="text-sm">
-          Sẽ đăng lúc <span className="font-medium">{formatScheduledAt(verdict.iso)}</span> ({zone}){" "}
-          — {formatCountdown(verdict.delayMs)}.
+        <p className="text-xs text-muted-foreground leading-relaxed pt-0.5">
+          Sẽ đăng lúc <span className="font-semibold text-foreground">{formatScheduledAt(verdict.iso)}</span> ({zone}) — {formatCountdown(verdict.delayMs)}.
         </p>
       ) : null}
 
-      {error ? (
-        <p id={errorId} role="alert" className="text-destructive text-sm">
-          {error}
+      {displayError ? (
+        <p role="alert" className="text-xs font-semibold text-destructive flex items-center gap-1 pt-0.5">
+          <span>⚠️</span>
+          <span>{displayError}</span>
+        </p>
+      ) : null}
+
+      {disabled && disabledReason ? (
+        <p className="text-xs text-muted-foreground italic">
+          {disabledReason}
         </p>
       ) : null}
     </div>

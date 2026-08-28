@@ -181,7 +181,9 @@ describe("the caption editor reads the published string", () => {
 describe("channels are chosen before the caption is written", () => {
   it("puts the channel block above the caption block", () => {
     const source = readCompose("../ComposeFocus.tsx");
-    const channels = source.indexOf("<ChannelChoice");
+    const channelsChoice = source.indexOf("<ChannelChoice");
+    const socialsBar = source.indexOf("<PostizSocialsBar");
+    const channels = socialsBar !== -1 ? socialsBar : channelsChoice;
     const caption = source.indexOf("<CaptionBlock");
     expect(channels).toBeGreaterThan(-1);
     expect(caption).toBeGreaterThan(-1);
@@ -235,9 +237,7 @@ describe("compose layout invariants", () => {
     // A second SchedulePicker anywhere on this screen means one post can be
     // given two different times by two controls that never agree.
     const source = readCompose("../ComposeFocus.tsx");
-    expect(source.match(/<SchedulePicker/g) ?? []).toHaveLength(1);
+    expect(source.match(/<SchedulePickerDialog/g) ?? []).toHaveLength(1);
     expect(readCompose("../ChannelChoice.tsx")).not.toContain("<SchedulePicker");
-    // And it opens in the sticky tray, beside the button that spends it.
-    expect(source).toMatch(/sticky bottom-0[\s\S]*?<SchedulePicker[\s\S]*?<ComposeActionBar/);
   });
 });

@@ -135,8 +135,6 @@ export function CaptionBlock({
     [duplicateKey, publish.shareCaption],
   );
 
-  if (!composed) return null;
-
   /**
    * NO channel count in this decision (see `activeCaptionChannel`): the editor
    * is on whichever channel the payload will be built for, whether that is one
@@ -490,7 +488,7 @@ export function CaptionBlock({
           label={activeId ? nameOf(activeId) : "Facebook"}
           value={value}
           onChange={writeCaption}
-          content={composed.content}
+          content={composed?.content ?? null}
           hashtagsFromAi={isThisTarget ? generated?.hashtags : undefined}
           provider={isThisTarget && captions.isSuccess ? generated : undefined}
         />
@@ -811,7 +809,7 @@ function CaptionFields({
   label: string;
   value: string;
   onChange: (next: string) => void;
-  content: ComposeResponse["content"];
+  content?: ComposeResponse["content"] | null;
   hashtagsFromAi?: readonly string[];
   provider?: { provider: string; model: string };
 }) {
@@ -980,7 +978,7 @@ function describeAiState(state: {
  * from (business rule 2) — never from stock, price or notes.
  */
 function suggestHashtags(
-  content: ComposeResponse["content"] | undefined,
+  content: ComposeResponse["content"] | null | undefined,
   fromAi: readonly string[] | undefined,
 ): string[] {
   if (fromAi && fromAi.length > 0) return [...fromAi];
