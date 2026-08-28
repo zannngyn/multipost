@@ -1072,4 +1072,34 @@ describe("composePost — manual product: provenance and persistence", () => {
     expect(result.blocked).toMatchObject({ code: "MEDIA_NOT_FOUND" });
     expect(calls.saveManual).toEqual([]);
   });
+
+  it("automatically creates a manual fallback product when source === 'upload' and code is missing from catalog", async () => {
+    const uploadAsset = asset({
+      driveFileId: "ast_upload_1",
+      fileName: "BG0SQ9999_1.jpg",
+      origin: "upload",
+      productCode: "BG0SQ9999",
+      sequence: 1,
+    });
+
+    const { compose, calls } = manualHarness({
+      stored: null,
+      media: [uploadAsset],
+    });
+
+    const result = await compose({
+      tenantId: TENANT,
+      productCode: "BG0SQ9999",
+      channel: CHANNEL,
+      source: "upload",
+    });
+
+    expect(result.blocked).toBeNull();
+    expect(result.productOrigin).toBe("manual");
+    expect(result.media).toHaveLength(1);
+    expect(result.media[0].driveFileId).toBe("ast_upload_1");
+    expect(calls.saveManual).toHaveLength(1);
+    expect(calls.saveManual[0].content.code).toBe("BG0SQ9999");
+  });
 });
+

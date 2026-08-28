@@ -233,7 +233,17 @@ export function useComposeWizard() {
     mutationFn: (files) =>
       detectUploadCode({ files: files.map((item) => ({ fileName: item.file.name })) }),
     retry: false,
-    onSuccess: (result) => setDetection(result),
+    onSuccess: (result) => {
+      setDetection(result);
+      if (form.getValues("source") === "upload") {
+        if (result.verdict?.status === "matched" || result.verdict?.status === "not_found") {
+          const code = result.verdict.productCode.trim();
+          if (code.length > 0 && !form.getValues("productCode")) {
+            form.setValue("productCode", code, { shouldDirty: true });
+          }
+        }
+      }
+    },
     // Detection failing must NOT block the compose screen — the operator can
     // still type the code by hand. It still has to be visible (rule 5), and
     // that is what `detect.error` is for; a stale verdict must not linger.
@@ -324,12 +334,12 @@ export function useComposeWizard() {
 
   const upload = useMutation<UploadResponse, ApiError, void>({
     mutationFn: () => {
-      const values = form.getValues();
-      // The queue order IS the album order (index 0 is the cover); tickets
-      // come back tagged with `sourceIndex` into this same array, so sending
-      // it straight through keeps that order without needing a separate
-      // `order` field on confirm.
-      return direct.upload(values.productCode, uploadQueue.map((item) => item.file));
+      let code = form.getValues("productCode").trim();
+      if (!code) {
+        code = "BAI_DANG_" + Date.now().toString(36).toUpperCase();
+        form.setValue("productCode", code, { shouldDirty: true });
+      }
+      return direct.upload(code, uploadQueue.map((item) => item.file));
     },
     retry: false,
     onSuccess: (result) => {
@@ -455,17 +465,10 @@ export function useComposeWizard() {
   const applyDetectedCode = useCallback(
     (code: string) => {
       const trimmed = code.trim();
-      if (trimmed.length === 0) {
-        form.setFocus("productCode");
-        return;
-      }
-      form.setValue("productCode", code, { shouldDirty: true });
-      // C1 — mode B, no file on the server yet: `compose-post` gates on media
-      // BEFORE anything read the code, so composing right now would always
-      // answer MEDIA_NOT_FOUND. Fill the field and stop; `upload.onSuccess`
-      // runs the real compose once the queued files actually land.
-      if (form.getValues("source") === "upload" && uploadedAssets.length === 0) {
-        form.setFocus("productCode");
+      if (trimmed.length === 0) return;
+      form.setValue("productCode", trimmed, { shouldDirty: true });
+      if (form.getValues("source") === "upload") {
+        if (uploadedAssets.length > 0) void submitProductStep();
         return;
       }
       void submitProductStep();

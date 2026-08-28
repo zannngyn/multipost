@@ -50,8 +50,6 @@ export function describeDetection(verdict: DetectCodeVerdict): DetectedCodeView 
           SYNC_ACTION,
           {
             kind: "use-code",
-            // Code sits INSIDE the label: the operator reads which code they
-            // are about to use without opening anything.
             label: `Nhập mã ${verdict.productCode}`,
             code: verdict.productCode,
             variant: "primary",
@@ -62,8 +60,6 @@ export function describeDetection(verdict: DetectCodeVerdict): DetectedCodeView 
     case "conflict":
       return {
         title: `Các file đang mang ${verdict.codes.length} mã khác nhau. Chọn mã cho bài này, hoặc tách ra tải lên từng mã.`,
-        // No "use this code" button here: the system does not pick for the
-        // operator (business rule 5).
         actions: verdict.codes.map((code) => ({
           kind: "pick-code" as const,
           label: code,

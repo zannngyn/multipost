@@ -194,8 +194,17 @@ export function makeComposePost(deps: ComposePostDeps) {
       });
     }
 
+    const kind: MediaKind = input?.mediaKind ?? "image";
+    const source: MediaOrigin = input?.source ?? "drive";
+
+    // --- 1. Product data: synced catalog OR typed by the operator -----------
+    // Business rule 1 is about ORDER, not about the source: whichever of the
+    // two produced this product, the stock gate below runs before any media
+    // work and nothing may jump over it.
+    const stored = await deps.products.findByCode(tenantId, productCode);
+
     const wantsManual = input?.manualProduct !== undefined && input?.manualProduct !== null;
-    const requestedOrigin: ProductOrigin = wantsManual ? "manual" : "sheet";
+    const requestedOrigin: ProductOrigin = wantsManual || (source === "upload" && !stored) ? "manual" : "sheet";
 
     const log = deps.logger.child({
       tenant_id: tenantId,
@@ -212,11 +221,6 @@ export function makeComposePost(deps: ComposePostDeps) {
       video: null,
     };
 
-    // --- 1. Product data: synced catalog OR typed by the operator -----------
-    // Business rule 1 is about ORDER, not about the source: whichever of the
-    // two produced this product, the stock gate below runs before any media
-    // work and nothing may jump over it.
-    const stored = await deps.products.findByCode(tenantId, productCode);
     let product: Product;
 
     if (wantsManual) {
@@ -268,21 +272,49 @@ export function makeComposePost(deps: ComposePostDeps) {
         });
       }
     } else if (!stored) {
-      log.warn("Compose blocked: product not found in the synced catalog", {
-        error_code: "PRODUCT_NOT_FOUND",
-      });
-      return {
-        ...base,
-        content: null,
-        inventory: null,
-        availableColors: [],
-        warnings: [],
-        blocked: {
-          code: "PRODUCT_NOT_FOUND",
-          reason: "PRODUCT_NOT_FOUND",
-          userMessage: `Không tìm thấy mã ${productCode} trong dữ liệu sản phẩm — đồng bộ lại bảng dữ liệu, hoặc nhập tay thông tin sản phẩm cho bài này`,
-        },
-      };
+      if (source === "upload") {
+        // Direct upload mode allows creating free-form posts without requiring catalog data.
+        product = buildManualProduct(productCode, {
+          name: productCode,
+          description: null,
+          category: null,
+          season: null,
+          stockRaw: "1",
+          noteRaw: null,
+        });
+        if (typeof deps.products.saveManual !== "function") {
+          log.error("Compose refused: manual products are not wired in this process", {
+            error_code: "INTERNAL",
+            reason: "MANUAL_PRODUCT_NOT_SUPPORTED",
+          });
+          throw new AppError("INTERNAL", {
+            message: "ProductRepo has no saveManual: manual products cannot be persisted",
+            userMessage:
+              "Hệ thống chưa bật chế độ nhập tay sản phẩm ở tiến trình này — báo quản trị viên.",
+            context: {
+              tenant_id: tenantId,
+              product_code: productCode,
+              reason: "MANUAL_PRODUCT_NOT_SUPPORTED",
+            },
+          });
+        }
+      } else {
+        log.warn("Compose blocked: product not found in the synced catalog", {
+          error_code: "PRODUCT_NOT_FOUND",
+        });
+        return {
+          ...base,
+          content: null,
+          inventory: null,
+          availableColors: [],
+          warnings: [],
+          blocked: {
+            code: "PRODUCT_NOT_FOUND",
+            reason: "PRODUCT_NOT_FOUND",
+            userMessage: `Không tìm thấy mã ${productCode} trong dữ liệu sản phẩm — đồng bộ lại bảng dữ liệu, hoặc nhập tay thông tin sản phẩm cho bài này`,
+          },
+        };
+      }
     } else {
       product = stored;
     }
@@ -319,8 +351,6 @@ export function makeComposePost(deps: ComposePostDeps) {
     if (inventory.operatorMessage) warnings.push(inventory.operatorMessage);
 
     // --- Media --------------------------------------------------------------
-    const kind: MediaKind = input?.mediaKind ?? "image";
-    const source: MediaOrigin = input?.source ?? "drive";
     const all = await deps.media.listByProductCode(tenantId, productCode);
     const fromSource = all.filter((asset) => asset.origin === source);
     const ofKind = fromSource.filter((asset) => asset.kind === kind);
@@ -489,7 +519,7 @@ export function makeComposePost(deps: ComposePostDeps) {
     // abandons a blocked compose must not leave a product row behind. The
     // stock this row carries is the one the gate above judged, so the second
     // check before publishing (rule 3) reads exactly the same values.
-    if (wantsManual) {
+    if (wantsManual || (source === "upload" && productOrigin(product) === "manual")) {
       const verdict = await persistManualProduct(deps, tenantId, product, log);
       if (verdict === "refused_synced") {
         return {
