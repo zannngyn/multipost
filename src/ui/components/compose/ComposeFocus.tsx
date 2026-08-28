@@ -298,300 +298,300 @@ export function ComposeFocus() {
             className="border-border bg-card flex w-full min-w-0 flex-col gap-7 rounded-xl border p-6 shadow-sm @5xl:w-190 @5xl:shrink-0"
           >
             <Step n={1} label="Sản phẩm">
-            {/* --- The one field that starts a post (38–57) --------------- */}
-            <form
-              noValidate
-              onSubmit={(event) => {
-                event.preventDefault();
-                void lookUp(color);
-              }}
-              className="flex flex-col gap-2.5"
-            >
-              <label htmlFor={`${fieldId}-code`} className="sr-only">
-                Mã sản phẩm
-              </label>
+              {/* --- The one field that starts a post (38–57) --------------- */}
+              <form
+                noValidate
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void lookUp(color);
+                }}
+                className="flex flex-col gap-2.5"
+              >
+                <label htmlFor={`${fieldId}-code`} className="sr-only">
+                  Mã sản phẩm
+                </label>
 
-              <ProductPicker
-                id={`${fieldId}-code`}
-                register={form.register("productCode")}
-                value={productCode}
-                onSelectCode={(code) =>
-                  form.setValue("productCode", code, { shouldDirty: true, shouldValidate: true })
-                }
-                onSubmit={() => void lookUp(color)}
-                /*
-                  The suggestion list is absolutely positioned over the card, so
-                  an open one lands on top of the typed-product editor and hides
-                  its heading. It would also be talking nonsense there: that
-                  editor is only open because this code is NOT in the catalog the
-                  list searches.
-                */
-                suppressSuggestions={isManualOpen}
-                disabled={compose.isPending}
-                invalid={Boolean(errors.productCode)}
-                describedBy={errors.productCode ? `${codeErrorId} ${codeHintId}` : codeHintId}
-                placeholder="Nhập mã hoặc tên sản phẩm…"
-                inputClassName="h-13 rounded-lg border-0 bg-[var(--card)] px-4.5 text-lg font-medium shadow-[inset_0_0_0_1.5px_var(--input)]"
-              />
-
-              {errors.productCode ? (
-                <p id={codeErrorId} role="alert" className="text-xs text-[var(--destructive)]">
-                  {errors.productCode.message}
-                </p>
-              ) : null}
-
-              {composed ? (
-                <ResolvedProductLine
-                  id={codeHintId}
-                  composed={composed}
-                  albumCount={albumCount}
-                  onChangeProduct={() => {
-                    form.setValue("productCode", "", { shouldDirty: true });
-                    form.setValue("color", "", { shouldDirty: true });
-                    setRefusedColors({});
-                    // Another product means another product's data: typed values
-                    // left behind would travel to the next code and come back as
-                    // MANUAL_PRODUCT_CONFLICT about a form nobody meant to reuse.
-                    cancelManualProduct();
-                    form.setFocus("productCode");
-                  }}
+                <ProductPicker
+                  id={`${fieldId}-code`}
+                  register={form.register("productCode")}
+                  value={productCode}
+                  onSelectCode={(code) =>
+                    form.setValue("productCode", code, { shouldDirty: true, shouldValidate: true })
+                  }
+                  onSubmit={() => void lookUp(color)}
+                  /*
+                    The suggestion list is absolutely positioned over the card, so
+                    an open one lands on top of the typed-product editor and hides
+                    its heading. It would also be talking nonsense there: that
+                    editor is only open because this code is NOT in the catalog the
+                    list searches.
+                  */
+                  suppressSuggestions={isManualOpen}
+                  disabled={compose.isPending}
+                  invalid={Boolean(errors.productCode)}
+                  describedBy={errors.productCode ? `${codeErrorId} ${codeHintId}` : codeHintId}
+                  placeholder="Nhập mã hoặc tên sản phẩm…"
+                  inputClassName="h-13 rounded-lg border-0 bg-[var(--card)] px-4.5 text-lg font-medium shadow-[inset_0_0_0_1.5px_var(--input)]"
                 />
-              ) : (
-                <div className="flex flex-wrap items-center gap-3">
-                  <p id={codeHintId} className="text-[13px] text-[var(--muted-foreground)]">
-                    Gõ vài ký tự đầu của mã rồi chọn trong danh sách — danh sách chỉ gợi ý mã
-                    đăng được. Mã đang vướng vẫn gõ thẳng được, hệ thống sẽ nói rõ lý do.
+
+                {errors.productCode ? (
+                  <p id={codeErrorId} role="alert" className="text-xs text-[var(--destructive)]">
+                    {errors.productCode.message}
                   </p>
-                  <span className="flex-1" />
-                  {/* Not in the mock, which only draws the resolved state: the
+                ) : null}
+
+                {composed ? (
+                  <ResolvedProductLine
+                    id={codeHintId}
+                    composed={composed}
+                    albumCount={albumCount}
+                    onChangeProduct={() => {
+                      form.setValue("productCode", "", { shouldDirty: true });
+                      form.setValue("color", "", { shouldDirty: true });
+                      setRefusedColors({});
+                      // Another product means another product's data: typed values
+                      // left behind would travel to the next code and come back as
+                      // MANUAL_PRODUCT_CONFLICT about a form nobody meant to reuse.
+                      cancelManualProduct();
+                      form.setFocus("productCode");
+                    }}
+                  />
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <p id={codeHintId} className="text-[13px] text-[var(--muted-foreground)]">
+                      Gõ vài ký tự đầu của mã rồi chọn trong danh sách — danh sách chỉ gợi ý mã
+                      đăng được. Mã đang vướng vẫn gõ thẳng được, hệ thống sẽ nói rõ lý do.
+                    </p>
+                    <span className="flex-1" />
+                    {/* Not in the mock, which only draws the resolved state: the
                       mock's field is submitted by picking a row. A code typed
                       in full still needs a visible way to run the lookup, so
                       the button exists exactly while nothing is resolved. */}
-                  <button
-                    type="submit"
-                    disabled={compose.isPending}
-                    className="focus-visible:ring-ring h-9.5 shrink-0 cursor-pointer rounded-lg bg-[var(--card)] px-4 text-[13px] font-medium shadow-[inset_0_0_0_1px_var(--input)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {compose.isPending ? "Đang tra…" : "Tra dữ liệu"}
-                  </button>
-                </div>
-              )}
+                    <button
+                      type="submit"
+                      disabled={compose.isPending}
+                      className="focus-visible:ring-ring h-9.5 shrink-0 cursor-pointer rounded-lg bg-[var(--card)] px-4 text-[13px] font-medium shadow-[inset_0_0_0_1px_var(--input)] outline-none focus-visible:ring-3 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {compose.isPending ? "Đang tra…" : "Tra dữ liệu"}
+                    </button>
+                  </div>
+                )}
 
-              <p className="sr-only" role="status" aria-live="polite">
-                {compose.isPending ? "Đang tra dữ liệu sản phẩm" : ""}
-              </p>
-            </form>
+                <p className="sr-only" role="status" aria-live="polite">
+                  {compose.isPending ? "Đang tra dữ liệu sản phẩm" : ""}
+                </p>
+              </form>
 
-            {/*
+              {/*
               ONE refusal, ONE place. While the typed-product editor is open it
               owns the message — that is where the operator is working and where
               the fix is — and this notice steps aside rather than printing the
               same sentence twice on the same card.
             */}
-            {compose.isError && !isManualOpen ? (
-              <ApiErrorNotice
-                error={compose.error}
-                onRetry={() => void lookUp(color)}
-                /*
-                  ONBOARDING PHASE 3. The server's own sentence already ends with
-                  "…hoặc nhập tay thông tin sản phẩm cho bài này"; this is the
-                  button that sentence is talking about, so it belongs on the
-                  notice rather than somewhere further down the card.
-                */
-                extraAction={
-                  offersManualProduct ? (
-                    <Button
-                      variant="secondary"
-                      label="Nhập tay thông tin sản phẩm"
-                      isDisabled={compose.isPending || Boolean(readOnlyReason)}
-                      tooltip={readOnlyReason ?? undefined}
-                      onClick={() => setIsManualOpen(true)}
-                    />
-                  ) : undefined
-                }
-              />
-            ) : null}
+              {compose.isError && !isManualOpen ? (
+                <ApiErrorNotice
+                  error={compose.error}
+                  onRetry={() => void lookUp(color)}
+                  /*
+                    ONBOARDING PHASE 3. The server's own sentence already ends with
+                    "…hoặc nhập tay thông tin sản phẩm cho bài này"; this is the
+                    button that sentence is talking about, so it belongs on the
+                    notice rather than somewhere further down the card.
+                  */
+                  extraAction={
+                    offersManualProduct ? (
+                      <Button
+                        variant="secondary"
+                        label="Nhập tay thông tin sản phẩm"
+                        isDisabled={compose.isPending || Boolean(readOnlyReason)}
+                        tooltip={readOnlyReason ?? undefined}
+                        onClick={() => setIsManualOpen(true)}
+                      />
+                    ) : undefined
+                  }
+                />
+              ) : null}
 
-            {/*
+              {/*
               The typed-product editor. OUTSIDE the lookup <form> above — HTML
               forbids nesting forms, and a nested one would submit the wrong
               thing. It stays mounted across a refusal so nothing typed is lost.
             */}
-            {isManualOpen ? (
-              <ManualProductForm
-                /*
-                  NO `key` here, deliberately, and it took one to learn why: the
-                  obvious `key={productCode}` remounts the whole editor on every
-                  keystroke in the code box above it — six typed fields gone
-                  because somebody fixed a typo in the code. Switching product
-                  already resets this form the honest way: "Đổi sản phẩm" closes
-                  it (`cancelManualProduct`), so the next open is a fresh mount.
-                  The heading below tracks the live code so it never names a
-                  product other than the one "Dùng thông tin này" will compose.
-                */
-                productCode={productCode.trim().toUpperCase()}
-                defaultValues={wizard.manualProduct?.values ?? EMPTY_MANUAL_PRODUCT}
-                isEditing={isManualComposed}
-                isPending={compose.isPending}
-                error={compose.isError ? compose.error : null}
-                readOnlyReason={readOnlyReason}
-                onSubmit={(values) => void submitManualProduct(values)}
-                onCancel={cancelManualProduct}
-              />
-            ) : null}
+              {isManualOpen ? (
+                <ManualProductForm
+                  /*
+                    NO `key` here, deliberately, and it took one to learn why: the
+                    obvious `key={productCode}` remounts the whole editor on every
+                    keystroke in the code box above it — six typed fields gone
+                    because somebody fixed a typo in the code. Switching product
+                    already resets this form the honest way: "Đổi sản phẩm" closes
+                    it (`cancelManualProduct`), so the next open is a fresh mount.
+                    The heading below tracks the live code so it never names a
+                    product other than the one "Dùng thông tin này" will compose.
+                  */
+                  productCode={productCode.trim().toUpperCase()}
+                  defaultValues={wizard.manualProduct?.values ?? EMPTY_MANUAL_PRODUCT}
+                  isEditing={isManualComposed}
+                  isPending={compose.isPending}
+                  error={compose.isError ? compose.error : null}
+                  readOnlyReason={readOnlyReason}
+                  onSubmit={(values) => void submitManualProduct(values)}
+                  onCancel={cancelManualProduct}
+                />
+              ) : null}
 
-            {/*
+              {/*
               Collapsed state of the same thing: the post IS built from typed
               data, and the operator must be able to see that without the whole
               form in the way. `status="info"`, not warning — nothing is wrong
               here; it is a fact about where the data came from, and the stock
               gate already ran on it like on any other product.
             */}
-            {isManualComposed && !isManualOpen ? (
-              <Banner
-                status="info"
-                title="Sản phẩm này do bạn nhập tay"
-                description="Dữ liệu dùng để viết caption không lấy từ bảng dữ liệu đã đồng bộ. Hệ thống vẫn kiểm tồn kho như mọi mã khác."
-                endContent={
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    label="Sửa thông tin nhập tay"
-                    isDisabled={compose.isPending || Boolean(readOnlyReason)}
-                    tooltip={readOnlyReason ?? undefined}
-                    onClick={() => setIsManualOpen(true)}
-                  />
-                }
-              />
-            ) : null}
+              {isManualComposed && !isManualOpen ? (
+                <Banner
+                  status="info"
+                  title="Sản phẩm này do bạn nhập tay"
+                  description="Dữ liệu dùng để viết caption không lấy từ bảng dữ liệu đã đồng bộ. Hệ thống vẫn kiểm tồn kho như mọi mã khác."
+                  endContent={
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      label="Sửa thông tin nhập tay"
+                      isDisabled={compose.isPending || Boolean(readOnlyReason)}
+                      tooltip={readOnlyReason ?? undefined}
+                      onClick={() => setIsManualOpen(true)}
+                    />
+                  }
+                />
+              ) : null}
 
-            {wizard.captionsCleared ? (
-              <p
-                role="status"
-                className="rounded-xl bg-[var(--warning)]/10 px-3.5 py-2.5 text-[13px] text-[var(--warning-foreground)]"
-              >
-                Caption của sản phẩm trước đã được xoá vì bạn đổi sang mã/màu khác.
-              </p>
-            ) : null}
+              {wizard.captionsCleared ? (
+                <p
+                  role="status"
+                  className="rounded-xl bg-[var(--warning)]/10 px-3.5 py-2.5 text-[13px] text-[var(--warning-foreground)]"
+                >
+                  Caption của sản phẩm trước đã được xoá vì bạn đổi sang mã/màu khác.
+                </p>
+              ) : null}
 
-            {/* Operator-only notes. DELIBERATELY here, above and outside the
+              {/* Operator-only notes. DELIBERATELY here, above and outside the
                 caption block: tồn kho và cảnh báo là thông tin nội bộ, không
                 bao giờ nằm trong khối caption (business rule 2). */}
 
-            {/* Nobody read the stock NUMBER for this tenant. `inventory.status`
+              {/* Nobody read the stock NUMBER for this tenant. `inventory.status`
                 is still `"in_stock"` in that mode, so this is read from the flag
                 — and it is the loudest thing on the step, because the numeric
                 half of the two-pass stock gate (business rule 3) is off for
                 every code composed and approved below. The sold-out note and the
                 row-conflict rule still block, in all three modes; the banner's
                 own text draws that line. */}
-            {composed && stockLabel(composed.inventory).isSkipped ? (
-              <StockCheckSkippedBanner
-                reason={composed.inventory?.stockCheckSkippedReason ?? null}
-              />
-            ) : null}
+              {composed && stockLabel(composed.inventory).isSkipped ? (
+                <StockCheckSkippedBanner
+                  reason={composed.inventory?.stockCheckSkippedReason ?? null}
+                />
+              ) : null}
 
-            {composed && composed.warnings.length > 0 ? (
-              <ul aria-label="Cảnh báo nội bộ" className="flex flex-col gap-1.5">
-                {composed.warnings.map((warning) => (
-                  <li
-                    key={warning}
-                    className="bg-warning/15 text-warning-foreground rounded-lg px-3 py-2 text-xs leading-relaxed"
-                  >
-                    {warning}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
+              {composed && composed.warnings.length > 0 ? (
+                <ul aria-label="Cảnh báo nội bộ" className="flex flex-col gap-1.5">
+                  {composed.warnings.map((warning) => (
+                    <li
+                      key={warning}
+                      className="bg-warning/15 text-warning-foreground rounded-lg px-3 py-2 text-xs leading-relaxed"
+                    >
+                      {warning}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </Step>
 
             <Step n={2} label="Ảnh & màu">
-            {/* --- Kiểu bài (59–64) + nguồn ảnh --------------------------- */}
-            <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
-              <SegmentedField
-                legend="Kiểu bài"
-                name="postKind"
-                value={postKindOf(mediaKind, videoTarget)}
-                onValueChange={(next) => {
-                  const kind = POST_KINDS.find((entry) => entry.value === next);
-                  if (!kind) return;
-                  form.setValue("mediaKind", kind.mediaKind, { shouldDirty: true });
-                  form.setValue("videoTarget", kind.videoTarget, { shouldDirty: true });
-                }}
-                options={POST_KINDS.map(({ value, label, hint }) => ({ value, label, hint }))}
-                disabled={compose.isPending}
-              />
-
-              <SegmentedField
-                legend="Nguồn ảnh"
-                name="source"
-                value={source}
-                options={MEDIA_SOURCES.map((value) => ({
-                  value,
-                  label: MEDIA_SOURCE_LABELS[value],
-                  hint: MEDIA_SOURCE_HINTS[value],
-                }))}
-                register={form.register("source")}
-                disabled={compose.isPending || wizard.upload.isPending}
-              />
-            </div>
-
-            {source === "upload" ? (
-              <>
-                <UploadPanel
-                  queue={wizard.uploadQueue}
-                  onQueueChange={wizard.setUploadQueue}
-                  onUpload={() => wizard.upload.mutate()}
-                  isUploading={wizard.upload.isPending}
-                  progress={wizard.uploadProgress}
-                  onCancel={wizard.cancelUpload}
-                  rejected={wizard.uploadRejections}
-                  uploadedCount={wizard.uploadedCount}
-                  warnings={wizard.uploadWarnings}
-                  disabled={compose.isPending}
-                />
-                {wizard.upload.isError ? (
-                  <ApiErrorNotice
-                    error={wizard.upload.error}
-                    onRetry={() => wizard.upload.mutate()}
-                  />
-                ) : null}
-              </>
-            ) : null}
-
-            {/* --- Everything below needs a composed post ------------------ */}
-            {compose.isPending ? (
-              showSkeleton ? (
-                <ComposeSkeleton />
-              ) : null
-            ) : composed ? (
-              <>
-                <ColorChips
-                  colors={colors}
-                  active={color}
-                  albumCount={albumCount}
-                  unavailable={refusedColors}
-                  pending={compose.isPending}
-                  onPick={(next) => {
-                    form.setValue("color", next, { shouldDirty: true });
-                    void lookUp(next);
+              {/* --- Kiểu bài (59–64) + nguồn ảnh --------------------------- */}
+              <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+                <SegmentedField
+                  legend="Kiểu bài"
+                  name="postKind"
+                  value={postKindOf(mediaKind, videoTarget)}
+                  onValueChange={(next) => {
+                    const kind = POST_KINDS.find((entry) => entry.value === next);
+                    if (!kind) return;
+                    form.setValue("mediaKind", kind.mediaKind, { shouldDirty: true });
+                    form.setValue("videoTarget", kind.videoTarget, { shouldDirty: true });
                   }}
-                  onRefused={setFlash}
-                />
-
-                <PhotoStrip
-                  media={wizard.album}
-                  onChange={wizard.setAlbum}
+                  options={POST_KINDS.map(({ value, label, hint }) => ({ value, label, hint }))}
                   disabled={compose.isPending}
                 />
 
-                {composed.video ? (
-                  <VideoSpecCard video={composed.video} clip={composed.media[0]} />
-                ) : null}
-              </>
-            ) : compose.isError ? null : (
-              <EmptyLookup mediaKind={mediaKind} restoring={draft.isRestoring} />
-            )}
+                <SegmentedField
+                  legend="Nguồn ảnh"
+                  name="source"
+                  value={source}
+                  options={MEDIA_SOURCES.map((value) => ({
+                    value,
+                    label: MEDIA_SOURCE_LABELS[value],
+                    hint: MEDIA_SOURCE_HINTS[value],
+                  }))}
+                  register={form.register("source")}
+                  disabled={compose.isPending || wizard.upload.isPending}
+                />
+              </div>
+
+              {source === "upload" ? (
+                <>
+                  <UploadPanel
+                    queue={wizard.uploadQueue}
+                    onQueueChange={wizard.setUploadQueue}
+                    onUpload={() => wizard.upload.mutate()}
+                    isUploading={wizard.upload.isPending}
+                    progress={wizard.uploadProgress}
+                    onCancel={wizard.cancelUpload}
+                    rejected={wizard.uploadRejections}
+                    uploadedCount={wizard.uploadedCount}
+                    warnings={wizard.uploadWarnings}
+                    disabled={compose.isPending}
+                  />
+                  {wizard.upload.isError ? (
+                    <ApiErrorNotice
+                      error={wizard.upload.error}
+                      onRetry={() => wizard.upload.mutate()}
+                    />
+                  ) : null}
+                </>
+              ) : null}
+
+              {/* --- Everything below needs a composed post ------------------ */}
+              {compose.isPending ? (
+                showSkeleton ? (
+                  <ComposeSkeleton />
+                ) : null
+              ) : composed ? (
+                <>
+                  <ColorChips
+                    colors={colors}
+                    active={color}
+                    albumCount={albumCount}
+                    unavailable={refusedColors}
+                    pending={compose.isPending}
+                    onPick={(next) => {
+                      form.setValue("color", next, { shouldDirty: true });
+                      void lookUp(next);
+                    }}
+                    onRefused={setFlash}
+                  />
+
+                  <PhotoStrip
+                    media={wizard.album}
+                    onChange={wizard.setAlbum}
+                    disabled={compose.isPending}
+                  />
+
+                  {composed.video ? (
+                    <VideoSpecCard video={composed.video} clip={composed.media[0]} />
+                  ) : null}
+                </>
+              ) : compose.isError ? null : (
+                <EmptyLookup mediaKind={mediaKind} restoring={draft.isRestoring} />
+              )}
             </Step>
 
             {/* KÊNH ĐĂNG BEFORE CAPTION (PM, 21/08/2026): a caption is written
@@ -785,21 +785,21 @@ const POST_KINDS = [
   {
     value: "image",
     label: "Ảnh",
-    hint: "Bài ảnh 5–10 tấm, ảnh đầu tiên là ảnh bìa.",
+    hint: "Tối đa 10 ảnh",
     mediaKind: "image" as MediaKind,
     videoTarget: "facebook_video" as VideoTarget,
   },
   {
     value: "video",
     label: "Video",
-    hint: "Một clip, đăng lên dòng thời gian của Page. Tỷ lệ 9:16 đến 16:9.",
+    hint: "Tỷ lệ đề xuất 9:16 đến 16:9.",
     mediaKind: "video" as MediaKind,
     videoTarget: "facebook_video" as VideoTarget,
   },
   {
     value: "reels",
     label: "Reels",
-    hint: "Chỉ nhận video dọc 9:16, dài 3–90 giây, tối thiểu 540x960.",
+    hint: "Video dọc 9:16.",
     mediaKind: "video" as MediaKind,
     videoTarget: "facebook_reels" as VideoTarget,
   },

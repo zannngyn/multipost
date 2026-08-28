@@ -50,7 +50,7 @@ const CELEBRATE_DWELL_MS = 4_000;
  * người bấm "Vào MYSP" rồi chuyển tab phải quay lại thấy mình đã ở trong app,
  * không phải kẹt trên một màn chúc mừng trong suốt.
  */
-const HANDOFF_FADE_MS = 300;
+const HANDOFF_FADE_MS = 500;
 
 export interface CelebrateHandoff {
   /** Số giây còn lại, hoặc `null` khi đã huỷ / không bao giờ chạy. */
@@ -193,7 +193,7 @@ export function useCelebrateHandoff({
   /**
    * LÀM ẤM APP TRONG LÚC NGƯỜI DÙNG ĐANG ĐỌC.
    *
-   * `QueryClientProvider` nằm ở root layout, và `router.replace("/")` là điều
+   * `QueryClientProvider` nằm ở root layout, và `router.replace("/overview")` là điều
    * hướng phía client — nên cache sống xuyên qua cú chuyển route và việc
    * prefetch ở đây là thật, không phải trang trí.
    *
@@ -206,7 +206,7 @@ export function useCelebrateHandoff({
   useEffect(() => {
     if (!isCelebrating) return;
 
-    router.prefetch("/");
+    router.prefetch("/overview");
 
     void queryClient
       .prefetchQuery({

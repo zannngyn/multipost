@@ -46,9 +46,9 @@ export const MEDIA_SOURCE_LABELS: Record<MediaSource, string> = {
 };
 
 export const MEDIA_SOURCE_HINTS: Record<MediaSource, string> = {
-  drive: "Hệ thống tự tìm ảnh/video trên Drive theo mã sản phẩm và màu.",
+  drive: "",
   upload:
-    "Dùng khi file chưa có trên Drive, hoặc muốn dùng file khác. Vẫn cần mã sản phẩm để tra dữ liệu sản phẩm và viết caption.",
+    "",
 };
 
 /** Mirrors MAX_UPLOADS_PER_POST / MAX_UPLOAD_BYTES in core/domain/uploaded-media. */

@@ -244,7 +244,7 @@ export function OverviewScreen() {
                 size="sm"
                 className="text-foreground border-border hover:bg-muted h-8 w-fit gap-1.5 rounded-lg px-3 text-xs font-semibold"
               >
-                <Link href="/settings/members">
+                <Link href="/members">
                   <UserPlus className="size-3.5" />
                   Mời thành viên
                 </Link>
