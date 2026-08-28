@@ -10,7 +10,7 @@
     "lint": "eslint",
     "depcruise": "depcruise src --validate",
     "test": "vitest run",
-    "test:integration": "vitest run src/adapters/db/db-errors.integration.test.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "theme:check": "astryx theme build --check src/ui/theme/mysp-theme.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm depcruise && pnpm theme:check && pnpm theme:presets:check && pnpm test && pnpm build",
     "db:generate": "drizzle-kit generate",

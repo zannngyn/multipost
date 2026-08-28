@@ -144,6 +144,10 @@ import {
   type ConfirmUpload,
 } from "@/core/usecases/confirm-upload";
 import {
+  makeDetectUploadCode,
+  type DetectUploadCode,
+} from "@/core/usecases/detect-upload-code";
+import {
   makeCancelScheduledJob,
   type CancelScheduledJob,
 } from "@/core/usecases/cancel-scheduled-job";
@@ -278,6 +282,11 @@ export interface Usecases {
   issueUploadTickets: IssueUploadTickets;
   /** E9/MinIO — stage 3: sniff the staged bytes, then promote and register. */
   confirmUpload: ConfirmUpload;
+  /**
+   * E9 — resolve a product code out of dropped file names before a byte
+   * uploads, so the compose screen can prefill/validate it on drop.
+   */
+  detectUploadCode: DetectUploadCode;
   /** E9.4 — periodic sweep of uploads nobody posted. */
   cleanupUploads: CleanupUploads;
   /** E3.6 — periodic sweep of the Drive byte cache (TTL-based). */
@@ -1119,6 +1128,11 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       blobs,
       media,
       clock: deps.clock,
+      logger: deps.logger,
+    }),
+    detectUploadCode: makeDetectUploadCode({
+      products,
+      catalogConfig,
       logger: deps.logger,
     }),
     cleanupUploads: makeCleanupUploads({

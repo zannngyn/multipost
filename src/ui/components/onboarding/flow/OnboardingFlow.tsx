@@ -138,7 +138,7 @@ export function OnboardingFlow({
   // before the position is derived, not after.
   const isAllowedRole = role === "owner" || role === "admin";
   useEffect(() => {
-    if (isResolved && !isAllowedRole) router.replace("/");
+    if (isResolved && !isAllowedRole) router.replace("/overview");
   }, [isResolved, isAllowedRole, router]);
 
   /**
@@ -219,7 +219,7 @@ export function OnboardingFlow({
   useEffect(() => {
     if (stageDecision !== "leave" || hasLeft.current) return;
     hasLeft.current = true;
-    router.replace("/");
+    router.replace("/overview");
   }, [stageDecision, router]);
 
   /**

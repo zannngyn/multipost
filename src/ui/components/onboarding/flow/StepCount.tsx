@@ -45,7 +45,7 @@ const CHOICES: readonly OptionChoice[] = CHANNEL_COUNTS.map((value) => ({
   label: COUNT_LABEL[value],
 }));
 
-const QUESTION = "Bạn đang quản lý bao nhiêu trang?";
+const QUESTION = "Bạn quản lý bao nhiêu trang mạng xã hội? ";
 
 /** Narrowing at the boundary: the group hands back a `string`. */
 function isChannelCount(value: string): value is ChannelCount {
@@ -84,18 +84,19 @@ export function StepCount({
   };
 
   return (
-    <div className="flex w-full flex-col items-center gap-8">
+    <div className="flex w-full flex-col items-center gap-8 font-bold">
       {/* 28px / 35px, measured (spec section 2.3). `tabIndex={-1}` because
           `OnboardingFrame` moves focus to the arriving screen's <h1>. */}
       <h1
         tabIndex={-1}
         style={enterDelay(ENTER_DELAY_HEADING)}
-        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] text-balance outline-none"
       >
         {QUESTION}
       </h1>
 
       <OptionCardGroup
+        className="text-center"
         name="count"
         // The same sentence as the <h1>: it names the group for a screen reader
         // that meets the radios without having passed the heading.

@@ -44,7 +44,7 @@ export interface NavSection {
  * past, and no screen removed.
  */
 export const NAV_SECTIONS: readonly NavSection[] = [
-  { title: "Bàn làm việc", items: [{ href: "/", label: "Tổng quan" }] },
+  { title: "Bàn làm việc", items: [{ href: "/overview", label: "Tổng quan" }] },
   {
     title: "Đăng bài",
     items: [

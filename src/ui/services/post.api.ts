@@ -173,10 +173,16 @@ export async function uploadMedia(
   });
 }
 
+export interface GenerateCaptionsCoverImage {
+  ref: string;
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  dataBase64: string;
+  kind?: "real" | "ai" | "unknown";
+}
+
 export interface GenerateCaptionsParams {
   /**
-   * Whitelisted product facts ONLY. `ProductContent` is the only type accepted
-   * here, so a price or a stock number has no field to travel in — and the API
+   * Product facts to build the prompt from — names MUST match the columns. The
    * route rejects any extra key (strict schema at the boundary).
    */
   content: ProductContent;
@@ -186,6 +192,7 @@ export interface GenerateCaptionsParams {
    * decides, and NOTHING extra is put on the wire.
    */
   tone?: CaptionTone;
+  coverImage?: GenerateCaptionsCoverImage;
 }
 
 /**
@@ -217,6 +224,16 @@ function captionsBody(params: GenerateCaptionsParams, withTone: boolean): unknow
       season: params.content.season ?? "",
     },
     channels: [...params.channels],
+    ...(params.coverImage
+      ? {
+          coverImage: {
+            ref: params.coverImage.ref,
+            mimeType: params.coverImage.mimeType,
+            dataBase64: params.coverImage.dataBase64,
+            kind: params.coverImage.kind ?? "real",
+          },
+        }
+      : {}),
     // The field only exists on the wire when the operator picked something
     // other than the default — a server without the new contract must see the
     // exact body it has always seen.

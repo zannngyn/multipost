@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
  *
  * MODULE SCOPE, KHÔNG PHẢI COOKIE, KHÔNG PHẢI sessionStorage.
  *
- * `router.replace("/")` là điều hướng phía client: bundle không nạp lại, nên
+ * `router.replace("/overview")` là điều hướng phía client: bundle không nạp lại, nên
  * một biến ở phạm vi module sống xuyên qua cú chuyển route group. Đó đúng bằng
  * thứ cần ở đây, và nó có ba tính chất mà cookie phải dựng thêm mới có:
  *
@@ -28,7 +28,7 @@ import { useEffect, useState } from "react";
 /** Cờ. Đọc bằng `peekHandoffArrival`, đừng đọc thẳng từ ngoài module. */
 let isArriving = false;
 
-/** Onboarding gọi ngay trước `router.replace("/")`. */
+/** Onboarding gọi ngay trước `router.replace("/overview")`. */
 export function markHandoffArrival(): void {
   isArriving = true;
 }
@@ -39,7 +39,7 @@ export function peekHandoffArrival(): boolean {
 }
 
 /**
- * Tiêu thụ cờ, để lần sau quay lại "/" trong cùng tab không phát lại hiệu ứng.
+ * Tiêu thụ cờ, để lần sau quay lại "/overview" trong cùng tab không phát lại hiệu ứng.
  *
  * KHÔNG thông báo cho ai. Nếu nó phát tín hiệu re-render, `AppFrame` sẽ vẽ lại
  * và gỡ class ra GIỮA LÚC animation đang chạy — cú fade chết ngang. Việc tiêu

@@ -13,6 +13,8 @@ import {
   STEP_PRODUCT_FIELDS,
   type ComposeResponse,
   type ComposeWizardValues,
+  type DetectCodeResponse,
+  type UploadedAsset,
   type UploadRejection,
   type UploadResponse,
 } from "@/ui/schemas/compose.schema";
@@ -31,6 +33,7 @@ import { useDirectUpload } from "@/ui/hooks/useDirectUpload";
 import type { ComposeDraftPayload } from "@/ui/schemas/post-draft.schema";
 import { ApiError } from "@/ui/services/api-error";
 import { composePost, generateCaptions, type GenerateCaptionsResult } from "@/ui/services/post.api";
+import { detectUploadCode } from "@/ui/services/upload.api";
 
 /**
  * Logic layer of the compose screen (docs/07 §4.1).
@@ -80,6 +83,32 @@ export interface ComposeRestoreOutcome {
  * post as a caption for a Reel, and letting it survive silently would be the
  * "im lặng xoá / im lặng giữ" mistake core-wizard forbids.
  */
+async function readCoverImageBase64(
+  file: File,
+): Promise<{ ref: string; mimeType: "image/jpeg" | "image/png" | "image/webp"; dataBase64: string } | undefined> {
+  const mimeType = file.type as "image/jpeg" | "image/png" | "image/webp";
+  if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) return undefined;
+
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const match = result.match(/^data:image\/(?:jpeg|png|webp);base64,(.+)$/);
+      if (match && match[1]) {
+        resolve({
+          ref: file.name,
+          mimeType,
+          dataBase64: match[1],
+        });
+      } else {
+        resolve(undefined);
+      }
+    };
+    reader.onerror = () => resolve(undefined);
+    reader.readAsDataURL(file);
+  });
+}
+
 function composeKey(
   values: Pick<ComposeWizardValues, "productCode" | "color" | "mediaKind" | "videoTarget">,
   /**
@@ -106,6 +135,20 @@ function composeKey(
 
 function emptyCaptions(): Record<string, string> {
   return Object.fromEntries(COMPOSE_CHANNELS.map((channel) => [channel.id, ""]));
+}
+
+/**
+ * Order-insensitive fingerprint of a queue's file names (E9 T7 review round 1,
+ * Important 2). A drag-reorder must not look like a new batch to detect, but
+ * adding or removing a file — even keeping the same count — must: compares
+ * the SET of names, not the array reference and not position.
+ */
+function queueNameFingerprint(queue: readonly QueuedFile[]): string {
+  return queue
+    .map((item) => item.file.name)
+    .slice()
+    .sort()
+    .join("\0");
 }
 
 export function useComposeWizard() {
@@ -186,33 +229,41 @@ export function useComposeWizard() {
   // is not serialisable, and react-hook-form would try to clone it.
   const [uploadQueue, setUploadQueue] = useState<QueuedFile[]>([]);
   const [uploadedCount, setUploadedCount] = useState(0);
+  /**
+   * E9 T8 — the stored files themselves, not just their count. The queue is
+   * cleared on `onSuccess` (a second click must not re-upload the same
+   * album), so this is the only thing left on screen the operator can look
+   * at; drawn through `MediaThumb` against the preview route, never from the
+   * object URLs that just got revoked with the queue.
+   *
+   * `UploadedAsset`, not `MediaAsset`: a just-uploaded file has no colour, no
+   * sync warnings and no review flag — those belong to a catalogue entry the
+   * Drive sync produced, and this is neither. `UploadedAsset.assetId` is the
+   * `upload_<hex>` id `MediaThumb`'s preview route already accepts.
+   */
+  const [uploadedAssets, setUploadedAssets] = useState<UploadedAsset[]>([]);
   const [uploadRejections, setUploadRejections] = useState<UploadRejection[]>([]);
   /** Non-blocking notes from `confirmUpload` (e.g. a corrected album order). */
   const [uploadWarnings, setUploadWarnings] = useState<string[]>([]);
 
   const direct = useDirectUpload();
-  const upload = useMutation<UploadResponse, ApiError, void>({
-    mutationFn: () => {
-      const values = form.getValues();
-      // The queue order IS the album order (index 0 is the cover); tickets
-      // come back tagged with `sourceIndex` into this same array, so sending
-      // it straight through keeps that order without needing a separate
-      // `order` field on confirm.
-      return direct.upload(values.productCode, uploadQueue.map((item) => item.file));
-    },
+
+  /**
+   * E9 T7 — which product code the file names in the queue carry. Fires the
+   * moment the queue goes from empty to non-empty, BEFORE anything uploads
+   * (spec §4.1: the operator is not required to type a code first).
+   */
+  const [detection, setDetection] = useState<DetectCodeResponse | null>(null);
+
+  const detect = useMutation<DetectCodeResponse, ApiError, readonly QueuedFile[]>({
+    mutationFn: (files) =>
+      detectUploadCode({ files: files.map((item) => ({ fileName: item.file.name })) }),
     retry: false,
-    onSuccess: (result) => {
-      setUploadedCount(result.accepted.length);
-      setUploadRejections(result.rejected);
-      setUploadWarnings([...result.warnings]);
-      // Accepted files are stored server-side now; keeping them queued would
-      // let a second click upload the same album twice.
-      setUploadQueue([]);
-    },
-    onError: () => {
-      setUploadRejections([]);
-      setUploadWarnings([]);
-    },
+    onSuccess: (result) => setDetection(result),
+    // Detection failing must NOT block the compose screen — the operator can
+    // still type the code by hand. It still has to be visible (rule 5), and
+    // that is what `detect.error` is for; a stale verdict must not linger.
+    onError: () => setDetection(null),
   });
 
   const compose = useMutation<ComposeResponse, ApiError, void>({
@@ -268,57 +319,6 @@ export function useComposeWizard() {
   });
 
   /**
-   * Tông giọng asked of the writer. State, not form state: it is not part of
-   * the post — it only shapes the next request, and it never travels to the
-   * publish payload or into a draft.
-   */
-  const [tone, setTone] = useState<CaptionTone>(DEFAULT_CAPTION_TONE);
-  /** Set when the server refused `tone` and the call was retried without it. */
-  const [toneDropped, setToneDropped] = useState(false);
-
-  /**
-   * "Nhờ AI viết" / "Viết lại", for ONE target at a time.
-   *
-   * The target is a variable, not a second mutation, so the screen can ask
-   * `captions.variables` which tab is currently writing and which one failed —
-   * a per-channel spinner needs exactly that and nothing more.
-   *
-   * The REQUEST is the same either way: `POST /api/posts/captions` takes the
-   * platform channel catalogue (`facebook`), not a Fanpage id — the prompt is
-   * built from the product alone, so there is nothing Fanpage-specific to send.
-   * Asking again simply produces another variation, which is precisely what a
-   * per-channel "Viết lại" is for. Where the text LANDS is the caller's call:
-   * only a shared target is written here, and a channel target is handed back
-   * so `usePublishForm` can put it on that channel's own caption.
-   */
-  const captions = useMutation<GenerateCaptionsResult, ApiError, CaptionTarget>({
-    mutationFn: () => {
-      if (!composed) {
-        throw new ApiError({
-          code: "INVALID_INPUT",
-          status: 0,
-          message: "generateCaptions called before compose",
-          userMessage: "Chưa có dữ liệu bài đăng. Hãy tra mã sản phẩm trước.",
-        });
-      }
-      return generateCaptions({
-        content: composed.content,
-        channels: COMPOSE_CHANNELS.map((channel) => channel.id),
-        tone,
-      });
-    },
-    retry: false,
-    onSuccess: (result, target) => {
-      setToneDropped(result.toneDropped);
-      if (target.kind !== "shared") return;
-      for (const item of result.generated) {
-        form.setValue(`captions.${item.channelId}`, item.text, { shouldDirty: true });
-      }
-    },
-    onError: () => setToneDropped(false),
-  });
-
-  /**
    * Validates ONLY the lookup fields — the caption is not filled in yet and
    * must not be reported as missing — then composes. On failure the focus moves
    * to the first invalid field so a keyboard user is not left guessing.
@@ -347,6 +347,173 @@ export function useComposeWizard() {
       };
     }
   }, [compose, form]);
+
+  const upload = useMutation<UploadResponse, ApiError, void>({
+    mutationFn: () => {
+      const values = form.getValues();
+      // The queue order IS the album order (index 0 is the cover); tickets
+      // come back tagged with `sourceIndex` into this same array, so sending
+      // it straight through keeps that order without needing a separate
+      // `order` field on confirm.
+      return direct.upload(values.productCode, uploadQueue.map((item) => item.file));
+    },
+    retry: false,
+    onSuccess: (result) => {
+      setUploadedCount(result.accepted.length);
+      setUploadedAssets(result.accepted);
+      setUploadRejections(result.rejected);
+      setUploadWarnings([...result.warnings]);
+      // Accepted files are stored server-side now; keeping them queued would
+      // let a second click upload the same album twice.
+      setUploadQueue([]);
+      // The detected code was about THIS queue; an empty queue has none, and a
+      // leftover error state must not resurface against the next batch.
+      setDetection(null);
+      detect.reset();
+      // C1 — the media the operator just arranged is now on the server, so
+      // compose can succeed for real. Composing any earlier (e.g. straight off
+      // "Dùng mã này") would hit MEDIA_NOT_FOUND against a post with nothing
+      // uploaded yet; this is the one place after that where it is safe.
+      if (result.accepted.length > 0) void submitProductStep();
+    },
+    onError: () => {
+      setUploadRejections([]);
+      setUploadWarnings([]);
+    },
+  });
+
+  /**
+   * Wraps the raw queue setter so the decision to re-ask detection is made at
+   * the one place queue changes actually originate (drop, remove, reorder),
+   * rather than reacted to a tick later from a `useEffect` watching
+   * `uploadQueue`: this project's lint forbids a synchronous `setState` call
+   * in an effect body (`react-hooks/set-state-in-effect`) and ref reads/writes
+   * during render (`react-hooks/refs`), both of which an effect-based version
+   * of this would need.
+   *
+   * E9 T7 review round 1, Important 2: re-fires on ANY change to the set of
+   * file NAMES, not only the empty→non-empty edge — dropping file B on top of
+   * an already-detected file A (or removing down to one of a conflicting
+   * pair) must not leave the old verdict on screen describing a queue that no
+   * longer exists (rule 5). Compared by name fingerprint, not array identity
+   * or length, so a pure drag-reorder — same names, same count — does not
+   * re-fire a request nobody asked for.
+   */
+  const handleUploadQueueChange = useCallback(
+    (next: QueuedFile[]) => {
+      const previousFingerprint = queueNameFingerprint(uploadQueue);
+      setUploadQueue(next);
+      if (next.length === 0) {
+        setDetection(null);
+        // Otherwise a later file dropped back in re-triggers `onError`'s old
+        // verdict-clearing path against a stale error/data pair from before
+        // the queue emptied.
+        detect.reset();
+        return;
+      }
+      if (queueNameFingerprint(next) !== previousFingerprint) detect.mutate(next);
+    },
+    [uploadQueue, detect],
+  );
+
+  /**
+   * Tông giọng asked of the writer. State, not form state: it is not part of
+   * the post — it only shapes the next request, and it never travels to the
+   * publish payload or into a draft.
+   */
+  const [tone, setTone] = useState<CaptionTone>(DEFAULT_CAPTION_TONE);
+  /** Set when the server refused `tone` and the call was retried without it. */
+  const [toneDropped, setToneDropped] = useState(false);
+
+  /**
+   * Generates a caption per channel.
+   *
+   * The mutation accepts a `CaptionTarget` so callers can say whether the
+   * answer is meant for the shared box or for a specific channel tab —
+   * `caption-targets.ts` owns the shape. `channels` on the wire is the closed
+   * platform channel catalogue (`facebook`), not a Fanpage id — the prompt is
+   * built from the product alone, so there is nothing Fanpage-specific to send.
+   * Asking again simply produces another variation, which is precisely what a
+   * per-channel "Viết lại" is for. Where the text LANDS is the caller's call:
+   * only a shared target is written here, and a channel target is handed back
+   * so `usePublishForm` can put it on that channel's own caption.
+   */
+  const captions = useMutation<GenerateCaptionsResult, ApiError, CaptionTarget>({
+    mutationFn: async () => {
+      const hasMedia = uploadQueue.length > 0 || uploadedAssets.length > 0 || album.length > 0;
+      const productCode = form.getValues("productCode")?.trim();
+
+      if (!composed && !hasMedia && !productCode) {
+        throw new ApiError({
+          code: "INVALID_INPUT",
+          status: 0,
+          message: "generateCaptions called before compose",
+          userMessage: "Chưa có dữ liệu bài đăng hoặc ảnh. Hãy chọn ảnh hoặc tra mã sản phẩm trước.",
+        });
+      }
+
+      let coverImage;
+      if (uploadQueue.length > 0 && uploadQueue[0].file.type.startsWith("image/")) {
+        coverImage = await readCoverImageBase64(uploadQueue[0].file);
+      }
+
+      const content = composed?.content ?? {
+        code: productCode || "MANUAL",
+        name: productCode || "Sản phẩm thời trang",
+        description: "",
+        category: "",
+        season: "",
+      };
+
+      return generateCaptions({
+        content,
+        channels: COMPOSE_CHANNELS.map((channel) => channel.id),
+        tone,
+        coverImage,
+      });
+    },
+    retry: false,
+    onSuccess: (result, target) => {
+      setToneDropped(result.toneDropped);
+      if (target.kind !== "shared") return;
+      for (const item of result.generated) {
+        form.setValue(`captions.${item.channelId}`, item.text, { shouldDirty: true });
+      }
+    },
+    onError: () => setToneDropped(false),
+  });
+
+  /**
+   * E9 T7 — "Dùng mã này" / "Nhập mã BG0SQ9999" / one code from a conflict.
+   * Fills the field with the code the button carries and, unless it is blank
+   * ("Nhập mã sản phẩm" only opens the field for typing), looks it up right
+   * away — spec §8.2 forbids making the operator retype it.
+   *
+   * Review round 1, Important 3: a BLANK code (the `no_code` verdict's manual
+   * button) must NOT overwrite the field — the operator may already have
+   * typed something there. It only moves focus to it, same as an invalid
+   * lookup does in `submitProductStep`.
+   */
+  const applyDetectedCode = useCallback(
+    (code: string) => {
+      const trimmed = code.trim();
+      if (trimmed.length === 0) {
+        form.setFocus("productCode");
+        return;
+      }
+      form.setValue("productCode", code, { shouldDirty: true });
+      // C1 — mode B, no file on the server yet: `compose-post` gates on media
+      // BEFORE anything read the code, so composing right now would always
+      // answer MEDIA_NOT_FOUND. Fill the field and stop; `upload.onSuccess`
+      // runs the real compose once the queued files actually land.
+      if (form.getValues("source") === "upload" && uploadedAssets.length === 0) {
+        form.setFocus("productCode");
+        return;
+      }
+      void submitProductStep();
+    },
+    [form, submitProductStep, uploadedAssets],
+  );
 
   /**
    * E10 — puts a stored draft back on screen.
@@ -485,8 +652,12 @@ export function useComposeWizard() {
     setToneDropped(false);
     setUploadQueue([]);
     setUploadedCount(0);
+    setUploadedAssets([]);
     setUploadRejections([]);
     setUploadWarnings([]);
+    // "Xoá nháp" clears the queue directly, bypassing `handleUploadQueueChange`
+    // — the detected code has to go with it.
+    setDetection(null);
     // A stray in-flight direct upload must not keep POSTing to MinIO or hand
     // back a result once the screen it belonged to no longer exists.
     direct.cancel();
@@ -496,7 +667,8 @@ export function useComposeWizard() {
     compose.reset();
     captions.reset();
     upload.reset();
-  }, [captions, clearManualProduct, compose, direct, form, upload]);
+    detect.reset();
+  }, [captions, clearManualProduct, compose, detect, direct, form, upload]);
 
   /**
    * Deep link from the product list: `/compose?code=MGKVX6310&color=TRẮNG`
@@ -576,9 +748,16 @@ export function useComposeWizard() {
     toneDropped,
     upload,
     uploadQueue,
-    setUploadQueue,
+    /** Routes every queue change through detection (E9 T7) as well as state. */
+    setUploadQueue: handleUploadQueueChange,
     uploadedCount,
+    /** E9 T8 — the stored files, drawn through `MediaThumb` once the queue is gone. */
+    uploadedAssets,
     uploadRejections,
+    /** E9 T7 — the code(s) read from the queued file names, and the request behind it. */
+    detection,
+    detect,
+    applyDetectedCode,
     /** Non-blocking notes from the confirm step (e.g. a corrected album order). */
     uploadWarnings,
     /** 0..100, real progress of the direct-to-storage POSTs (stage 2 only). */

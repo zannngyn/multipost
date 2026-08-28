@@ -134,7 +134,7 @@ export function FirstRunChecklist({
             }
             className="bg-primary text-primary-foreground hover:bg-primary/80 focus-visible:ring-ring inline-flex h-8 shrink-0 items-center rounded-lg px-3 text-[0.8rem] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
-            {isReady ? "Soạn bài đầu tiên" : "Mở bước này"}
+            {isReady ? "Soạn bài đầu tiên" : "Làm ngay"}
           </Link>
         </div>
       </Card>

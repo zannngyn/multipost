@@ -120,8 +120,8 @@ export function buildStepViews(progress: SetupProgress): readonly StepView[] {
       detail: isDone ? "Đã xong" : (reason ?? `${step.minutes} ph`),
       isOptional: false,
       action: {
-        label: isDone ? "Xem lại" : "Mở bước này",
-        onAction: () => {},
+        label: isDone ? "Xem lại" : "Làm ngay",
+        onAction: () => { },
         isBusy: false,
         disabledReason: reason,
       },

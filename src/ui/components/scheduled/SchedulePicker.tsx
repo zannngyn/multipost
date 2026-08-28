@@ -89,10 +89,23 @@ export function SchedulePicker({
       ))}
 
       {choice.mode === "scheduled" ? (
-        <div className="bg-accent/15 flex flex-col gap-2.5 rounded-xl p-3.5">
+        <div className="flex flex-col gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-4 shadow-xs">
+          <div className="flex items-center justify-between border-b border-primary/10 pb-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-primary">
+              Cài đặt giờ hẹn đăng
+            </span>
+            <button
+              type="button"
+              onClick={() => choice.setMode("now")}
+              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 px-2 py-0.5 rounded-lg hover:bg-muted/60 transition-colors cursor-pointer"
+            >
+              <span>✕</span>
+              <span>Đóng</span>
+            </button>
+          </div>
           <ScheduleTimeField
             id={fieldId}
-            label="Giờ đăng"
+            label="Chọn ngày & Giờ hẹn đăng"
             value={choice.value}
             onChange={choice.setValue}
             disabled={disabled}
@@ -100,28 +113,6 @@ export function SchedulePicker({
             error={choice.error}
             nowMs={nowMs}
           />
-
-          {slots.length > 0 ? (
-            <div role="group" aria-label="Giờ đăng gợi ý" className="flex flex-wrap gap-1.5">
-              {slots.map((slot) => (
-                <button
-                  key={slot.value}
-                  type="button"
-                  disabled={disabled}
-                  aria-pressed={choice.value === slot.value}
-                  onClick={() => choice.setValue(slot.value)}
-                  className={cn(
-                    "focus-visible:ring-ring/50 cursor-pointer rounded-full px-3 py-1 text-xs transition-colors outline-none focus-visible:ring-3 disabled:opacity-50",
-                    choice.value === slot.value
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-card text-accent-foreground hover:bg-accent/40",
-                  )}
-                >
-                  {slot.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
         </div>
       ) : null}
     </fieldset>

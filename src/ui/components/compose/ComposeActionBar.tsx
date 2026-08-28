@@ -34,95 +34,65 @@ import { cn } from "@/shared/utils";
  * happen, so nobody publishes to eight pages thinking it was one.
  */
 export function ComposeActionBar({
-  primaryLabel,
-  onPrimary,
+  onPublishNow,
+  onSchedule,
   primaryDisabled,
-  scheduling,
-  onToggleSchedule,
-  onPickChannels,
   note,
   busy,
   readOnlyReason,
 }: {
-  primaryLabel: string;
-  onPrimary: () => void;
+  onPublishNow: () => void;
+  onSchedule: () => void;
   primaryDisabled: boolean;
-  /** True when the schedule branch is chosen — the "Hẹn lịch" toggle's state. */
-  scheduling: boolean;
-  onToggleSchedule: () => void;
-  onPickChannels: () => void;
   note: string;
   busy: boolean;
   /**
    * Support mode (M3.3): every write answers 403, so both write actions are
-   * disabled and the reason is already in `note`. Choosing channels stays
-   * available — it changes nothing on the server.
+   * disabled and the reason is already in `note`.
    */
   readOnlyReason?: string | null;
 }) {
   const blocked = Boolean(readOnlyReason);
   return (
-    // No frame of its own any more: the bar is the last row of the sticky tray
-    // its caller owns, and a second hairline inside that tray only drew a line
-    // across it. Spacing and background belong to the tray, this is the row.
-    <div className="flex flex-wrap items-center gap-2.5 @sm:gap-3.5">
-      <button
-        type="button"
-        onClick={onPickChannels}
-        className="focus-visible:ring-ring bg-card h-13 cursor-pointer rounded-lg px-4 text-[15px] font-medium shadow-[inset_0_0_0_1px_var(--input)] outline-none focus-visible:ring-3 @sm:px-6"
-      >
-        Chọn kênh
-      </button>
+    <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+      <div className="flex flex-wrap items-center gap-2.5">
+        {/* Nút Đăng ngay (Primary) */}
+        <button
+          type="button"
+          onClick={onPublishNow}
+          disabled={primaryDisabled || blocked}
+          aria-busy={busy}
+          title={readOnlyReason ?? undefined}
+          className={cn(
+            "flex h-11 cursor-pointer items-center gap-2 rounded-xl bg-primary px-6 text-xs font-bold text-primary-foreground shadow-xs transition-all hover:opacity-90 outline-none focus:ring-2 focus:ring-primary/30",
+            "disabled:cursor-not-allowed disabled:opacity-40",
+          )}
+        >
+          <span>Đăng ngay</span>
+        </button>
 
-      {/* The rule between "choose" and "publish". Dropped on a narrow row:
-          three buttons already fill it, and the gap says the same thing. */}
-      <span aria-hidden="true" className="hidden h-6.5 w-px bg-[var(--border)] @sm:block" />
+        {/* Nút Hẹn lịch (Secondary Action) */}
+        <button
+          type="button"
+          onClick={onSchedule}
+          disabled={primaryDisabled || blocked}
+          aria-busy={busy}
+          title={readOnlyReason ?? "Mở bảng chọn ngày giờ hẹn đăng"}
+          className={cn(
+            "flex h-11 cursor-pointer items-center gap-2 rounded-xl border border-input bg-card px-4 text-xs font-semibold text-foreground shadow-xs transition-all hover:bg-muted/50 outline-none focus:ring-2 focus:ring-primary/20",
+            "disabled:cursor-not-allowed disabled:opacity-40",
+          )}
+        >
+          <CalendarClock className="size-4 text-primary shrink-0" />
+          <span>Hẹn lịch</span>
+        </button>
+      </div>
 
-      <button
-        type="button"
-        onClick={onPrimary}
-        disabled={primaryDisabled || blocked}
-        aria-busy={busy}
-        title={readOnlyReason ?? undefined}
-        className={cn(
-          // Takes the room the row has left on a phone, keeps its own width
-          // from @sm up — it is the one thing this screen does.
-          "focus-visible:ring-ring h-13 flex-1 cursor-pointer rounded-lg bg-primary text-primary-foreground px-4 text-[15px] font-semibold outline-none focus-visible:ring-3 @sm:flex-none @sm:px-8",
-          "disabled:cursor-not-allowed disabled:opacity-50",
-        )}
-      >
-        {primaryLabel}
-      </button>
-
-      <button
-        type="button"
-        aria-pressed={scheduling}
-        onClick={onToggleSchedule}
-        disabled={blocked}
-        // Named for the narrow row, where the label is an icon. Same words as
-        // the visible label above @sm, so voice control matches what is drawn.
-        aria-label="Hẹn lịch"
-        title={readOnlyReason ?? "Hẹn lịch"}
-        className={cn(
-          "focus-visible:ring-ring h-13 w-13 shrink-0 cursor-pointer rounded-lg text-[15px] font-medium outline-none focus-visible:ring-3 @sm:w-auto @sm:px-6",
-          scheduling
-            ? "bg-accent text-accent-foreground shadow-[inset_0_0_0_1.5px_var(--primary)]"
-            : "bg-card shadow-[inset_0_0_0_1px_var(--input)]",
-          "disabled:cursor-not-allowed disabled:opacity-50",
-        )}
-      >
-        <CalendarClock aria-hidden="true" className="mx-auto size-5 @sm:hidden" />
-        <span className="hidden @sm:inline">Hẹn lịch</span>
-      </button>
-
-      <span aria-hidden="true" className="hidden flex-1 @sm:block" />
-
-      {/* Its own line on a phone (`w-full`), beside the buttons from @sm up.
-          It must never share a line with a wrapped button: this sentence is
-          the reason a dimmed button is refusing. */}
-      <p className="text-muted-foreground w-full text-[13px] leading-relaxed @sm:w-auto @sm:max-w-90">
+      {/* Note indicator on the right */}
+      <p className="text-muted-foreground text-xs font-medium leading-relaxed">
         {note}
       </p>
     </div>
   );
 }
+

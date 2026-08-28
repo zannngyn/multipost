@@ -36,7 +36,7 @@ const TOOL_LABEL: Record<
   // 🔵 on blue (it IS a blue circle) and 🦄 on purple, which is what the
   // prototype paints that same unicorn on in step 1.
   manual_facebook: {
-    label: "Tự đăng tay trên Facebook",
+    label: "Đăng thủ công trên Facebook",
     emoji: "💻",
     tone: "yellow",
   },
@@ -70,7 +70,7 @@ const CHOICES: readonly CheckOptionChoice[] = TOOL_KINDS.map((value) => ({
   ...TOOL_LABEL[value],
 }));
 
-const QUESTION = "Bạn đang đăng bài bằng gì?";
+const QUESTION = "Bạn đã sử dụng những công cụ nào trước đây?";
 
 /** Narrowing at the boundary: the group hands back a `string`, not a `ToolKind`. */
 function isToolKind(value: string): value is ToolKind {
@@ -108,11 +108,11 @@ export function StepTools({
   };
 
   return (
-    <div className="flex w-full flex-col items-center gap-8">
+    <div className="flex w-full flex-col items-center gap-8 font-bold">
       <h1
         tabIndex={-1}
         style={enterDelay(ENTER_DELAY_HEADING)}
-        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] text-balance outline-none"
       >
         {QUESTION}
       </h1>

@@ -44,7 +44,7 @@ const CHOICES: readonly ChannelTileChoice[] = FOCUS_CHANNELS.map((value) => ({
   isComingSoon: !AVAILABLE_CHANNELS.includes(value),
 }));
 
-const QUESTION = "Kênh nào bạn đang tập trung?";
+const QUESTION = "Các kênh bạn đang tập trung";
 
 /** Narrowing at the boundary: the group hands back a `string`. */
 function isFocusChannel(value: string): value is FocusChannel {
@@ -82,11 +82,11 @@ export function StepChannels({
   };
 
   return (
-    <div className="flex w-full flex-col items-center gap-8">
+    <div className="flex w-full flex-col items-center gap-8 font-bold">
       <h1
         tabIndex={-1}
         style={enterDelay(ENTER_DELAY_HEADING)}
-        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] text-balance outline-none"
       >
         {QUESTION}
       </h1>

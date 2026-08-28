@@ -47,7 +47,7 @@ export function WelcomeScreen({
   onStart: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center gap-8">
+    <div className="flex flex-col items-center gap-4">
       {/*
         28px / 35px, measured (spec section 2.3). Neither lands on the type
         scale, and the visual gate measures both, so they are stated outright.
@@ -61,7 +61,7 @@ export function WelcomeScreen({
       <h1
         tabIndex={-1}
         style={enterDelay(ENTER_DELAY_HEADING)}
-        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
+        className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-bold text-balance outline-none"
       >
         {/*
           PENDING(welcome-name): spec section 12 asks for the local part of the
@@ -70,8 +70,8 @@ export function WelcomeScreen({
           is nullable. So a nameless account gets a greeting with no name rather
           than an invented one.
         */}
-        <span className="block">{name === null ? "Chào bạn 👋" : `Chào ${name} 👋`}</span>
-        <span className="block">Chào mừng tới MYSP</span>
+        <span className="block">{name === null ? "Hey you 👋" : `Hello ${name} 👋`}</span>
+        <span className="block">Welcome To MysP</span>
       </h1>
 
       {/*
@@ -100,7 +100,7 @@ export function WelcomeScreen({
         <Button
           type="button"
           onClick={onStart}
-          className="bg-foreground text-background hover:bg-foreground/90 h-12 gap-2 rounded-lg px-6 text-sm font-medium"
+          className="bg-foreground text-background hover:bg-foreground/90 h-12 gap-2 rounded-lg px-6 text-sm font-bold"
         >
           Bắt đầu
           <ArrowRight aria-hidden="true" />

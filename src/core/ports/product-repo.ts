@@ -59,6 +59,16 @@ export interface ProductRepo {
    * difference is only visible by comparing the two numbers.
    */
   countAll(tenantId: TenantId): Promise<number>;
+  /**
+   * Mọi mã sản phẩm của tenant, để parser tên file nhận ra mã có hình dạng
+   * riêng của khách (`SP-001`, `AB.12`) — thứ `PRODUCT_CODE_PATTERN` không thể
+   * đoán ra. Hôm nay chỉ `sync-catalog` dựng tập này trong bộ nhớ; đây là
+   * đường đọc lại.
+   *
+   * TUỲ CHỌN: một tiến trình chưa wire vẫn chạy, chỉ là parser mất lớp
+   * knownCodes — đúng hành vi trước khi có method này, không phải hỏng.
+   */
+  listCodes?(tenantId: TenantId): Promise<readonly string[]>;
 }
 
 /** One row the E9.4 sweep may remove. Carries its tenant: the sweep has none. */
