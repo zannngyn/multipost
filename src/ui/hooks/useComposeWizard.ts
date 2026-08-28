@@ -83,6 +83,32 @@ export interface ComposeRestoreOutcome {
  * post as a caption for a Reel, and letting it survive silently would be the
  * "im lặng xoá / im lặng giữ" mistake core-wizard forbids.
  */
+async function readCoverImageBase64(
+  file: File,
+): Promise<{ ref: string; mimeType: "image/jpeg" | "image/png" | "image/webp"; dataBase64: string } | undefined> {
+  const mimeType = file.type as "image/jpeg" | "image/png" | "image/webp";
+  if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) return undefined;
+
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const match = result.match(/^data:image\/(?:jpeg|png|webp);base64,(.+)$/);
+      if (match && match[1]) {
+        resolve({
+          ref: file.name,
+          mimeType,
+          dataBase64: match[1],
+        });
+      } else {
+        resolve(undefined);
+      }
+    };
+    reader.onerror = () => resolve(undefined);
+    reader.readAsDataURL(file);
+  });
+}
+
 function composeKey(
   values: Pick<ComposeWizardValues, "productCode" | "color" | "mediaKind" | "videoTarget">,
   /**
@@ -400,13 +426,11 @@ export function useComposeWizard() {
   const [toneDropped, setToneDropped] = useState(false);
 
   /**
-   * "Nhờ AI viết" / "Viết lại", for ONE target at a time.
+   * Generates a caption per channel.
    *
-   * The target is a variable, not a second mutation, so the screen can ask
-   * `captions.variables` which tab is currently writing and which one failed —
-   * a per-channel spinner needs exactly that and nothing more.
-   *
-   * The REQUEST is the same either way: `POST /api/posts/captions` takes the
+   * The mutation accepts a `CaptionTarget` so callers can say whether the
+   * answer is meant for the shared box or for a specific channel tab —
+   * `caption-targets.ts` owns the shape. `channels` on the wire is the closed
    * platform channel catalogue (`facebook`), not a Fanpage id — the prompt is
    * built from the product alone, so there is nothing Fanpage-specific to send.
    * Asking again simply produces another variation, which is precisely what a
@@ -415,19 +439,37 @@ export function useComposeWizard() {
    * so `usePublishForm` can put it on that channel's own caption.
    */
   const captions = useMutation<GenerateCaptionsResult, ApiError, CaptionTarget>({
-    mutationFn: () => {
-      if (!composed) {
+    mutationFn: async () => {
+      const hasMedia = uploadQueue.length > 0 || uploadedAssets.length > 0 || album.length > 0;
+      const productCode = form.getValues("productCode")?.trim();
+
+      if (!composed && !hasMedia && !productCode) {
         throw new ApiError({
           code: "INVALID_INPUT",
           status: 0,
           message: "generateCaptions called before compose",
-          userMessage: "Chưa có dữ liệu bài đăng. Hãy tra mã sản phẩm trước.",
+          userMessage: "Chưa có dữ liệu bài đăng hoặc ảnh. Hãy chọn ảnh hoặc tra mã sản phẩm trước.",
         });
       }
+
+      let coverImage;
+      if (uploadQueue.length > 0 && uploadQueue[0].file.type.startsWith("image/")) {
+        coverImage = await readCoverImageBase64(uploadQueue[0].file);
+      }
+
+      const content = composed?.content ?? {
+        code: productCode || "MANUAL",
+        name: productCode || "Sản phẩm thời trang",
+        description: "",
+        category: "",
+        season: "",
+      };
+
       return generateCaptions({
-        content: composed.content,
+        content,
         channels: COMPOSE_CHANNELS.map((channel) => channel.id),
         tone,
+        coverImage,
       });
     },
     retry: false,

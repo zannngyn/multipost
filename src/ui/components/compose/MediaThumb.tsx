@@ -42,39 +42,51 @@ export function MediaThumb({
   className?: string;
   lazy?: boolean;
 }) {
-  const url = asset.kind === "video" ? null : mediaPreviewUrl(asset.driveFileId);
-
+  const initialUrl = asset.kind === "video" ? null : mediaPreviewUrl(asset.driveFileId);
+  const [currentUrl, setCurrentUrl] = useState<string | null>(initialUrl);
   const [phase, setPhase] = useState<Phase>("loading");
-  // Adjusting state during render (the documented React alternative to an
-  // effect): a tile reused for another asset after a reorder must go back to
-  // "loading", or it would show the previous photo until the new bytes land.
-  const [renderedUrl, setRenderedUrl] = useState<string | null>(url);
-  if (renderedUrl !== url) {
-    setRenderedUrl(url);
+  const [hasTriedFallback, setHasTriedFallback] = useState(false);
+
+  // Adjusting state during render when asset changes
+  const [renderedAssetId, setRenderedAssetId] = useState(asset.driveFileId);
+  if (renderedAssetId !== asset.driveFileId) {
+    setRenderedAssetId(asset.driveFileId);
+    setCurrentUrl(initialUrl);
     setPhase("loading");
+    setHasTriedFallback(false);
   }
 
-  const note = describe(asset, url, phase);
+  const handleImageError = () => {
+    const id = (asset.driveFileId ?? "").trim();
+    if (
+      !hasTriedFallback &&
+      id.length > 0 &&
+      !id.startsWith("upload_") &&
+      !id.startsWith("blob:") &&
+      !id.startsWith("data:") &&
+      !id.startsWith("http")
+    ) {
+      setHasTriedFallback(true);
+      setCurrentUrl(`https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w800`);
+      return;
+    }
+    setPhase("failed");
+  };
+
+  const note = describe(asset, currentUrl, phase);
 
   return (
     <span className={cn("absolute inset-0 block overflow-hidden", className)}>
-      {url ? (
-        /* next/image cannot help here: the bytes come from a per-session,
-           per-tenant API route with `Cache-Control: private`, so the optimizer
-           must not proxy or cache them, and the intrinsic size is unknown until
-           the response arrives. The parent owns the box, so there is no layout
-           shift to protect against either. */
+      {currentUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={url}
+          src={currentUrl}
           alt={alt ?? `Ảnh ${asset.fileName}`}
           loading={lazy ? "lazy" : "eager"}
           decoding="async"
           draggable={false}
           onLoad={() => setPhase("ready")}
-          // Not swallowed: a failed preview becomes a visible, worded surface
-          // instead of an icon nobody can act on.
-          onError={() => setPhase("failed")}
+          onError={handleImageError}
           className={cn(
             "h-full w-full object-cover",
             phase === "ready" ? "opacity-100" : "opacity-0",

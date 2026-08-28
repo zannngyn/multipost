@@ -166,7 +166,7 @@ export function suggestionFooterText(
 ): string {
   const hidden = hiddenCount > 0 ? `, ẩn ${hiddenCount} mã đang vướng (xem ở màn Sản phẩm)` : "";
   return (
-    `Danh sách chỉ gợi ý mã đăng được, tối đa ${limit} mã một lần — gõ thêm ký tự để thu hẹp. ` +
+    `Danh sách chỉ gợi ý mã đăng được, tối đa ${limit} mã một lần. ` +
     `Khớp ${okCount} mã đăng được${hidden}. Mã chưa đồng bộ vẫn gõ thẳng được.`
   );
 }

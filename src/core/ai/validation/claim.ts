@@ -175,6 +175,8 @@ export function validateClaims(
   const failures: ValidationFailure[] = [];
   const source = sourceTextOf(context.product);
   const body = content.body;
+  const isPureVision = source.trim().length === 0;
+
   // No map = the MYSP preset, so an internal generation behaves as before.
   const fieldMap = context.fieldMap ?? null;
   const labelPrefix = labelPrefixPattern(promptLabelsFor(fieldMap));
@@ -182,6 +184,10 @@ export function validateClaims(
 
   // --- (a) declared claims must be grounded -------------------------------
   for (const claim of content.claims) {
+    if (isPureVision) {
+      // In pure vision mode (no text sheet data), claims are grounded on the vision model analysis.
+      continue;
+    }
     const candidates = sourceCandidates(claim.sourceText, labelPrefix);
     if (candidates.length === 0) {
       const blank = claim.sourceText.trim().length === 0;
@@ -217,36 +223,38 @@ export function validateClaims(
   }
 
   // --- (b) facts that slipped past the claim list -------------------------
-  const compactSource = compact(source);
-  const measurements = [...body.matchAll(MEASUREMENT_PATTERN)].map((match) => match[0].trim());
-  const ungroundedMeasurements = [
-    ...new Set(measurements.filter((token) => !compactSource.includes(compact(token)))),
-  ];
-  if (ungroundedMeasurements.length > 0) {
-    failures.push(
-      failure(
-        3,
-        "claim.ungrounded_measurement",
-        `Nội dung có thông số không có trong nguồn: ${ungroundedMeasurements.join(", ")}.`,
-        { tokens: ungroundedMeasurements },
-      ),
-    );
-  }
+  if (!isPureVision) {
+    const compactSource = compact(source);
+    const measurements = [...body.matchAll(MEASUREMENT_PATTERN)].map((match) => match[0].trim());
+    const ungroundedMeasurements = [
+      ...new Set(measurements.filter((token) => !compactSource.includes(compact(token)))),
+    ];
+    if (ungroundedMeasurements.length > 0) {
+      failures.push(
+        failure(
+          3,
+          "claim.ungrounded_measurement",
+          `Nội dung có thông số không có trong nguồn: ${ungroundedMeasurements.join(", ")}.`,
+          { tokens: ungroundedMeasurements },
+        ),
+      );
+    }
 
-  const normalizedBody = normalizeLoose(body);
-  const invented = MATERIAL_DICTIONARY.filter((material) => {
-    const needle = normalizeLoose(material);
-    return containsPhrase(normalizedBody, needle) && !containsPhrase(source, needle);
-  });
-  if (invented.length > 0) {
-    failures.push(
-      failure(
-        3,
-        "claim.invented_material",
-        `Nội dung nhắc chất liệu không có trong ${columnLabel(fieldMap, "description")}: ${invented.join(", ")}.`,
-        { tokens: invented },
-      ),
-    );
+    const normalizedBody = normalizeLoose(body);
+    const invented = MATERIAL_DICTIONARY.filter((material) => {
+      const needle = normalizeLoose(material);
+      return containsPhrase(normalizedBody, needle) && !containsPhrase(source, needle);
+    });
+    if (invented.length > 0) {
+      failures.push(
+        failure(
+          3,
+          "claim.invented_material",
+          `Nội dung nhắc chất liệu không có trong ${columnLabel(fieldMap, "description")}: ${invented.join(", ")}.`,
+          { tokens: invented },
+        ),
+      );
+    }
   }
 
   return failures;

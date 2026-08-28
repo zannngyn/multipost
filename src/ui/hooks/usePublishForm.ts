@@ -193,7 +193,7 @@ export function usePublishForm(wizard: ComposeWizard) {
     createBatch.reset();
   }, [createBatch, schedule]);
 
-  const submit = useCallback(() => {
+  const submit = useCallback(async () => {
     setFormError(null);
     createBatch.reset();
 
@@ -239,28 +239,52 @@ export function usePublishForm(wizard: ComposeWizard) {
     const resolved = schedule.resolve();
     if (!resolved.ok) return;
 
+    // If in upload mode and files are queued but not yet uploaded, upload them seamlessly now
+    let assetsToSend = wizard.uploadedAssets;
+    if (
+      wizard.form.getValues().source === "upload" &&
+      wizard.uploadQueue.length > 0 &&
+      assetsToSend.length === 0
+    ) {
+      try {
+        const res = await wizard.upload.mutateAsync();
+        if (res.accepted.length > 0) {
+          assetsToSend = res.accepted;
+        } else {
+          setFormError("Không thể tải tệp lên. Vui lòng kiểm tra lại định dạng tệp.");
+          return;
+        }
+      } catch {
+        setFormError("Tải tệp lên máy chủ thất bại. Vui lòng thử lại.");
+        return;
+      }
+    }
+
+    const mediaList =
+      assetsToSend.length > 0
+        ? assetsToSend.map((asset) => ({
+            driveFileId: asset.assetId,
+            fileName: asset.fileName,
+            kind: asset.kind,
+          }))
+        : wizard.album.map((asset) => ({
+            driveFileId: asset.driveFileId,
+            fileName: asset.fileName,
+            kind: asset.kind,
+          }));
+
     createBatch.mutate(
       {
-        productCode: composed.content.code,
+        productCode: composed?.content?.code ?? wizard.form.getValues().productCode ?? "MANUAL",
         color: wizard.form.getValues().color,
         format,
         channelIds: selectedIds,
         captionByChannel,
         scheduledAt: resolved.scheduledAt,
-        // Cover first. `composePost` proposes an order and the operator may
-        // rearrange it in step 1; `wizard.album` is whichever won.
-        media: wizard.album.map((asset) => ({
-          driveFileId: asset.driveFileId,
-          fileName: asset.fileName,
-          kind: asset.kind,
-        })),
+        media: mediaList,
       },
       {
         onSuccess: (result) => {
-          // A scheduled lô has nothing to watch for hours: send the operator to
-          // the list of what is coming (where it can still be moved or cancelled)
-          // instead of a batch page that would poll an unchanging "chờ đăng".
-          // An immediate lô goes to its own URL — the operator can close the tab.
           if (resolved.scheduledAt) router.push("/scheduled");
           else router.push(`/batches/${encodeURIComponent(result.batchId)}`);
         },
@@ -276,6 +300,9 @@ export function usePublishForm(wizard: ComposeWizard) {
     selectedIds,
     wizard.album,
     wizard.form,
+    wizard.uploadQueue,
+    wizard.uploadedAssets,
+    wizard.upload,
   ]);
 
   return {
@@ -303,36 +330,20 @@ export function usePublishForm(wizard: ComposeWizard) {
     /** E10 — draft restore / "Xoá nháp". */
     restore,
     reset,
-    /**
-     * The footer must be able to dim its button without re-deriving the guards.
-     * It is a hint, not the gate: `submit` still checks everything and explains
-     * what is missing, because a disabled button that says nothing is worse.
-     */
-    /**
-     * A preset group is NOT part of this any more (ComposeFocus, 20/08/2026):
-     * channels are ticked one by one in the picker modal, which lists the
-     * tenant's Pages straight from `/api/channels`. Groups became the shortcut
-     * they were always meant to be, so a tenant that never made one could no
-     * longer publish at all — that was the bug this line used to encode.
-     */
     canSubmit:
-      Boolean(composed) &&
+      (Boolean(composed) || wizard.uploadQueue.length > 0 || wizard.uploadedAssets.length > 0) &&
       selectedIds.length > 0 &&
       missingCaptionIds.length === 0 &&
-      !createBatch.isPending,
-    isPending: createBatch.isPending,
-    /**
-     * Wording of the one black action at the bottom of the card (ComposeFocus
-     * template line 129). "Đăng luôn" is literal: pressing it creates the lô and
-     * the worker publishes straight away. Nothing auto-publishes — the label
-     * describes what THIS press does, which is the whole point of the screen.
-     */
-    submitLabel: createBatch.isPending
-      ? "Đang tạo lô…"
+      !createBatch.isPending &&
+      !wizard.upload.isPending,
+    isPending: createBatch.isPending || wizard.upload.isPending,
+    submitLabel: createBatch.isPending || wizard.upload.isPending
+      ? "Đang xử lý…"
       : schedule.mode === "scheduled"
-        ? "Hẹn lịch đăng"
-        : "Đăng luôn",
+        ? "Lên lịch đăng bài"
+        : "Đăng bài ngay",
   };
 }
 
 export type PublishForm = ReturnType<typeof usePublishForm>;
+
