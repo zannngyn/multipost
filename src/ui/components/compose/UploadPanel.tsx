@@ -1,15 +1,23 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { AlbumArranger } from "@/ui/components/compose/AlbumArranger";
-import { formatBytes, removeAt, type QueuedFile } from "@/ui/components/compose/upload-queue";
+import { MediaThumb } from "@/ui/components/compose/MediaThumb";
+import {
+  formatBytes,
+  isPreviewable,
+  removeAt,
+  syncPreviewUrls,
+  type QueuedFile,
+} from "@/ui/components/compose/upload-queue";
 import { Button } from "@/ui/components/ui/button";
 import { Progress } from "@/ui/components/ui/progress";
 import {
   MAX_UPLOAD_FILES,
   MAX_UPLOAD_FILE_BYTES,
   UPLOAD_ACCEPT,
+  type UploadedAsset,
   type UploadRejection,
 } from "@/ui/schemas/compose.schema";
 
@@ -40,6 +48,14 @@ export interface UploadPanelProps {
   /** Set once the upload succeeded, so the operator sees the album is stored. */
   uploadedCount: number;
   /**
+   * The stored files themselves (E9 T8). Required, not optional with a
+   * `[]` fallback: an optional prop here would let a caller silently render
+   * only the "Đã lưu N file" sentence with the album quietly missing, which
+   * is exactly the "xanh nhưng hỏng" regression this task exists to fix —
+   * `tsc` must refuse to compile a caller that forgets it.
+   */
+  uploadedAssets: readonly UploadedAsset[];
+  /**
    * Non-blocking notes from the confirm step — e.g. a malformed album order
    * that was silently corrected server-side. Business rule 5 (không im lặng
    * bỏ qua): these MUST reach the operator, not just the server log.
@@ -54,8 +70,50 @@ export function UploadPanel(props: UploadPanelProps) {
   const [announcement, setAnnouncement] = useState("");
   const [localErrors, setLocalErrors] = useState<string[]>([]);
 
-  const { queue, onQueueChange, disabled } = props;
+  const { queue, onQueueChange, disabled, uploadedAssets } = props;
   const full = queue.length >= MAX_UPLOAD_FILES;
+
+  /**
+   * One object URL per image still waiting to upload, built from the File
+   * already in memory — costs 0 bytes on the wire. `previewsRef` is the
+   * source of truth read/written by effects; `previews` state is only what
+   * gets rendered.
+   */
+  const previewsRef = useRef<Map<string, string>>(new Map());
+  const [previews, setPreviews] = useState<Map<string, string>>(new Map());
+
+  /**
+   * Reconciles previews against `queue`: reuses the url of any id still
+   * present, creates one for every new image, and revokes exactly the urls
+   * whose id left the queue — never the ones still on screen. Doing this in
+   * the effect BODY (not a returned cleanup) matters: React StrictMode
+   * double-invokes effects once right after mount, and a cleanup that
+   * revokes "whatever's current" would revoke the very url the <img> just
+   * painted is pointing at (web-file-upload §3).
+   */
+  useEffect(() => {
+    const { next, revoked } = syncPreviewUrls(previewsRef.current, queue, (file) =>
+      URL.createObjectURL(file),
+    );
+    for (const url of revoked) URL.revokeObjectURL(url);
+    previewsRef.current = next;
+    setPreviews(next);
+  }, [queue]);
+
+  /**
+   * Mount-only: revokes whatever remains when the panel truly leaves the
+   * tree. Its cleanup ALSO fires once during StrictMode's dev-only
+   * setup→cleanup→setup dance right after mount — clearing the ref there is
+   * what makes that dance harmless: the sync effect's second run then sees
+   * an empty map and creates fresh urls instead of reusing ones this
+   * cleanup just revoked.
+   */
+  useEffect(() => {
+    return () => {
+      for (const url of previewsRef.current.values()) URL.revokeObjectURL(url);
+      previewsRef.current = new Map();
+    };
+  }, []);
 
   /**
    * Client-side triage is UX, not security: it saves a pointless round trip.
@@ -194,10 +252,36 @@ export function UploadPanel(props: UploadPanelProps) {
         disabled={disabled}
         itemName={(item) => item.file.name}
         renderContent={(item) => (
-          <>
-            <span className="block truncate text-sm">{item.file.name}</span>
-            <span className="text-muted-foreground text-xs">{formatBytes(item.file.size)}</span>
-          </>
+          // M2 — `AlbumArranger`'s list layout wraps this in a `<span>`; a
+          // `<div>` directly inside it was flow content inside inline content
+          // (invalid HTML). Same classes, so the rendered box is unchanged.
+          <span className="flex min-w-0 items-center gap-3">
+            {/* Fixed-size tile so the list never shifts once the image
+                decodes (CLS = 0). `aria-hidden`: the filename right next to
+                it already names the file — reading both would be noise for
+                a screen reader (web-accessibility — decorative image). */}
+            <div className="bg-muted relative h-12 w-12 shrink-0 overflow-hidden rounded">
+              {previews.get(item.id) ? (
+                /* next/image cannot optimize a blob: URL — it never leaves the
+                   browser, so there is nothing for the optimizer to fetch. */
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={previews.get(item.id)}
+                  alt=""
+                  aria-hidden="true"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="text-muted-foreground flex h-full w-full items-center justify-center text-xs">
+                  {isPreviewable(item.file) ? "…" : "Video"}
+                </span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <span className="block truncate text-sm">{item.file.name}</span>
+              <span className="text-muted-foreground text-xs">{formatBytes(item.file.size)}</span>
+            </div>
+          </span>
         )}
         renderActions={(item, index) => (
           <Button
@@ -212,6 +296,27 @@ export function UploadPanel(props: UploadPanelProps) {
           </Button>
         )}
       />
+
+      {/* E9 T8 — what got stored, drawn AFTER the queue empties. The queue's own
+          thumbnails die with it (their object URLs are revoked the moment the
+          file leaves the browser); these come from the server's preview
+          route instead, through the same `MediaThumb` the rest of the screen
+          uses (component-reuse) — no second loading/ready/failed state to
+          maintain here. */}
+      {uploadedAssets.length > 0 && !props.isUploading ? (
+        <ul className="flex flex-wrap gap-2" aria-label="File đã lưu cho bài này">
+          {uploadedAssets.map((asset) => (
+            <li key={asset.assetId} className="w-16">
+              <div className="bg-muted relative h-16 w-16 overflow-hidden rounded">
+                <MediaThumb asset={{ ...asset, driveFileId: asset.assetId }} alt="" />
+              </div>
+              <span className="text-muted-foreground mt-1 block truncate text-xs">
+                {asset.fileName}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       {/* The confirmation lives OUTSIDE the queue check on purpose: a successful
           upload empties the queue, and hiding the receipt with it would leave

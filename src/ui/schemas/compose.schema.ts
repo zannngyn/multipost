@@ -90,6 +90,29 @@ export const UploadResponseSchema = z.object({
 
 export type UploadResponse = z.infer<typeof UploadResponseSchema>;
 
+/** E9 — trả lời của `POST /api/posts/uploads/detect-code`. */
+export const DetectCodeVerdictSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("matched"), productCode: z.string() }),
+  z.object({ status: z.literal("not_found"), productCode: z.string() }),
+  z.object({ status: z.literal("conflict"), codes: z.array(z.string()) }),
+  z.object({ status: z.literal("no_code") }),
+]);
+
+export const DetectCodeResponseSchema = z.object({
+  verdict: DetectCodeVerdictSchema,
+  files: z.array(
+    z.object({
+      fileName: z.string(),
+      status: z.enum(["parsed", "candidate", "none"]),
+      productCode: z.string().nullable(),
+    }),
+  ),
+  warnings: z.array(z.string()),
+});
+
+export type DetectCodeVerdict = z.infer<typeof DetectCodeVerdictSchema>;
+export type DetectCodeResponse = z.infer<typeof DetectCodeResponseSchema>;
+
 export const MEDIA_KINDS = ["image", "video"] as const;
 export const MediaKindSchema = z.enum(MEDIA_KINDS);
 export type MediaKind = z.infer<typeof MediaKindSchema>;

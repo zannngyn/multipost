@@ -1,6 +1,7 @@
 "use client";
 
 import { Banner, Button } from "@astryxdesign/core";
+import { useRouter } from "next/navigation";
 import { useCallback, useId, useMemo, useState, type ReactNode } from "react";
 import { useWatch } from "react-hook-form";
 
@@ -10,6 +11,7 @@ import {
   channelSentenceName,
 } from "@/ui/components/channels/channel-option-labels";
 import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
+import { DetectedCodeNotice } from "@/ui/components/compose/DetectedCodeNotice";
 import { StockCheckSkippedBanner } from "@/ui/components/inventory/StockCheckSkippedBanner";
 import { stockLabel } from "@/ui/components/inventory/stock-check";
 import { activeCaptionChannel } from "@/ui/components/compose/caption-targets";
@@ -86,6 +88,7 @@ import { ApiError } from "@/ui/services/api-error";
  * the one screen in the product that did not change when the design did.
  */
 export function ComposeFocus() {
+  const router = useRouter();
   const wizard = useComposeWizard();
   const publish = usePublishForm(wizard);
   // Owned here, like `publish`: the draft line, the fields and the action bar
@@ -547,9 +550,39 @@ export function ComposeFocus() {
                     onCancel={wizard.cancelUpload}
                     rejected={wizard.uploadRejections}
                     uploadedCount={wizard.uploadedCount}
+                    uploadedAssets={wizard.uploadedAssets}
                     warnings={wizard.uploadWarnings}
                     disabled={compose.isPending}
                   />
+                  <DetectedCodeNotice
+                    verdict={wizard.detection?.verdict ?? null}
+                    warnings={wizard.detection?.warnings ?? []}
+                    isPending={wizard.detect.isPending || compose.isPending}
+                    onAction={(action) => {
+                      if (action.kind === "sync") {
+                        router.push("/sync");
+                        return;
+                      }
+                      // "use-code" and "pick-code" do the same thing: fill the
+                      // code field then look it up. An empty code (the blank
+                      // "Nhập mã sản phẩm" button) only moves focus there.
+                      wizard.applyDetectedCode(action.code);
+                    }}
+                  />
+                  {wizard.detect.isError ? (
+                    // Review round 1, Critical: a failed detection must say so —
+                    // silently falling back to `null` left an empty screen with
+                    // no explanation for why nothing showed up after the drop.
+                    <ApiErrorNotice
+                      error={wizard.detect.error}
+                      source="Nhận diện mã"
+                      onRetry={
+                        wizard.uploadQueue.length > 0
+                          ? () => wizard.detect.mutate(wizard.uploadQueue)
+                          : undefined
+                      }
+                    />
+                  ) : null}
                   {wizard.upload.isError ? (
                     <ApiErrorNotice
                       error={wizard.upload.error}
