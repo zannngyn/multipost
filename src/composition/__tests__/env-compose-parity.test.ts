@@ -39,6 +39,11 @@ function envVarNames(file: string): string[] {
     .map((line) => line.split("=")[0]!.trim());
 }
 
+/**
+ * Deliberately NOT including docker-compose.override.yml: it is the local
+ * development stack and never reaches the VPS, so a variable that only IT reads
+ * is exactly the silent no-op this test exists to catch.
+ */
 function composeInterpolations(): Set<string> {
   const files = ["docker-compose.yml", "docker-compose.prod.yml"];
   const text = files.map((file) => readFileSync(join(REPO_ROOT, file), "utf8")).join("\n");
@@ -48,7 +53,7 @@ function composeInterpolations(): Set<string> {
 describe("deploy env ↔ docker-compose parity", () => {
   const referenced = composeInterpolations();
 
-  for (const file of ["stg.env.example", "prod.env.example"]) {
+  for (const file of ["prod.env.example"]) {
     it(`every variable in ${file} is read somewhere in compose`, () => {
       const declared = envVarNames(file).filter((name) => !COMPOSE_OWN_VARS.has(name));
 
@@ -60,7 +65,7 @@ describe("deploy env ↔ docker-compose parity", () => {
   }
 
   it("reads a non-trivial number of variables — a glob that matched nothing would pass", () => {
-    expect(envVarNames("stg.env.example").length).toBeGreaterThan(20);
+    expect(envVarNames("prod.env.example").length).toBeGreaterThan(20);
     expect(referenced.size).toBeGreaterThan(20);
   });
 });

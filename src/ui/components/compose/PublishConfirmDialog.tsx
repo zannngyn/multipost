@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Clock } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { cn } from "@/shared/utils";
 import {
   Dialog,

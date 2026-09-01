@@ -45,7 +45,7 @@ const CHOICES: readonly OptionChoice[] = CHANNEL_COUNTS.map((value) => ({
   label: COUNT_LABEL[value],
 }));
 
-const QUESTION = "Bạn quản lý bao nhiêu trang mạng xã hội? ";
+const QUESTION = "Bạn quản lý bao nhiêu trang mạng xã hội?";
 
 /** Narrowing at the boundary: the group hands back a `string`. */
 function isChannelCount(value: string): value is ChannelCount {

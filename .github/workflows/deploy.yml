@@ -1,19 +1,20 @@
-# Build and deploy. The whole promotion flow is these two branches:
+# Build and deploy. The promotion flow is two branches:
 #
-#   dev  ->  stg  ->  main
-#   (nothing) (staging) (production)
+#   dev  ->  main
+#   (nothing) (production)
 #
 # Pushing to `dev` triggers NOTHING, on purpose — dev is where work lands, not
-# where it ships. A change reaches an environment only by being merged forward.
+# where it ships. A change reaches production only by being merged forward.
 #
-# One VPS hosts both environments as two independent compose stacks; see
-# docker-compose.prod.yml and deploy/bootstrap.sh.
+# The VPS has no public IP and no deploy key: CI joins the tailnet and uses
+# Tailscale SSH, which authenticates by tailnet identity. See
+# ~/.claude/deploy/new-project.md section 5.
 name: Deploy
 
 on:
   push:
-    branches: [stg, main]
-  # Re-deploy the current head of stg/main without an empty commit — the usual
+    branches: [main]
+  # Re-deploy the current head of main without an empty commit — the usual
   # answer to "the box was rebooted and something did not come back".
   workflow_dispatch:
 
@@ -52,20 +53,15 @@ jobs:
             main)
               env_name=production
               stack=prod
-              url=https://mysp.vannt.asia
-              ;;
-            stg)
-              env_name=staging
-              stack=stg
-              url=https://mysp-stg.vannt.asia
+              url=https://multipost.vannt.asia
               ;;
             *)
-              echo "::error::$REF_NAME is not a deployable branch (expected stg or main)"
+              echo "::error::$REF_NAME is not a deployable branch (expected main)"
               exit 1
               ;;
           esac
 
-          # GHCR rejects an uppercase path, and the repository is "MYSP".
+          # GHCR rejects an uppercase path, and a repository name may carry one.
           image_prefix="ghcr.io/$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
 
           {
@@ -86,7 +82,7 @@ jobs:
     # Runs in PARALLEL with verify, not after it — the server only ever deploys
     # the sha tag and the deploy job below waits for both, so an image for a
     # commit that fails verify is pushed but never shipped. The branch tag
-    # (:stg/:prod) is applied in the deploy job, after everything passed.
+    # (:prod) is applied in the deploy job, after everything passed.
     name: Build and push images
     needs: [context]
     runs-on: ubuntu-latest
@@ -152,39 +148,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up SSH
+      # No SSH key anywhere: the tailnet identity IS the credential. This is
+      # also why appleboy/ssh-action cannot be used here — it requires a key.
+      - name: Connect to tailnet
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Open the SSH alias
         env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
-          SSH_PORT: ${{ vars.DEPLOY_SSH_PORT || '22' }}
-          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.VPS_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VPS_SSH_USER }}
         run: |
           set -euo pipefail
+          test -n "$SSH_HOST" || { echo "::error::VPS_TAILSCALE_IP is not set"; exit 1; }
+          test -n "$SSH_USER" || { echo "::error::VPS_SSH_USER is not set"; exit 1; }
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-
-          if [ -n "$KNOWN_HOSTS" ]; then
-            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            # Trust-on-first-use. Works, but a man in the middle on the very
-            # first run would be accepted silently — set DEPLOY_SSH_KNOWN_HOSTS
-            # to close that window.
-            echo "::warning::DEPLOY_SSH_KNOWN_HOSTS is not set; falling back to ssh-keyscan"
-            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
-          fi
-          chmod 600 ~/.ssh/known_hosts
-
           cat > ~/.ssh/config <<EOF
           Host deploy-target
             HostName $SSH_HOST
-            Port $SSH_PORT
-            User ${{ secrets.DEPLOY_SSH_USER }}
-            IdentityFile ~/.ssh/id_deploy
-            IdentitiesOnly yes
-            StrictHostKeyChecking yes
+            User $SSH_USER
+            # accept-new, not "yes": the host key of a tailnet node is not known
+            # in advance, and the connection itself is already authenticated by
+            # WireGuard — there is no man in the middle to accept.
+            StrictHostKeyChecking accept-new
             ServerAliveInterval 30
           EOF
           chmod 600 ~/.ssh/config
@@ -193,52 +184,45 @@ jobs:
 
       - name: Ship compose files
         env:
-          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          DEPLOY_PATH: ${{ secrets.VPS_APP_DIR }}
         run: |
           set -euo pipefail
-          test -n "$DEPLOY_PATH" || { echo "::error::DEPLOY_PATH is not set on this environment"; exit 1; }
+          test -n "$DEPLOY_PATH" || { echo "::error::VPS_APP_DIR is not set"; exit 1; }
 
           # tar over ssh rather than rsync/scp -r: tar is on every box, it is one
           # round trip, and it copies exactly this list — the server's .env and
           # .image-tag.env are not in it and cannot be clobbered.
+          #
+          # docker-compose.override.yml is deliberately NOT shipped: it is the
+          # local development stack (its own MinIO, its own Caddy), and a bare
+          # `docker compose` on the box would pick it up automatically.
           tar czf - docker-compose.yml docker-compose.prod.yml deploy \
             | ssh -o BatchMode=yes deploy-target \
                 "mkdir -p '$DEPLOY_PATH' && tar xzf - -C '$DEPLOY_PATH' && chmod +x '$DEPLOY_PATH'/deploy/*.sh"
 
       - name: Deploy
         env:
-          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          DEPLOY_PATH: ${{ secrets.VPS_APP_DIR }}
           IMAGE_PREFIX: ${{ needs.context.outputs.image_prefix }}
           IMAGE_TAG: ${{ github.sha }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Per-environment, so staging and production hold DIFFERENT MinIO root
-          # credentials. remote-deploy.sh writes them into the stack's own
-          # .ci-secrets.env; they are deliberately NOT in the operator's .env,
-          # which CI never touches.
-          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
         run: |
           set -euo pipefail
 
-          # Fail here, with a name, rather than 200 lines later inside a compose
-          # interpolation error that only says a variable "is missing a value".
-          for v in MINIO_ACCESS_KEY MINIO_SECRET_KEY; do
-            test -n "${!v}" || {
-              echo "::error::$v is not set on this environment's secrets"; exit 1; }
-          done
-
           # The variables are prepended to the script on stdin rather than put in
           # the ssh command line: argv is world-readable through `ps` on the
-          # server, and three of these are credentials.
+          # server, and one of these is a registry token.
+          #
+          # The MinIO credentials are NOT here. They belong to the app's own
+          # service account on the shared MinIO (/srv/_infra/new-app-s3.sh) and
+          # live in the operator's .env on the box, which CI never touches.
           {
             printf 'export DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
             printf 'export IMAGE_PREFIX=%q\n' "$IMAGE_PREFIX"
             printf 'export IMAGE_TAG=%q\n' "$IMAGE_TAG"
             printf 'export GHCR_USER=%q\n' "$GHCR_USER"
             printf 'export GHCR_TOKEN=%q\n' "$GHCR_TOKEN"
-            printf 'export MINIO_ACCESS_KEY=%q\n' "$MINIO_ACCESS_KEY"
-            printf 'export MINIO_SECRET_KEY=%q\n' "$MINIO_SECRET_KEY"
             cat deploy/remote-deploy.sh
           } | ssh -o BatchMode=yes deploy-target 'bash -s'
 
@@ -248,8 +232,8 @@ jobs:
         run: |
           set -euo pipefail
           # Deliberately from the internet, not from the VPS: this is the only
-          # step that proves DNS, the edge Caddy, its certificate and the app
-          # are all working at once. A container can be healthy while the
+          # step that proves DNS, the Cloudflare Tunnel, Traefik's route and the
+          # app are all working at once. A container can be healthy while the
           # hostname still points nowhere.
           for attempt in $(seq 1 10); do
             if body="$(curl -fsS --max-time 15 "$URL/api/health")"; then
@@ -262,11 +246,11 @@ jobs:
             echo "attempt $attempt failed, retrying in 10s"
             sleep 10
           done
-          echo "::error::$URL/api/health never answered — check DNS, the edge Caddy, and its certificate"
+          echo "::error::$URL/api/health never answered — check the CNAME to the tunnel, then Traefik's routers (curl 127.0.0.1:8091/api/http/routers on the box)"
           exit 1
 
       # The branch tag moves LAST, once the release is verified, shipped and
-      # answering on its public URL — so :stg/:prod always name the release that
+      # answering on its public URL — so :prod always names the release that
       # is actually live, never one that merely got built. `imagetools create`
       # retags in the registry without pulling the image.
       - uses: docker/login-action@v3

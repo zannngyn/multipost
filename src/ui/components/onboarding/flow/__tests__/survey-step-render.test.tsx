@@ -65,7 +65,7 @@ describe("StepSeller — bước 1, một lựa chọn", () => {
       expect(html).toContain(label);
     }
     // The question is the screen's own <h1> — the frame moves focus to it.
-    expect(html).toContain("Bạn đang bán hàng kiểu nào?");
+    expect(html).toContain("Mô tả đúng nhất về bạn?");
     expect(html).toContain("<h1");
     expect(html).toContain('tabindex="-1"');
   });
@@ -179,7 +179,7 @@ describe("StepTools — bước 2, nhiều lựa chọn", () => {
       <StepTools values={[]} onToggle={noop} onContinue={noop} onSkip={noop} />,
     );
     for (const label of [
-      "Tự đăng tay trên Facebook",
+      "Đăng thủ công trên Facebook",
       "Meta Business Suite",
       "Công cụ quản lý mạng xã hội",
       "Công cụ chuyên một nền tảng",
@@ -188,7 +188,7 @@ describe("StepTools — bước 2, nhiều lựa chọn", () => {
     ]) {
       expect(html).toContain(label);
     }
-    expect(html).toContain("Bạn đang đăng bài bằng gì?");
+    expect(html).toContain("Bạn đã sử dụng những công cụ nào trước đây?");
   });
 
   it("is several answers at once, never a radio group", () => {
@@ -256,7 +256,7 @@ describe("StepCount — bước 3, một lựa chọn, thẻ chữ trơn", () =>
     const html = renderToStaticMarkup(
       <StepCount value={null} onChange={noop} onContinue={noop} onSkip={noop} />,
     );
-    expect(html).toContain("Bạn đang quản lý bao nhiêu trang?");
+    expect(html).toContain("Bạn quản lý bao nhiêu trang mạng xã hội?");
     expect(html).toContain("<h1");
   });
 
@@ -322,7 +322,7 @@ describe("StepChannels — bước 4, nhiều lựa chọn", () => {
     ]) {
       expect(html).toContain(label);
     }
-    expect(html).toContain("Kênh nào bạn đang tập trung?");
+    expect(html).toContain("Các kênh bạn đang tập trung");
   });
 
   it("marks every channel but Facebook 'Sắp có', in WORDS", () => {

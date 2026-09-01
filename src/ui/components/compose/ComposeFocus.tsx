@@ -40,7 +40,6 @@ import { CaptionBlock } from "@/ui/components/compose/CaptionBlock";
 import { PublishConfirmDialog } from "@/ui/components/compose/PublishConfirmDialog";
 import { SchedulePickerDialog } from "@/ui/components/compose/SchedulePickerDialog";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
-import { SchedulePicker } from "@/ui/components/scheduled/SchedulePicker";
 import { useChannels } from "@/ui/hooks/useChannels";
 import { useComposeDraft } from "@/ui/hooks/useComposeDraft";
 import { useComposeWizard } from "@/ui/hooks/useComposeWizard";
@@ -288,7 +287,7 @@ export function ComposeFocus() {
         return;
       }
     }
-    wizard.setAlbum(nextMedia as any);
+    wizard.setAlbum(nextMedia);
   };
 
   const displayMedia: MediaAsset[] = useMemo(() => {

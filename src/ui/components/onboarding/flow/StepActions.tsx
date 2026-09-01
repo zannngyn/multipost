@@ -281,7 +281,7 @@ export function StepActions({
               Đang lưu…
             </>
           ) : isBlockedLook ? (
-            "Chọn một để tiếp tục"
+            "Chọn một mục để tiếp tục"
           ) : (
             <>
               {continueLabel}

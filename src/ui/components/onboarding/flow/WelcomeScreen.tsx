@@ -70,8 +70,8 @@ export function WelcomeScreen({
           is nullable. So a nameless account gets a greeting with no name rather
           than an invented one.
         */}
-        <span className="block">{name === null ? "Hey you 👋" : `Hello ${name} 👋`}</span>
-        <span className="block">Welcome To MysP</span>
+        <span className="block">{name === null ? "Chào bạn 👋" : `Chào ${name} 👋`}</span>
+        <span className="block">Chào mừng tới MYSP</span>
       </h1>
 
       {/*

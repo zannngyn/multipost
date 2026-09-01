@@ -44,6 +44,13 @@ Next.js App Router + TypeScript · PostgreSQL + Drizzle · BullMQ + Redis (queue
 | Theme | `pnpm theme:presets` sau khi sửa `src/ui/theme/mysp-theme.ts` |
 | Hạ tầng local | `docker compose up -d postgres redis minio` |
 
+**Compose 3 file:** `docker-compose.yml` là hình dạng **production** (không có MinIO, không
+có proxy). `docker-compose.override.yml` được compose nạp **tự động** khi gõ `docker compose`
+trần — nó thêm MinIO + Caddy cho máy dev. Production nạp `-f docker-compose.yml -f
+docker-compose.prod.yml` nên không bao giờ thấy file override. Trên VPS, object storage là
+MinIO dùng chung ở `/srv/minio` (`minio-server:9000` qua network `data`), edge là
+Cloudflare Tunnel → Traefik.
+
 **Theme:** `src/ui/theme/mysp.css` là artifact **sinh ra rồi commit**. Sửa `mysp-theme.ts`
 mà quên build → app chạy bằng file CSS cũ; typecheck/lint/test đều không thấy.
 `pnpm theme:check` build lại và so sánh, không ghi đè.
@@ -52,8 +59,10 @@ mà quên build → app chạy bằng file CSS cũ; typecheck/lint/test đều k
 `onConflictDoUpdate` → thay cả mảng kênh. `scripts/smoke-guard.ts` chặn nếu DB có kênh
 lạ. Không set `SMOKE_ALLOW_OVERWRITE=1` trừ khi cố ý.
 
-**CI** chỉ chạy khi mở PR vào `stg`/`main` (`.github/workflows/ci.yml`) — merge vào `dev`
+**CI** chỉ chạy khi mở PR vào `main` (`.github/workflows/ci.yml`) — merge vào `dev`
 không tốn phút Actions. `verify.yml` cố ý bỏ `pnpm build` vì Docker image build đã chạy.
+Deploy (`deploy.yml`) chỉ chạy khi push `main`; CI vào VPS bằng Tailscale SSH, không có
+deploy key.
 
 ## Bản đồ `src/` — 7 tầng, phụ thuộc một chiều
 
