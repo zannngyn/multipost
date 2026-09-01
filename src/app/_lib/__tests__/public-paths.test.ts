@@ -40,8 +40,15 @@ describe("isPublicPath — the rest of the allowlist", () => {
     expect(isPublicPath("/api/authx")).toBe(false);
   });
 
+  it("lets the marketing landing page through — it is not the dashboard", () => {
+    // Since aadd9fb the signed-in dashboard is /overview and "/" is a public
+    // product page. Guarding "/" would put a login wall in front of the one
+    // URL a stranger is most likely to arrive on.
+    expect(isPublicPath("/")).toBe(true);
+    expect(isPublicPath("/overview")).toBe(false);
+  });
+
   it("guards everything else", () => {
-    expect(isPublicPath("/")).toBe(false);
     expect(isPublicPath("/api/posts/batches")).toBe(false);
     expect(isPublicPath("/join/sometoken")).toBe(false);
   });

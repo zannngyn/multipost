@@ -50,7 +50,7 @@ const CELEBRATE_DWELL_MS = 4_000;
  * người bấm "Vào MYSP" rồi chuyển tab phải quay lại thấy mình đã ở trong app,
  * không phải kẹt trên một màn chúc mừng trong suốt.
  */
-const HANDOFF_FADE_MS = 500;
+const HANDOFF_FADE_MS = 300;
 
 export interface CelebrateHandoff {
   /** Số giây còn lại, hoặc `null` khi đã huỷ / không bao giờ chạy. */

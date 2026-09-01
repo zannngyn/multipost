@@ -423,12 +423,16 @@ with instant state changes"* khi bật reduced motion (tắt hẳn, không làm 
 
 Buffer hỏi về mạng xã hội; MYSP bán hàng qua Facebook nên câu chữ đổi, **cấu trúc giữ nguyên**.
 
+Câu chữ dưới đây là **bản đang chạy**, cập nhật theo commit `b885c5c` (đổi cho rõ nghĩa
+hơn bản phác đầu). `survey-step-render.test.tsx` ghim đúng những chuỗi này — sửa một bên
+mà quên bên kia là cách bảng này lệch khỏi sản phẩm lần trước.
+
 | Bước | Câu hỏi | Dạng thẻ | Lựa chọn |
 |---|---|---|---|
-| 1 | Bạn đang bán hàng kiểu nào? | A (1 chọn, emoji) | Bán lẻ cá nhân · Chủ shop nhỏ · Trong đội marketing · Cộng tác viên/freelancer · Agency · Khác |
-| 2 | Bạn đang đăng bài bằng gì? | B (nhiều chọn, tick) | Tự đăng tay trên Facebook · Meta Business Suite · Công cụ quản lý mạng xã hội *(vd: Hootsuite, Later)* · Công cụ chuyên một nền tảng · Nền tảng AI *(ChatGPT/Claude…)* · Khác |
-| 3 | Bạn đang quản lý bao nhiêu trang? | C (chữ trơn) | 1-3 · 4-6 · 7-10 · 11-20 · 21-50 · 50+ |
-| 4 | Kênh nào bạn đang tập trung? | D (ô kênh) | xem dưới |
+| 1 | Mô tả đúng nhất về bạn? | A (1 chọn, emoji) | Bán lẻ cá nhân · Chủ shop nhỏ · Trong đội marketing · Cộng tác viên/freelancer · Agency · Khác |
+| 2 | Bạn đã sử dụng những công cụ nào trước đây? | B (nhiều chọn, tick) | Đăng thủ công trên Facebook · Meta Business Suite · Công cụ quản lý mạng xã hội *(vd: Hootsuite, Later)* · Công cụ chuyên một nền tảng · Nền tảng AI *(ChatGPT/Claude…)* · Khác |
+| 3 | Bạn quản lý bao nhiêu trang mạng xã hội? | C (chữ trơn) | 1-3 · 4-6 · 7-10 · 11-20 · 21-50 · 50+ |
+| 4 | Các kênh bạn đang tập trung | D (ô kênh) | xem dưới |
 
 **Bước 4 — danh sách kênh và nhãn "sắp có"** (PM chốt: liệt kê đủ như Buffer, kênh chưa hỗ
 trợ phải ghi rõ):

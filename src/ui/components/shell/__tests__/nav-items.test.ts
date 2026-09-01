@@ -70,7 +70,9 @@ describe("NAV_SECTIONS", () => {
       "Nền tảng",
     ]);
     expect(sections.flatMap((s) => s.items.map((i) => i.href))).toEqual([
-      "/",
+      // "/" is the public landing page since aadd9fb; the signed-in dashboard
+      // lives at /overview.
+      "/overview",
       "/compose",
       "/bulk",
       "/posts",

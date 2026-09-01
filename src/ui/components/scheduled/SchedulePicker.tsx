@@ -51,7 +51,6 @@ export function SchedulePicker({
   const groupId = useId();
   const fieldId = `${groupId}-at`;
   const nowMs = useNowMs();
-  const slots = nowMs > 0 ? quickSlots(nowMs) : [];
 
   return (
     <fieldset className="flex flex-col gap-2.5" aria-describedby={`${groupId}-hint`}>
@@ -132,34 +131,3 @@ const MODE_OPTIONS = [
     hint: "Bài chờ tới giờ đã hẹn. Trước khi tới giờ vẫn đổi giờ hoặc huỷ được ở màn “Bài đã hẹn”.",
   },
 ] as const;
-
-/**
- * The hours operators actually pick, as one-click chips.
- *
- * Built from the browser clock and filtered to the future, so "Tối nay 20:00"
- * disappears at 20:01 instead of offering a time the field would then reject.
- */
-function quickSlots(nowMs: number): { label: string; value: string }[] {
-  const day = 86_400_000;
-
-  return [
-    { label: "Tối nay 20:00", at: atLocalTime(nowMs, 20, 0) },
-    { label: "Mai 09:00", at: atLocalTime(nowMs + day, 9, 0) },
-    { label: "Mai 19:30", at: atLocalTime(nowMs + day, 19, 30) },
-    { label: "Ngày mốt 12:00", at: atLocalTime(nowMs + 2 * day, 12, 0) },
-  ]
-    .filter((slot) => slot.at.getTime() > nowMs)
-    .map((slot) => ({ label: slot.label, value: toDateTimeLocal(slot.at) }));
-}
-
-function atLocalTime(baseMs: number, hours: number, minutes: number): Date {
-  const date = new Date(baseMs);
-  date.setHours(hours, minutes, 0, 0);
-  return date;
-}
-
-/** `<input type="datetime-local">` wants LOCAL wall time, so never touch toISOString(). */
-function toDateTimeLocal(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}

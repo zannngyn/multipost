@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Calendar as CalendarIcon,
   Clock,
@@ -21,6 +21,7 @@ import {
   timeZoneLabel,
   validateScheduleInput,
   toDateTimeLocalValue,
+  scheduleInputBounds,
 } from "@/ui/schemas/scheduled.schema";
 
 export interface ScheduleTimeFieldProps {
@@ -43,7 +44,6 @@ const GOLDEN_HOURS = [
 ];
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const MINUTES = Array.from({ length: 12 }, (_, i) => i * 5); // 00, 05, 10, ... 55
 const ALL_MINUTES = Array.from({ length: 60 }, (_, i) => i);
 
 export function ScheduleTimeField({
@@ -58,18 +58,28 @@ export function ScheduleTimeField({
 }: ScheduleTimeFieldProps) {
   const zone = timeZoneLabel();
   const trimmed = typeof value === "string" ? value.trim() : "";
-  const verdict = nowMs > 0 && trimmed.length > 0 ? validateScheduleInput(trimmed, nowMs) : null;
+  // nowMs is 0 until the client reports its clock. Everything below reads it
+  // instead of calling Date.now(): an impure call during render gives a
+  // different answer on every re-render, and React's purity rule rejects it.
+  const clockKnown = nowMs > 0;
+  const verdict = clockKnown && trimmed.length > 0 ? validateScheduleInput(trimmed, nowMs) : null;
 
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isTimeDropdownOpen, setIsTimeDropdownOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  // Parse current date & time from value
-  const parsedDate = useMemo(() => {
-    if (!trimmed) return new Date(nowMs > 0 ? nowMs + 3600000 : Date.now() + 3600000);
+  // Parse current date & time from value. `new Date("2026-09-15T20:00")` is
+  // spec-defined local time — this is NOT the locale-dependent string parsing
+  // that once read "1/9/2026" as 9 January.
+  //
+  // No useMemo: building one Date is cheaper than the memo bookkeeping, and a
+  // hand-written dependency list here is a second place to keep in sync.
+  const parsedDate = ((): Date => {
+    const fallback = new Date(clockKnown ? nowMs + 3600000 : 0);
+    if (!trimmed) return fallback;
     const d = new Date(trimmed);
-    return Number.isNaN(d.getTime()) ? new Date(nowMs > 0 ? nowMs + 3600000 : Date.now() + 3600000) : d;
-  }, [trimmed, nowMs]);
+    return Number.isNaN(d.getTime()) ? fallback : d;
+  })();
 
   const [viewYear, setViewYear] = useState(parsedDate.getFullYear());
   const [viewMonth, setViewMonth] = useState(parsedDate.getMonth()); // 0-indexed
@@ -94,14 +104,6 @@ export function ScheduleTimeField({
   const selectedHoursStr = curHour.toString().padStart(2, "0");
   const selectedMinutesStr = curMinute.toString().padStart(2, "0");
   const timeString = `${selectedHoursStr}:${selectedMinutesStr}`;
-
-  const [customHourInput, setCustomHourInput] = useState(selectedHoursStr);
-  const [customMinuteInput, setCustomMinuteInput] = useState(selectedMinutesStr);
-
-  useEffect(() => {
-    setCustomHourInput(selectedHoursStr);
-    setCustomMinuteInput(selectedMinutesStr);
-  }, [selectedHoursStr, selectedMinutesStr]);
 
   const setDatePart = (year: number, month: number, day: number) => {
     const updated = new Date(year, month, day, parsedDate.getHours(), parsedDate.getMinutes());
@@ -145,8 +147,11 @@ export function ScheduleTimeField({
     }
   };
 
-  const today = new Date(nowMs > 0 ? nowMs : Date.now());
-  const maxDate = new Date((nowMs > 0 ? nowMs : Date.now()) + MAX_SCHEDULE_AHEAD_DAYS * 86400000);
+  // ONE definition of the window, shared with the validator: the calendar can
+  // never disagree with the error message the field shows afterwards.
+  const bounds = scheduleInputBounds(clockKnown ? nowMs : 0);
+  const today = new Date(clockKnown ? nowMs : 0);
+  const maxDate = new Date((clockKnown ? nowMs : 0) + MAX_SCHEDULE_AHEAD_DAYS * 86400000);
 
   const isDayDisabled = (day: number) => {
     const checkDate = new Date(viewYear, viewMonth, day, 23, 59, 59);
@@ -171,6 +176,9 @@ export function ScheduleTimeField({
   };
 
   const formatSelectedDateLabel = () => {
+    // Before the clock is known there is no honest date to show, and printing
+    // 01/01/1970 for a split second reads as a bug.
+    if (!clockKnown && !trimmed) return "Chọn ngày";
     const d = parsedDate;
     const days = ["Chủ Nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"];
     const dayName = days[d.getDay()];
@@ -178,11 +186,25 @@ export function ScheduleTimeField({
   };
 
   const displayError = error || (!verdict?.ok ? verdict?.message : null);
-  const isInvalidTime = Boolean(!verdict?.ok && trimmed.length > 0);
+  const isInvalidTime = Boolean(error) || Boolean(!verdict?.ok && trimmed.length > 0);
+
+  // The two buttons ARE the control now, so they carry what the native input
+  // used to: the invalid state and the pointers to the sentences explaining it.
+  // Without these a screen reader announces a plain button and the reason is
+  // just decorative text somewhere below.
+  const errorId = `${id}-error`;
+  const lockedId = `${id}-locked`;
+  const describedBy =
+    [displayError ? errorId : null, disabled && disabledReason ? lockedId : null]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
   const handleGoldenHourClick = (slotHour: number, slotMinute: number) => {
+    // No clock, no scheduling: rolling "today" over to "tomorrow" needs a real
+    // now, and guessing one here would silently pick the wrong day.
+    if (!clockKnown) return;
     const isCurDayToday = isToday(selectedDay);
-    const now = new Date(nowMs > 0 ? nowMs : Date.now());
+    const now = new Date(nowMs);
     const slotTimeToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), slotHour, slotMinute);
 
     // If currently on "Today" and this golden hour has already passed today, roll over to Tomorrow
@@ -202,7 +224,15 @@ export function ScheduleTimeField({
   };
 
   return (
-    <div ref={popoverRef} className="flex flex-col gap-2.5 w-full">
+    <div
+      ref={popoverRef}
+      className="flex flex-col gap-2.5 w-full"
+      // The scheduling window, from the same helper the validator uses. The
+      // native control used to publish it as min/max; with a custom picker it
+      // would otherwise exist only inside a disabled-day check nobody can see.
+      data-min={bounds.min}
+      data-max={bounds.max}
+    >
       <label htmlFor={id} className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
         {label}
       </label>
@@ -212,8 +242,15 @@ export function ScheduleTimeField({
         {/* Date Button (Opens Calendar Popover) */}
         <div className="relative">
           <button
+            id={id}
             type="button"
+            role="combobox"
+            aria-haspopup="dialog"
             disabled={disabled}
+            aria-invalid={isInvalidTime || undefined}
+            aria-describedby={describedBy}
+            aria-expanded={isCalendarOpen}
+            aria-controls={`${id}-calendar`}
             onClick={() => {
               setIsCalendarOpen(!isCalendarOpen);
               setIsTimeDropdownOpen(false);
@@ -231,7 +268,12 @@ export function ScheduleTimeField({
 
           {/* Calendar Popover (Opens UPWARD) */}
           {isCalendarOpen && (
-            <div className="absolute bottom-full mb-2 left-0 z-50 w-72 rounded-2xl border border-border bg-card p-3.5 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-150">
+            <div
+              id={`${id}-calendar`}
+              role="dialog"
+              aria-label="Chọn ngày đăng"
+              className="absolute bottom-full mb-2 left-0 z-50 w-72 rounded-2xl border border-border bg-card p-3.5 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-150"
+            >
               {/* Quick Date Presets */}
               <div className="flex items-center justify-between gap-1 mb-3 border-b border-border/60 pb-2">
                 <button
@@ -337,7 +379,14 @@ export function ScheduleTimeField({
         <div className="relative">
           <button
             type="button"
+            role="combobox"
+            aria-haspopup="dialog"
             disabled={disabled}
+            aria-label={`${label} — giờ`}
+            aria-invalid={isInvalidTime || undefined}
+            aria-describedby={describedBy}
+            aria-expanded={isTimeDropdownOpen}
+            aria-controls={`${id}-time`}
             onClick={() => {
               setIsTimeDropdownOpen(!isTimeDropdownOpen);
               setIsCalendarOpen(false);
@@ -355,7 +404,12 @@ export function ScheduleTimeField({
 
           {/* Time Picker 2-Column Popover (Opens UPWARD with strict overflow control) */}
           {isTimeDropdownOpen && (
-            <div className="absolute bottom-full mb-2 left-0 z-50 w-60 overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-150">
+            <div
+              id={`${id}-time`}
+              role="dialog"
+              aria-label="Chọn giờ đăng"
+              className="absolute bottom-full mb-2 left-0 z-50 w-60 overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-150"
+            >
               {/* Direct Hour:Minute Input Bar */}
               <div className="flex items-center justify-between pb-2 mb-2 border-b border-border/70">
                 <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
@@ -366,9 +420,15 @@ export function ScheduleTimeField({
                     type="number"
                     min={0}
                     max={23}
-                    value={customHourInput}
+                    aria-label="Giờ"
+                    // Uncontrolled + keyed on the selected time: typing stays
+                    // free-form (a half-typed "1" must not snap to 01), and a
+                    // change made elsewhere in the popover remounts the input
+                    // with the new value. The previous version synced it with a
+                    // setState inside an effect, which re-renders twice.
+                    key={`hour-${selectedHoursStr}`}
+                    defaultValue={selectedHoursStr}
                     onChange={(e) => {
-                      setCustomHourInput(e.target.value);
                       const val = parseInt(e.target.value, 10);
                       if (!Number.isNaN(val) && val >= 0 && val <= 23) {
                         setTimePart(val, curMinute);
@@ -381,9 +441,10 @@ export function ScheduleTimeField({
                     type="number"
                     min={0}
                     max={59}
-                    value={customMinuteInput}
+                    aria-label="Phút"
+                    key={`minute-${selectedMinutesStr}`}
+                    defaultValue={selectedMinutesStr}
                     onChange={(e) => {
-                      setCustomMinuteInput(e.target.value);
                       const val = parseInt(e.target.value, 10);
                       if (!Number.isNaN(val) && val >= 0 && val <= 59) {
                         setTimePart(curHour, val);
@@ -501,14 +562,14 @@ export function ScheduleTimeField({
       ) : null}
 
       {displayError ? (
-        <p role="alert" className="text-xs font-semibold text-destructive flex items-center gap-1 pt-0.5">
+        <p id={errorId} role="alert" className="text-xs font-semibold text-destructive flex items-center gap-1 pt-0.5">
           <span>⚠️</span>
           <span>{displayError}</span>
         </p>
       ) : null}
 
       {disabled && disabledReason ? (
-        <p className="text-xs text-muted-foreground italic">
+        <p id={lockedId} className="text-xs text-muted-foreground italic">
           {disabledReason}
         </p>
       ) : null}

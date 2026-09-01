@@ -117,10 +117,9 @@ export function CelebrateScreen({
         className="onboarding-enter text-foreground font-heading text-center text-[1.75rem] leading-[2.1875rem] font-medium text-balance outline-none"
       >
         <span className="block">
-          {name === null ? "Tuyệt vời 🎉" : `Tuyệt vời, ${name} 🎉`}
+          {name === null ? "Xong rồi 🎉" : `Xong rồi, ${name} 🎉`}
         </span>
-        <span className="block">Chào mừng bạn đến với MYSPViệc cần chú ý
-        </span>
+        <span className="block">Chào mừng bạn đến với MYSP</span>
       </h1>
 
       <p
