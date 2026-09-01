@@ -110,9 +110,16 @@ echo "--- seed the base rows"
 # `insert into tenant_integration ... field: tenantId`.
 #
 # Safe to repeat: seed() is one transaction that converges to the same two rows
-# (tenant + demo user) and writes no business data. Revisit when real
-# multi-tenancy lands and the tenant id stops being a constant.
-stack run --rm --no-deps migrate pnpm db:seed
+# (tenant + demo user) and writes no business data.
+#
+# `< /dev/null` IS LOAD-BEARING, and its absence is invisible. This whole script
+# arrives on the box as the STDIN of `bash -s` (deploy.yml). `docker compose run`
+# attaches stdin to the container, so without the redirect it swallows every
+# remaining line of this file: bash then hits EOF and exits 0. The deploy would
+# report success having never waited for a healthcheck, never printed a failure
+# log and never pruned an image — the one failure mode a green tick cannot show
+# you.
+stack run --rm --no-deps migrate pnpm db:seed < /dev/null
 
 echo "--- wait for health"
 wait_healthy() {
