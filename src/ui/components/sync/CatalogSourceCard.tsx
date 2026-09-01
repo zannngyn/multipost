@@ -15,10 +15,15 @@ import { useCatalogSource } from "@/ui/hooks/useCatalogProducts";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { writeGate } from "@/ui/hooks/read-only-gate";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
-import { useGoogleConnection } from "@/ui/hooks/useGoogleDrive";
+import { useDisconnectGoogle, useGoogleConnection } from "@/ui/hooks/useGoogleDrive";
+import {
+  canCollapseSourceCard,
+  type LastRunHealth,
+} from "@/ui/components/sync/sync-source-collapse";
 import { shortenId, type CatalogSource } from "@/ui/schemas/catalog.schema";
 import {
   parseGoogleConnectOutcome,
+  sourceAccessWarning,
   type GoogleConnectOutcome,
 } from "@/ui/schemas/google-drive.schema";
 
@@ -39,10 +44,24 @@ import {
  * Four states per region: loading (skeleton) / data / empty (chưa cấu hình) /
  * error. The connection and the source are separate queries on purpose — one
  * failing must not blank the other.
+ *
+ * On top of those, the card has a SIZE: once a source is stored and the last
+ * sync proves it works, the whole thing folds into one summary row so the run's
+ * numbers are not pushed under the fold by settled configuration. The rule for
+ * that — and every condition that keeps the card open — lives in
+ * `sync-source-collapse.ts`, tested per branch.
  */
 export function CatalogSourceCard({
+  lastRunHealth,
   onSourceChanged,
 }: {
+  /**
+   * The pipeline's verdict on this setup, from the sync-status query the screen
+   * already runs. It is the evidence the fold is allowed on: connection state
+   * alone calls a healthy Service Account tenant "chưa kết nối" forever, and
+   * cannot tell that apart from a setup that is quietly broken.
+   */
+  lastRunHealth: LastRunHealth;
   /** Lets the screen point at "Chạy đồng bộ" right after a source change. */
   onSourceChanged?: () => void;
 }) {
@@ -51,12 +70,21 @@ export function CatalogSourceCard({
   // Lifted out of the disclosure: the "Đổi nguồn" button in the header points
   // at the SAME panel, so both controls need the id.
   const manualPanelId = `${baseId}-manual`;
+  /** The whole card body, so the collapsed row's button can point at it. */
+  const detailsId = `${baseId}-details`;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const source = useCatalogSource();
   const connection = useGoogleConnection();
+  /**
+   * Hoisted out of `GoogleConnectionPanel` (I-2): that panel is unmounted the
+   * moment the card folds, and a disconnect that failed left a live token
+   * stored. Both the mutation state and its notice belong to the card, which
+   * survives the fold.
+   */
+  const disconnect = useDisconnectGoogle();
 
   /**
    * Support mode is read-only (M3.3). Changing the source is the heaviest write
@@ -69,6 +97,13 @@ export function CatalogSourceCard({
   const [isPicking, setIsPicking] = useState(false);
   const [isManualOpen, setIsManualOpen] = useState(false);
   const [hasAutoOpenedManual, setHasAutoOpenedManual] = useState(false);
+  /**
+   * Operator intent, not a derived value: once this card is opened it STAYS
+   * open until the operator closes it or a source change completes. Deriving it
+   * would collapse the card underneath somebody mid-task — e.g. the moment a
+   * disconnect succeeds, or the moment an OAuth banner is dismissed.
+   */
+  const [isExpanded, setIsExpanded] = useState(false);
 
   // --- OAuth callback: `?google=connected|cancelled|error&reason=…` ---------
   const search = searchParams.toString();
@@ -82,7 +117,13 @@ export function CatalogSourceCard({
   if (lastReadSearch !== search) {
     setLastReadSearch(search);
     const parsed = parseGoogleConnectOutcome(new URLSearchParams(search));
-    if (parsed) setOutcome(parsed);
+    if (parsed) {
+      setOutcome(parsed);
+      // Coming back from Google IS the source-setup flow. The card has to be
+      // open to show what the round trip produced — and it must stay open after
+      // the banner is dismissed, or the answer would take the card with it.
+      setIsExpanded(true);
+    }
   }
 
   useEffect(() => {
@@ -136,15 +177,45 @@ export function CatalogSourceCard({
   function finishSourceChange() {
     setIsPicking(false);
     setIsManualOpen(false);
+    // The change is done and the facts are settled — back to one line.
+    setIsExpanded(false);
     onSourceChanged?.();
   }
+
+  // The decision itself is pure and lives in `sync-source-collapse.ts`; this is
+  // only the translation from query state into its inputs.
+  const connectionData = connection.data ?? null;
+  const sourceWarning =
+    connectionData?.state === "connected" && connectionData.sourceAccess
+      ? sourceAccessWarning(connectionData.sourceAccess)
+      : null;
+  const canCollapse = canCollapseSourceCard({
+    hasConfiguredSource: configured !== null,
+    isSourceLoading: isFirstLoad,
+    isSourceError: source.isError,
+    isConnectionLoading: isConnectionFirstLoad,
+    isConnectionError: connection.isError,
+    connectionState: connectionData?.state ?? null,
+    hasSourceAccessWarning: sourceWarning !== null,
+    hasDisconnectError: disconnect.isError,
+    hasConnectOutcome: outcome !== null,
+    isPicking,
+    isManualOpen,
+    lastRunHealth,
+  });
+  const isCollapsed = canCollapse && !isExpanded;
 
   return (
     <section
       aria-labelledby={headingId}
       className="@container bg-card border-border overflow-hidden rounded-xl border"
     >
-      <div className="border-border flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2.5",
+          isCollapsed ? null : "border-border border-b",
+        )}
+      >
         {/* Eyebrow styling on a real heading: the block needs a title in the
             outline, and <Eyebrow> is a <p> by design. */}
         <h2
@@ -153,14 +224,56 @@ export function CatalogSourceCard({
         >
           Nguồn đang đọc
         </h2>
+
+        {/* Collapsed: the two ids and the tab name ARE the summary. There is no
+            folder or spreadsheet NAME in `CatalogSource` (the API stores ids,
+            urls and `sheetName` only), and inventing one — or fetching it from
+            Drive in the browser — is not on the table. */}
+        {isCollapsed && configured !== null ? (
+          <p className="text-muted-foreground min-w-0 flex-1 text-xs">
+            <span className="font-mono" title={configured.driveFolderId}>
+              Drive {shortenId(configured.driveFolderId)}
+            </span>
+            <span aria-hidden="true"> · </span>
+            <span className="font-mono" title={configured.spreadsheetId}>
+              Sheet {shortenId(configured.spreadsheetId)}
+            </span>
+            <span aria-hidden="true"> · </span>
+            tab <span className="text-foreground font-medium">{configured.sheetName}</span>
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-2">
           {source.isFetching || connection.isFetching ? (
             <Badge tone="neutral">Đang làm mới…</Badge>
           ) : null}
+
+          {/* One control for the whole card, and it names what it does. In
+              read-only support mode it promises READING, because that is all it
+              can deliver — the editors behind it are gated off (M3.3).
+              `aria-controls` is dropped while folded: the panel it names is
+              unmounted, and pointing at an absent id is worse than pointing at
+              nothing. `aria-expanded` is valid on its own. */}
+          {canCollapse ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-expanded={isExpanded}
+              aria-controls={isCollapsed ? undefined : detailsId}
+              onClick={() => setIsExpanded((open) => !open)}
+            >
+              {isExpanded ? "Thu gọn" : gate.isDisabled ? "Xem chi tiết nguồn" : "Đổi nguồn"}
+            </Button>
+          ) : null}
           {/* Only for the tenants the picker cannot serve, and only once the
               status is known — offering it while the answer is still loading
-              would flash a button at everyone. */}
-          {configured !== null && needsManualEntry && !isPicking && !gate.isDisabled ? (
+              would flash a button at everyone. Suppressed while the card can
+              collapse: the control above already carries this label, and two
+              buttons reading "Đổi nguồn" side by side is a coin toss. The
+              manual editor is still one click away as its own disclosure at the
+              foot of the opened card. */}
+          {!canCollapse && configured !== null && needsManualEntry && !isPicking && !gate.isDisabled ? (
             <Button
               type="button"
               variant="outline"
@@ -175,55 +288,86 @@ export function CatalogSourceCard({
         </div>
       </div>
 
-      <GoogleConnectionPanel
-        connection={connection}
-        outcome={outcome}
-        onDismissOutcome={() => setOutcome(null)}
-        onPickSource={() => setIsPicking(true)}
-        isPicking={isPicking}
-      />
+      {/* Unmounted when collapsed, not hidden: the picker and the manual form
+          hold draft values and server errors, and a form nobody can see must
+          not keep either alive. */}
+      {isCollapsed ? null : (
+        <div id={detailsId}>
+          <GoogleConnectionPanel
+            connection={connection}
+            disconnect={disconnect}
+            outcome={outcome}
+            onDismissOutcome={() => setOutcome(null)}
+            onPickSource={() => setIsPicking(true)}
+            isPicking={isPicking}
+          />
 
-      {isPicking ? (
-        <div className="border-border space-y-3 border-b p-4">
-          <p className="text-muted-foreground max-w-prose text-sm">
-            Chọn thư mục ảnh, bảng Google Sheet và tab dữ liệu ngay tại đây. Nguồn chỉ được lưu ở
-            bước cuối, sau khi bạn xác nhận.
-          </p>
-          <GoogleDrivePicker
-            onSaved={finishSourceChange}
-            onCancel={() => setIsPicking(false)}
+          {isPicking ? (
+            <div className="border-border space-y-3 border-b p-4">
+              <p className="text-muted-foreground max-w-prose text-sm">
+                Chọn thư mục ảnh, bảng Google Sheet và tab dữ liệu ngay tại đây. Nguồn chỉ được lưu
+                ở bước cuối, sau khi bạn xác nhận.
+              </p>
+              <GoogleDrivePicker onSaved={finishSourceChange} onCancel={() => setIsPicking(false)} />
+            </div>
+          ) : (
+            <SourceRegion
+              isFirstLoad={isFirstLoad}
+              showSkeleton={showSkeleton}
+              isError={source.isError}
+              error={source.error}
+              onRetry={() => void source.refetch()}
+              configured={configured}
+              isConnectionPending={isConnectionFirstLoad}
+              canPick={isConnected && !gate.isDisabled}
+              onPick={() => setIsPicking(true)}
+              readOnlyReason={gate.reason}
+            />
+          )}
+
+          {/* The manual editor is not offered at all in read-only mode: a form
+              whose save can only 403 invites typing that gets thrown away. */}
+          {gate.isDisabled ? null : (
+            <ManualSourceDisclosure
+              panelId={manualPanelId}
+              isOpen={isManualOpen}
+              onToggle={() => setIsManualOpen((open) => !open)}
+            >
+              <CatalogSourceForm
+                current={configured ?? undefined}
+                onSaved={finishSourceChange}
+                onCancel={() => setIsManualOpen(false)}
+              />
+            </ManualSourceDisclosure>
+          )}
+        </div>
+      )}
+
+      {/* OUTSIDE the fold, on purpose: a disconnect that failed left the token
+          stored, and that fact must not disappear with the panel that started
+          it. `canCollapse` also refuses to fold while it is on screen, so this
+          renders inside an open card — never orphaned under a summary row.
+
+          …which is why it needs a way OUT (B-4). A mutation keeps its error
+          until it is reset or fired again, so without this button one failed
+          disconnect pinned the whole card open for the rest of the session,
+          long after the operator had read it — and the fold exists precisely so
+          settled configuration stops covering the run's numbers. Dismissing is
+          local UI state, not a write, so it is not gated in support mode; the
+          RETRY is the panel's own "Ngắt kết nối" above, which still asks for
+          confirmation and is still gated. */}
+      {disconnect.isError ? (
+        <div className="border-border border-t p-4">
+          <ApiErrorNotice
+            error={disconnect.error}
+            extraAction={
+              <Button type="button" variant="outline" size="sm" onClick={() => disconnect.reset()}>
+                Đã đọc, ẩn cảnh báo
+              </Button>
+            }
           />
         </div>
-      ) : (
-        <SourceRegion
-          isFirstLoad={isFirstLoad}
-          showSkeleton={showSkeleton}
-          isError={source.isError}
-          error={source.error}
-          onRetry={() => void source.refetch()}
-          configured={configured}
-          isConnectionPending={isConnectionFirstLoad}
-          canPick={isConnected && !gate.isDisabled}
-          onPick={() => setIsPicking(true)}
-          readOnlyReason={gate.reason}
-        />
-      )}
-
-      {/* The manual editor is not offered at all in read-only mode: a form
-          whose save can only 403 invites typing that gets thrown away. */}
-      {gate.isDisabled ? null : (
-        <ManualSourceDisclosure
-          panelId={manualPanelId}
-          isOpen={isManualOpen}
-          onToggle={() => setIsManualOpen((open) => !open)}
-        >
-          <CatalogSourceForm
-            current={configured ?? undefined}
-            onSaved={finishSourceChange}
-            onCancel={() => setIsManualOpen(false)}
-          />
-        </ManualSourceDisclosure>
-      )}
+      ) : null}
     </section>
   );
 }
@@ -289,7 +433,7 @@ function SourceRegion({
         </p>
         {/* In read-only mode the "làm gì tiếp theo" belongs to whoever owns the
             company, not to the person reading over their shoulder. */}
-        <ReadOnlyNotice reason={readOnlyReason} />
+        <ReadOnlyNotice reason={readOnlyReason} className="max-w-prose" />
         {canPick ? (
           <Button type="button" onClick={onPick}>
             Chọn thư mục và bảng

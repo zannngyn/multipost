@@ -1,6 +1,13 @@
 # Tiến độ dự án
 
-> Cập nhật lần cuối: **21/08/2026** · Nhánh đối chiếu: `dev` tại `58aa907` (PR #22)
+> Cập nhật lần cuối: **22/08/2026** · Nhánh đối chiếu: `dev` tại `73b74a4` (PR #34)
+>
+> Bản 22/08 gộp thêm **PR #34** `73b74a4` — **redesign UI wave 1 "Sổ mẫu vải"**
+> (29 commit, +7.309/−1.668, **0 dòng** trong `hooks/services/schemas/api/core/adapters/worker`):
+> theme token mới + theme Astryx `mysp` · IA mới (nav 5+1 nhóm/10 mục; gộp
+> `/scheduled`+`/jobs`→`/posts`, `/channels/groups`→`/channels`, `/access`→`/members`,
+> route cũ thành redirect giữ query) · màn Tổng quan mới · `/compose` bố cục lại ·
+> DESIGN.md ghi lại từ code thật. Chi tiết ở dòng E10 và mục 5.
 >
 > Bản 21/08 gộp thêm **2 merge**: PR #20 `91f66ae` (`/compose` bám sát mẫu PM —
 > trang đơn, modal chọn kênh/nhóm, tone caption, ảnh preview; sweep read-only chế
@@ -32,19 +39,19 @@ thu) chưa làm, và UAT với Facebook thật chưa diễn ra (mục 6). Không
 
 ## 2. Cơ sở đối chiếu
 
-Số liệu **đo lại 21/08/2026** trên worktree ngang `origin/dev` (`58aa907`), kèm lệnh đo:
+Số liệu **đo lại 22/08/2026** trên `dev` (`73b74a4`, sau merge PR #34), kèm lệnh đo:
 
 - `pnpm typecheck` · `pnpm lint` — sạch (exit 0)
-- `pnpm depcruise` — `no dependency violations found (565 modules, 2541 dependencies cruised)`
-- `pnpm exec vitest run` — **3341 test xanh / 125 skip** (3466 tổng, đo 21/08 tại `58aa907`) · **195 file pass / 14 file skip** trên 209 file. File skip là integration test cần DB/key thật (15 file `*.integration.test.ts` trong repo)
-- `pnpm build` — exit 0, artifact thật có (`.next/BUILD_ID` sinh lúc build)
-- Phân bố file test theo tầng (`find src -name '*.test.ts' -o -name '*.test.tsx'` gom theo thư mục cấp 1): core 61 · adapters 49 · app 42 · ui 41 · composition 9 · worker 5 · shared 2 = 209
+- `pnpm depcruise` — `no dependency violations found (604 modules, 2672 dependencies cruised)`
+- `pnpm exec vitest run` — **3570 test xanh / 125 skip** (3695 tổng, đo 22/08 tại `73b74a4` bởi gate PR #34) · **210 file pass / 14 file skip** trên 224 file. File skip là integration test cần DB/key thật
+- `pnpm build` — exit 0, artifact thật có (`.next/BUILD_ID` sinh lúc build; direction contract `e06531fb` xuất hiện trong output build — kiểm bằng grep)
+- Phân bố file test theo tầng (`find src -name '*.test.ts' -o -name '*.test.tsx'` gom theo thư mục cấp 1): core 61 · adapters 49 · app 42 · ui 56 · composition 9 · worker 5 · shared 2 = 224
 - **54 API route** (`find src/app/api -name route.ts | wc -l`)
-- **16 màn** (`find src/app -name page.tsx`): **14 dưới `app/(app)/`** + `/join/[token]` và `/signin` cố ý nằm ngoài app shell
+- **17 màn** (`find src/app -name page.tsx`): **15 dưới `app/(app)/`** (thêm `/posts`; 4 trang cũ `/scheduled` `/jobs` `/channels/groups` `/access` nay là redirect thuần vẫn tính là page) + `/join/[token]` và `/signin` ngoài app shell
 - **22 bảng DB** (`grep -h "= pgTable(" src/adapters/db/schema/*.ts | wc -l` — đếm biểu thức khai bảng, không dính dòng import như cách đếm cũ; mỗi file schema đúng 1 bảng)
 - **17 migration** (`ls drizzle/*.sql | wc -l`, mới nhất `0016_elite_landau.sql`)
 - **8 service Docker** (đếm key dưới `services:` của `docker-compose.yml`: postgres · redis · migrate · web · web-demo · worker · pg-backup · caddy). Bản trước ghi 11 — chạy lại cùng phép đếm trên chính commit cũ (`git show f5afc2b:docker-compose.yml`) cũng chỉ ra 8: con số 11 là đếm sai, không phải compose đổi
-- **134 commit** (`git rev-list --count origin/dev`)
+- **197 commit** (`git rev-list --count origin/dev`)
 
 ## 3. Bảng tiến độ theo epic
 
@@ -59,8 +66,8 @@ Số liệu **đo lại 21/08/2026** trên worktree ngang `origin/dev` (`58aa907
 | E4 AI sinh caption | ✅ | `adapters/ai/{google,openai,registry-store,prompt-store,generation-log,cache}`, usecase `generate-captions.ts`, bảng `ai_generation` + `ai_prompt_template` + `ai_model_policy_override`, màn `/prompts`. Chạy OpenAI-only từ 15/08/2026 (B-5) |
 | E5 Adapter Facebook | 🟡 | Đăng bài ✅ `adapters/meta/{graph-client,facebook-publisher,graph-error-map,fake-publisher}.ts`. E5.1 kết nối kênh: xem mục 3.2 — code xong cả hai cửa (dán token / OAuth), `META_APP_SECRET` + `TENANT_SECRETS_ENC_KEY` nay đã có trong `.env` (đo 20/08 — B-6/B-7 đã gỡ), **còn thiếu duy nhất lần chạy với Page thật = UAT** |
 | E7 Điều phối đa kênh | ✅ | usecase `publish-post.ts` + `retry-post-job.ts` + `reap-post-jobs.ts`, bảng `post_job`/`post_batch`/`channel_group`, `worker/jobs/publish-post-job.ts`, màn `/channels/groups`. Từ M1.3b worker có suspended-guard (tenant bị khoá thì job không chạy) |
-| E10 Giao diện (lõi) | ✅ | **14 màn dưới `app/(app)/`**: `/`, `/compose`, `/bulk`, `/scheduled`, `/jobs`, `/products`, `/sync`, `/channels`, `/channels/groups`, `/prompts`, `/batches/[batchId]`, **`/members`** (thành viên + link mời, M2.3), **`/access`** (nay là *Lịch sử duyệt* read-only, M2.4), **`/platform`** (quản trị MYSP, M3.2); ngoài shell: **`/join/[token]`** (nhận lời mời, M2.2) + `/signin`. **`/compose` redesign trung thành mẫu PM** (PR #19 đợt đầu; PR #20 bám sát mẫu: trang đơn `ComposeFocus.tsx`, modal chọn kênh/nhóm `ChannelPickerDialog.tsx`, tone caption `shared/caption-tone.ts`). **Caption riêng từng kênh** (PR #22 `58aa907`): chọn kênh TRƯỚC khối caption, công tắc "dùng riêng" là dòng đầu, một nút "Viết caption cho N trang" fan-out concurrency 3 + retry từng tab (`caption-fanout.ts`, `useCaptionFanOut.ts`), cảnh báo trùng D1 sớm trên trình duyệt (`caption-duplicate.ts` mirror `core/domain/caption.ts`, test vi phân mirror-vs-core chống drift thuật toán); editor/preview/payload cùng đọc qua một luật `caption-targets.ts` (đóng lỗ B1 editor hiện caption chung nhưng payload gửi caption riêng). **Ảnh hiện ra nơi soạn bài**: route session-backed `/api/media/preview/[driveFileId]` + usecase `get-media-preview.ts`, component `MediaThumb`/`FacebookPreview` — tầng media ký HMAC (tầng P) không mất một dòng verify nào, tái chứng minh bằng 3 ca giả mạo của M1.5. UI hết biết tenant từ M1.4: `DEMO_TENANT_ID` = 0 chỗ, query key theo `useActiveTenant()`, `TenantBoundary` + `TenantSwitcher` |
-| E12 Kiểm thử (rút gọn) | 🟡 | 3341 test xanh (`vitest run`, xem mục 2); 15 file integration (`find src -name '*.integration.test.ts'` — DB write path, AI gateway); 10 smoke script ở `scripts/`; negative matrix đa tenant 12/12 chạy thật qua HTTP (M1.5, docs/09 §5). **E12.3 chạy thật đầu-cuối với Facebook thật và E12.4 UAT: chưa làm** |
+| E10 Giao diện (lõi) | ✅ | **15 màn dưới `app/(app)/`** (từ PR #34 thêm **`/posts`**; 4 màn `/scheduled` `/jobs` `/channels/groups` `/access` nay là redirect thuần): `/`, `/compose`, `/bulk`, `/posts`, `/scheduled`, `/jobs`, `/products`, `/sync`, `/channels`, `/channels/groups`, `/prompts`, `/batches/[batchId]`, **`/members`** (thành viên + link mời, M2.3), **`/access`** (nay là *Lịch sử duyệt* read-only, M2.4), **`/platform`** (quản trị MYSP, M3.2); ngoài shell: **`/join/[token]`** (nhận lời mời, M2.2) + `/signin`. **`/compose` redesign trung thành mẫu PM** (PR #19 đợt đầu; PR #20 bám sát mẫu: trang đơn `ComposeFocus.tsx`, modal chọn kênh/nhóm `ChannelPickerDialog.tsx`, tone caption `shared/caption-tone.ts`). **Caption riêng từng kênh** (PR #22 `58aa907`): chọn kênh TRƯỚC khối caption, công tắc "dùng riêng" là dòng đầu, một nút "Viết caption cho N trang" fan-out concurrency 3 + retry từng tab (`caption-fanout.ts`, `useCaptionFanOut.ts`), cảnh báo trùng D1 sớm trên trình duyệt (`caption-duplicate.ts` mirror `core/domain/caption.ts`, test vi phân mirror-vs-core chống drift thuật toán); editor/preview/payload cùng đọc qua một luật `caption-targets.ts` (đóng lỗ B1 editor hiện caption chung nhưng payload gửi caption riêng). **Ảnh hiện ra nơi soạn bài**: route session-backed `/api/media/preview/[driveFileId]` + usecase `get-media-preview.ts`, component `MediaThumb`/`FacebookPreview` — tầng media ký HMAC (tầng P) không mất một dòng verify nào, tái chứng minh bằng 3 ca giả mạo của M1.5. UI hết biết tenant từ M1.4: `DEMO_TENANT_ID` = 0 chỗ, query key theo `useActiveTenant()`, `TenantBoundary` + `TenantSwitcher`. **Redesign wave 1 "Sổ mẫu vải" (PR #34 `73b74a4`, 22/08):** theme token mới (`globals.css` + theme Astryx `mysp` ở `src/ui/theme/`) · nav 5+1 nhóm/10 mục (`nav-items.ts`) · 3 hub gộp `/posts` (tab Đã hẹn/Nhật ký) · `/channels` (3 tab, tên Page thay id trong nhóm) · `/members` (3 tab, `/access` thành tab Lịch sử duyệt) — 4 route cũ redirect giữ query (`posts/legacy-routes.ts` + test) · màn Tổng quan mới (`overview/OverviewScreen.tsx`: số liệu bấm được không bịa số, việc cần chú ý, chồng thẻ lô đang chạy, health-check sau disclosure) · `/compose` sticky action bar + rail bước + nhóm kênh trong dialog, xoá `compose-theme.ts` · sửa gốc lỗi mọi `<a>` mang attribute `to` không chuẩn (`shell/AppLink` + test 2 chiều) · DESIGN.md ghi lại từ code thật ("Sổ mẫu vải", ramp có 13/11/10px hợp thức). Qua 8 gate `reviewer-qa` + finish-review Impeccable (verdict ship) + final review toàn nhánh PASS. **Onboarding đổi bản chất (nhánh `feat/e10-onboarding-buffer`, 26/08):** wizard thiết lập 6 bước bị thay bằng **khảo sát hồ sơ kiểu Buffer** — 1 màn chào + 4 câu hỏi (`welcome/seller/tools/count/channels`), bước nằm trên URL `?step=`, mỗi bước lưu ngay, "Bỏ qua" ghi `null`. Chi tiết ở mục 3.3. |
+| E12 Kiểm thử (rút gọn) | 🟡 | 3570 test xanh (`vitest run`, xem mục 2); 15 file integration (`find src -name '*.integration.test.ts'` — DB write path, AI gateway); 10 smoke script ở `scripts/`; negative matrix đa tenant 12/12 chạy thật qua HTTP (M1.5, docs/09 §5). **E12.3 chạy thật đầu-cuối với Facebook thật và E12.4 UAT: chưa làm** |
 
 ### Hệ đa tenant & phân quyền (ngoài WBS gốc — track riêng)
 
@@ -94,7 +101,7 @@ Vé còn mở đáng chú ý nhất ghi ở docs/09 §7: **Caddy access log ở 
 |---|---|---|
 | E9 Chế độ B: tự tải file lên | ✅ **Code xong, chưa UAT** | Xem mục 3.1 bên dưới |
 | E11 Vận hành & giám sát | 🟡 | E11.1 có màn `/jobs` + `/api/posts/jobs/[postJobId]/retry`; E11.3 có `worker/reaper-schedule.ts`. **E11.2 kênh cảnh báo và E11.4 sao lưu + thử khôi phục: chưa có** |
-| E10 phần còn lại | 🟡 | Track redesign Astryx (mục 5) chưa phủ hết các màn cũ |
+| E10 phần còn lại | 🟡 | Track redesign Astryx (mục 5) chưa phủ hết các màn cũ. **Nợ mới (mục 3.3):** task 11B — bảng `/platform` chưa hiện cột khảo sát và dải tổng hợp; và lỗi cấp công ty tự động không đi tiếp vào `/onboarding` ở lần mount đầu |
 | E12 đầy đủ | ⬜ | Xem dòng E12 ở Phase 1 |
 | E13 Bàn giao | ⬜ | Có `Dockerfile` + `docker-compose.yml`; chưa có tài liệu vận hành, chưa triển khai production, chưa đào tạo |
 
@@ -174,6 +181,50 @@ Còn lại đúng một việc: **kết nối Page với Facebook thật** — t
 4. Giá trị đã seal mở theo **prefix `enc:v1:`**, không theo tên field; chiều seal vẫn theo tên.
    Bất đối xứng có chủ đích: giá trị ghi bằng luật đặt tên hôm qua phải mở được hôm nay.
 
+### 3.3 E10 — Onboarding: từ wizard thiết lập sang khảo sát hồ sơ
+
+Nhánh `feat/e10-onboarding-buffer` (task 1–10). **Đổi bản chất, không phải đổi giao diện.**
+
+| Trước | Sau |
+|---|---|
+| `/onboarding` là wizard **thiết lập**: tạo công ty → nối Google → chọn nguồn → nối Facebook → nhóm kênh → mời người | `/onboarding` là **khảo sát hồ sơ**: 1 màn chào + 4 câu (nghề, công cụ đang dùng, số trang đang quản, kênh quan tâm) |
+| Người dùng phải tự tạo công ty ở slide đầu | Công ty được **cấp tự động** ở lần đầu vào app (`POST /api/tenants/ensure-default` → `"Công ty của tôi"`), màn "tạo công ty" không còn xuất hiện |
+| Việc nối nguồn sống trong wizard | **Việc nối nguồn quay về `SetupDock` và các route thật** — `/sync` (Google + chọn nguồn), `/data-mapping` (ánh xạ cột), `/channels` (Facebook), `/channels/groups` (nhóm), `/compose` (bài đầu) |
+
+Chốt lại những gì đã dựng:
+
+- Bảng **`tenant_profile`** (`tenant_id` PK, 4 cột đáp án + `completed_at`). `null` ≠ `[]`:
+  `null` = chưa hỏi / đã bỏ qua, `[]` = đã trả lời "không chọn gì". Mã lưu là mã ổn định
+  (`solo_seller`, `smm_tool`…), không lưu chữ tiếng Việt.
+- API `GET/PATCH /api/tenants/onboarding-profile` + `POST …/complete`, chỉ `owner`/`admin`;
+  bốn danh sách hằng mirror giữa `core/usecases/onboarding-profile.ts` và
+  `ui/schemas/onboarding-profile.schema.ts`, khoá chống lệch bằng test của route.
+- `FirstRunGate` chỉ hỏi **một** thứ để quyết định hỏi lại hay không: `completed_at`.
+- Migration `0024` **backfill** mọi tenant đang tồn tại là đã xong → chỉ tenant MỚI thấy khảo sát.
+- Superadmin đọc được số liệu khảo sát ở `/platform` (task 11A: `listTenants` LEFT JOIN
+  `tenant_profile` + `core/domain/onboarding-survey-summary.ts`).
+
+**Còn nợ và lỗi đã đo (task 10, đi bộ trên dev server thật):**
+
+- **Task 11B chưa làm** — phần bảng: cột khảo sát + dải tổng hợp trên `PlatformTenantTable`.
+  Dữ liệu và phép đếm đã có ở tầng dưới; màn `/platform` chưa hiển thị chúng.
+- **Lỗi nhánh cấp công ty tự động (chưa sửa, ngoài phạm vi task 10).** Đo 26/08 với 7 tài
+  khoản đăng ký mới: `POST /api/tenants/ensure-default` trả **201 + `set-cookie` +
+  `wasCreated: true`** và tạo đúng `"Công ty của tôi"`, nhưng **lần mount đó không đi tiếp
+  vào `/onboarding`** — người dùng đứng lại ở `/`. Nguyên nhân đo được:
+  `useAdoptActiveTenant()` gọi `queryClient.removeQueries()` rồi `fetchQuery`, các observer
+  `useMe` đang mounted không nhận query mới nên vẫn báo `tenants: []`;
+  `GET /api/tenants/onboarding-profile` **không hề được gửi**, quyết định của gate kẹt ở
+  `wait`. Lần vào sau (đăng nhập lại / tải lại trang) thì vào khảo sát bình thường.
+  Sửa được là sửa ở `useAdoptActiveTenant` — dùng chung cho đổi công ty, tạo công ty và
+  nhận lời mời — nên cần một việc riêng, không vá trong nhánh này.
+- **Cơ chế `oauth-return-cookie` nay là code chết**: không màn nào truyền `?return=onboarding`
+  nữa, và `resolveReturnScreen` vẫn trỏ về `?step=data` / `?step=facebook` — hai id bước
+  KHÔNG còn tồn tại sau khi máy trạng thái được viết lại. Hai callback thật vẫn quay đúng
+  `/sync` và `/channels?tab=pages` (đã đi bộ), nên chưa ai gặp; nhưng nhánh chết này phải
+  gỡ hoặc trỏ lại trước khi có người bật lại nó.
+
+
 ## 4. Đang bị chặn / sổ nợ
 
 File này là sổ sử: hàng đã xử **giữ nguyên trong bảng** với trạng thái gạch, không xoá.
@@ -189,16 +240,19 @@ File này là sổ sử: hàng đã xử **giữ nguyên trong bảng** với tr
 | ~~B-7~~ | ~~Chưa có `META_APP_SECRET` → luồng OAuth Facebook chưa chạy được lần nào~~ | **Đã gỡ phần chặn (đo 20/08: `META_APP_SECRET` 32 ký tự có trong `.env`)**; OAuth state nay server-side (M1.3b) và đã bị thử giả qua HTTP trong matrix M1.5. Việc còn lại — bấm kết nối với Facebook thật — không còn là blocker cấu hình mà là hạng mục UAT | **Mốc vẫn còn hiệu lực: `data_access_expires_at` của token hiện tại ≈ 26/09/2026** — sau mốc đó phải cấp quyền lại; UAT phải xong trước đó (mục 6) |
 | ~~B-8~~ | ~~Mọi route lấy `tenantId` từ client (query/body/cookie), không đối chiếu với tenant của phiên đăng nhập~~ | **ĐÃ XỬ 20/08/2026** — M1.3b (`b3df9bd`): 36 route lấy tenant từ phiên qua `requireTenantContext`, branded `TenantId` chặn compile-time, UI hết biết tenant (M1.4, `fa4ed41`). Kiểm chứng: **negative matrix M1.5 12/12 chạy thật qua HTTP** trên dev — cookie/body giả bị bỏ qua, tài nguyên tenant khác trả 404, media URL giả tenant → 401 | Chi tiết thiết kế + từng milestone: `docs/09-phan-quyen-da-tenant.md` |
 
-## 5. Track song song: redesign UI trên Astryx
+## 5. Track song song: redesign UI
 
-Không nằm trong WBS gốc. Spec `superpowers/specs/2026-08-14-redesign-ui-astryx-design.md`,
-plan `superpowers/plans/2026-08-14-astryx-b0-shell.md`. Lộ trình B0–B9.
+Không nằm trong WBS gốc. **Từ 21–22/08 track này chuyển hướng**: PM chọn thế giới thị giác
+mới **"Sổ mẫu vải"** qua Impeccable (spec `superpowers/specs/2026-08-21-ui-redesign-design.md`,
+plan `superpowers/plans/2026-08-21-ui-redesign-wave1.md`) — thay cho lộ trình B0–B9 cũ
+(spec 2026-08-14). Mốc B9 (bridge `tailwind-theme.css`) vẫn giữ nguyên vị trí là việc tương lai.
 
 | Giai đoạn | Trạng thái |
 |---|---|
-| B0 nền + shell điều hướng | ✅ commit `c122645` → `799b028` |
-| B1 màn Sản phẩm (chốt pattern rows + inspector) | ✅ commit `816f3ea` |
-| B2–B9 | ⬜ Chưa có plan. B0 chốt: phải chờ B1 xong mới viết plan B2–B8, viết trước là đoán |
+| B0 nền + shell điều hướng (track cũ) | ✅ commit `c122645` → `799b028` |
+| B1 màn Sản phẩm (track cũ, pattern rows + inspector) | ✅ commit `816f3ea` |
+| **Wave 1 "Sổ mẫu vải"** — theme + IA + Tổng quan + Compose | ✅ PR #34 `73b74a4` (22/08). 8 gate + finish-review ship + final PASS |
+| **Wave 2** — cuốn `/bulk` `/sync` `/products` `/prompts` + ruột bảng `/posts` vào hệ; lỗ rule-5 `skipped=Y`; vòng đăng nhanh 30 mã/sáng; ~10 dòng dọn tên gọi | ⬜ Backlog đã ghi trong spec §7 + ledger wave 1. **PR #33** (redesign 15 màn trên theme neutral, làm trước khi chốt "Sổ mẫu vải") đã được PM **đóng không merge** 22/08 — bị vượt bởi #34 về thế giới thị giác lẫn IA; branch còn trên remote làm nguyên liệu wave 2 |
 
 Ngoài lộ trình: màn **Kênh** (`/channels`) dựng thẳng trên Astryx theo pattern rows +
 inspector của B1; các màn mới của lộ trình đa tenant (**`/members`, `/platform`, `/access`**)

@@ -20,6 +20,7 @@ import type {
   PostJobMedia,
   PostJobStatus,
 } from "@/core/domain/post-job";
+import type { ProductOrigin } from "@/core/domain/product";
 import type { PostJobStage } from "@/core/domain/post-job-progress";
 import type { TenantId } from "@/core/domain/tenant-context";
 
@@ -34,6 +35,17 @@ export interface NewPostBatch {
   readonly note: string | null;
   /** Operator user id; null for system/worker-created batches. */
   readonly createdBy: string | null;
+  /**
+   * Gap the spacing gate keeps between two posts of THIS run, in milliseconds.
+   * Absent/null = this run picked nothing, so the tenant's
+   * `PublishSettings.spacingMs` applies — the behaviour of every batch created
+   * before the column existed.
+   *
+   * Already validated by the creator (core/domain/publish-spacing): an
+   * implementer stores it as given and lets the CHECK constraint be the last
+   * word. PENDING(E1): still a gap between posts of the SAME CHANNEL.
+   */
+  readonly spacingMs?: number | null;
 }
 
 export interface NewPostJob {
@@ -41,6 +53,13 @@ export interface NewPostJob {
   readonly tenantId: TenantId;
   readonly batchId: string;
   readonly productCode: string;
+  /**
+   * REQUIRED on the write path even though `PostJob` reads it as optional: the
+   * creator always holds the product it built the post from, and defaulting to
+   * `sheet` here would invent an origin for a post typed by hand. A caller that
+   * cannot say must not guess.
+   */
+  readonly productOrigin: ProductOrigin;
   readonly color: string;
   readonly channelId: string;
   readonly format: PostFormat;
@@ -316,6 +335,21 @@ export interface PostJobRepo {
    * the spacing gate. Null when the channel never published.
    */
   findLastPublishedAt(tenantId: TenantId, channelId: string): Promise<Date | null>;
+
+  /**
+   * The OTHER input of the spacing gate: `post_batch.spacing_ms` for this run.
+   *
+   * Null means "this run picked nothing" — a batch created before the column
+   * existed, or an operator who left the field empty — and the caller then uses
+   * the tenant setting, which is exactly the old behaviour.
+   *
+   * A narrow read on purpose: the gate runs on every publish attempt and must
+   * not pay for `getBatchSummary`, which loads every job of the batch.
+   * The VALUE is not validated here; core owns the range (resolveSpacingMs), so
+   * a row that somehow escaped the CHECK constraint is reported and ignored
+   * instead of stranding the job.
+   */
+  findBatchSpacingMs(tenantId: TenantId, batchId: string): Promise<number | null>;
 
   /** Recomputes and stores post_batch.status from its jobs; returns the summary. */
   refreshBatchStatus(tenantId: TenantId, batchId: string): Promise<PostBatchSummary>;

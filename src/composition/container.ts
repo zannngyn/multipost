@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
+import { makeScryptPasswordHasher } from "@/adapters/auth/scrypt-password-hasher";
 import { makeSystemClock } from "@/adapters/clock/system-clock";
 import { makeMediaSigner } from "@/adapters/crypto/media-signer";
 import type { TenantId } from "@/core/domain/tenant-context";
@@ -7,26 +8,33 @@ import { DrizzleAccessRequestRepo } from "@/adapters/db/access-request-repo.driz
 import { DrizzleAccountRepo } from "@/adapters/db/account-repo.drizzle";
 import { DrizzleInviteRepo } from "@/adapters/db/invite-repo.drizzle";
 import { DrizzleMemberRepo } from "@/adapters/db/member-repo.drizzle";
+import { DrizzleAppearanceSettingRepo } from "@/adapters/db/appearance-setting-repo.drizzle";
 import { DrizzlePlatformTenantRepo } from "@/adapters/db/platform-tenant-repo.drizzle";
 import { DrizzleSupportSessionRepo } from "@/adapters/db/support-session-repo.drizzle";
 import { DrizzleOAuthStateStore } from "@/adapters/db/oauth-state-store.drizzle";
 import { DrizzleTenantOnboardingRepo } from "@/adapters/db/tenant-onboarding-repo.drizzle";
+import { DrizzleTenantProfileRepo } from "@/adapters/db/tenant-profile-repo.drizzle";
 import { DrizzleCatalogConfigRepo } from "@/adapters/db/catalog-config-repo.drizzle";
 import { DrizzleChannelConfigRepo } from "@/adapters/db/channel-config-repo.drizzle";
 import { DrizzleChannelGroupRepo } from "@/adapters/db/channel-group-repo.drizzle";
+import { DrizzleCredentialRepo } from "@/adapters/db/credential-repo.drizzle";
 import { closeDbHandle, getDbHandle, type Database } from "@/adapters/db/client";
 import { DrizzleGoogleOAuthRepo } from "@/adapters/db/google-oauth-repo.drizzle";
 import { DrizzleMediaRepo } from "@/adapters/db/media-repo.drizzle";
 import { makeSecretBox, type SecretBox } from "@/adapters/db/secret-box";
 import { DrizzlePostDraftRepo } from "@/adapters/db/post-draft-repo.drizzle";
 import { DrizzlePostJobRepo } from "@/adapters/db/post-job-repo.drizzle";
+import { DrizzleUploadTicketRepo } from "@/adapters/db/upload-ticket-repo.drizzle";
 import { DrizzleProductRepo } from "@/adapters/db/product-repo.drizzle";
 import { DrizzleSyncRunRepo } from "@/adapters/db/sync-run-repo.drizzle";
 import { DrizzleTenantRepo } from "@/adapters/db/tenant-repo.drizzle";
 import { DrizzleUserRepo } from "@/adapters/db/user-repo.drizzle";
 import { makePinoLogger } from "@/adapters/logging/pino-logger";
 import { makeDriveVideoProbe } from "@/adapters/media/drive-video-probe";
-import { makeLocalBlobStore } from "@/adapters/media/local-blob-store";
+import { makeMinioBlobStore } from "@/adapters/media/minio-blob-store";
+import { makeCsvCatalogTextSource } from "@/adapters/catalog/csv-text-source";
+import { makeSheetCatalogTextSource } from "@/adapters/catalog/sheet-text-source";
+import { makeLocalCatalogFileStore } from "@/adapters/catalog/local-catalog-file-store";
 import { makeLocalMediaCache } from "@/adapters/media/local-media-cache";
 import { makeFfprobeMediaProbe } from "@/adapters/media/ffprobe-probe";
 import { makeFacebookOAuthClient } from "@/adapters/meta/facebook-oauth";
@@ -64,6 +72,10 @@ import {
 } from "@/core/usecases/check-operator-access";
 import { makeCreateTenant, type CreateTenant } from "@/core/usecases/create-tenant";
 import {
+  makeEnsureDefaultTenant,
+  type EnsureDefaultTenant,
+} from "@/core/usecases/ensure-default-tenant";
+import {
   makeGetOperatorOverview,
   type GetOperatorOverview,
 } from "@/core/usecases/get-operator-overview";
@@ -73,11 +85,13 @@ import {
 } from "@/core/usecases/join-with-invite";
 import { makeManageInvites, type ManageInvites } from "@/core/usecases/manage-invites";
 import { makeManageMembers, type ManageMembers } from "@/core/usecases/manage-members";
+import { makePlatformAppearance } from "@/core/usecases/platform-appearance";
 import { makePlatformTenants, type PlatformTenants } from "@/core/usecases/platform-tenants";
 import {
   makeManageSupportSessions,
   type ManageSupportSessions,
 } from "@/core/usecases/manage-support-sessions";
+import { makePasswordAuth, type PasswordAuth } from "@/core/usecases/password-auth";
 import {
   makeResolveOperatorAccount,
 } from "@/core/usecases/resolve-operator-account";
@@ -122,6 +136,18 @@ import {
 import { makeReadMediaBytes, type ReadMediaBytes } from "@/core/usecases/read-media-bytes";
 import { makeUploadMedia, type UploadMedia } from "@/core/usecases/upload-media";
 import {
+  makeIssueUploadTickets,
+  type IssueUploadTickets,
+} from "@/core/usecases/issue-upload-tickets";
+import {
+  makeConfirmUpload,
+  type ConfirmUpload,
+} from "@/core/usecases/confirm-upload";
+import {
+  makeDetectUploadCode,
+  type DetectUploadCode,
+} from "@/core/usecases/detect-upload-code";
+import {
   makeCancelScheduledJob,
   type CancelScheduledJob,
 } from "@/core/usecases/cancel-scheduled-job";
@@ -134,6 +160,23 @@ import {
   type ReschedulePostJob,
 } from "@/core/usecases/reschedule-post-job";
 import { makeGetCatalogSource, type GetCatalogSource } from "@/core/usecases/get-catalog-source";
+import { makeGetSetupProgress, type GetSetupProgress } from "@/core/usecases/get-setup-progress";
+import {
+  makeCompleteOnboarding,
+  makeGetOnboardingProfile,
+  makeSaveOnboardingProfile,
+  type CompleteOnboarding,
+  type GetOnboardingProfile,
+  type SaveOnboardingProfile,
+} from "@/core/usecases/onboarding-profile";
+import {
+  makeProfileCatalogSource,
+  type ProfileCatalogSource,
+} from "@/core/usecases/profile-catalog-source";
+import {
+  makeUploadCatalogFile,
+  type UploadCatalogFile,
+} from "@/core/usecases/upload-catalog-file";
 import {
   makeListCatalogProducts,
   type ListCatalogProducts,
@@ -161,11 +204,13 @@ import {
   loadConfig,
   loadMediaConfig,
   loadMediaCacheConfig,
-  loadUploadConfig,
+  loadCatalogFileConfig,
+  loadMinioConfig,
   loadMetaConfig,
   loadMetaOAuthConfig,
   loadOnboardingConfig,
   loadSecretsConfig,
+  loadUploadConfig,
   loadVideoConfig,
   type Config,
   type EnvRecord,
@@ -173,7 +218,12 @@ import {
 import { makeLazyGoogleSources } from "./google-sources";
 import { makeOperatorAccessGate, type OperatorAccessGate } from "./operator-access-gate";
 import { makeOAuthStateService, type OAuthStateService } from "./oauth-state-service";
+import {
+  makeLazyAuthRateLimiter,
+  type AuthRateLimiter,
+} from "./auth-rate-limiter";
 import { makeOperatorAccountGate, type OperatorAccountGate } from "./operator-account-gate";
+import { makeAppearanceGate, type AppearanceGate } from "./appearance-gate";
 import { makeRequirePlatformAdmin, type RequirePlatformAdmin } from "./require-platform-admin";
 import { makeRequireTenant, type RequireTenant } from "./require-tenant";
 
@@ -194,13 +244,49 @@ export interface Usecases {
   getSyncStatus: GetSyncStatus;
   /** E2 — "nguồn dữ liệu" panel: which Drive folder / Sheet this tenant reads. */
   getCatalogSource: GetCatalogSource;
+  /**
+   * E2 — onboarding: dry-run a tenant's Sheet/Drive and report how much of it
+   * this tool can actually use, BEFORE anything is configured.
+   */
+  profileCatalogSource: ProfileCatalogSource;
+  /**
+   * E2/phase 3 — the tenant hands us a CSV instead of connecting a Sheet. Reads
+   * it BEFORE storing the bytes, so an unreadable file is refused while the
+   * operator is still looking at the screen.
+   */
+  uploadCatalogFile: UploadCatalogFile;
   /** E2 — point the tenant at another folder/sheet. Does NOT trigger a sync. */
   updateCatalogSource: UpdateCatalogSource;
+  /**
+   * First-run — the six setup flags behind the checklist and the dock, read in
+   * ONE request so the dock can ride in the shell without costing five.
+   */
+  getSetupProgress: GetSetupProgress;
+  /**
+   * E10 — the onboarding survey (spec §8). Three verbs on one row: read it so a
+   * half-finished flow reopens where it stopped, save ONE step at a time, and
+   * stamp `completed_at` once — that stamp is what stops the flow reappearing.
+   */
+  getOnboardingProfile: GetOnboardingProfile;
+  saveOnboardingProfile: SaveOnboardingProfile;
+  completeOnboarding: CompleteOnboarding;
   /** E2/E3 — catalog screen: products with their composable/blocked verdict. */
   listCatalogProducts: ListCatalogProducts;
   composePost: ComposePost;
   /** E9 — mode B: register operator-supplied files as media assets. */
   uploadMedia: UploadMedia;
+  /**
+   * E9/MinIO — stage 1 of the presigned-upload path: sign upload URLs
+   * without touching a byte. Stage 3 (confirm) lands in a later task.
+   */
+  issueUploadTickets: IssueUploadTickets;
+  /** E9/MinIO — stage 3: sniff the staged bytes, then promote and register. */
+  confirmUpload: ConfirmUpload;
+  /**
+   * E9 — resolve a product code out of dropped file names before a byte
+   * uploads, so the compose screen can prefill/validate it on drop.
+   */
+  detectUploadCode: DetectUploadCode;
   /** E9.4 — periodic sweep of uploads nobody posted. */
   cleanupUploads: CleanupUploads;
   /** E3.6 — periodic sweep of the Drive byte cache (TTL-based). */
@@ -250,6 +336,19 @@ export interface Usecases {
    * (short-cached; a suspension is felt within ACCOUNT_CACHE_TTL_MS).
    */
   operatorAccounts: OperatorAccountGate;
+  /**
+   * E-mail + password sign-up / sign-in / admin reset. The DECISION only —
+   * Auth.js still mints the session and `decideSignIn` still has the last word
+   * through the account tables, exactly as for Google and Facebook.
+   */
+  passwordAuth: PasswordAuth;
+  /**
+   * The sliding window in front of the two password doors (per IP, per
+   * address). Exposed on the container rather than hidden inside the usecase
+   * because the KEY is an interface-layer fact: only the server action can see
+   * the caller's IP.
+   */
+  authRateLimit: AuthRateLimiter;
   /** M1.2 — `GET /api/me`: account + companies + active tenant. */
   getOperatorOverview: GetOperatorOverview;
   /**
@@ -261,6 +360,11 @@ export interface Usecases {
   oauthStates: OAuthStateService;
   /** M2.1 — self-service company creation; the creator becomes owner. */
   createTenant: CreateTenant;
+  /**
+   * E10 — first entry without a company provisions one (spec §1). Idempotent:
+   * an account that already belongs somewhere gets that company back.
+   */
+  ensureDefaultTenant: EnsureDefaultTenant;
   /** M2.2 — invite links: list / create (role ladder) / revoke. */
   invites: ManageInvites;
   /** M2.2 — `POST /api/join`: token → membership (NoMembership state's door). */
@@ -274,6 +378,12 @@ export interface Usecases {
   requirePlatformAdmin: RequirePlatformAdmin;
   /** M3.2 — platform tenant administration: list / provision / (un)suspend. */
   platformTenants: PlatformTenants;
+  /**
+   * M3.4 — the colour of the product, one value for every company. Exposed as
+   * the GATE, not the bare usecase: the root layout reads it on the way to
+   * every page, so the cache is not optional and must not be bypassable.
+   */
+  platformAppearance: AppearanceGate;
   /** M3.3 — support mode: audited visits into customer tenants, read-only. */
   supportSessions: ManageSupportSessions;
   /**
@@ -681,6 +791,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const syncRuns = new DrizzleSyncRunRepo(deps.db, deps.logger);
   const catalogConfig = new DrizzleCatalogConfigRepo(deps.db, deps.logger);
   const postJobs = new DrizzlePostJobRepo(deps.db);
+  // MinIO presigned upload, stage 1 — its own table, its own repo (Task 5).
+  const uploadTickets = new DrizzleUploadTicketRepo(deps.db);
   const channels = new DrizzleChannelConfigRepo(deps.db, {
     box: makeTenantSecretBox(deps.logger),
     logger: deps.logger,
@@ -688,6 +800,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
   const channelGroups = new DrizzleChannelGroupRepo(deps.db);
   // E10 — one open compose draft per operator per tenant.
   const postDrafts = new DrizzlePostDraftRepo(deps.db);
+  // E10 — the onboarding survey answers; one row per tenant.
+  const tenantProfiles = new DrizzleTenantProfileRepo(deps.db);
   // E11.1/E8.4 audit: session e-mail -> app_user.id for every operator action.
   const users = new DrizzleUserRepo(deps.db);
   // E1.4 — who may sign in. Read on every request through `operatorAccess`.
@@ -714,9 +828,24 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     tiktok: overrides.publishers?.tiktok ?? makeLazyTikTokPublisher(deps.logger),
   };
   const drive = overrides.drive ?? google.drive;
-  // E9 — mode B bytes. Cheap to build (a path, no connection), so unlike the
-  // Google sources it needs no lazy wrapper.
-  const blobs = overrides.blobs ?? makeLocalBlobStore({ root: loadUploadConfig().UPLOAD_STORAGE_ROOT });
+  // E9 — mode B bytes, now MinIO (Task 11). `loadMinioConfig()`'s return value
+  // is field-for-field the adapter's own `MinioBlobStoreConfig`, so no mapping
+  // and no cast — see the type doc on that interface for why.
+  const blobs = overrides.blobs ?? makeMinioBlobStore({ config: loadMinioConfig(), logger: deps.logger });
+
+  // Phase 3 — a tenant may hand us a CSV instead of connecting a Google Sheet.
+  // Its own root, never the upload root: these bytes ARE the product catalog,
+  // so the orphan sweep that owns UPLOAD_STORAGE_ROOT must not reach them.
+  const catalogFiles = makeLocalCatalogFileStore({
+    root: loadCatalogFileConfig().CATALOG_STORAGE_ROOT,
+  });
+  // Order is not a priority list — the run picks by the tenant's own
+  // `textSource` ref via canRead(); both are always offered.
+  const csvCatalogSource = makeCsvCatalogTextSource({ logger: deps.logger });
+  const catalogSources = [
+    csvCatalogSource,
+    makeSheetCatalogTextSource({ sheet: overrides.sheet ?? google.sheet, logger: deps.logger }),
+  ];
   // E3.6 — read-through cache in front of Drive. Cheap to build (a path and a
   // TTL, no connection), so like the blob store it needs no lazy wrapper; both
   // of its variables have working defaults, so no deployment must set them.
@@ -774,6 +903,25 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     clock: deps.clock,
     logger: deps.logger,
   });
+  /**
+   * Password sign-in. The hasher is stateless and cheap to build (the cost is
+   * paid per call, in `scrypt`), so unlike Redis/Google it needs no lazy seam.
+   */
+  const authRateLimit = makeLazyAuthRateLimiter({
+    redisUrl: deps.config.REDIS_URL,
+    clock: deps.clock,
+    logger: deps.logger,
+  });
+  // Registered with the SAME set the lazy queue/progress connections use, so
+  // `closeContainer()` drains it without knowing whether it was ever opened.
+  lazyQueueClosers.add(() => authRateLimit.close());
+  const passwordAuth = makePasswordAuth({
+    credentials: new DrizzleCredentialRepo(deps.db, { logger: deps.logger }),
+    accounts: accountRepo,
+    hasher: makeScryptPasswordHasher(),
+    clock: deps.clock,
+    logger: deps.logger,
+  });
   const supportSessionRepo = new DrizzleSupportSessionRepo(deps.db, { logger: deps.logger });
   const tenantGate = makeRequireTenant({
     accounts: accountRepo,
@@ -804,6 +952,22 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     },
     randomSuffix: () => randomBytes(2).toString("hex"),
   });
+  /**
+   * Creating a company mints a NEW membership — every cache over accounts and
+   * memberships is stale the same instant, so they drop HERE (the same
+   * discipline as decideAccessRequest below). Without this, /api/me and
+   * requireTenant would not see the new company for up to a TTL.
+   *
+   * Named rather than inlined into `usecases.createTenant` because
+   * `ensureDefaultTenant` delegates to the SAME wrapper: a company it
+   * provisions must invalidate exactly as much.
+   */
+  const createTenant: CreateTenant = async (input) => {
+    const result = await baseCreateTenant(input);
+    operatorAccounts.invalidateAll();
+    tenantGate.invalidateAll();
+    return result;
+  };
   const inviteRepo = new DrizzleInviteRepo(deps.db, { logger: deps.logger });
   const baseJoinWithInvite = makeJoinWithInvite({
     invites: inviteRepo,
@@ -823,6 +987,19 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     newToken: () => randomBytes(32).toString("hex"),
     hashToken: hashInviteToken,
     randomSuffix: () => randomBytes(2).toString("hex"),
+  });
+  /**
+   * M3.4 — the appearance setting, behind its own short cache (see
+   * `appearance-gate.ts`): the root layout asks for it on the way to EVERY
+   * page, so an uncached read would be a query per page view.
+   */
+  const platformAppearance = makeAppearanceGate({
+    appearance: makePlatformAppearance({
+      settings: new DrizzleAppearanceSettingRepo(deps.db, { logger: deps.logger }),
+      logger: deps.logger,
+    }),
+    clock: deps.clock,
+    logger: deps.logger,
   });
   /**
    * The cache is dropped the instant a decision is written — wired HERE rather
@@ -855,6 +1032,8 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     syncCatalog: makeSyncCatalog({
       drive,
       sheet: overrides.sheet ?? google.sheet,
+      catalogSources,
+      catalogFiles,
       catalogConfig,
       products,
       media,
@@ -864,6 +1043,25 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     }),
     getSyncStatus: makeGetSyncStatus({ syncRuns, logger: deps.logger }),
     getCatalogSource: makeGetCatalogSource({ catalogConfig, logger: deps.logger }),
+    profileCatalogSource: makeProfileCatalogSource({
+      sheet: overrides.sheet ?? google.sheet,
+      drive,
+      // Without these the compatibility report cannot read an uploaded file, so
+      // a CSV tenant would see a report describing a source they do not use.
+      catalogSources,
+      catalogFiles,
+      logger: deps.logger,
+    }),
+    uploadCatalogFile: makeUploadCatalogFile({
+      // The SAME reader the later sync uses — a file that previews here and
+      // fails at sync time would be the worst possible outcome.
+      catalogSource: csvCatalogSource,
+      catalogFiles,
+      catalogConfig,
+      users,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
     updateCatalogSource: makeUpdateCatalogSource({
       catalogConfig,
       logger: deps.logger,
@@ -874,10 +1072,35 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       browser: google.browser,
       clock: deps.clock,
     }),
-    listCatalogProducts: makeListCatalogProducts({ catalog: products, logger: deps.logger }),
+    getSetupProgress: makeGetSetupProgress({
+      google: googleOAuth,
+      catalogConfig,
+      channels,
+      groups: channelGroups,
+      postJobs,
+      logger: deps.logger,
+    }),
+    getOnboardingProfile: makeGetOnboardingProfile({ profiles: tenantProfiles, logger: deps.logger }),
+    saveOnboardingProfile: makeSaveOnboardingProfile({ profiles: tenantProfiles, logger: deps.logger }),
+    completeOnboarding: makeCompleteOnboarding({
+      profiles: tenantProfiles,
+      // Injected, not `new Date()`: `completed_at` is the one value that decides
+      // whether the flow ever appears again, so a test must be able to pin it.
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+    listCatalogProducts: makeListCatalogProducts({
+      catalog: products,
+      // Without this the stock verdict always runs in `numeric` mode, so a
+      // tenant on a textual/disabled policy would read a stock badge that does
+      // not match the gate their posts actually go through.
+      catalogConfig,
+      logger: deps.logger,
+    }),
     composePost: makeComposePost({
       products,
       media,
+      catalogConfig,
       logger: deps.logger,
       videoProbe: overrides.videoProbe ?? makeLazyVideoProbe(drive, deps.logger),
     }),
@@ -889,11 +1112,39 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       // so it is a safe path segment for the blob store.
       newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
     }),
+    // Stage 1 of the presigned-upload path. Shares the one `blobs` wired above
+    // (MinIO since Task 11) with every other upload usecase.
+    issueUploadTickets: makeIssueUploadTickets({
+      blobs,
+      tickets: uploadTickets,
+      logger: deps.logger,
+      newAssetId: () => `upload_${randomUUID().replace(/-/g, "")}`,
+      ticketTtlSeconds: 30 * 60,
+    }),
+    // Stage 3 of the presigned-upload path: sniffs the staged bytes before
+    // promoting them, on the same MinIO-backed `blobs` (Task 11).
+    confirmUpload: makeConfirmUpload({
+      tickets: uploadTickets,
+      blobs,
+      media,
+      clock: deps.clock,
+      logger: deps.logger,
+    }),
+    detectUploadCode: makeDetectUploadCode({
+      products,
+      catalogConfig,
+      logger: deps.logger,
+    }),
     cleanupUploads: makeCleanupUploads({
       media,
       blobs,
+      // Ticket sweep (Task 8), on the same MinIO-backed `blobs` (Task 11).
+      tickets: uploadTickets,
       clock: deps.clock,
       logger: deps.logger,
+      // I4: was never wired — the worker enqueued an empty payload and the
+      // usecase silently fell back to its own default every tick.
+      ttlHours: loadUploadConfig().UPLOAD_ORPHAN_TTL_HOURS,
     }),
     cleanupMediaCache: makeCleanupMediaCache({
       cache: mediaCache,
@@ -907,6 +1158,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       clock: deps.clock,
       db: deps.db,
       redisUrl: deps.config.REDIS_URL,
+      // Claim validation compares a caption against the labels of THIS tenant's
+      // sheet; without it an external tenant is judged by MYSP's column names.
+      catalogConfig,
     }),
     promptTemplates: makeLazyPromptTemplates({
       logger: deps.logger,
@@ -918,6 +1172,9 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       products,
       channels,
       queue,
+      // Same stock policy the compose screen used; without it a tenant whose
+      // sheet spells stock in words has every code rejected as NaN.
+      catalogConfig,
       // Bug B6 — turns the session e-mail into the `app_user.id` stored in
       // `post_batch.created_by`; without it every batch is unattributed.
       users,
@@ -932,6 +1189,10 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
       products,
       channels,
       publishers,
+      // Runs in the worker: the second stock check (business rule 3) must read
+      // the SAME policy the compose step did, or a post clears the gate at
+      // compose time and dies here.
+      catalogConfig,
       // Doc 10 §5.2 — a suspended tenant must not publish, and the worker has
       // no session to check it for us.
       tenants,
@@ -972,23 +1233,24 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
     operatorAccess,
     accessRequests,
     operatorAccounts,
+    passwordAuth,
+    authRateLimit,
     getOperatorOverview: makeGetOperatorOverview({ accounts: accountRepo, logger: deps.logger }),
     oauthStates: makeOAuthStateService({
       store: new DrizzleOAuthStateStore(deps.db, { logger: deps.logger }),
       clock: deps.clock,
     }),
+    createTenant,
     /**
-     * Both onboarding writes mint a NEW membership — every cache over accounts
-     * and memberships is stale the same instant, so the caches drop HERE (the
-     * same discipline as decideAccessRequest above). Without this, /api/me and
-     * requireTenant would not see the new company for up to a TTL.
+     * E10 — lazy provisioning on first entry. It reads memberships through the
+     * RAW repo, not `operatorAccounts`: a cached "no memberships" would
+     * provision a second company for someone who already has one.
      */
-    createTenant: async (input) => {
-      const result = await baseCreateTenant(input);
-      operatorAccounts.invalidateAll();
-      tenantGate.invalidateAll();
-      return result;
-    },
+    ensureDefaultTenant: makeEnsureDefaultTenant({
+      accounts: accountRepo,
+      createTenant,
+      logger: deps.logger,
+    }),
     invites: makeManageInvites({
       invites: inviteRepo,
       clock: deps.clock,
@@ -1043,6 +1305,7 @@ export function makeUsecases(deps: Infra, overrides: UsecaseOverrides = {}): Use
         return result;
       },
     },
+    platformAppearance,
     supportSessions: makeManageSupportSessions({
       sessions: supportSessionRepo,
       clock: deps.clock,
@@ -1240,6 +1503,14 @@ export type {
   OperatorAccountState as OperatorAccountSessionState,
 } from "@/core/usecases/resolve-operator-account";
 export type { OperatorOverview } from "@/core/usecases/get-operator-overview";
+
+/**
+ * Password sign-in vocabulary for the app layer (which may not import
+ * `core/usecases` or `core/ports` — docs/07 §2): what `authorize` hands Auth.js,
+ * and the two budgets the server action spends before it hashes anything.
+ */
+export type { PasswordIdentity } from "@/core/usecases/password-auth";
+export { AUTH_EMAIL_RULE, AUTH_IP_RULE } from "./auth-rate-limiter";
 export type { PlatformRole } from "@/core/domain/account";
 export type { TenantContext, TenantId } from "@/core/domain/tenant-context";
 

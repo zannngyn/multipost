@@ -3,9 +3,11 @@ import {
   canOperatorRetryPostJob,
   isPostJobStatus,
   postJobOperatorMessage,
+  postJobProductOrigin,
   type PostFormat,
   type PostJobStatus,
 } from "@/core/domain/post-job";
+import type { ProductOrigin } from "@/core/domain/product";
 import { isTenantId } from "@/core/domain/tenant";
 import type { Logger } from "@/core/ports/infra";
 import type { PostJobCursor, PostJobRepo } from "@/core/ports/post-job-repo";
@@ -44,6 +46,13 @@ export interface PostJobLogEntry {
   readonly postJobId: string;
   readonly batchId: string;
   readonly productCode: string;
+  /**
+   * Where this post's product text came from, stamped at creation. Read from
+   * the job row itself, never joined from `product`: months later that row may
+   * be gone, and this log is exactly where "bài này lấy dữ liệu từ đâu" gets
+   * asked.
+   */
+  readonly productOrigin: ProductOrigin;
   readonly color: string;
   readonly channelId: string;
   readonly format: PostFormat;
@@ -121,6 +130,7 @@ export function makeListPostJobs(deps: ListPostJobsDeps) {
       postJobId: job.id,
       batchId: job.batchId,
       productCode: job.productCode,
+      productOrigin: postJobProductOrigin(job),
       color: job.color,
       channelId: job.channelId,
       format: job.format,
@@ -153,6 +163,9 @@ export function makeListPostJobs(deps: ListPostJobsDeps) {
       limit,
       returned: items.length,
       has_more: page.nextCursor !== null,
+      // How many rows on this page were built from typed data: the cheap
+      // version of "which posts did not come from the synced catalog?".
+      manual_origin_count: items.filter((item) => item.productOrigin === "manual").length,
     });
 
     return {

@@ -61,6 +61,13 @@ const ProductSchema = z.strictObject({
  * a job outside the tenant; that needs a `POST_JOB_NOT_FOUND` code, which
  * `errors.ts` does not have yet.
  */
+const CoverImageSchema = z.strictObject({
+  ref: z.string().min(1),
+  mimeType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+  dataBase64: z.string().min(1),
+  kind: z.enum(["real", "ai", "unknown"]).default("real"),
+});
+
 const BodySchema = z.object({
   product: ProductSchema,
   channels: z
@@ -73,6 +80,7 @@ const BodySchema = z.object({
    * a prompt). Absent = `mac-dinh` = today's prompt, unchanged.
    */
   tone: z.enum(CAPTION_TONES, { error: "Tông giọng không hợp lệ." }).optional(),
+  coverImage: CoverImageSchema.optional(),
 });
 
 export const dynamic = "force-dynamic";
@@ -103,10 +111,9 @@ export async function POST(request: Request): Promise<Response> {
         platform: CHANNEL_CATALOG[channelId].platform,
         contentType: CHANNEL_CATALOG[channelId].contentType,
       })),
-      // TODO(E3/E4): send the cover image once the media layer can hand over
-      // resized bytes (ADR-001 §4: exactly ONE cover image, never the album).
-      // The web layer must not download from Drive itself.
-      vision: { mode: "none" },
+      vision: body.coverImage
+        ? { mode: "single", image: body.coverImage }
+        : { mode: "none" },
       // Omitted entirely when the client sent nothing, so the usecase sees the
       // same input it saw before tones existed.
       ...(body.tone ? { tone: body.tone } : {}),

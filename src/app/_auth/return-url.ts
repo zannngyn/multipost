@@ -6,7 +6,7 @@
  * URLs a browser would happily follow off-site, so both are rejected.
  */
 
-export const DEFAULT_RETURN_URL = "/";
+export const DEFAULT_RETURN_URL = "/overview";
 
 export function safeReturnUrl(value: unknown): string {
   if (typeof value !== "string") return DEFAULT_RETURN_URL;

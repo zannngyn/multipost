@@ -1,5 +1,5 @@
 /**
- * Pure parts of "Viết caption cho N trang" — what the run consists of, and how
+ * Pure parts of "Viết caption cho N kênh" — what the run consists of, and how
  * it is reported. The hook (`useCaptionFanOut`) owns the timers and the calls;
  * everything here can be tested without React or a network.
  */
@@ -149,7 +149,7 @@ function describeUnknownFailure(error: unknown): string {
 }
 
 /**
- * The progress line, in words. "Đã viết 2/3 trang…" while it runs, a summary
+ * The progress line, in words. "Đã viết 2/3 kênh…" while it runs, a summary
  * once it stops — and the summary NAMES the failures rather than hiding them
  * behind a count of successes (business rule 5).
  *
@@ -163,8 +163,8 @@ export function describeFanOut(input: {
   failed: number;
 }): string {
   if (input.total === 0) return "";
-  if (input.isRunning) return `Đang viết caption — đã xong ${input.done}/${input.total} trang…`;
-  if (input.failed === 0) return `Đã viết caption cho ${input.total} trang.`;
+  if (input.isRunning) return `Đang viết caption — đã xong ${input.done}/${input.total} kênh…`;
+  if (input.failed === 0) return `Đã viết caption cho ${input.total} kênh.`;
   const written = input.total - input.failed;
-  return `Đã viết ${written}/${input.total} trang — ${input.failed} trang lỗi, xem tab có chấm đỏ và bấm “Viết lại”.`;
+  return `Đã viết ${written}/${input.total} kênh — ${input.failed} kênh lỗi, xem tab có chấm đỏ và bấm “Viết lại”.`;
 }

@@ -12,6 +12,7 @@ const IO_LIBS = [
   "drizzle-orm*",
   "postgres*",
   "pg",
+  "minio*",
   "googleapis*",
   "google-auth-library*",
   "@google/genai*",
@@ -39,6 +40,7 @@ const SERVER_ONLY_LIBS = [
   "drizzle-orm*",
   "postgres*",
   "pg",
+  "minio*",
   "googleapis*",
   "@google/genai*",
   "@anthropic-ai/*",
@@ -71,7 +73,7 @@ const IMPORT_SYSTEM_TENANT_ID = {
 };
 const IMPORT_TESTING_TENANT_ID = {
   selector: "ImportDeclaration[source.value='@/core/domain/tenant-context.testing']",
-  message: "testTenantId chỉ dùng trong *.test.ts / __fixtures__ (docs/11 §3).",
+  message: "testTenantId chỉ dùng trong __tests__/ / __fixtures__ (docs/11 §3).",
 };
 const IMPORT_PLATFORM_TENANT_ID = {
   selector: "ImportDeclaration[source.value='@/composition/platform-tenant-id']",
@@ -136,8 +138,22 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Local git worktrees carry their own .next/ — linting them OOMs eslint.
+    // Claude Code's own directory: installed plugins and skills ship bundled
+    // .cjs scripts that are not this repo's source and do not follow its rules.
+    // It is untracked, so linting it fails `pnpm verify` on whichever machine
+    // happens to have a skill installed — a gate that reports on the operator's
+    // tooling rather than on the diff. (Supersedes the worktree-only ignore
+    // below, which stays because it names a different reason: worktrees carry
+    // their own .next/ and linting them OOMs eslint.)
+    ".claude/**",
     ".claude/worktrees/**",
+    // `astryx theme build` output (src/ui/theme/mysp-theme.ts is the source and
+    // IS linted). Generated files cannot be fixed in place — the next build
+    // would overwrite the fix — and the triple-slash reference in the emitted
+    // .d.ts is how the CLI ships its variant augmentations.
+    "src/ui/theme/mysp.js",
+    "src/ui/theme/mysp.d.ts",
+    "src/ui/theme/mysp.variants.d.ts",
   ]),
 
   // Unused code is dead weight; `_` prefix is the explicit opt-out.
@@ -316,7 +332,7 @@ const eslintConfig = defineConfig([
   // 4. Tests + fixtures are exempt from all of the above (they brand freely and
   //    wire across layers on purpose — mirrors dependency-cruiser's test exclude).
   {
-    files: ["src/**/*.test.ts", "src/**/__fixtures__/**"],
+    files: ["src/**/__tests__/**", "src/**/*.test.{ts,tsx}", "src/**/__fixtures__/**"],
     rules: { "no-restricted-syntax": "off", "no-restricted-imports": "off" },
   },
 ]);

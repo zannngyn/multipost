@@ -61,3 +61,53 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/**
+ * An image can be shown from the File itself; a video cannot — grabbing its
+ * first frame needs a <video> + canvas, and that is Phase 2 work. Returns
+ * `false` instead of throwing: the caller is a component mid-render.
+ */
+export function isPreviewable(file: File): boolean {
+  const type = typeof file?.type === "string" ? file.type.toLowerCase() : "";
+  return type.startsWith("image/");
+}
+
+/**
+ * Reconciles the preview-URL map against the current queue, without creating
+ * any React state or DOM API call itself — `createUrl` is injected so this
+ * stays testable in the node environment, no jsdom required.
+ *
+ * MUST be idempotent: given a `queue` whose ids are unchanged from `current`
+ * — even when the array itself is a new reference, as a drag-reorder or an
+ * add-then-remove produces — it returns the exact same URLs (no new
+ * `createUrl` calls) and an empty `revoked` list. That is what keeps a
+ * reorder from tearing down and rebuilding every preview in the panel.
+ * (React StrictMode's mount-time double-invoke is guarded separately, by the
+ * mount-only effect in `UploadPanel` clearing the ref before its second
+ * setup runs — not by this function.)
+ */
+export function syncPreviewUrls(
+  current: ReadonlyMap<string, string>,
+  queue: readonly QueuedFile[],
+  createUrl: (file: File) => string,
+): { next: Map<string, string>; revoked: string[] } {
+  const next = new Map<string, string>();
+  const liveIds = new Set<string>();
+
+  for (const item of queue) {
+    liveIds.add(item.id);
+    const existing = current.get(item.id);
+    if (existing) {
+      next.set(item.id, existing);
+    } else if (isPreviewable(item.file)) {
+      next.set(item.id, createUrl(item.file));
+    }
+  }
+
+  const revoked: string[] = [];
+  for (const [id, url] of current) {
+    if (!liveIds.has(id)) revoked.push(url);
+  }
+
+  return { next, revoked };
+}

@@ -31,6 +31,14 @@ export const ERROR_CODES = [
   /** The requested slug already names another tenant. */
   "SLUG_TAKEN",
   /**
+   * We ran out of tries deriving a FREE slug for a name the operator did not
+   * slug themselves (every default company derives the same base slug). Its own
+   * code, not SLUG_TAKEN: nobody chose that slug, so "pick another one" would be
+   * nonsense — and at the entropy we retry with, seeing this means something is
+   * systemically wrong, not that a name is popular.
+   */
+  "SLUG_DERIVATION_EXHAUSTED",
+  /**
    * ONE code for every invite refusal — unknown, expired, revoked, used up,
    * suspended tenant. Deliberately indistinguishable outside (anti-probing);
    * the precise reason goes to the log.
@@ -55,6 +63,24 @@ export const ERROR_CODES = [
    * from ACCESS_FORBIDDEN (the legacy /access screen gate, retiring at M2.4).
    */
   "FORBIDDEN",
+  // Password sign-in / sign-up (email + password, docs/09 §3.1)
+  /** The chosen password breaks the shared policy (shared/password-policy). */
+  "AUTH_WEAK_PASSWORD",
+  /** Sign-up: a credential already exists for this address. */
+  "AUTH_EMAIL_TAKEN",
+  /**
+   * ONE code for EVERY sign-in refusal — unknown address, wrong password,
+   * suspended account, malformed input. Deliberately indistinguishable outside
+   * (anti-enumeration, same discipline as INVITE_INVALID); the precise reason
+   * goes to the log.
+   */
+  "AUTH_INVALID_CREDENTIALS",
+  /** Too many consecutive failures: refused until `locked_until` passes. */
+  "AUTH_ACCOUNT_LOCKED",
+  /** Sliding-window limiter said no (per-IP or per-address) before any hashing. */
+  "AUTH_RATE_LIMITED",
+  /** Admin reset asked for an account that signs in some other way. */
+  "AUTH_CREDENTIAL_NOT_FOUND",
   "JOB_PAYLOAD_INVALID",
   // Data pipeline (E2/E3)
   "DRIVE_ERROR",
@@ -137,18 +163,28 @@ const DEFAULT_USER_MESSAGES: Record<ErrorCode, string> = {
   TENANT_LIMIT_REACHED:
     "Bạn đã chạm giới hạn tạo công ty (tối đa 3 công ty, và không quá 1 công ty mỗi giờ). Liên hệ quản trị viên nếu cần thêm.",
   SLUG_TAKEN: "Định danh (slug) này đã có công ty khác dùng. Hãy chọn một định danh khác.",
+  SLUG_DERIVATION_EXHAUSTED:
+    "Hệ thống chưa tạo được định danh (slug) cho công ty này. Vui lòng thử lại sau ít phút.",
   INVITE_INVALID: "Link mời không hợp lệ hoặc đã hết hạn. Hãy xin link mời mới.",
   INVITE_ROLE_FORBIDDEN: "Vai trò của bạn không được phép mời tới vai trò này.",
   LAST_OWNER: "Công ty phải còn ít nhất một owner — chuyển quyền trước.",
   MEMBER_NOT_FOUND: "Không tìm thấy thành viên tương ứng trong công ty.",
   RETIRED: "Tính năng này đã thay đổi — thành viên mới vào công ty bằng link mời.",
   FORBIDDEN: "Vai trò của bạn trong công ty này không đủ quyền thực hiện thao tác.",
+  AUTH_WEAK_PASSWORD: "Mật khẩu chưa đủ mạnh. Vui lòng chọn mật khẩu khác.",
+  AUTH_EMAIL_TAKEN: "Email này đã được đăng ký. Hãy đăng nhập, hoặc dùng email khác.",
+  AUTH_INVALID_CREDENTIALS: "Email hoặc mật khẩu không đúng.",
+  AUTH_ACCOUNT_LOCKED:
+    "Tài khoản đang tạm khoá do nhập sai mật khẩu nhiều lần. Vui lòng thử lại sau ít phút.",
+  AUTH_RATE_LIMITED: "Bạn thử quá nhiều lần. Vui lòng chờ ít phút rồi thử lại.",
+  AUTH_CREDENTIAL_NOT_FOUND:
+    "Tài khoản này không đăng nhập bằng mật khẩu — không có mật khẩu để đặt lại.",
   JOB_PAYLOAD_INVALID: "Dữ liệu công việc nền không hợp lệ — công việc đã bị từ chối.",
   DRIVE_ERROR: "Không truy cập được Google Drive. Kiểm tra quyền Service Account hoặc thử lại sau.",
   SHEET_ERROR: "Không đọc được Google Sheet. Kiểm tra quyền Service Account hoặc thử lại sau.",
   FILE_NAME_INVALID: "Tên file ảnh/video không đúng chuẩn đặt tên — file bị bỏ qua và đã ghi nhận.",
-  SHEET_ROW_INVALID: "Dòng dữ liệu trong Sheet không hợp lệ — đã ghi nhận để rà soát.",
-  PRODUCT_NOT_FOUND: "Không tìm thấy sản phẩm với mã tương ứng trong Sheet.",
+  SHEET_ROW_INVALID: "Dòng dữ liệu trong bảng dữ liệu không hợp lệ — đã ghi nhận để rà soát.",
+  PRODUCT_NOT_FOUND: "Không tìm thấy sản phẩm với mã tương ứng trong dữ liệu sản phẩm.",
   MEDIA_NOT_FOUND: "Không tìm thấy ảnh/video cho sản phẩm này trên Drive.",
   OUT_OF_STOCK: "Sản phẩm đã hết hàng hoặc tồn kho không hợp lệ — bài đăng bị chặn.",
   SYNC_FAILED: "Đồng bộ dữ liệu từ Drive/Sheet thất bại. Xem nhật ký đồng bộ để biết chi tiết.",
@@ -201,18 +237,27 @@ const DEFAULT_MESSAGES: Record<ErrorCode, string> = {
   TENANT_NOT_SELECTED: "Signed-in account has not selected an active tenant",
   TENANT_LIMIT_REACHED: "Self-service tenant creation limit reached for this account",
   SLUG_TAKEN: "Another tenant already uses this slug",
+  SLUG_DERIVATION_EXHAUSTED: "Ran out of attempts deriving an unused tenant slug",
   INVITE_INVALID: "Invite token is unknown, expired, revoked or used up",
   INVITE_ROLE_FORBIDDEN: "Inviter's role may not grant the requested role",
   LAST_OWNER: "Change would leave the tenant with zero active owners",
   MEMBER_NOT_FOUND: "No membership with that id in this tenant",
   RETIRED: "Endpoint retired — members join through invite links",
   FORBIDDEN: "Membership role is below the required role for this action",
+  AUTH_WEAK_PASSWORD: "Password does not satisfy the password policy",
+  AUTH_EMAIL_TAKEN: "A credential already exists for this e-mail address",
+  AUTH_INVALID_CREDENTIALS: "E-mail/password sign-in refused",
+  AUTH_ACCOUNT_LOCKED: "Credential is locked after consecutive failed attempts",
+  AUTH_RATE_LIMITED: "Authentication rate limit exceeded",
+  AUTH_CREDENTIAL_NOT_FOUND: "Account has no password credential",
   JOB_PAYLOAD_INVALID: "Job payload failed schema validation",
   DRIVE_ERROR: "Google Drive operation failed",
   SHEET_ERROR: "Google Sheets operation failed",
   FILE_NAME_INVALID: "Media file name does not match the naming convention",
   SHEET_ROW_INVALID: "Sheet row failed schema validation",
-  PRODUCT_NOT_FOUND: "Product code not found in sheet snapshot",
+  // "catalog", not "sheet": a tenant's product data may come from a Google tab,
+  // an uploaded CSV or an operator typing it (onboarding phase 3).
+  PRODUCT_NOT_FOUND: "Product code not found in the catalog snapshot",
   MEDIA_NOT_FOUND: "No media assets found for product",
   OUT_OF_STOCK: "Product is out of stock or stock value invalid",
   SYNC_FAILED: "Catalog sync run failed",

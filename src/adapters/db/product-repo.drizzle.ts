@@ -1,4 +1,4 @@
-import { asc, eq, gt, ilike, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, ilike, ne, or, sql, type SQL } from "drizzle-orm";
 
 import { AppError } from "@/core/domain/errors";
 import type { Product } from "@/core/domain/product";
@@ -7,6 +7,7 @@ import type {
   CatalogReadRepo,
   CatalogSignalGroup,
   ListCatalogProductsQuery,
+  ManualProductSaveResult,
   ProductRepo,
 } from "@/core/ports/product-repo";
 
@@ -41,6 +42,7 @@ function toDomain(row: ProductRow): Product {
     },
     hasConflict: row.hasConflict,
     sourceRows: row.sourceRows ?? [],
+    origin: row.origin === "manual" ? "manual" : "sheet",
   };
 }
 
@@ -141,6 +143,7 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
           colorsRaw: product.operational.colorsRaw,
           hasConflict: product.hasConflict,
           sourceRows: [...product.sourceRows],
+          origin: "sheet" as const,
           lastSyncRunId: syncRunId,
         }),
       );
@@ -161,6 +164,9 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
               colorsRaw: sql`excluded.colors_raw`,
               hasConflict: sql`excluded.has_conflict`,
               sourceRows: sql`excluded.source_rows`,
+              // A code the catalog now describes stops being a manual row: the
+              // real data wins, and the row becomes sweepable again.
+              origin: sql`excluded.origin`,
               lastSyncRunId: sql`excluded.last_sync_run_id`,
               updatedAt: new Date(),
             },
@@ -179,6 +185,80 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
     }
 
     return written;
+  }
+
+  /**
+   * Stores ONE product an operator typed on the compose screen (phase 3).
+   *
+   * Two things make this different from `upsertMany`:
+   *   - it writes NO sync run id, so the next sync cannot sweep the row away
+   *     (`deleteStale` is scoped to `origin = 'sheet'` for the same reason);
+   *   - the update half carries `where origin = 'manual'`, so a code the synced
+   *     catalog already owns is NOT overwritten. That is a real race: a sync can
+   *     land between the caller's lookup and this write, and typed data quietly
+   *     replacing a synced row would also replace that row's stock.
+   * The verdict travels back to the caller instead of being swallowed.
+   */
+  async saveManual(tenantId: TenantId, product: Product): Promise<ManualProductSaveResult> {
+    const scope = forTenant(this.db, tenantId);
+    const code = typeof product?.content?.code === "string" ? product.content.code.trim().toUpperCase() : "";
+    if (code.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "saveManual requires a product code",
+        userMessage: "Thiếu mã sản phẩm.",
+        context: { tenant_id: scope.tenantId, operation: "product.saveManual" },
+      });
+    }
+
+    let written: { id: string }[];
+    try {
+      written = await scope.db
+        .insert(products)
+        .values(
+          scope.row({
+            code,
+            name: product.content.name,
+            description: product.content.description,
+            category: product.content.category,
+            season: product.content.season,
+            stockRaw: product.operational.stockRaw,
+            noteRaw: product.operational.noteRaw,
+            colorsRaw: product.operational.colorsRaw,
+            hasConflict: product.hasConflict,
+            sourceRows: [...product.sourceRows],
+            origin: "manual" as const,
+            lastSyncRunId: null,
+          }),
+        )
+        .onConflictDoUpdate({
+          target: [products.tenantId, products.code],
+          set: {
+            name: sql`excluded.name`,
+            description: sql`excluded.description`,
+            category: sql`excluded.category`,
+            season: sql`excluded.season`,
+            stockRaw: sql`excluded.stock_raw`,
+            noteRaw: sql`excluded.note_raw`,
+            colorsRaw: sql`excluded.colors_raw`,
+            hasConflict: sql`excluded.has_conflict`,
+            sourceRows: sql`excluded.source_rows`,
+            lastSyncRunId: null,
+            updatedAt: new Date(),
+          },
+          setWhere: eq(products.origin, "manual"),
+        })
+        .returning({ id: products.id });
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        product_code: code,
+        operation: "product.saveManual",
+      });
+    }
+
+    // No row returned = the conflict target existed and `setWhere` refused it,
+    // i.e. the code belongs to the synced catalog.
+    return written.length > 0 ? "saved" : "refused_synced";
   }
 
   /**
@@ -319,12 +399,50 @@ export class DrizzleProductRepo implements ProductRepo, CatalogReadRepo {
     }
   }
 
+  /**
+   * Every product code of the tenant, so the upload file-name parser can
+   * recognise a code shape `PRODUCT_CODE_PATTERN` cannot guess (E9).
+   * `(tenant_id, code)` already carries a UNIQUE constraint at the DB level
+   * (`product_tenant_code_uq`), so `selectDistinct` never removes a real
+   * duplicate here — it is a cheap defensive layer, matching `countAll`'s
+   * plain `select` in every other way.
+   */
+  async listCodes(tenantId: TenantId): Promise<readonly string[]> {
+    const scope = forTenant(this.db, tenantId);
+    try {
+      const rows = await scope.db
+        .selectDistinct({ code: products.code })
+        .from(products)
+        .where(scope.where(products));
+      return rows
+        .map((row) => (typeof row.code === "string" ? row.code.trim() : ""))
+        .filter((code) => code.length > 0);
+    } catch (error) {
+      throw wrapDbError(error, {
+        tenant_id: scope.tenantId,
+        field: "tenantId",
+        operation: "product.listCodes",
+      });
+    }
+  }
+
+  /**
+   * Removes the rows this sync did not see. Scoped to `origin = 'sheet'`: a
+   * manual product belongs to no run, so without the guard every sync would
+   * delete the products an operator typed (`ne(NULL, ...)` is NULL anyway, but
+   * the explicit predicate is what makes the intent — and the index — right).
+   */
   async deleteStale(tenantId: TenantId, syncRunId: string): Promise<number> {
     const scope = forTenant(this.db, tenantId);
     try {
       const deleted = await scope.db
         .delete(products)
-        .where(scope.where(products, ne(products.lastSyncRunId, syncRunId)))
+        .where(
+          scope.where(
+            products,
+            and(eq(products.origin, "sheet"), ne(products.lastSyncRunId, syncRunId)),
+          ),
+        )
         .returning({ id: products.id });
       return deleted.length;
     } catch (error) {

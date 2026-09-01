@@ -69,6 +69,9 @@ export function makeCleanupUploadsHandler(deps: CleanupUploadsHandlerDeps): JobH
         scanned: result.scanned,
         blobs_removed: result.blobsRemoved,
         rows_removed: result.rowsRemoved,
+        tickets_scanned: result.ticketsScanned,
+        tickets_removed: result.ticketsRemoved,
+        ticket_list_failed: result.ticketListFailed,
         failed: result.failed,
       });
     } catch (error) {

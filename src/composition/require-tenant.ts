@@ -181,6 +181,9 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
     // isTenantId above, and only a membership-checked value leaves this function.
     const selected: TenantId | "" = cookieIsUsable ? (rawSelected as TenantId) : "";
 
+    const standing = await deps.accounts.findPlatformStanding(accountId);
+    const isSuperAdmin = standing?.status === "active" && standing.platformRole === "super_admin";
+
     /**
      * M3.3 — the support-mode fallback, consulted ONLY after a membership path
      * missed (a real membership always wins). The session row is read FRESH;
@@ -220,7 +223,7 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
       const usable = activeMemberships.filter((m) => m.tenantStatus === "active");
       if (usable.length === 1) {
         // One company needs no cookie — auto-active (docs/09 §3.8).
-        return toContext(usable[0], options.minRole, log);
+        return toContext(usable[0], options.minRole, log, isSuperAdmin);
       }
       // No usable membership picked — a live support visit may still answer
       // (this is how a staffer with no memberships reads the visited tenant).
@@ -239,16 +242,77 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
 
     const membership = await readMembership(accountId, selected, tier);
     if (!membership || membership.status !== "active" || membership.tenantStatus !== "active") {
+      if (isSuperAdmin) {
+        log.info("Tenant context granted to platform super_admin (stealth mode)", {
+          tenant_id: selected,
+          super_admin: true,
+        });
+        return {
+          tenantId: selected as TenantId,
+          role: "owner",
+          membershipVersion: 0,
+        };
+      }
+
       // Membership MISS on the selected tenant — a live support visit covering
       // exactly that tenant may still answer (read-only, M3.3).
       const support = await supportFallback(selected);
       if (support) return support;
-      // No membership, removed membership, suspended tenant, nonexistent
-      // tenant: ONE indistinguishable 404, so this cannot probe what exists.
+
+      /**
+       * NO ROW AT ALL: the selector names a company this account was never in.
+       * That is not a refusal to deliver — it is a cookie somebody else left in
+       * this browser (sign-out did not clear it until `_auth/signout-action.ts`,
+       * and one already in the wild outlives that fix by up to 30 days).
+       *
+       * Answering 404 here locked an account out of EVERY route at once while
+       * `/api/me` — reading the very same cookie — reported the company it does
+       * belong to and drew the app around it. Two halves of one server giving
+       * two answers is the bug; the selector simply does not count when it
+       * points nowhere this account can go, exactly as a malformed one does
+       * not. Nothing is revealed about the named tenant either way.
+       *
+       * NOT reached through the support fallback a second time: `supportFallback`
+       * above already refused this selector, and re-asking it with "" would turn
+       * a visit covering tenant A into a skeleton key for a selector naming B.
+       */
+      if (membership === null) {
+        // Contract: this repo call returns ACTIVE memberships only, so a
+        // membership that was REMOVED cannot come back through this door.
+        const usable = (await deps.accounts.listMembershipsWithTenant(accountId)).filter(
+          (candidate) => candidate.tenantStatus === "active",
+        );
+        if (usable.length === 1) {
+          log.info("Selector named a company this account is not in — using its only company", {
+            tenant_id: usable[0].tenantId,
+            selector_tenant_id: selected,
+            stale_selector: true,
+          });
+          return toContext(usable[0], options.minRole, log, isSuperAdmin);
+        }
+        log.warn("Selector named a company this account is not in — asking for a choice", {
+          selector_tenant_id: selected,
+          error_code: "TENANT_NOT_SELECTED",
+          membership_count: usable.length,
+          tier,
+        });
+        throw new AppError("TENANT_NOT_SELECTED", {
+          message:
+            usable.length === 0
+              ? "Selected tenant holds no membership, and the account has none anywhere"
+              : "Selected tenant holds no membership; the account belongs to several others",
+          context: { account_id: accountId, membership_count: usable.length },
+        });
+      }
+
+      // A row EXISTS and is unusable: a REMOVED membership or a SUSPENDED
+      // tenant — both real decisions about this account, not a stale cookie.
+      // ONE indistinguishable 404, so this cannot probe what exists.
       log.warn("Tenant resolution refused", {
         tenant_id: selected,
         error_code: "TENANT_NOT_FOUND",
-        membership_found: membership !== null,
+        membership_status: membership.status,
+        tenant_status: membership.tenantStatus,
         tier,
       });
       throw new AppError("TENANT_NOT_FOUND", {
@@ -258,15 +322,17 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
       });
     }
 
-    return toContext(membership, options.minRole, log);
+    return toContext(membership, options.minRole, log, isSuperAdmin);
   };
 
   function toContext(
     membership: MembershipWithTenant,
     minRole: OperatorRole | undefined,
     log: Logger,
+    isSuperAdmin = false,
   ): TenantContext {
-    if (minRole && !roleAtLeast(membership.role, minRole)) {
+    const effectiveRole = isSuperAdmin ? "owner" : membership.role;
+    if (!isSuperAdmin && minRole && !roleAtLeast(membership.role, minRole)) {
       log.warn("Role below the required minimum for this route", {
         tenant_id: membership.tenantId,
         error_code: "FORBIDDEN",
@@ -283,7 +349,7 @@ export function makeRequireTenant(deps: RequireTenantDeps): RequireTenantGate {
       // just authorised against the membership table, which is what the brand
       // certifies.
       tenantId: membership.tenantId as TenantId,
-      role: membership.role,
+      role: effectiveRole,
       membershipVersion: membership.version,
     };
   }

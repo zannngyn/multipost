@@ -12,6 +12,7 @@ import type { AITask, PromptStore, PromptTemplate } from "@/core/ports/ai";
 import {
   FACEBOOK_CONTENT_TEMPLATE_V1,
   FACEBOOK_CONTENT_TEMPLATE_V2,
+  FACEBOOK_CONTENT_TEMPLATE_V3,
 } from "@/adapters/ai/prompt-store/templates/facebook-content";
 import { unbrandTenantId, type TenantId } from "@/core/domain/tenant-context";
 
@@ -19,6 +20,7 @@ import { unbrandTenantId, type TenantId } from "@/core/domain/tenant-context";
 export const BUILT_IN_TEMPLATES: readonly PromptTemplate[] = [
   FACEBOOK_CONTENT_TEMPLATE_V1,
   FACEBOOK_CONTENT_TEMPLATE_V2,
+  FACEBOOK_CONTENT_TEMPLATE_V3,
 ];
 
 function keyOf(task: AITask, platform: string, tenantId: TenantId | null): string {

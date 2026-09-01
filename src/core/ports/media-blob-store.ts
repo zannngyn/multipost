@@ -50,10 +50,73 @@ export interface BlobContent {
   readonly mimeType: string | null;
 }
 
+export interface CreateUploadUrlInput {
+  readonly tenantId: TenantId;
+  readonly assetId: string;
+  /** Client-declared mime type; the signed policy is constrained to exactly this value. */
+  readonly declaredMimeType: string;
+  /** Byte ceiling baked into the policy itself, so storage rejects an oversized file on its own. */
+  readonly maxBytes: number;
+  readonly expiresInSeconds: number;
+}
+
+/**
+ * A POST policy, NOT a presigned PUT: only a POST policy can carry
+ * `content-length-range`, which is what lets the bucket enforce the 25MB cap
+ * without Node standing in the middle of the upload.
+ */
+export interface PresignedUpload {
+  readonly postUrl: string;
+  /** Attach to the FormData BEFORE the `file` field. */
+  readonly formFields: Readonly<Record<string, string>>;
+  /** Key of the object in the staging area. */
+  readonly storageKey: string;
+  readonly expiresAt: Date;
+}
+
+export interface BlobStat {
+  readonly sizeBytes: number;
+  readonly mimeType: string | null;
+}
+
 export interface MediaBlobStore {
   put(input: PutBlobInput): Promise<StoredBlob>;
   /** Null when the blob is not there (deleted, never written, wrong tenant). */
   get(input: GetBlobInput): Promise<BlobContent | null>;
-  /** True when a blob was removed, false when there was nothing to remove. */
+  /** True when a blob was removed, false when there was nothing to remove. Targets the SERVING area. */
   delete(input: { tenantId: TenantId; storageKey: string }): Promise<boolean>;
+  /** Throws when the implementer cannot sign uploads (local). */
+  createUploadUrl(input: CreateUploadUrlInput): Promise<PresignedUpload>;
+  /** Null when the object is not there. Targets the SERVING area. */
+  stat(input: { tenantId: TenantId; storageKey: string }): Promise<BlobStat | null>;
+  /**
+   * Same as `stat` but targets the STAGING area. Exists separately because
+   * confirm-upload must learn the REAL size of the object before promoting it,
+   * and at that point the object is not yet in the serving area — `stat` would
+   * always answer null.
+   */
+  statStaging(input: { tenantId: TenantId; storageKey: string }): Promise<BlobStat | null>;
+  /** First `length` bytes, for sniffing. Null when the object is not there. */
+  readRange(input: {
+    tenantId: TenantId;
+    storageKey: string;
+    length: number;
+  }): Promise<Uint8Array | null>;
+  /** Moves staging -> serving area. Server-side copy, bytes never pass through Node. */
+  promote(input: { tenantId: TenantId; assetId: string }): Promise<StoredBlob>;
+  /**
+   * Removes an object from the STAGING area only — never touches the serving
+   * area. A refused upload's bytes are ALWAYS in staging, never promoted, so
+   * `delete` (serving-only) is the wrong call here: it would stat the serving
+   * prefix, find nothing, and silently no-op, leaking the staged object
+   * forever with no row left to name it. True when something was removed,
+   * false when there was nothing to remove.
+   */
+  deleteStaging(input: { tenantId: TenantId; storageKey: string }): Promise<boolean>;
+  /** Null when the implementer cannot sign; the caller falls back to streaming itself. */
+  createDownloadUrl(input: {
+    tenantId: TenantId;
+    storageKey: string;
+    expiresInSeconds: number;
+  }): Promise<string | null>;
 }

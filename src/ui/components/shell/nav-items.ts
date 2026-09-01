@@ -7,9 +7,12 @@ export interface NavItem {
   readonly href: string;
   readonly label: string;
   /**
-   * Set when another nav entry lives UNDER this one. "/channels" owns
-   * "/channels/groups", which has its own entry — prefix matching would light
-   * both at once and the operator could not tell which screen they are on.
+   * Set when another nav entry lives UNDER this one: prefix matching would
+   * light both at once and the operator could not tell which screen they are
+   * on.
+   *
+   * `/platform` is the first entry to need it (M3.4 put "Màu giao diện" at
+   * `/platform/appearance`) — the case the mechanism was kept for.
    */
   readonly isExact?: boolean;
 }
@@ -30,53 +33,53 @@ export interface NavSection {
   readonly requiresPlatformRole?: boolean;
 }
 
+/**
+ * The wave-1 information architecture: five groups an operator can name, each
+ * answering one question — where do I start, what do I publish, what happened,
+ * what is it built from, how is it set up.
+ *
+ * Ten destinations, down from thirteen: "/posts" absorbs the scheduled list and
+ * the publish log (one list, filtered), channel groups moved inside "/channels",
+ * and the approval history became a tab of "/members" — three fewer rows to read
+ * past, and no screen removed.
+ */
 export const NAV_SECTIONS: readonly NavSection[] = [
+  { title: "Bàn làm việc", items: [{ href: "/overview", label: "Tổng quan" }] },
   {
-    title: "Vận hành",
+    title: "Đăng bài",
     items: [
-      { href: "/", label: "Tổng quan" },
       { href: "/compose", label: "Soạn bài" },
       { href: "/bulk", label: "Chạy hàng loạt" },
     ],
   },
-  {
-    title: "Theo dõi",
-    items: [
-      { href: "/scheduled", label: "Bài đã hẹn" },
-      { href: "/jobs", label: "Nhật ký đăng bài" },
-    ],
-  },
+  { title: "Theo dõi", items: [{ href: "/posts", label: "Bài đăng" }] },
   {
     title: "Dữ liệu",
     items: [
       { href: "/products", label: "Sản phẩm" },
       { href: "/sync", label: "Đồng bộ dữ liệu" },
+      { href: "/data-mapping", label: "Kết nối dữ liệu" },
     ],
   },
   {
-    title: "Cấu hình",
+    title: "Cài đặt",
     items: [
-      { href: "/channels", label: "Kênh", isExact: true },
-      { href: "/channels/groups", label: "Nhóm kênh" },
+      { href: "/channels", label: "Kênh" },
       { href: "/prompts", label: "Mẫu prompt" },
-    ],
-  },
-  {
-    // People, not settings: who may use this company and what was decided about
-    // them. Kept apart from "Cấu hình" so an operator looking for a person does
-    // not have to read past channel and prompt settings.
-    title: "Tổ chức",
-    items: [
       { href: "/members", label: "Thành viên" },
-      // Read-only history since M2.4 — the label says so, so nobody opens it
-      // expecting to add someone.
-      { href: "/access", label: "Lịch sử duyệt" },
     ],
   },
   {
     title: "Nền tảng",
     requiresPlatformRole: true,
-    items: [{ href: "/platform", label: "Công ty khách" }],
+    items: [
+      // `isExact` earns its keep here: "/platform/appearance" lives UNDER
+      // "/platform", so prefix matching would light both rows at once and the
+      // operator could not tell which screen they are on. This is the nested
+      // destination the mechanism was built for (M3.4).
+      { href: "/platform", label: "Công ty khách", isExact: true },
+      { href: "/platform/appearance", label: "Màu giao diện" },
+    ],
   },
 ] as const;
 
@@ -107,11 +110,11 @@ export function visibleNavSections(
 
 /**
  * A nav entry owns its own path and everything under it. `/batches/<id>` has no
- * nav entry of its own, so the caller may pass "/batches" to keep the log
- * section lit while a batch is open.
+ * nav entry of its own, so the caller may pass "/batches" to keep "Bài đăng"
+ * lit while a batch is open.
  *
- * Prefix matching is segment-aware on purpose: "/jobsomething" must not light
- * up "/jobs".
+ * Prefix matching is segment-aware on purpose: "/postsomething" must not light
+ * up "/posts".
  *
  * `exact` turns the prefix rule off for an entry whose sub-paths belong to a
  * different entry (see `NavItem.isExact`).

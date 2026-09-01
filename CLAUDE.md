@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # MYSP — Công cụ đăng bài tự động (Facebook + TikTok, AI viết caption)
 
 Dự án nội bộ, SaaS-ready. Phase hiện tại: **Phase 1 — MVP Facebook** (TikTok/video/hẹn lịch = Phase 2, chế độ tự tải lên = Phase 3).
@@ -19,6 +23,72 @@ Dự án nội bộ, SaaS-ready. Phase hiện tại: **Phase 1 — MVP Facebook*
 ## Stack (đã chốt — không đổi khi chưa bàn)
 
 Next.js App Router + TypeScript · PostgreSQL + Drizzle · BullMQ + Redis (queue; Redis kiêm cache nóng registry + rate-limit) · worker Node riêng cùng repo · Tailwind + shadcn/ui · AI Gateway đa provider, **hiện chạy MỘT provider: OpenAI** (quyết định 15/08/2026 — chưa có key Google paid tier; Google tắt nhưng adapter còn nguyên, bật lại bằng env + `config/ai-models.yaml`, không sửa code. Hệ quả: tạm không có provider fallback. Chi tiết `docs/ai/provider-strategy.md` §3.1) · Google Service Account · Docker Compose trên 1 VPS.
+
+## Lệnh
+
+`pnpm verify` là cổng duy nhất trước khi báo xong:
+`typecheck → lint → depcruise → theme:check → theme:presets:check → test → build`.
+
+| Việc | Lệnh |
+|---|---|
+| Dev web | `pnpm dev` |
+| Dev worker | `pnpm worker:dev` (worker là process Node riêng, KHÔNG chạy trong Next) |
+| Typecheck | `pnpm typecheck` (= `next typegen && tsc --noEmit`) |
+| Lint | `pnpm lint` |
+| Luật tầng | `pnpm depcruise` — vi phạm ở đây là **lỗi kiến trúc**, không phải style |
+| Test toàn bộ | `pnpm test` (vitest, `environment: node`) |
+| **Một file test** | `pnpm exec vitest run src/core/domain/inventory.test.ts` |
+| **Một test theo tên** | `pnpm exec vitest run -t "<tên test>"` |
+| Integration (cần DB thật) | `pnpm test:integration` |
+| Migration | `pnpm db:generate` → `pnpm db:migrate` (`drizzle/`) · seed: `pnpm db:seed` |
+| Theme | `pnpm theme:presets` sau khi sửa `src/ui/theme/mysp-theme.ts` |
+| Hạ tầng local | `docker compose up -d postgres redis minio` |
+
+**Compose 3 file:** `docker-compose.yml` là hình dạng **production** (không có MinIO, không
+có proxy). `docker-compose.override.yml` được compose nạp **tự động** khi gõ `docker compose`
+trần — nó thêm MinIO + Caddy cho máy dev. Production nạp `-f docker-compose.yml -f
+docker-compose.prod.yml` nên không bao giờ thấy file override. Trên VPS, object storage là
+MinIO dùng chung ở `/srv/minio` (`minio-server:9000` qua network `data`), edge là
+Cloudflare Tunnel → Traefik.
+
+**Theme:** `src/ui/theme/mysp.css` là artifact **sinh ra rồi commit**. Sửa `mysp-theme.ts`
+mà quên build → app chạy bằng file CSS cũ; typecheck/lint/test đều không thấy.
+`pnpm theme:check` build lại và so sánh, không ghi đè.
+
+**Smoke script** (`scripts/*.ts`, chạy bằng `tsx`) ghi đè `tenant_integration` bằng
+`onConflictDoUpdate` → thay cả mảng kênh. `scripts/smoke-guard.ts` chặn nếu DB có kênh
+lạ. Không set `SMOKE_ALLOW_OVERWRITE=1` trừ khi cố ý.
+
+**CI** chỉ chạy khi mở PR vào `main` (`.github/workflows/ci.yml`) — merge vào `dev`
+không tốn phút Actions. `verify.yml` cố ý bỏ `pnpm build` vì Docker image build đã chạy.
+Deploy (`deploy.yml`) chỉ chạy khi push `main`; CI vào VPS bằng Tailscale SSH, không có
+deploy key.
+
+## Bản đồ `src/` — 7 tầng, phụ thuộc một chiều
+
+```
+app / worker / ui  →  composition  →  adapters  →  core  ←  shared
+```
+
+| Thư mục | Vai trò | Cấm |
+|---|---|---|
+| `core/domain` | Type + luật thuần (inventory, caption, post-job, media-*, tenant-context) | mọi lib I/O trừ `zod` |
+| `core/ports` | Interface cho mọi thứ bên ngoài (`ai`, `publisher`, `sheet-source`, `job-queue`…) | — |
+| `core/usecases` | Usecase nhận dependency qua tham số, không tự tạo | import adapter |
+| `adapters/*` | Cài port thật: `db` (Drizzle), `google`, `meta`, `ai`, `queue`, `media`, `auth`, `logging` | gọi ngược usecase · **import adapter khác** |
+| `composition` | `container.ts` + `worker-container.ts` ráp adapter vào usecase; gate quyền (`require-tenant`, `operator-access-gate`, `require-platform-admin`) | import app/worker/ui |
+| `app` | Route API mỏng + màn Next; lấy usecase từ composition | import adapter · import `@/core` ngoài `core/domain/errors` |
+| `worker` | Process Node + BullMQ (`jobs/publish-post-job.ts`, reaper, heartbeat) | import Next/React/UI |
+| `ui` | Component/hook/schema; gọi BE qua `ui/services/*.api.ts` | import `core`/`adapters`/`app`/`composition` · lib phía server |
+| `shared` | Util thuần dùng chung FE+BE | phụ thuộc bất kỳ tầng nào |
+
+Luật này bị **cưỡng chế hai lớp**: `eslint.config.mjs` (`no-restricted-imports`, thông báo
+tiếng Việt kèm số mục doc) bắt lúc gõ code; `.dependency-cruiser.cjs` bắt thêm import vòng
+và cạnh gián tiếp mà ESLint không thấy. Test và `__fixtures__` được miễn cả hai.
+
+**Tenant id là branded type** — `systemTenantId` chỉ dùng trong `worker/` (actor=system,
+doc 10 §5) · `testTenantId` chỉ trong `*.test.ts`/`__fixtures__` (doc 11 §3) ·
+`signedMediaTenantId` chỉ trong `src/app/api/media/**` (doc 10 §2). ESLint chặn theo path.
 
 ## Flow agent team — BẮT BUỘC
 

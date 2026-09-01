@@ -17,6 +17,23 @@ export const TENANT_NAME_MAX = 80;
 const SLUG_MAX = 40;
 const SLUG_SHAPE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 
+/**
+ * How many times we try to place a DERIVED slug before refusing.
+ *
+ * Bounded on purpose (no "loop until free"): a repo that answers SLUG_TAKEN for
+ * the wrong reason would spin forever. Five is not a guess — attempt 1 is the
+ * bare slug and every later attempt widens the random suffix by one more chunk
+ * (4 hex ~ 16 bits each), so the tail probability collapses faster than the
+ * tenant count grows. With 3.000 companies sharing one base slug (the shape
+ * `ensureDefaultTenant` creates: every default company derives
+ * "cong-ty-cua-toi"), attempt 2 misses ~4.5% of the time, attempt 3 ~1e-6, and
+ * the whole ladder misses about once in 30 million sign-ups.
+ */
+export const MAX_DERIVED_SLUG_ATTEMPTS = 5;
+
+/** Base used when a name carries no Latin letters at all ("日本語のみ"). */
+const FALLBACK_SLUG_BASE = "cong-ty";
+
 export interface CreateTenantInput {
   readonly accountId: string;
   readonly sessionEmail: string;
@@ -43,7 +60,11 @@ export interface CreateTenantDeps {
   logger: Logger;
   /** Abuse caps (docs/09 §3.7), read from env config by the composition root. */
   limits: { readonly maxCreatedTotal: number; readonly maxCreatedPerHour: number };
-  /** Entropy for auto-slug collision suffixes — core owns no crypto. */
+  /**
+   * Entropy for auto-slug collision suffixes — core owns no crypto. Called once
+   * per retry chunk, so a 4-hex generator still reaches 64 bits on the last
+   * attempt; its output is sanitised here, never trusted as slug-shaped.
+   */
   randomSuffix: () => string;
 }
 
@@ -93,25 +114,19 @@ export function makeCreateTenant(deps: CreateTenantDeps): CreateTenant {
     });
 
     /**
-     * A slug the OPERATOR chose that is taken → their problem, SLUG_TAKEN.
-     * A slug WE derived that collides → our problem: retry once with a random
-     * suffix before giving up, so "Công ty ABC" does not fail because another
-     * "cong-ty-abc" exists somewhere.
+     * A slug the OPERATOR chose that is taken → their problem, SLUG_TAKEN, on
+     * the first attempt: silently moving them to "their-slug-9f2c" would hand
+     * back a company living at an address they did not ask for.
+     *
+     * A slug WE derived that collides → our problem, and it must never become
+     * theirs: `ensureDefaultTenant` provisions companies with no slug at all,
+     * so a refusal there is a dead end for an account that has no screen to
+     * retry from. Hence the retry ladder below.
      */
-    let created: CreatedTenant;
-    if (requestedSlug.length > 0) {
-      created = await deps.onboarding.createTenant(record(requestedSlug));
-    } else {
-      const derived = slugify(name) || `cong-ty-${deps.randomSuffix()}`;
-      try {
-        created = await deps.onboarding.createTenant(record(derived));
-      } catch (error) {
-        if (!AppError.is(error) || error.code !== "SLUG_TAKEN") throw error;
-        created = await deps.onboarding.createTenant(
-          record(`${derived.slice(0, SLUG_MAX - 5)}-${deps.randomSuffix()}`),
-        );
-      }
-    }
+    const created: CreatedTenant =
+      requestedSlug.length > 0
+        ? await deps.onboarding.createTenant(record(requestedSlug))
+        : await createWithDerivedSlug(deps, name, record, log);
 
     log.info("Tenant created through self-service", {
       tenant_id: created.tenantId,
@@ -129,6 +144,83 @@ export function makeCreateTenant(deps: CreateTenantDeps): CreateTenant {
       activeTenantId: created.tenantId,
     };
   };
+}
+
+/**
+ * Place a slug WE derived, widening the random suffix on every miss.
+ *
+ * Errors: SLUG_TAKEN from the repo is the retry signal and is logged with the
+ * slug that lost; anything else (limits, driver) travels out untouched on the
+ * first throw. Exhausting the ladder throws SLUG_DERIVATION_EXHAUSTED with the
+ * last refusal as `cause` — refused, but never swallowed.
+ */
+async function createWithDerivedSlug(
+  deps: CreateTenantDeps,
+  name: string,
+  record: (slug: string) => Parameters<TenantOnboardingRepo["createTenant"]>[0],
+  log: Logger,
+): Promise<CreatedTenant> {
+  const derived = slugify(name);
+  const base = derived || FALLBACK_SLUG_BASE;
+  // A name that slugifies to nothing has no distinguishing base, so it starts
+  // suffixed: the bare "cong-ty" would burn an attempt on a near-certain miss.
+  const firstAttempt = derived.length > 0 ? 0 : 1;
+
+  let lastRefusal: AppError | undefined;
+  for (let i = 0; i < MAX_DERIVED_SLUG_ATTEMPTS; i += 1) {
+    const attempt = firstAttempt + i;
+    const slug = attempt === 0 ? base : withSuffix(base, entropy(deps.randomSuffix, attempt));
+    try {
+      return await deps.onboarding.createTenant(record(slug));
+    } catch (error) {
+      if (!AppError.is(error) || error.code !== "SLUG_TAKEN") throw error;
+      lastRefusal = error;
+      log.warn("Derived slug is taken — retrying with a wider suffix", {
+        slug,
+        attempt: i + 1,
+        max_attempts: MAX_DERIVED_SLUG_ATTEMPTS,
+        error_code: error.code,
+      });
+    }
+  }
+
+  log.error("Gave up deriving a free slug", {
+    slug_base: base,
+    attempts: MAX_DERIVED_SLUG_ATTEMPTS,
+    error_code: "SLUG_DERIVATION_EXHAUSTED",
+  });
+  throw new AppError("SLUG_DERIVATION_EXHAUSTED", {
+    context: { slug_base: base, attempts: MAX_DERIVED_SLUG_ATTEMPTS },
+    cause: lastRefusal,
+  });
+}
+
+/**
+ * `attempt` chunks of entropy, sanitised: the generator is injected, so its
+ * output is outside data as far as this layer is concerned. An empty result
+ * means the composition root handed us a broken generator — that is a bug in
+ * the deployment, not a slug collision, and it gets its own code.
+ */
+function entropy(randomSuffix: () => string, attempt: number): string {
+  let suffix = "";
+  for (let i = 0; i < attempt; i += 1) {
+    suffix += String(randomSuffix() ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+  }
+  if (suffix.length === 0) {
+    throw new AppError("INTERNAL", {
+      message: "randomSuffix produced no usable entropy for slug derivation",
+      context: { attempt },
+    });
+  }
+  return suffix.slice(0, SLUG_MAX - 2);
+}
+
+/** `base-suffix`, trimmed to the 40-char limit without breaking SLUG_SHAPE. */
+function withSuffix(base: string, suffix: string): string {
+  const head = base.slice(0, Math.max(0, SLUG_MAX - suffix.length - 1)).replace(/-+$/g, "");
+  return head.length > 0 ? `${head}-${suffix}` : suffix;
 }
 
 /** Vietnamese-friendly: fold diacritics (đ→d), keep [a-z0-9-], collapse runs. */

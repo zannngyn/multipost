@@ -1,6 +1,8 @@
 import { getOperatorSession } from "@/app/_auth/session";
 import { fallbackLogger } from "@/app/api/_lib/fallback-logger";
+import { resolveRedirectOrigin } from "@/app/api/_lib/redirect-origin";
 import { type ErrorLogger } from "@/app/api/_lib/http-errors";
+import { buildOauthReturnCookie, resolveReturnScreen } from "@/app/api/_lib/oauth-return-cookie";
 import { clearStateCookie, readStateCookie } from "@/app/api/channels/_lib/oauth-state-cookie";
 import { getContainer } from "@/composition/container";
 import { AppError } from "@/core/domain/errors";
@@ -17,12 +19,17 @@ import { AppError } from "@/core/domain/errors";
  *      tenant (fresh, tier S) before anything is written.
  * Any mismatch → 302 `?connect=error&reason=STATE_MISMATCH`.
  *
- * This route never answers JSON: whatever happens, the browser must land on
- * the channels screen with a message it can show. The state cookie is cleared
- * on EVERY exit — a nonce that survives a failed attempt can be replayed.
+ * This route never answers JSON: whatever happens, the browser must land on a
+ * screen with a message it can show. WHICH screen is decided by
+ * `resolveReturnScreen` — `/channels` for every historic entry point, the
+ * onboarding slide when the connect started there. Every exit runs through the
+ * one `redirect` helper below, so no branch (cancel included) can quietly keep
+ * the old destination. The state cookie is cleared on EVERY exit — a nonce that
+ * survives a failed attempt can be replayed.
  */
 
 const ROUTE = "GET /api/channels/callback";
+/** Unchanged for everyone who did not arrive through the onboarding flow. */
 const SCREEN = "/channels";
 
 export const dynamic = "force-dynamic";
@@ -49,7 +56,7 @@ export async function GET(request: Request): Promise<Response> {
         oauth_error_reason: url.searchParams.get("error_reason"),
         error_code: "CONNECT_CANCELLED",
       });
-      return redirect(url, `${SCREEN}?connect=cancelled`, secure);
+      return redirect(request, url, "connect=cancelled", secure, logger);
     }
 
     if (!nonce) {
@@ -58,7 +65,7 @@ export async function GET(request: Request): Promise<Response> {
         error_code: "UNAUTHORIZED",
         reason: "STATE_COOKIE_ABSENT",
       });
-      return redirect(url, `${SCREEN}?connect=error&reason=STATE_MISMATCH`, secure);
+      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure, logger);
     }
 
     // Single-use claim — the row is burned HERE, before any external call, so
@@ -70,7 +77,7 @@ export async function GET(request: Request): Promise<Response> {
         error_code: "UNAUTHORIZED",
         reason: "STATE_CLAIM_REFUSED",
       });
-      return redirect(url, `${SCREEN}?connect=error&reason=STATE_MISMATCH`, secure);
+      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure, logger);
     }
 
     /**
@@ -87,7 +94,7 @@ export async function GET(request: Request): Promise<Response> {
         reason: "STATE_ACCOUNT_MISMATCH",
         alert: "OPERATOR_ATTENTION",
       });
-      return redirect(url, `${SCREEN}?connect=error&reason=STATE_MISMATCH`, secure);
+      return redirect(request, url, "connect=error&reason=STATE_MISMATCH", secure, logger);
     }
     // Throws TENANT_NOT_FOUND / FORBIDDEN when the membership or role is gone.
     const ctx = await container.usecases.requireTenant(session, claimed.tenantId, {
@@ -109,10 +116,12 @@ export async function GET(request: Request): Promise<Response> {
     // saved, and "vì sao Page X không có trong danh sách" must be answerable on
     // this door as well, not only on the paste-a-token one (business rule 5).
     return redirect(
+      request,
       url,
-      `${SCREEN}?connected=${result.imported + result.updated}&new=${result.imported}` +
+      `connected=${result.imported + result.updated}&new=${result.imported}` +
         `&skipped=${result.skipped}`,
       secure,
+      logger,
     );
   } catch (error) {
     // The browser is mid-navigation: an error BODY would be a dead end. Log with
@@ -129,18 +138,40 @@ export async function GET(request: Request): Promise<Response> {
       appError.code === "TENANT_NOT_FOUND" || appError.code === "FORBIDDEN"
         ? "STATE_MISMATCH"
         : appError.code;
-    return redirect(url, `${SCREEN}?connect=error&reason=${encodeURIComponent(reason)}`, secure);
+    return redirect(request, url, `connect=error&reason=${encodeURIComponent(reason)}`, secure, logger);
   }
 }
 
-/** 302 back to the screen, always clearing the one-time state cookie. */
-function redirect(current: URL, target: string, secure: boolean): Response {
-  return new Response(null, {
-    status: 302,
-    headers: {
-      location: new URL(target, current.origin).toString(),
-      "set-cookie": clearStateCookie({ secure }),
-      "cache-control": "no-store",
-    },
+/**
+ * The single exit of this route: 302 back to whichever screen started the flow,
+ * always clearing both one-time cookies.
+ *
+ * Routing through one helper is deliberate. The bug this mechanism exists to
+ * prevent is a branch — cancel, state mismatch — that still hardcodes
+ * `/channels` and drops the operator out of the slideshow. With one exit there
+ * is no branch left to forget.
+ */
+function redirect(
+  request: Request,
+  current: URL,
+  query: string,
+  secure: boolean,
+  logger: ErrorLogger,
+): Response {
+  const target = resolveReturnScreen({
+    request,
+    defaultScreen: SCREEN,
+    onboardingStep: "facebook",
+    query,
   });
+  const headers = new Headers({
+    location: new URL(target, resolveRedirectOrigin(current, logger, ROUTE)).toString(),
+    "cache-control": "no-store",
+  });
+  // Two cookies, so `Headers.append` — an object literal would keep only one.
+  headers.append("set-cookie", clearStateCookie({ secure }));
+  // Cleared even when it was never set: a stale return flag would otherwise
+  // pull the NEXT connect, started from /channels, back into onboarding.
+  headers.append("set-cookie", buildOauthReturnCookie(null, { secure }));
+  return new Response(null, { status: 302, headers });
 }

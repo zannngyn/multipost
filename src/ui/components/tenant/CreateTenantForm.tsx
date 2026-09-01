@@ -37,6 +37,7 @@ export function CreateTenantForm({
   onCancel,
   hasAutoFocus = false,
   submitLabel = "Tạo công ty",
+  slugDisplay = "field",
 }: {
   onSubmit: (values: CreateTenantFormValues) => void;
   isPending: boolean;
@@ -45,6 +46,17 @@ export function CreateTenantForm({
   onCancel?: () => void;
   hasAutoFocus?: boolean;
   submitLabel?: string;
+  /**
+   * `"field"` — an editable box, for the switcher's "Tạo công ty mới…" dialog
+   * where somebody who cares about the URL is likely to be the one opening it.
+   *
+   * `"inline"` — a read-only preview line, for the first-run wizard. Someone
+   * founding their company in the first two minutes is not deciding on a URL
+   * segment, and a second box to fill in is a second reason to stall. The slug
+   * is still SENT, still validated, and still where SLUG_TAKEN lands — this
+   * changes what is drawn, never what is submitted.
+   */
+  slugDisplay?: "field" | "inline";
 }) {
   const form = useForm<CreateTenantFormValues>({
     resolver: zodResolver(CreateTenantFormSchema),
@@ -79,7 +91,9 @@ export function CreateTenantForm({
 
     if (error.code === "SLUG_TAKEN") {
       form.setError("slug", { type: "server", message: error.userMessage });
-      form.setFocus("slug");
+      // Nothing to focus when the slug is a preview line: send the operator to
+      // the field that DOES change it — the name the preview follows.
+      form.setFocus(slugDisplay === "field" ? "slug" : "name");
       return;
     }
 
@@ -89,7 +103,7 @@ export function CreateTenantForm({
     }
     const first = fieldIssues[0];
     if (first) form.setFocus(first.path as "name" | "slug");
-  }, [error, form]);
+  }, [error, form, slugDisplay]);
 
   /** Field-level refusals are already on the fields; do not repeat them. */
   const isFieldOnlyError =
@@ -131,24 +145,46 @@ export function CreateTenantForm({
         <Controller
           control={form.control}
           name="slug"
-          render={({ field, fieldState }) => (
-            <TextInput
-              label="Đường dẫn"
-              description="Tự sinh từ tên công ty. Sửa được, chỉ gồm chữ thường, số và dấu gạch ngang."
-              placeholder="nha-xe-an-anh"
-              isDisabled={isPending}
-              value={field.value}
-              onChange={(value) => {
-                // From the first keystroke here the preview stops following.
-                isSlugOwnedByUser.current = true;
-                field.onChange(value);
-              }}
-              status={
-                fieldState.error ? { type: "error", message: fieldState.error.message } : undefined
-              }
-              statusVariant="detached"
-            />
-          )}
+          render={({ field, fieldState }) =>
+            slugDisplay === "field" ? (
+              <TextInput
+                label="Đường dẫn"
+                description="Tự sinh từ tên công ty. Sửa được, chỉ gồm chữ thường, số và dấu gạch ngang."
+                placeholder="nha-xe-an-anh"
+                isDisabled={isPending}
+                value={field.value}
+                onChange={(value) => {
+                  // From the first keystroke here the preview stops following.
+                  isSlugOwnedByUser.current = true;
+                  field.onChange(value);
+                }}
+                status={
+                  fieldState.error ? { type: "error", message: fieldState.error.message } : undefined
+                }
+                statusVariant="detached"
+              />
+            ) : (
+              // Read-only preview. `aria-live`: it changes while the operator
+              // types in ANOTHER field, so a screen reader has to be told —
+              // silently mutating text beside the box is how a URL surprises
+              // somebody. Errors still surface here: SLUG_TAKEN is about this
+              // value even when there is no box to fix it in.
+              <Stack direction="vertical" gap={1}>
+                <Text type="supporting" className="text-muted-foreground text-xs" aria-live="polite">
+                  Đường dẫn{" "}
+                  <span className="text-foreground font-mono">
+                    mysp.vn/{field.value || "…"}
+                  </span>{" "}
+                  · tự sinh từ tên
+                </Text>
+                {fieldState.error ? (
+                  <Text type="supporting" role="alert" className="text-destructive text-xs">
+                    {fieldState.error.message}
+                  </Text>
+                ) : null}
+              </Stack>
+            )
+          }
         />
 
         {/* Everything the fields cannot carry — limits, network, 5xx. */}

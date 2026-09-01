@@ -1,21 +1,34 @@
-# Production/staging overlay. Always used together with the base file:
+# Production overlay. Always used together with the base file, and NEVER with
+# docker-compose.override.yml — naming the files explicitly is what excludes it:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml <cmd>
 #
-# What it changes: web/worker/migrate run PRE-BUILT images from GHCR instead of
-# building on the VPS. Building on the box that also runs production means a
-# deploy can OOM the thing it is deploying.
+# (deploy/stack.sh is that command with the flags already right.)
 #
-# Two stacks share this VPS (staging + production). They stay apart through
-# COMPOSE_PROJECT_NAME, which namespaces containers AND volumes — separate
-# database, separate Redis, separate uploads. Set it in the stack's .env.
+# What it changes:
 #
-# HTTPS is NOT in here. The VPS already runs Caddy under systemd (it serves
-# other sites), and two processes cannot share :443. So each stack publishes its
-# web port on LOOPBACK ONLY — WEB_BIND=127.0.0.1 in the stack's .env — and the
-# host Caddy reverse-proxies to it. The site blocks live in
-# deploy/edge/mysp.caddy; the per-stack `caddy` service from the base file is
-# left unstarted (`--scale caddy=0`).
+# 1. IMAGES. web/worker/migrate run PRE-BUILT images from GHCR instead of
+#    building on the VPS. Building on the box that also runs production means a
+#    deploy can OOM the thing it is deploying.
+#
+# 2. EDGE. There is no reverse proxy in this stack. The VPS is fronted by
+#    Cloudflare Tunnel -> Traefik (a shared stack in /srv/_infra), and Traefik
+#    finds this app through the labels below, over the external `edge` network.
+#    TLS terminates at Cloudflare, so the hop from Traefik to `web` is plain
+#    HTTP on the container port — that is why the entrypoint is `web` and not
+#    `websecure`. The loopback port the base file publishes stays published,
+#    but only for debugging and for the deploy's health probe; Traefik does not
+#    use it.
+#
+# 3. STORAGE. Object storage is the SHARED MinIO in /srv/minio, reached as
+#    `minio-server:9000` over the external `data` network, with a service
+#    account scoped to this app's own buckets (created by
+#    /srv/_infra/new-app-s3.sh). Presigned URLs are signed with the PUBLIC
+#    endpoint https://s3.vannt.asia instead — see deploy/env/prod.env.example.
+#
+# Both networks are created by /srv/_infra and are declared `external` here: a
+# typo in the name fails the `up` loudly instead of silently creating a third,
+# empty network that nothing else is attached to.
 
 services:
   migrate:
@@ -25,7 +38,34 @@ services:
   web:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX is required}/web:${IMAGE_TAG:?IMAGE_TAG is required}
     pull_policy: always
+    networks:
+      - default
+      - edge
+      - data
+    labels:
+      - traefik.enable=true
+      # Without this, Traefik picks whichever network it sees first and can end
+      # up dialling an address it has no route to — a 502 that looks like the
+      # app is down.
+      - traefik.docker.network=edge
+      - traefik.http.routers.multipost-web.rule=Host(`${PUBLIC_HOSTNAME:?PUBLIC_HOSTNAME is required}`)
+      - traefik.http.routers.multipost-web.entrypoints=web
+      - traefik.http.routers.multipost-web.service=multipost-web
+      # The CONTAINER port, not the published one: Traefik connects over the
+      # docker network and never goes through the host's loopback binding.
+      - traefik.http.services.multipost-web.loadbalancer.server.port=3000
 
   worker:
     image: ${IMAGE_PREFIX:?IMAGE_PREFIX is required}/worker:${IMAGE_TAG:?IMAGE_TAG is required}
     pull_policy: always
+    # `data` for the shared MinIO; no `edge`, because nothing routes to a
+    # worker — it has no HTTP surface at all.
+    networks:
+      - default
+      - data
+
+networks:
+  edge:
+    external: true
+  data:
+    external: true

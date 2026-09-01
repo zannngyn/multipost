@@ -120,6 +120,62 @@
       "when": 1787210167306,
       "tag": "0016_elite_landau",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787542183169,
+      "tag": "0017_same_pestilence",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787580898869,
+      "tag": "0018_messy_shinko_yamashiro",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787624553371,
+      "tag": "0019_shallow_molly_hayes",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1787630143538,
+      "tag": "0020_fine_mojo",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787718315208,
+      "tag": "0021_legal_shaman",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1787718874749,
+      "tag": "0022_loud_the_enforcers",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1787720455302,
+      "tag": "0023_sleepy_doomsday",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787737373301,
+      "tag": "0024_backfill_tenant_profile_completed_at",
+      "breakpoints": true
     }
   ]
 }

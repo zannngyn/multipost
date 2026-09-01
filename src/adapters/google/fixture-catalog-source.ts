@@ -11,6 +11,8 @@ import type {
 } from "@/core/ports/drive-source";
 import type { ReadSheetInput, SheetSnapshot, SheetSource } from "@/core/ports/sheet-source";
 
+import { parseCsv as parseCsvText } from "@/shared/csv";
+
 import { buildSheetSnapshot } from "./sheet-values";
 
 /**
@@ -148,56 +150,12 @@ export function makeFixtureSheetSource(options: FixtureSourceOptions = {}): Shee
 }
 
 /**
- * Minimal RFC 4180 CSV reader (quoted fields, escaped quotes, newlines inside
- * quotes — the real export has all three). Written by hand rather than adding a
- * dependency for one fixture.
+ * CSV reader for the sample export. The state machine lives in `@/shared/csv`
+ * (written by hand — CLAUDE.md forbids a new dependency) so the fixture, the
+ * uploaded-file adapter and any future format read a table the same way.
+ * The delimiter is forced: this file is a known comma export, and a fixture
+ * must not change shape because a detector changed its mind.
  */
 export function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-
-    if (inQuotes) {
-      if (char === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i += 1;
-          continue;
-        }
-        inQuotes = false;
-        continue;
-      }
-      field += char;
-      continue;
-    }
-
-    if (char === '"') {
-      inQuotes = true;
-      continue;
-    }
-    if (char === ",") {
-      row.push(field);
-      field = "";
-      continue;
-    }
-    if (char === "\r") continue;
-    if (char === "\n") {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = "";
-      continue;
-    }
-    field += char;
-  }
-
-  if (field.length > 0 || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows;
+  return parseCsvText(text, { delimiter: "," }).rows.map((row) => [...row]);
 }

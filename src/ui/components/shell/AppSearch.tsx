@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, CommandPalette, Kbd } from "@astryxdesign/core";
+import { Button, CommandPalette, CommandPaletteFooter, Kbd } from "@astryxdesign/core";
 import type { SearchSource, SearchableItem } from "@astryxdesign/core";
 import { Search } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -99,6 +99,28 @@ export function AppSearch() {
         searchSource={searchSource}
         label="Tìm màn hình"
         emptySearchText="Không có màn hình nào khớp"
+        /* The placeholder comes from the Vietnamese Astryx catalog
+           (`ui/i18n/astryx-vi`); these three hints cannot. `CommandPaletteFooter`
+           writes "Navigate / Select / Close" straight into its JSX with no
+           message key behind them, so the `children` slot is the only supported
+           way to say them in the operator's language. */
+        footer={
+          <CommandPaletteFooter>
+            <span className="flex items-center gap-1.5">
+              <Kbd keys="up" />
+              <Kbd keys="down" />
+              Di chuyển
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Kbd keys="enter" />
+              Chọn
+            </span>
+            <span className="flex items-center gap-1.5">
+              <Kbd keys="escape" />
+              Đóng
+            </span>
+          </CommandPaletteFooter>
+        }
       />
     </>
   );

@@ -42,6 +42,7 @@
  */
 
 import { AppError } from "./errors";
+import type { ProductOrigin } from "./product";
 import type { TenantId } from "@/core/domain/tenant-context";
 
 export const POST_JOB_STATUSES = [
@@ -127,6 +128,16 @@ export interface PostJob {
   readonly batchId: string;
   readonly productCode: string;
   /**
+   * Where the product TEXT of this post came from, stamped when the job was
+   * created (E7 + onboarding phase 3). Historical fact, NOT a live lookup: the
+   * product row may be re-synced or deleted afterwards — publish-post already
+   * handles the case where it is gone at publish time — and joining at read
+   * time would answer nothing exactly when "bài này lấy dữ liệu từ đâu" is
+   * asked. Absent = `sheet` (every post before phase 3 was built from a synced
+   * catalog); read it through `postJobProductOrigin()`, never directly.
+   */
+  readonly productOrigin?: ProductOrigin;
+  /**
    * Canonical colour, or "" for "every colour of this code". NEVER null: the
    * anti-duplicate UNIQUE index must compare it, and in Postgres NULL != NULL
    * would let the same (batch, code, channel, format) be inserted twice.
@@ -189,6 +200,18 @@ export interface TransitionMeta {
    * a `queued` row whose queue id was never written cannot be cancelled.
    */
   readonly queueJobId?: string | null;
+}
+
+/**
+ * Origin of the product data this post was built from, with the historical
+ * default. Mirrors `productOrigin()` for products: a job that carries none is
+ * a pre-phase-3 row (the DB column is NOT NULL DEFAULT 'sheet', so this default
+ * can only ever apply to an in-memory job that never came from the database).
+ */
+export function postJobProductOrigin(
+  job: { readonly productOrigin?: ProductOrigin } | null | undefined,
+): ProductOrigin {
+  return job?.productOrigin === "manual" ? "manual" : "sheet";
 }
 
 export function isPostJobStatus(value: unknown): value is PostJobStatus {

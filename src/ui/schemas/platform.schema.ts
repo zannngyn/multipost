@@ -33,6 +33,37 @@ export const TENANT_STATUS_TONES: Record<TenantStatus, "success" | "error"> = {
   suspended: "error",
 };
 
+// --- The onboarding survey, per company (E10) -------------------------------
+
+/**
+ * One company's answers to the four onboarding questions. Mirrors
+ * `core/ports/tenant-profile.ts`.
+ *
+ * THE THREE STATES, and they must survive this schema intact:
+ *   the whole object `null` = no `tenant_profile` row — never started;
+ *   a field `null`          = bỏ qua, or never reached that step;
+ *   `[]`                    = answered "không chọn gì" — an ANSWER.
+ * Rendering any two of them as the same dash makes "bao nhiêu người bỏ qua
+ * bước này" unanswerable, which is the number this whole feature is for.
+ *
+ * Codes are free strings here and NOT `z.enum` — a deliberate difference from
+ * `onboarding-profile.schema.ts`, where the enum is right because it drives the
+ * cards a tenant is answering with right now. This screen shows EVERY company,
+ * including rows written before an option was retired or renamed; under
+ * `z.enum` one legacy code fails the parse and blanks the entire platform
+ * table. A mirror that is too strict produces exactly the silently-empty screen
+ * mirrors exist to prevent.
+ */
+export const PlatformTenantSurveySchema = z.object({
+  sellerKind: z.string().min(1).nullable(),
+  currentTools: z.array(z.string().min(1)).nullable(),
+  channelCount: z.string().min(1).nullable(),
+  focusChannels: z.array(z.string().min(1)).nullable(),
+  /** Null while the survey is unfinished — the only "đã xong chưa" check. */
+  completedAt: z.iso.datetime({ offset: true }).nullable(),
+});
+export type PlatformTenantSurvey = z.infer<typeof PlatformTenantSurveySchema>;
+
 export const PlatformTenantSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -42,11 +73,72 @@ export const PlatformTenantSchema = z.object({
   status: TenantStatusSchema,
   memberCount: z.number().int().min(0),
   createdAt: z.iso.datetime({ offset: true }),
+  /** Null = this company has no survey row at all. See the schema above. */
+  survey: PlatformTenantSurveySchema.nullable(),
 });
 export type PlatformTenant = z.infer<typeof PlatformTenantSchema>;
 
+// --- The survey aggregate ---------------------------------------------------
+
+/** One code and how many companies picked it. `count: 0` is meaningful. */
+export const SurveyCodeTallySchema = z.object({
+  code: z.string().min(1),
+  count: z.number().int().min(0),
+});
+export type SurveyCodeTally = z.infer<typeof SurveyCodeTallySchema>;
+
+/**
+ * A one-choice question. `total` is EVERY company, answered or not — the
+ * denominator a percentage needs, and the reason `answered` alone is not it.
+ */
+export const SingleAnswerBreakdownSchema = z.object({
+  total: z.number().int().min(0),
+  answered: z.number().int().min(0),
+  /** Bỏ qua / chưa tới bước đó / chưa có hàng nào. */
+  noAnswer: z.number().int().min(0),
+  /** Stored value the server could not read as a code. Not a skip. */
+  unreadable: z.number().int().min(0),
+  byCode: z.array(SurveyCodeTallySchema),
+});
+export type SingleAnswerBreakdown = z.infer<typeof SingleAnswerBreakdownSchema>;
+
+/**
+ * A many-choice question. `answeredNone` ([]) is its OWN number next to
+ * `noAnswer` (null) on purpose — see `PlatformTenantSurveySchema`.
+ */
+export const MultiAnswerBreakdownSchema = SingleAnswerBreakdownSchema.extend({
+  /** Answered "không chọn gì". NOT the same companies as `noAnswer`. */
+  answeredNone: z.number().int().min(0),
+  /** Entries inside a stored list that were not readable codes. */
+  unreadableVotes: z.number().int().min(0),
+  /** Sum of `byCode` — one company contributes one per code it picked. */
+  votes: z.number().int().min(0),
+});
+export type MultiAnswerBreakdown = z.infer<typeof MultiAnswerBreakdownSchema>;
+
+/**
+ * Mirrors `core/domain/onboarding-survey-summary.ts`. Counted from exactly the
+ * `items` it arrives with, so the strip and the table always agree.
+ *
+ * NOT in here, and not obtainable from this data: per-step drop-off, cohorts,
+ * conversion funnels. Only the FINAL answers are stored — nothing records who
+ * skipped which step and when.
+ */
+export const OnboardingSurveySummarySchema = z.object({
+  /** Every company in `items`. */
+  total: z.number().int().min(0),
+  completed: z.number().int().min(0),
+  notCompleted: z.number().int().min(0),
+  sellerKind: SingleAnswerBreakdownSchema,
+  channelCount: SingleAnswerBreakdownSchema,
+  currentTools: MultiAnswerBreakdownSchema,
+  focusChannels: MultiAnswerBreakdownSchema,
+});
+export type OnboardingSurveySummary = z.infer<typeof OnboardingSurveySummarySchema>;
+
 export const PlatformTenantListResponseSchema = z.object({
   items: z.array(PlatformTenantSchema),
+  surveySummary: OnboardingSurveySummarySchema,
 });
 export type PlatformTenantListResponse = z.infer<typeof PlatformTenantListResponseSchema>;
 

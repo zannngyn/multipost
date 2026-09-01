@@ -30,12 +30,30 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   // "never existed" is a probing oracle.
   TENANT_LIMIT_REACHED: 409,
   SLUG_TAKEN: 409,
+  // 503, not 409: no slug the caller sent is at fault and the same request,
+  // sent again, draws fresh entropy and very probably succeeds.
+  SLUG_DERIVATION_EXHAUSTED: 503,
   INVITE_INVALID: 404,
   INVITE_ROLE_FORBIDDEN: 403,
   // Members (M2.3) + retirement (M2.4)
   LAST_OWNER: 409,
   MEMBER_NOT_FOUND: 404,
   RETIRED: 410,
+  /**
+   * Password sign-in / sign-up. These normally travel through the Server
+   * Actions (which answer `{ok:false, code, message}`, not HTTP), but the map
+   * must be TOTAL — an unmapped code would fall through to 500 and turn "sai
+   * mật khẩu" into an outage in any route that ever surfaces one.
+   *
+   * 401, not 403: the caller failed to authenticate, and no role change fixes
+   * it. 423 Locked says exactly what a lock-out is. 429 carries the limiter.
+   */
+  AUTH_WEAK_PASSWORD: 422,
+  AUTH_EMAIL_TAKEN: 409,
+  AUTH_INVALID_CREDENTIALS: 401,
+  AUTH_ACCOUNT_LOCKED: 423,
+  AUTH_RATE_LIMITED: 429,
+  AUTH_CREDENTIAL_NOT_FOUND: 404,
   TENANT_NOT_FOUND: 404,
   INTERNAL: 500,
   DB_ERROR: 503,

@@ -1,9 +1,11 @@
 import {
   CreateTenantResponseSchema,
+  EnsureDefaultTenantResponseSchema,
   JoinTenantResponseSchema,
   parseInviteToken,
   type CreateTenantFormValues,
   type CreateTenantResponse,
+  type EnsureDefaultTenantResponse,
   type JoinTenantResponse,
 } from "@/ui/schemas/tenant-onboarding.schema";
 
@@ -48,6 +50,28 @@ export async function createTenant(
     signal,
     malformedMessage:
       "Kết quả tạo công ty không đúng định dạng. Công ty có thể đã được tạo — hãy tải lại trang để kiểm tra.",
+  });
+}
+
+/**
+ * E10 — make sure the signed-in account has somewhere to work, then get out of
+ * the way. Called by the first-run gate BEFORE the onboarding survey, and only
+ * for an account that belongs nowhere.
+ *
+ * No body: the default company name lives in the usecase and is changed in Cài
+ * đặt. The answer says which company the account is in and, crucially, whether
+ * it was just created — a `200` means it already had one and the active-tenant
+ * cookie was left alone.
+ */
+export async function ensureDefaultTenant(
+  signal?: AbortSignal,
+): Promise<EnsureDefaultTenantResponse> {
+  return apiRequest("/api/tenants/ensure-default", {
+    method: "POST",
+    schema: EnsureDefaultTenantResponseSchema,
+    signal,
+    malformedMessage:
+      "Không đọc được kết quả tạo công ty. Hãy tải lại trang để xem công ty đã được tạo chưa.",
   });
 }
 

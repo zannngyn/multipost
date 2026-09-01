@@ -2,13 +2,13 @@
 #
 # Note what is absent: `push` on `dev`. Day-to-day work merges into dev without
 # spending a single Actions minute, by request. The first time a change is
-# checked is when it is proposed for `stg` — i.e. when it is about to become a
+# checked is when it is proposed for `main` — i.e. when it is about to become a
 # deployment.
 name: CI
 
 on:
   pull_request:
-    branches: [stg, main]
+    branches: [main]
   # Lets a branch be checked without opening a pull request first.
   workflow_dispatch:
 

@@ -3,6 +3,8 @@
 import { TopNav, TopNavHeading } from "@astryxdesign/core";
 
 import { AppSearch } from "@/ui/components/shell/AppSearch";
+import { ColorSchemeToggle } from "@/ui/components/shell/ColorSchemeToggle";
+import { OutOfTenantBadge } from "@/ui/components/shell/OutOfTenantBadge";
 import { TenantSwitcher } from "@/ui/components/shell/TenantSwitcher";
 
 /**
@@ -27,11 +29,30 @@ export function AppTopBar({
   return (
     <TopNav
       label="Thanh trên cùng"
-      heading={<TopNavHeading heading="MYSP" headingHref="/" />}
+      heading={<TopNavHeading heading="MYSP" headingHref="/overview" />}
       // The company is no longer a label but a control (M2.3): it says where
       // you are AND is the way out of it, plus the only door to "tạo công ty".
-      startContent={<TenantSwitcher fallbackLabel={tenantName} />}
-      endContent={<AppSearch />}
+      //
+      // The badge next to it only appears on MYSP's own admin screens, where
+      // that company name is not what the screen is about. The slot is already
+      // a spaced row, so the two travel as a fragment — no wrapper of our own.
+      startContent={
+        <>
+          <TenantSwitcher fallbackLabel={tenantName} />
+          <OutOfTenantBadge />
+        </>
+      }
+      // Sáng / tối, immediately left of the search (M3.4). A per-VIEWER
+      // preference, not the platform appearance setting — so it belongs on
+      // the chrome every operator has, not on an admin screen most of them
+      // cannot open. The slot is already a spaced row, so the two travel as
+      // a fragment, the same way `startContent` does above.
+      endContent={
+        <>
+          <ColorSchemeToggle />
+          <AppSearch />
+        </>
+      }
     />
   );
 }

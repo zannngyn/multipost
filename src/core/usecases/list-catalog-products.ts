@@ -1,3 +1,4 @@
+import { DEFAULT_STOCK_POLICY, type StockPolicy } from "@/core/domain/catalog-field-map";
 import { AppError, type ErrorCode } from "@/core/domain/errors";
 import {
   evaluateInventory,
@@ -5,6 +6,7 @@ import {
   type InventoryStatus,
 } from "@/core/domain/inventory";
 import { isTenantId } from "@/core/domain/tenant";
+import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type { Logger } from "@/core/ports/infra";
 import type {
   CatalogProductRow,
@@ -73,6 +75,14 @@ export interface CatalogProductInventoryView {
   readonly reason: InventoryBlockReason | null;
   /** Vietnamese, internal-only (never a caption). Null when not blocked. */
   readonly operatorMessage: string | null;
+  /**
+   * TRUE = nobody checked the stock (tenant policy `disabled`). Its own field,
+   * not a sentence: the screen paints it red. `status: "in_stock"` next to this
+   * flag does NOT mean "còn hàng" — it means "không ai kiểm".
+   */
+  readonly stockCheckSkipped: boolean;
+  /** The reason the tenant declared when turning the check off. Null otherwise. */
+  readonly stockCheckSkippedReason: string | null;
 }
 
 export interface CatalogProductBlockedReason {
@@ -112,6 +122,11 @@ export interface ListCatalogProductsResult {
 export interface ListCatalogProductsDeps {
   catalog: CatalogReadRepo;
   logger: Logger;
+  /**
+   * Per-tenant stock policy (onboarding phase 1). Optional so an unwired caller
+   * keeps the `numeric` behaviour — the safe default, which still checks stock.
+   */
+  catalogConfig?: CatalogConfigRepo;
 }
 
 export function makeListCatalogProducts(deps: ListCatalogProductsDeps) {
@@ -135,13 +150,17 @@ export function makeListCatalogProducts(deps: ListCatalogProductsDeps) {
     const search = str(filter.q);
     const cursor = decodeCatalogCursor(filter.cursor, tenantId);
 
+    // Read ONCE per request: the policy is a tenant setting, and the decision
+    // table must be identical for every row and for the totals.
+    const stockPolicy = await resolveStockPolicy(deps.catalogConfig, tenantId, deps.logger);
+
     // Totals first: they describe the search result, not the page, so the
     // screen can say "12/299" even when the status filter empties the page.
     const groups = await deps.catalog.aggregateCatalog({
       tenantId,
       search: search.length > 0 ? search : undefined,
     });
-    const totals = foldTotals(groups);
+    const totals = foldTotals(groups, stockPolicy);
 
     const items: CatalogProductEntry[] = [];
     let afterCode = cursor;
@@ -166,7 +185,7 @@ export function makeListCatalogProducts(deps: ListCatalogProductsDeps) {
       let filledMidPage = false;
       for (const row of page.items) {
         scannedRows += 1;
-        const entry = toEntry(row);
+        const entry = toEntry(row, stockPolicy);
         // Advance the keyset over EVERY row read, filtered out or not: the next
         // page must resume after the last row this request consumed.
         afterCode = row.code;
@@ -206,6 +225,7 @@ export function makeListCatalogProducts(deps: ListCatalogProductsDeps) {
 
     deps.logger.debug("Catalog product list read", {
       tenant_id: tenantId,
+      stock_policy_mode: stockPolicy.mode,
       status_filter: status,
       search: search.length > 0 ? search : null,
       limit,
@@ -228,19 +248,22 @@ export type ListCatalogProducts = ReturnType<typeof makeListCatalogProducts>;
  * out-of-stock code is fixed by restocking, a missing photo is fixed on Drive.
  * Showing the wrong one first sends the operator to the wrong tool.
  */
-function toEntry(row: CatalogProductRow): CatalogProductEntry {
+function toEntry(row: CatalogProductRow, stockPolicy: StockPolicy): CatalogProductEntry {
   const imageCount = toCount(row?.mediaImageCount);
   const videoCount = toCount(row?.mediaVideoCount);
   const hasMedia = imageCount + videoCount > 0;
   const hasConflict = row?.hasConflict === true;
   const code = typeof row?.code === "string" ? row.code : "";
 
-  const inventory = evaluateInventory({
-    productCode: code,
-    stockRaw: typeof row?.stockRaw === "string" ? row.stockRaw : "",
-    noteRaw: typeof row?.noteRaw === "string" ? row.noteRaw : "",
-    hasConflict,
-  });
+  const inventory = evaluateInventory(
+    {
+      productCode: code,
+      stockRaw: typeof row?.stockRaw === "string" ? row.stockRaw : "",
+      noteRaw: typeof row?.noteRaw === "string" ? row.noteRaw : "",
+      hasConflict,
+    },
+    stockPolicy,
+  );
 
   const composable = !inventory.blocked && hasMedia && !hasConflict;
 
@@ -272,6 +295,8 @@ function toEntry(row: CatalogProductRow): CatalogProductEntry {
       stock: inventory.stock,
       reason: inventory.reason,
       operatorMessage: inventory.operatorMessage,
+      stockCheckSkipped: inventory.stockCheckSkipped,
+      stockCheckSkippedReason: inventory.stockCheckSkippedReason,
     },
     mediaImageCount: imageCount,
     mediaVideoCount: videoCount,
@@ -286,21 +311,27 @@ function matchesStatus(entry: CatalogProductEntry, status: CatalogStatusFilter):
 }
 
 /** Runs the decision table once per bucket and sums the SQL counts. */
-function foldTotals(groups: readonly CatalogSignalGroup[]): CatalogTotals {
+function foldTotals(
+  groups: readonly CatalogSignalGroup[],
+  stockPolicy: StockPolicy,
+): CatalogTotals {
   let total = 0;
   let ok = 0;
   for (const group of groups ?? []) {
     const howMany = toCount(group?.count);
     if (howMany === 0) continue;
     total += howMany;
-    const inventory = evaluateInventory({
-      // The bucket has no single code; the code only shapes the message, which
-      // a counter never shows.
-      productCode: "",
-      stockRaw: typeof group?.stockRaw === "string" ? group.stockRaw : "",
-      noteRaw: typeof group?.noteRaw === "string" ? group.noteRaw : "",
-      hasConflict: group?.hasConflict === true,
-    });
+    const inventory = evaluateInventory(
+      {
+        // The bucket has no single code; the code only shapes the message, which
+        // a counter never shows.
+        productCode: "",
+        stockRaw: typeof group?.stockRaw === "string" ? group.stockRaw : "",
+        noteRaw: typeof group?.noteRaw === "string" ? group.noteRaw : "",
+        hasConflict: group?.hasConflict === true,
+      },
+      stockPolicy,
+    );
     if (!inventory.blocked && group?.hasMedia === true && group?.hasConflict !== true) {
       ok += howMany;
     }
@@ -372,4 +403,33 @@ function toCount(value: unknown): number {
 
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * The tenant's stock policy for this listing.
+ *
+ * No repo wired -> `numeric` (the safe default: stock IS checked). A failure is
+ * rethrown: the repo only throws on a STORED policy that cannot be parsed, and
+ * a catalog screen that answers "còn hàng" from a broken config is worse than a
+ * screen that says it could not be read.
+ */
+async function resolveStockPolicy(
+  catalogConfig: CatalogConfigRepo | undefined,
+  tenantId: TenantId,
+  logger: Logger,
+): Promise<StockPolicy> {
+  if (!catalogConfig) return DEFAULT_STOCK_POLICY;
+
+  try {
+    return await catalogConfig.findStockPolicy(tenantId);
+  } catch (error) {
+    const appError = AppError.from(error, "SYNC_FAILED", { tenant_id: tenantId });
+    logger.error("Catalog listing stopped: the tenant stock policy could not be read", {
+      tenant_id: tenantId,
+      error_code: appError.code,
+      err: appError,
+      ...appError.toLogObject(),
+    });
+    throw appError;
+  }
 }

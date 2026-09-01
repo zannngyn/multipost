@@ -21,6 +21,7 @@ import type { TableColumn } from "@astryxdesign/core";
 import { useEffect, useState } from "react";
 
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
+import { MEMBERSHIP_ROLE_BADGE_TONES } from "@/ui/components/members/role-badge";
 import { useCreateInvite, useInvites, useRevokeInvite } from "@/ui/hooks/useInvites";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useNowMs } from "@/ui/hooks/useNowMs";
@@ -310,7 +311,10 @@ function InviteListBody({
       header: "Vai trò",
       width: pixel(130),
       renderCell: (invite) => (
-        <Badge variant="blue" label={MEMBERSHIP_ROLE_LABELS[invite.role]} />
+        <Badge
+          variant={MEMBERSHIP_ROLE_BADGE_TONES[invite.role]}
+          label={MEMBERSHIP_ROLE_LABELS[invite.role]}
+        />
       ),
     },
     {

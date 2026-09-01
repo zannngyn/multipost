@@ -3,13 +3,9 @@
 import { Button, HStack, Stack, StatusDot, Table, Text, pixel, proportional } from "@astryxdesign/core";
 import type { TableColumn } from "@astryxdesign/core";
 
-import {
-  INVENTORY_STATUS_LABELS,
-  blockedReasonLabel,
-  formatCount,
-  formatMediaCounts,
-  type CatalogProduct,
-} from "@/ui/schemas/catalog.schema";
+import { stockCellText } from "@/ui/components/inventory/stock-check";
+import { productStatus } from "@/ui/components/products/product-status";
+import { formatMediaCounts, type CatalogProduct } from "@/ui/schemas/catalog.schema";
 
 /**
  * The catalog as the operator sees it: which codes can be posted, and for the
@@ -33,27 +29,6 @@ import {
 /** Table's generic needs an index signature; the fields stay CatalogProduct's. */
 type ProductRow = CatalogProduct & Record<string, unknown>;
 
-interface StatusView {
-  variant: "success" | "warning" | "error";
-  label: string;
-}
-
-/** One dot answers "can I post this?" before any text is read. */
-export function productStatus(product: CatalogProduct): StatusView {
-  if (!product.composable) {
-    return {
-      variant: "error",
-      label: product.blockedReason
-        ? blockedReasonLabel(product.blockedReason.code)
-        : "Không đăng được",
-    };
-  }
-  if (product.inventory.status === "low_stock") {
-    return { variant: "warning", label: INVENTORY_STATUS_LABELS.low_stock };
-  }
-  return { variant: "success", label: "Đăng được" };
-}
-
 export function ProductTable({
   items,
   selectedCode,
@@ -73,6 +48,10 @@ export function ProductTable({
         const isSelected = selectedCode === product.code;
         return (
           <HStack gap={2} align="center">
+            {/* The dot's colour is decoded by ProductStatusLegend above the
+                table — words that are always on screen, not only on hover
+                (Named Status Rule). The label/tooltip here name THIS row's own
+                reason ("Hết hàng", "Thiếu ảnh"), which the legend cannot. */}
             <StatusDot variant={status.variant} label={status.label} tooltip={status.label} />
             {/* The code is the row's interactive element: one tab stop per row,
                 and a real button rather than a click handler on the <tr>.
@@ -111,11 +90,23 @@ export function ProductTable({
       header: "Tồn kho",
       width: pixel(120),
       align: "end",
+      /*
+       * `stockCellText` reads `stockCheckSkipped` FIRST. A tenant with the stock
+       * gate off still gets `status: "in_stock"` and a number from the Sheet, and
+       * a bare "62" in this column would be read as a count somebody made.
+       *
+       * The cell carries the WORD, not the alarm: with the gate off every row
+       * says the same thing, and a red pill repeated down 300 rows stops being
+       * read (Badge §"Don't repeat the same badge in every row"). The red banner
+       * above the table is where the warning lives, once, with the reason.
+       */
       renderCell: (product) =>
-        product.inventory.stock === null ? (
+        product.inventory.stockCheckSkipped ? (
+          <Text>{stockCellText(product.inventory)}</Text>
+        ) : product.inventory.stock === null ? (
           <Text color="placeholder">—</Text>
         ) : (
-          <Text>{formatCount(product.inventory.stock)}</Text>
+          <Text>{stockCellText(product.inventory)}</Text>
         ),
     },
     {

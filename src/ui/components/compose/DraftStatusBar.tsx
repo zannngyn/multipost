@@ -15,21 +15,24 @@ import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import type { ComposeDraftState } from "@/ui/hooks/useComposeDraft";
 
 /**
- * The draft's own status line (E10).
+ * The draft's status line (E10) — SILENT while nothing is wrong.
  *
- * It answers one question at all times: WHERE is what I just typed? Autosave
- * that shows nothing is indistinguishable from autosave that is broken, and the
- * operator only finds out which after losing an afternoon.
+ * Autosave working is not news. "Đang lưu nháp…", "Đã lưu nháp lúc 15:30" and
+ * "Tự động lưu nháp đang bật" are the app narrating its own bookkeeping: they
+ * occupy the header on every single visit and the operator has no decision to
+ * make about any of them. So the happy path renders NOTHING.
  *
- * Four states, four different sentences (core-feedback-states):
- *  - restoring → "Đang khôi phục nháp…"
- *  - saved     → "Đã lưu nháp lúc HH:mm" (the hour, not a vague "đã lưu")
- *  - local-only→ "Chỉ lưu trên máy này" + why, because it is a real limitation
- *  - error     → "Lưu nháp lỗi" + the server's reason + a retry that works
+ * What still speaks, because each one costs the operator something if missed
+ * (business rule 5 — nothing is swallowed):
+ *  - error            → "Lưu nháp lỗi" + the server's reason + a retry
+ *  - local-only       → "Chỉ lưu trên máy này", a real limitation
+ *  - localBufferFailed→ the browser refused to buffer locally (own paragraph)
+ *  - notices          → warnings raised while restoring
  *
- * Never a spinner over the content and never a toast: this is ambient state, it
- * belongs in a line the operator can glance at, not in something that steals
- * focus or disappears before it is read.
+ * "Xoá nháp" stays reachable whenever a draft actually exists — it is the only
+ * way to clear one — but on its own, not wrapped in a status announcement.
+ *
+ * Never a spinner over the content and never a toast.
  */
 export function DraftStatusBar({ draft }: { draft: ComposeDraftState }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -40,30 +43,57 @@ export function DraftStatusBar({ draft }: { draft: ComposeDraftState }) {
    * always slower than that, so the only thing this hides is the flicker.
    */
   const showRestoring = useDelayedFlag(draft.isRestoring);
-  const status = describe(draft, showRestoring);
+
+  /** Something the operator has to know about or act on. */
+  const hasProblem =
+    draft.phase === "error" || draft.phase === "local-only" || draft.localBufferFailed;
+  // Only these two get the dot-and-sentence line; `localBufferFailed` has its
+  // own paragraph below and must not be said twice.
+  const status =
+    draft.phase === "error" || draft.phase === "local-only" ? describe(draft) : null;
+
+  /**
+   * Is there anything to throw away? A "Xoá nháp" button on an untouched screen
+   * is one more thing to read and nothing to do.
+   */
+  const hasDraft =
+    draft.phase === "saved" ||
+    draft.phase === "local-only" ||
+    draft.phase === "error" ||
+    Boolean(draft.updatedAt);
+
+  // Quiet, with nothing stored and nothing wrong: say nothing at all. Also the
+  // whole of a restore, which the operator did not ask about either.
+  if (!hasProblem && !hasDraft && draft.notices.length === 0) return null;
+  if (showRestoring && !hasProblem && draft.notices.length === 0) return null;
 
   return (
     <section aria-label="Trạng thái nháp" className="flex flex-col gap-2">
-      <div className="border-border bg-card flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3.5 py-2.5">
-        <span
-          aria-hidden="true"
-          className={`size-2 shrink-0 rounded-full ${status.dotClass}`}
-        />
-        {/* `polite`: a save is not an interruption. The text carries the state,
-            never the colour alone (core-accessibility §5). */}
-        <p role="status" aria-live="polite" className="text-sm">
-          <span className="font-medium">{status.title}</span>
-          {status.detail ? (
-            <span className="text-muted-foreground"> — {status.detail}</span>
-          ) : null}
-        </p>
+      {status ? (
+        <div className="border-border bg-card flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3.5 py-2.5">
+          <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${status.dotClass}`} />
+          {/* `polite`: a failed save is not an interruption, but it must be
+              announced. The text carries the state, never the colour alone
+              (core-accessibility §5). */}
+          <p role="status" aria-live="polite" className="text-sm">
+            <span className="font-medium">{status.title}</span>
+            {status.detail ? (
+              <span className="text-muted-foreground"> — {status.detail}</span>
+            ) : null}
+          </p>
 
-        <div className="ms-auto flex items-center gap-2">
-          {draft.phase === "error" ? (
-            <Button type="button" variant="outline" size="sm" onClick={draft.retry}>
-              Thử lại
-            </Button>
-          ) : null}
+          <div className="ms-auto flex items-center gap-2">
+            {draft.phase === "error" ? (
+              <Button type="button" variant="outline" size="sm" onClick={draft.retry}>
+                Thử lại
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {hasDraft ? (
+        <div className="flex justify-end">
           <Button
             type="button"
             variant="ghost"
@@ -74,7 +104,7 @@ export function DraftStatusBar({ draft }: { draft: ComposeDraftState }) {
             Xoá nháp
           </Button>
         </div>
-      </div>
+      ) : null}
 
       {draft.localBufferFailed ? (
         <p className="text-muted-foreground text-xs leading-relaxed">
@@ -134,52 +164,62 @@ interface DraftStatusText {
   dotClass: string;
 }
 
-/** One sentence per state — and the hour, because "đã lưu" alone ages badly. */
-function describe(draft: ComposeDraftState, showRestoring: boolean): DraftStatusText {
-  if (showRestoring) {
+/** One sentence per state that is still worth a sentence. */
+function describe(draft: ComposeDraftState): DraftStatusText {
+  if (draft.phase === "error") {
     return {
-      title: "Đang khôi phục nháp…",
-      detail: "Đang tra lại mã sản phẩm và kiểm tồn kho như lúc soạn mới.",
-      dotClass: "bg-accent-foreground motion-safe:animate-pulse",
+      title: "Lưu nháp lỗi",
+      detail: draft.errorMessage ?? "Không lưu được nháp lên máy chủ.",
+      dotClass: "bg-destructive",
     };
   }
 
-  switch (draft.phase) {
-    case "saving":
-      return { title: "Đang lưu nháp…", detail: null, dotClass: "bg-accent-foreground" };
-    case "saved":
-      return {
-        title: draft.updatedAt ? `Đã lưu nháp lúc ${formatSavedAt(draft.updatedAt)}` : "Đã lưu nháp",
-        detail: "Đóng tab hay F5 đều không mất phần bạn đã gõ.",
-        dotClass: "bg-success",
-      };
-    case "local-only":
-      return {
-        title: "Chỉ lưu trên máy này",
-        detail:
-          "Máy chủ chưa nhận diện được người dùng của phiên này, nên nháp không đồng bộ sang máy khác.",
-        dotClass: "bg-warning",
-      };
-    case "error":
-      return {
-        title: "Lưu nháp lỗi",
-        detail: draft.errorMessage ?? "Không lưu được nháp lên máy chủ.",
-        dotClass: "bg-destructive",
-      };
-    // Also the first ~300ms of a restore, before it is worth announcing: the
-    // sentence is true either way, so nothing flickers between the two.
-    default:
-      return {
-        title: "Tự động lưu nháp đang bật",
-        detail: "Mọi thứ bạn gõ được lưu lại ngay khi bạn dừng tay.",
-        dotClass: "bg-border",
-      };
-  }
+  // local-only — the only other phase this is called for.
+  return {
+    title: "Chỉ lưu trên máy này",
+    detail:
+      "Máy chủ chưa nhận diện được người dùng của phiên này, nên nháp không đồng bộ sang máy khác.",
+    dotClass: "bg-warning",
+  };
 }
 
-/** "15:30" in the operator's own zone; the date is not news on this screen. */
-function formatSavedAt(iso: string): string {
+/**
+ * "15:30" today, "20/08/2026 15:30" any other day, in the operator's own zone.
+ *
+ * The hour alone was a trap on the screen this line lives on: a draft is
+ * restored days later, and "Đã lưu nháp lúc 01:31" reads as "a minute ago" —
+ * the operator then trusts content typed before a catalog sync moved the stock.
+ * The date shows up exactly when it carries news, so the everyday case stays
+ * short (`formatDraftSavedAt` is exported for its test).
+ */
+export function formatDraftSavedAt(iso: string, now: Date = new Date()): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" }).format(date);
+
+  const time = new Intl.DateTimeFormat("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+  if (isSameLocalDay(date, now)) return time;
+
+  // The year is in, and on purpose: the `day/month` skeleton alone renders as
+  // "22-07" in the vi-VN ICU data, a separator that appears nowhere else in
+  // this app. Every other date on screen is dd/MM/yyyy (`formatScheduledAt`,
+  // `formatDateTime`), and one line reading differently is the kind of detail
+  // an operator notices without being able to name.
+  const day = new Intl.DateTimeFormat("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+  return `${day} ${time}`;
+}
+
+/** Local calendar day, not UTC — the operator reads their own clock. */
+function isSameLocalDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }

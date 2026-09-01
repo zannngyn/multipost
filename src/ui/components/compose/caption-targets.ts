@@ -1,14 +1,14 @@
 /**
  * One caption per CHANNEL (brief §7.2) — the rules, without React.
  *
- * The shape of the problem: a post goes to several Fanpages, and the brief says
+ * The shape of the problem: a post goes to several Pages, and the brief says
  * their captions must not be identical (validator D1 on the server measures
  * "trùng > 8 từ liên tiếp"). So the screen holds two things at once:
  *
  *   base       — the caption of record, `form.captions.facebook`. It is what
  *                exists before any channel is ticked, and what "dùng chung"
  *                publishes to every channel.
- *   overrides  — `channelId -> caption`, the per-Fanpage copy. Absent means "chưa
+ *   overrides  — `channelId -> caption`, the per-Page copy. Absent means "chưa
  *                sửa riêng", NOT "rỗng": publishing falls back to `base`, which
  *                is why a post can never go out captionless by accident.
  *
@@ -91,7 +91,7 @@ export function resolveCaption(sources: CaptionSources, channelId: string): stri
  *  own       — it has its own text. The goal state.
  *  inherited — nothing of its own, so it will publish the shared caption. NOT an
  *              error: the post can go out. It IS worth a warning, because two
- *              Fanpages with the identical caption is what the platform reads as
+ *              Pages with the identical caption is what the platform reads as
  *              spam and what validator D1 refuses.
  *  empty     — neither its own text nor a shared one. This channel cannot be
  *              published, and it is named by the action bar.

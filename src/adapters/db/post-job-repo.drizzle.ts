@@ -79,6 +79,7 @@ function toDomain(row: PostJobRow): PostJob {
     tenantId: row.tenantId,
     batchId: row.batchId,
     productCode: row.productCode,
+    productOrigin: row.productOrigin,
     color: row.color,
     channelId: row.channelId,
     // Unknown text in the column would corrupt the domain type silently.
@@ -157,6 +158,9 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
               format: input.batch.format,
               note: input.batch.note,
               createdBy: input.batch.createdBy,
+              // undefined would let drizzle omit the column; NULL is the value
+              // that means "this run picked nothing, use the tenant setting".
+              spacingMs: input.batch.spacingMs ?? null,
               status: "pending" as const,
             }),
           )
@@ -170,6 +174,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
                 id: job.id,
                 batchId: job.batchId,
                 productCode: job.productCode,
+                productOrigin: job.productOrigin,
                 color: job.color,
                 channelId: job.channelId,
                 format: job.format,
@@ -192,6 +197,7 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
               payload: {
                 batch_id: row.batchId,
                 product_code: row.productCode,
+                product_origin: row.productOrigin,
                 color: row.color,
                 channel: row.channelId,
                 format: row.format,
@@ -820,6 +826,46 @@ export class DrizzlePostJobRepo implements PostJobRepo, UntouchedQueuedRepo {
         tenant_id: scope.tenantId,
         channel,
         field: "channelId",
+      });
+    }
+  }
+
+  /**
+   * The run's own spacing (E7 spacing gate). One column, one row: this runs on
+   * every publish attempt, so it must not drag the batch's jobs along with it.
+   *
+   * A batch that does not exist reads as null rather than throwing: post_job
+   * .batch_id is a FK, so the caller cannot be holding a job whose batch is
+   * gone, and inventing a failure here would stop a publish over a row the gate
+   * only needed an OPTIONAL value from.
+   */
+  async findBatchSpacingMs(tenantId: TenantId, batchId: string): Promise<number | null> {
+    const scope = forTenant(this.db, tenantId);
+    const id = typeof batchId === "string" ? batchId.trim() : "";
+    if (id.length === 0) {
+      throw new AppError("INVALID_INPUT", {
+        message: "findBatchSpacingMs requires a batch id",
+        userMessage: "Thiếu mã lô bài đăng.",
+        context: { tenant_id: scope.tenantId },
+      });
+    }
+
+    try {
+      const rows = await scope.db
+        .select({ spacingMs: postBatches.spacingMs })
+        .from(postBatches)
+        .where(scope.where(postBatches, eq(postBatches.id, id)))
+        .limit(1);
+      const value = rows[0]?.spacingMs ?? null;
+      // The driver hands back int4 as a number; anything else means the column
+      // type changed under us, and guessing would silently change the gate.
+      return typeof value === "number" && Number.isFinite(value) ? value : null;
+    } catch (error) {
+      throw wrapDbError(error, {
+        operation: "postJob.findBatchSpacingMs",
+        tenant_id: scope.tenantId,
+        batch_id: id,
+        field: "batchId",
       });
     }
   }

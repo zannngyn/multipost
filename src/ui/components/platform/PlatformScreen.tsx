@@ -302,16 +302,25 @@ function PlatformListBody({
         </Stack>
       ) : null}
 
+      {/* `paddingInline={4}` — the same 16px every other block on this screen
+          stands on (the live region, the notices, the "Danh sách công ty"
+          heading). Without it the table sat flush against the side nav on one
+          edge and ran off the window on the other, 16px out of line with the
+          heading that names it: measured at 1440 in the T11 inspect round,
+          table x=256 against a heading at x=272. The table stays bare on the
+          cloth — it only has to stand in the same column as its title. */}
       <StackItem size="fill">
-        <PlatformTenantTable
-          tenants={items}
-          canAdminister={canAdminister}
-          canSupport={canSupport}
-          busyTenantId={busyTenantId}
-          onSuspend={onSuspend}
-          onActivate={onActivate}
-          onEnterSupport={onEnterSupport}
-        />
+        <Stack direction="vertical" height="100%" paddingInline={4}>
+          <PlatformTenantTable
+            tenants={items}
+            canAdminister={canAdminister}
+            canSupport={canSupport}
+            busyTenantId={busyTenantId}
+            onSuspend={onSuspend}
+            onActivate={onActivate}
+            onEnterSupport={onEnterSupport}
+          />
+        </Stack>
       </StackItem>
     </Stack>
   );

@@ -11,8 +11,10 @@
  */
 
 import { buildCaptionText, captionInputSchema, type CaptionResult } from "@/core/domain/caption";
+import type { CatalogFieldMap } from "@/core/domain/catalog-field-map";
 import { AppError, isErrorCode, type ErrorCode } from "@/core/domain/errors";
 import type { AITask } from "@/core/ports/ai";
+import type { CatalogConfigRepo } from "@/core/ports/drive-source";
 import type {
   ContentConstraints,
   ContentEngine,
@@ -90,6 +92,12 @@ export interface GenerateCaptionsResult {
 export interface GenerateCaptionsDeps {
   contentEngine: ContentEngine;
   logger: Logger;
+  /**
+   * Per-tenant column mapping (onboarding phase 1), read once per call and
+   * handed to validation stage 3. Optional so a caller that is not wired yet
+   * keeps the MYSP preset — exactly the behaviour before onboarding.
+   */
+  catalogConfig?: CatalogConfigRepo;
 }
 
 const DEFAULT_TASK_BY_PLATFORM: Partial<Record<ContentPlatform, AITask>> = {
@@ -183,6 +191,10 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
       forbiddenWords: input.constraints?.forbiddenWords,
     };
 
+    // Read ONCE per call, not per channel: N channels must not mean N queries.
+    // A broken map stops every channel here, before a token is spent.
+    const fieldMap = await resolveFieldMap(deps.catalogConfig, tenantId, log);
+
     // --- Happy path --------------------------------------------------------
     const generated: GeneratedChannelCaption[] = [];
     const failed: FailedChannelCaption[] = [];
@@ -212,6 +224,7 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
         tenantId,
         task,
         product,
+        fieldMap,
         platform: channel.platform,
         contentType: channel.contentType,
         vision: input.vision,
@@ -314,6 +327,36 @@ export function makeGenerateCaptions(deps: GenerateCaptionsDeps) {
 
     return { generated, failed, totalCostUsd };
   };
+}
+
+/**
+ * The tenant's column mapping for one caption run.
+ *
+ * `undefined` means "nothing wired": stage 3 then uses the MYSP preset, which
+ * is what every caller did before onboarding. A repo FAILURE is rethrown, never
+ * downgraded to the preset — the repo already answers a missing/disabled
+ * integration with the preset itself, so a throw means the STORED map is
+ * unusable, and validating a customer's caption against our column names would
+ * reject grounded claims (or ground invented ones) without anyone noticing.
+ */
+async function resolveFieldMap(
+  catalogConfig: CatalogConfigRepo | undefined,
+  tenantId: TenantId,
+  log: Logger,
+): Promise<CatalogFieldMap | undefined> {
+  if (!catalogConfig) return undefined;
+
+  try {
+    return await catalogConfig.findFieldMap(tenantId);
+  } catch (error) {
+    const appError = AppError.from(error, "SYNC_FAILED", { tenant_id: tenantId });
+    log.error("Caption generation stopped: the tenant column mapping could not be read", {
+      error_code: appError.code,
+      err: appError,
+      ...appError.toLogObject(),
+    });
+    throw appError;
+  }
 }
 
 function findDuplicateChannelId(channels: readonly CaptionChannelRequest[]): string | null {

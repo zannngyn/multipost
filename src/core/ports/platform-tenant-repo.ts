@@ -1,5 +1,6 @@
 import type { TenantStatus } from "@/core/domain/tenant";
 import type { TenantId } from "@/core/domain/tenant-context";
+import type { OnboardingProfile } from "@/core/ports/tenant-profile";
 
 /**
  * Platform tenant administration (M3.2, docs/09 §3.5 + doc 10 §4.4). Types
@@ -13,7 +14,10 @@ import type { TenantId } from "@/core/domain/tenant-context";
  *   right after (M2.2 infrastructure);
  * - `setStatus` is idempotent (suspending a suspended tenant reports
  *   `already`), audited with the caller's reason, and never deletes anything;
- * - unknown tenant surfaces as TENANT_NOT_FOUND.
+ * - unknown tenant surfaces as TENANT_NOT_FOUND;
+ * - `listTenants` joins the onboarding survey OUTWARD: most tenants predate it
+ *   and have no `tenant_profile` row, and a tenant must never fall out of the
+ *   list because it never answered.
  */
 
 export interface PlatformTenantListItem {
@@ -24,6 +28,19 @@ export interface PlatformTenantListItem {
   readonly status: TenantStatus;
   readonly memberCount: number;
   readonly createdAt: Date;
+  /**
+   * Onboarding survey answers (E10), or `null` when this tenant has NO
+   * `tenant_profile` row — the LEFT JOIN missed, i.e. the survey was never
+   * started. That is not the same as a null FIELD inside (a step skipped or
+   * not reached), and neither is the same as `[]` ("none of these"). All three
+   * states travel intact to whoever counts them; an implementer that folds any
+   * two together makes the aggregate lie.
+   *
+   * A row this repo CANNOT read (a blank code, a scalar where a `text[]` was
+   * expected) is reported as `null` here and WARNED about with the tenant id —
+   * one corrupt row must not take the whole platform list down.
+   */
+  readonly survey: OnboardingProfile | null;
 }
 
 export interface PlatformCreateTenantRecord {

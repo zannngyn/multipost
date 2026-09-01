@@ -10,8 +10,15 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useId, useMemo, useState } from "react";
 
+import {
+  channelFilterOptions,
+  channelLabelIndex,
+  channelSentenceName,
+} from "@/ui/components/channels/channel-option-labels";
 import { ApiErrorNotice } from "@/ui/components/feedback/ApiErrorNotice";
 import { EmptyState } from "@/ui/components/feedback/EmptyState";
+import { POSTS_TAB_PARAM, withTabParam } from "@/ui/components/posts/posts-tabs";
+import { RulesDisclosure } from "@/ui/components/posts/RulesDisclosure";
 import { resolveMonthKey } from "@/ui/components/scheduled/calendar-grid";
 import { CancelDialog } from "@/ui/components/scheduled/CancelDialog";
 import { RescheduleDialog } from "@/ui/components/scheduled/RescheduleDialog";
@@ -24,6 +31,7 @@ import {
 import { Button } from "@/ui/components/ui/button";
 import { Select } from "@/ui/components/ui/select";
 import { useChannelGroups } from "@/ui/hooks/useChannelGroups";
+import { useChannels } from "@/ui/hooks/useChannels";
 import { useDelayedFlag } from "@/ui/hooks/useDelayedFlag";
 import { useReadOnlyReason } from "@/ui/hooks/useReadOnlyReason";
 import { useNowMs } from "@/ui/hooks/useNowMs";
@@ -96,6 +104,10 @@ export function ScheduledScreen() {
 
   const list = useScheduledJobs(filter);
   const groups = useChannelGroups();
+  // Names for the ids the schedule speaks in. A separate query on purpose: it
+  // is cached across the whole app (30s staleTime), and a failure here must
+  // only cost the NAMES — the schedule itself still loads and still works.
+  const channels = useChannels();
   const reschedule = useReschedulePostJob();
   const cancel = useCancelScheduledJob();
   // Support mode is read-only (M3.3): a customer's schedule may be read, never
@@ -123,7 +135,12 @@ export function ScheduledScreen() {
       ? (cancel.variables?.postJobId ?? null)
       : null;
 
-  /** Channel ids the tenant actually uses, from the preset groups (E7.6). */
+  /**
+   * The "Lọc theo kênh" options: ids the tenant actually uses (from the preset
+   * groups, E7.6), each carrying the PAGE NAME the operator knows. The value
+   * stays the id — that is what the URL and the API speak — but nothing on
+   * screen is a bare `fb-1121597217877301` any more (spec §3.1).
+   */
   const channelOptions = useMemo(() => {
     const ids = new Set<string>();
     for (const group of groups.data?.groups ?? []) {
@@ -132,8 +149,18 @@ export function ScheduledScreen() {
     // Keep the active filter selectable even when its group was deleted, or the
     // select would silently jump back to "Tất cả kênh" while the URL says else.
     if (filter.channelId) ids.add(filter.channelId);
-    return [...ids].sort((a, b) => a.localeCompare(b, "vi"));
-  }, [groups.data, filter.channelId]);
+    return channelFilterOptions([...ids], channels.data?.channels);
+  }, [groups.data, filter.channelId, channels.data]);
+
+  /**
+   * One resolve for every row on screen, shared by the table, the calendar and
+   * the two dialogs — the rule rebuilds a Map of all channels per call, so
+   * resolving per row would be O(rows × channels) (wave 1, M-1).
+   */
+  const channelLabels = useMemo(
+    () => channelLabelIndex(items.map((item) => item.channelId), channels.data?.channels),
+    [items, channels.data],
+  );
 
   const rescheduleId = searchParams.get(SCHEDULED_DIALOG_PARAMS.reschedule)?.trim() ?? "";
   const cancelId = searchParams.get(SCHEDULED_DIALOG_PARAMS.cancel)?.trim() ?? "";
@@ -150,21 +177,30 @@ export function ScheduledScreen() {
   function pushUrl(nextFilter: ScheduledFilter, nextView: ScheduledViewState) {
     setNotice(null);
     setWarning(null);
-    const query = scheduledSearchParams(nextFilter, nextView).toString();
+    // The hub's `?tab=` rides along on every rewrite: this screen replaces the
+    // WHOLE query, and dropping the tab would bounce the operator to the other
+    // tab on the next server render.
+    const query = withTabParam(
+      scheduledSearchParams(nextFilter, nextView).toString(),
+      searchParams.get(POSTS_TAB_PARAM),
+    );
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
   function hrefForDialog(action: "reschedule" | "cancel", postJobId: string): string {
     const params = scheduledSearchParams(filter, view);
     params.set(SCHEDULED_DIALOG_PARAMS[action], postJobId);
-    return `${pathname}?${params.toString()}`;
+    return `${pathname}?${withTabParam(params.toString(), searchParams.get(POSTS_TAB_PARAM))}`;
   }
 
-  /** Closing a dialog only drops its parameter — filter and month must survive. */
+  /** Closing a dialog only drops its parameter — filter, month and tab survive. */
   function closeDialogs() {
     reschedule.reset();
     cancel.reset();
-    const query = scheduledSearchParams(filter, view).toString();
+    const query = withTabParam(
+      scheduledSearchParams(filter, view).toString(),
+      searchParams.get(POSTS_TAB_PARAM),
+    );
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   }
 
@@ -178,7 +214,7 @@ export function ScheduledScreen() {
         // only guards on status, so an early post is possible. Say it.
         if (!result.previousQueueEntryRemoved) {
           setWarning(
-            "Đã lưu giờ mới, nhưng không xoá được lịch cũ trong hàng đợi — bài vẫn có thể lên vào giờ cũ. Hãy theo dõi ở Nhật ký đăng bài.",
+            "Đã lưu giờ mới, nhưng không xoá được lịch cũ trong hàng đợi — bài vẫn có thể lên vào giờ cũ. Hãy theo dõi ở Nhật ký đăng.",
           );
         }
         closeDialogs();
@@ -209,18 +245,38 @@ export function ScheduledScreen() {
   return (
     <section className="space-y-6" aria-labelledby="scheduled-heading">
       <header className="space-y-1">
-        <h1 id="scheduled-heading" className="text-2xl font-semibold tracking-tight">
+        {/* h2: since the wave-1 IA this screen is a TAB inside /posts, and the
+            hub above it owns the page's h1 (core-accessibility §1). */}
+        <h2 id="scheduled-heading" className="text-2xl font-semibold tracking-tight">
           Bài đã hẹn
-        </h1>
+        </h2>
+        {/* Two sentences (spec §3.4): what this screen is, and the one thing an
+            operator has to know before reading a single hour on it. Everything
+            else is a rule, and rules live one click away. */}
         <p className="text-muted-foreground max-w-prose text-sm">
-          Những bài đang chờ tới giờ đăng. Chế độ Danh sách xếp bài sớm nhất lên trên; chế độ Lịch
-          tháng cho thấy công việc rải ra trong tháng — bấm vào một ngày để mở chi tiết. Giờ hiển
-          thị theo múi giờ máy bạn ({timeZoneLabel()}). Đổi giờ hoặc huỷ chỉ được trước khi tới giờ
-          — tồn kho vẫn được kiểm tra lại ngay trước khi đăng. Bài mang nhãn “Facebook giữ lịch” đã
-          nằm sẵn trên Facebook và Facebook sẽ tự đăng: bài đó không đổi giờ được nữa, muốn đổi thì
-          bấm Huỷ rồi soạn lại.
+          Những bài đang chờ tới giờ đăng, sớm nhất lên trên. Giờ hiển thị theo múi giờ máy bạn (
+          {timeZoneLabel()}).
         </p>
       </header>
+
+      <RulesDisclosure>
+        <p>
+          Chế độ <strong>Lịch tháng</strong> cho thấy công việc rải ra trong tháng — bấm vào một
+          ngày để mở chi tiết ngày đó.
+        </p>
+        <p>
+          Đổi giờ hoặc huỷ chỉ được trước khi tới giờ. Tồn kho vẫn được kiểm tra lại ngay trước khi
+          đăng, nên một bài đã hẹn vẫn có thể bị chặn nếu mã hết hàng.
+        </p>
+        <p>
+          Bài mang nhãn “Facebook giữ lịch” đã nằm sẵn trên Facebook và Facebook sẽ tự đăng: bài đó
+          không đổi giờ được nữa — muốn đổi thì bấm Huỷ rồi soạn lại.
+        </p>
+        <p>
+          Một bài hẹn lên nhiều kênh gộp thành một dòng “× N kênh”. Mở dòng đó để xem giờ của từng
+          kênh và đổi giờ hoặc huỷ riêng từng kênh.
+        </p>
+      </RulesDisclosure>
 
       <div className="flex flex-wrap items-end gap-3">
         <SegmentedControl
@@ -257,9 +313,9 @@ export function ScheduledScreen() {
             }
           >
             <option value="">Tất cả kênh</option>
-            {channelOptions.map((channelId) => (
-              <option key={channelId} value={channelId}>
-                {channelId}
+            {channelOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
               </option>
             ))}
           </Select>
@@ -321,6 +377,15 @@ export function ScheduledScreen() {
         </p>
       ) : null}
 
+      {/* Said out loud rather than left as a silent fallback: without it the
+          rows quietly go back to showing mã kênh and nobody knows why. */}
+      {channels.isError ? (
+        <p className="text-muted-foreground text-sm">
+          Không tải được tên Page nên danh sách đang hiện mã kênh. Lịch và các thao tác vẫn dùng
+          được bình thường.
+        </p>
+      ) : null}
+
       {notice ? (
         <p
           role="status"
@@ -336,8 +401,8 @@ export function ScheduledScreen() {
           className="border-warning/40 bg-warning/10 text-warning-foreground rounded-lg border px-3 py-2 text-sm"
         >
           {warning}{" "}
-          <Link href="/jobs" className="underline underline-offset-4">
-            Mở nhật ký đăng bài
+          <Link href="/posts?tab=log" className="underline underline-offset-4">
+            Mở nhật ký đăng
           </Link>
           .
         </p>
@@ -418,6 +483,7 @@ export function ScheduledScreen() {
               pushUrl(filter, { view: "calendar", month: monthKey, day: dayKey })
             }
             onClearFilters={() => pushUrl({ channelId: null, from: null, to: null }, view)}
+            channelLabels={channelLabels}
             renderDayDetail={(dayKey, jobs) => (
               <ScheduledJobTable
                 items={jobs}
@@ -426,6 +492,7 @@ export function ScheduledScreen() {
                 hrefFor={hrefForDialog}
                 busyJobId={busyJobId}
                 readOnlyReason={readOnlyReason}
+                channelLabels={channelLabels}
               />
             )}
           />
@@ -439,14 +506,18 @@ export function ScheduledScreen() {
             const headingId = `scheduled-day-${group.dayKey}`;
             return (
               <section key={group.dayKey} className="space-y-2">
-                <h2 id={headingId} className="text-base font-semibold">
+                {/* h3, not h2: this screen is a TAB inside /posts, so the hub
+                    owns the h1, the screen title above owns the h2, and a day
+                    group sits one level under it. Two h2s would have read as
+                    two sibling screens (core-accessibility §1). */}
+                <h3 id={headingId} className="text-base font-semibold">
                   {/* nowMs is 0 only on the server: the heading then shows the
                       full date, never a wrong "Hôm nay". */}
                   {formatDayHeading(group.dayKey, nowMs)}
                   <span className="text-muted-foreground ml-2 text-sm font-normal">
                     {group.items.length} bài
                   </span>
-                </h2>
+                </h3>
                 <ScheduledJobTable
                   items={group.items}
                   headingId={headingId}
@@ -454,6 +525,7 @@ export function ScheduledScreen() {
                   hrefFor={hrefForDialog}
                   busyJobId={busyJobId}
                   readOnlyReason={readOnlyReason}
+                  channelLabels={channelLabels}
                 />
               </section>
             );
@@ -497,6 +569,11 @@ export function ScheduledScreen() {
           // stale error from the previous row must not survive.
           key={rescheduleId}
           job={rescheduleJob}
+          // The dialog asks "đổi giờ bài này trên kênh nào?" — it must answer
+          // with the Page name, not with an id nobody can place.
+          channelName={
+            rescheduleJob ? channelSentenceName(rescheduleJob.channelId, channelLabels) : null
+          }
           open
           onOpenChange={(open) => {
             if (!open) closeDialogs();
@@ -511,6 +588,7 @@ export function ScheduledScreen() {
         <CancelDialog
           key={cancelId}
           job={cancelJob}
+          channelName={cancelJob ? channelSentenceName(cancelJob.channelId, channelLabels) : null}
           open
           onOpenChange={(open) => {
             if (!open) closeDialogs();

@@ -86,12 +86,32 @@ export function CatalogSourceForm({
     if (!pending) return;
     const values = pending;
     setPending(null);
-    update.mutate(values, {
-      onSuccess: () => {
-        form.reset(values);
-        onSaved();
+    update.mutate(
+      {
+        ...values,
+        /*
+         * This form points the tenant at a GOOGLE TAB, so it says so — and the
+         * saying is what makes the switch real.
+         *
+         * Without it, a tenant reading an uploaded CSV could fill in a
+         * spreadsheet link here, press Đổi nguồn, get a 200 and a reset form,
+         * and still be reading the old file: the usecase falls back to the
+         * STORED kind when nothing is sent, so the source never moved. Silent
+         * success on a write that did nothing is worse than a refusal, because
+         * the operator walks away believing it (business rule 5).
+         *
+         * It also tells the client-side guard that the three coordinates are
+         * required for THIS save, whatever the tenant was reading before.
+         */
+        textConfig: { kind: "google_sheet" as const },
       },
-    });
+      {
+        onSuccess: () => {
+          form.reset(values);
+          onSaved();
+        },
+      },
+    );
   }
 
   return (
@@ -185,6 +205,20 @@ export function CatalogSourceForm({
           className="border-warning/40 bg-warning/5 space-y-3 rounded-xl border p-4"
         >
           <p className="text-sm font-medium">Đổi nguồn dữ liệu của đơn vị này?</p>
+          {/*
+            A tenant switching AWAY from an uploaded file is making a bigger
+            change than one editing a folder id, and only this screen knows it is
+            about to happen. Naming the file makes the consequence concrete:
+            after this, nothing reads that file again.
+          */}
+          {current?.textSource?.kind === "file" ? (
+            <p className="text-sm">
+              Đơn vị này đang đọc file{" "}
+              <span className="font-medium">“{current.textSource.fileName}”</span>. Lưu xong hệ
+              thống chuyển sang đọc bảng Google Sheet ở trên và{" "}
+              <span className="font-medium">không đọc file đó nữa</span>.
+            </p>
+          ) : null}
           <p className="text-muted-foreground text-sm">
             Đổi nguồn xong cần bấm <span className="text-foreground font-medium">Chạy đồng bộ</span>{" "}
             lại. Lần đồng bộ kế tiếp sẽ xoá sản phẩm/ảnh không còn thuộc nguồn mới.

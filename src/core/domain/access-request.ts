@@ -2,7 +2,7 @@ import {
   isOperatorProvider,
   normaliseDisplayName,
   normaliseEmail,
-  normaliseProviderAccountId,
+  normaliseIdentityKey,
   operatorSessionEmail,
   type AccessStatus,
   type OperatorProvider,
@@ -77,7 +77,8 @@ export function toOperatorIdentity(raw: RawOperatorIdentity): OperatorIdentity {
   }
 
   const provider = raw.provider;
-  const providerAccountId = normaliseProviderAccountId(raw?.providerAccountId);
+  // Provider-aware: `password` is keyed by its address, not by an opaque id.
+  const providerAccountId = normaliseIdentityKey(provider, raw?.providerAccountId);
   if (!providerAccountId) {
     throw new AppError("INVALID_INPUT", {
       message: "Provider account id is missing or malformed",

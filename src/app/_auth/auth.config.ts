@@ -194,6 +194,23 @@ export function evaluateEnvAllowList(input: SignInIdentityInput): EnvAllowListVe
   const env = loadAuthEnv();
 
   // --- Edge cases first (CLAUDE.md technical rule 1) ------------------------
+  /**
+   * PASSWORD goes straight to the registry, skipping the domain filter.
+   *
+   * AUTH_ALLOWED_DOMAINS exists to narrow which GOOGLE WORKSPACE may knock —
+   * it is a statement about a third party's user directory. A password account
+   * has no directory behind it; the credential row IS the membership decision,
+   * and it only exists because someone signed up on this deployment. Applying
+   * the Google filter here would silently lock every password account out the
+   * day an admin narrows the list for an unrelated reason.
+   *
+   * `consult_registry`, never `allow`: the account tables still decide, so a
+   * suspended password account is refused exactly like a suspended Google one.
+   * There is no env bootstrap door for passwords by design — the escape hatch
+   * must not be something an attacker can create by filling in a form.
+   */
+  if (input?.provider === "password") return "consult_registry";
+
   if (input?.provider !== "google" && input?.provider !== "facebook") {
     warnAuth("Sign-in rejected: unexpected provider", {
       error_code: "UNAUTHORIZED",

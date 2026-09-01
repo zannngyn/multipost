@@ -6,8 +6,8 @@ import {
   PRODUCTS_DEFAULT_LIMIT,
   type CatalogProductsResponse,
   type CatalogSourceResponse,
-  type CatalogSourceFormValues,
   type ProductFilter,
+  type UploadCatalogFileResponse,
 } from "@/ui/schemas/catalog.schema";
 import { useActiveTenant } from "@/ui/hooks/useMe";
 import { ApiError } from "@/ui/services/api-error";
@@ -16,6 +16,9 @@ import {
   fetchCatalogSource,
   listCatalogProducts,
   updateCatalogSource,
+  uploadCatalogFile,
+  type UpdateCatalogSourceParams,
+  type UploadCatalogFileParams,
 } from "@/ui/services/catalog.api";
 
 /**
@@ -51,7 +54,10 @@ export function useUpdateCatalogSource() {
   const queryClient = useQueryClient();
   const { tenantKey } = useActiveTenant();
 
-  return useMutation<CatalogSourceResponse, ApiError, CatalogSourceFormValues>({
+  // The variables type is the SERVICE's, not the source form's: the mapping step
+  // saves through this same mutation and sends `fieldMap`/`stockPolicy` with the
+  // three coordinates. The form still passes exactly what it always did.
+  return useMutation<CatalogSourceResponse, ApiError, UpdateCatalogSourceParams>({
     mutationFn: (values) => updateCatalogSource(values),
     retry: false,
     onSuccess: (result) => {
@@ -62,6 +68,50 @@ export function useUpdateCatalogSource() {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: catalogKeys.source(tenantKey) });
       void queryClient.invalidateQueries({ queryKey: catalogKeys.syncStatus(tenantKey) });
+      // Prefix key: every filter/search combination of the product list.
+      void queryClient.invalidateQueries({ queryKey: ["catalog", tenantKey, "products"] });
+    },
+  });
+}
+
+/**
+ * Onboarding phase 3 — upload the tenant's product table as a CSV.
+ *
+ * A WRITE, and a heavy one: it replaces the source every later sync reads. Never
+ * retried automatically, for the reason every write on this screen is not — a
+ * call that half-applied must not be repeated behind the operator's back.
+ *
+ * On success it invalidates exactly what the update mutation does, plus the
+ * compatibility report: every number in that report was measured against the
+ * PREVIOUS table, and leaving it on screen would tell the operator their new
+ * file has 299 usable codes when nobody has read it yet.
+ *
+ * What it does NOT do is touch the product list beyond invalidating it: the
+ * catalog is not rewritten until somebody runs a sync, and the screen says so
+ * rather than implying the upload imported anything.
+ */
+export function useUploadCatalogFile() {
+  const queryClient = useQueryClient();
+  const { tenantKey } = useActiveTenant();
+
+  return useMutation<UploadCatalogFileResponse, ApiError, UploadCatalogFileParams>({
+    mutationFn: (params) => uploadCatalogFile(params),
+    retry: false,
+    onSuccess: (result) => {
+      // The response carries the source AFTER the save, in the same shape a GET
+      // returns — write it straight in so the card cannot flash the old source
+      // while the refetch is in flight.
+      queryClient.setQueryData(catalogKeys.source(tenantKey), {
+        state: "configured" as const,
+        tenantId: tenantKey,
+        source: result.source,
+      });
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: catalogKeys.source(tenantKey) });
+      void queryClient.invalidateQueries({ queryKey: catalogKeys.syncStatus(tenantKey) });
+      // The report described the table this upload just replaced.
+      void queryClient.invalidateQueries({ queryKey: ["catalog", tenantKey, "profile"] });
       // Prefix key: every filter/search combination of the product list.
       void queryClient.invalidateQueries({ queryKey: ["catalog", tenantKey, "products"] });
     },

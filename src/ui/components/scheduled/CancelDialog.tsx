@@ -32,6 +32,7 @@ import type { ApiError } from "@/ui/services/api-error";
  */
 export function CancelDialog({
   job,
+  channelName = null,
   open,
   onOpenChange,
   onSubmit,
@@ -39,6 +40,12 @@ export function CancelDialog({
   error,
 }: {
   job: ScheduledJobEntry | null;
+  /**
+   * The Page this post goes to, already named by the screen. A confirmation for
+   * a destructive action has to name what it destroys in words the operator
+   * recognises; `null` falls back to the id rather than to nothing.
+   */
+  channelName?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (params: { postJobId: string; note?: string }) => void;
@@ -74,7 +81,7 @@ export function CancelDialog({
           <DialogTitle>Huỷ bài đã hẹn?</DialogTitle>
           <DialogDescription>
             {job
-              ? `Bài ${job.productCode}${job.color.trim() ? ` · ${job.color}` : ""} trên kênh ${job.channelId}, đang hẹn lúc ${formatScheduledAt(job.scheduledAt)}.`
+              ? `Bài ${job.productCode}${job.color.trim() ? ` · ${job.color}` : ""} trên kênh ${channelName ?? job.channelId}, đang hẹn lúc ${formatScheduledAt(job.scheduledAt)}.`
               : "Không tìm thấy bài này trong danh sách đang xem — có thể bài đã đăng, đã huỷ, hoặc nằm ở trang khác."}
           </DialogDescription>
         </DialogHeader>
@@ -92,7 +99,7 @@ export function CancelDialog({
                   // scheduled — so this is worded as an attempt, not a promise.
                   // "Facebook sẽ không đăng nữa" belongs to the success message
                   // the server sends back, where it is true.
-                  "Bài này đang được Facebook giữ. Khi bấm huỷ, hệ thống sẽ cố gỡ bài khỏi Facebook trước, gỡ được mới đánh dấu “Bị chặn”. Nếu không gỡ được, màn hình sẽ báo lại kèm hướng dẫn — bài vẫn sẽ tự đăng cho tới khi bạn vào Trang xoá tay. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."
+                  "Bài này đang được Facebook giữ. Khi bấm huỷ, hệ thống sẽ cố gỡ bài khỏi Facebook trước, gỡ được mới đánh dấu “Bị chặn”. Nếu không gỡ được, màn hình sẽ báo lại kèm hướng dẫn — bài vẫn sẽ tự đăng cho tới khi bạn vào Page xoá tay. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."
                 : "Huỷ xong bài sẽ chuyển sang trạng thái “Bị chặn” và không bao giờ lên kênh này. Không hoàn tác được: muốn đăng lại thì phải soạn bài mới. Các kênh khác trong cùng lô không bị ảnh hưởng."}
             </p>
 
