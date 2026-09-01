@@ -7,10 +7,16 @@ import { parse } from "yaml";
 /**
  * Locks the ONE line standing between a private MinIO bucket and every
  * tenant's photos being served to the open internet: `mc anonymous set none`
- * in `minio-init`'s entrypoint (docker-compose.yml). Nothing else notices if
- * that line is deleted — the stack still boots green, `minio-init` still
- * exits 0, and only a live probe against a real bucket would ever reveal the
- * bug (see task-11-report.md for exactly that probe).
+ * in `minio-init`'s entrypoint. Nothing else notices if that line is deleted —
+ * the stack still boots green, `minio-init` still exits 0, and only a live
+ * probe against a real bucket would ever reveal the bug (see task-11-report.md
+ * for exactly that probe).
+ *
+ * SCOPE: docker-compose.override.yml, the LOCAL development stack. Production
+ * has no MinIO of its own — it uses the shared instance in /srv/minio, where
+ * the bucket is created private by /srv/_infra/new-app-s3.sh and the app's
+ * service account has no permission to change that. This file guards the half
+ * that lives in the repo.
  *
  * Also locks the FAIL-CLOSED ordering: `web`/`worker` must wait for
  * `minio-init` to finish (`service_completed_successfully`), not just for
@@ -30,7 +36,7 @@ import { parse } from "yaml";
 const REPO_ROOT = join(import.meta.dirname, "..", "..", "..");
 
 function loadCompose(): Record<string, unknown> {
-  const text = readFileSync(join(REPO_ROOT, "docker-compose.yml"), "utf8");
+  const text = readFileSync(join(REPO_ROOT, "docker-compose.override.yml"), "utf8");
   return parse(text) as Record<string, unknown>;
 }
 
